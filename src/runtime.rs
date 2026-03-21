@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError};
 use pyo3::prelude::*;
+#[cfg(unix)]
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
 
 use crate::fd_ops;
@@ -20,8 +21,8 @@ struct RuntimeDispatcher {
     next_timer_id: u64,
     active_run: Option<ActiveRun>,
     signal_tasks: HashMap<i32, SignalWatcher>,
-    reader_tasks: HashMap<i32, WatchTask>,
-    writer_tasks: HashMap<i32, WatchTask>,
+    reader_tasks: HashMap<fd_ops::RawFd, WatchTask>,
+    writer_tasks: HashMap<fd_ops::RawFd, WatchTask>,
     shutting_down: bool,
 }
 
@@ -30,10 +31,14 @@ struct ActiveRun {
     wake_tx: std::sync::mpsc::Sender<()>,
 }
 
+#[cfg(unix)]
 struct SignalWatcher {
     handle: SignalHandle,
     join: thread::JoinHandle<()>,
 }
+
+#[cfg(not(unix))]
+struct SignalWatcher;
 
 struct WatchTask {
     stop: Arc<AtomicBool>,
@@ -261,9 +266,14 @@ impl RuntimeDispatcher {
                 }
             }
             LoopCommand::StopSignalWatcher(sig) => {
+                #[cfg(unix)]
                 if let Some(watcher) = self.signal_tasks.remove(&sig) {
                     watcher.handle.close();
                     let _ = watcher.join.join();
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = sig;
                 }
             }
             LoopCommand::SignalFired(sig) => {
@@ -440,10 +450,13 @@ impl RuntimeDispatcher {
     }
 
     fn cleanup_watchers(&mut self) {
+        #[cfg(unix)]
         for (_, watcher) in self.signal_tasks.drain() {
             watcher.handle.close();
             let _ = watcher.join.join();
         }
+        #[cfg(not(unix))]
+        self.signal_tasks.clear();
         for (_, task) in self.reader_tasks.drain() {
             task.abort();
         }

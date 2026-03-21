@@ -954,6 +954,7 @@ dependencies = [
  "pyo3-build-config",
  "signal-hook",
  "socket2",
+ "windows-sys",
 ]
 
 [[package]]

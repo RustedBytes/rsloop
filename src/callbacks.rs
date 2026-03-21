@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
 use crate::context::{enter_context, exit_context, is_nested_context_error};
+use crate::fd_ops::RawFd;
 
 pub type CallbackId = u64;
 
@@ -22,8 +23,8 @@ pub enum CallbackKind {
     Threadsafe,
     Timer,
     Signal(i32),
-    Reader(i32),
-    Writer(i32),
+    Reader(RawFd),
+    Writer(RawFd),
 }
 
 pub struct ReadyCallback {

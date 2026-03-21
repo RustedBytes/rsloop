@@ -1,7 +1,10 @@
 use std::fs::File;
+#[cfg(unix)]
 use std::os::fd::FromRawFd;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use std::os::windows::io::FromRawHandle;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -15,16 +18,19 @@ use pyo3_async_runtimes::TaskLocals;
 use crate::callbacks::{CallbackKind, PyHandle, PyTimerHandle};
 use crate::context::{build_context_args, capture_context, ensure_running_loop, run_in_context};
 use crate::fd_ops;
-use crate::loop_core::{LoopCommand, LoopCore, LoopCoreError, SignalHandlerTemplate};
+use crate::loop_core::{LoopCommand, LoopCore, LoopCoreError};
+#[cfg(unix)]
+use crate::loop_core::SignalHandlerTemplate;
 use crate::process_transport::{
     spawn_process_transport, BoxedProcessReader, ProcessTextConfig, ProcessTransportParams,
 };
 use crate::stream_transport::{
     create_server as create_py_server, remove_unix_socket_if_present, spawn_read_pipe_transport,
     spawn_write_pipe_transport, tcp_listener_from_socket_fd, tcp_server_listener,
-    transport_from_socket, unix_listener_from_socket_fd, unix_server_listener, PyServer,
-    ServerCreateParams, TransportSpawnContext,
+    transport_from_socket, PyServer, ServerCreateParams, TransportSpawnContext,
 };
+#[cfg(unix)]
+use crate::stream_transport::{unix_listener_from_socket_fd, unix_server_listener};
 
 static ASYNCIO_TASK_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
 static ASYNCIO_FUTURE_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
@@ -260,12 +266,20 @@ fn listener_sources_from_sockets(
     let mut listeners = Vec::with_capacity(sockets.len());
     for socket in sockets {
         let family = socket.getattr(py, "family")?.extract::<i32>(py)?;
-        let fd = fd_ops::fileobj_to_fd(py, socket.bind(py))?;
-        listeners.push(if family == libc::AF_UNIX {
-            unix_server_listener(unix_listener_from_socket_fd(fd)?)
-        } else {
-            tcp_server_listener(tcp_listener_from_socket_fd(fd)?)
-        });
+        let fd = socket.call_method0(py, "dup")?.call_method0(py, "detach")?.extract(py)?;
+        #[cfg(unix)]
+        {
+            listeners.push(if family == libc::AF_UNIX {
+                unix_server_listener(unix_listener_from_socket_fd(fd)?)
+            } else {
+                tcp_server_listener(tcp_listener_from_socket_fd(fd)?)
+            });
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = family;
+            listeners.push(tcp_server_listener(tcp_listener_from_socket_fd(fd)?));
+        }
     }
     Ok(listeners)
 }
@@ -344,7 +358,7 @@ enum ProcessStdioSpec {
     Inherit,
     Pipe,
     DevNull,
-    Fd(i32),
+    Fd(fd_ops::RawFd),
     Stdout,
 }
 
@@ -406,23 +420,45 @@ fn parse_process_stdio(
     Ok(ProcessStdioSpec::Fd(fd_ops::fileobj_to_fd(py, bound)?))
 }
 
-fn stdio_from_fd(fd: i32) -> PyResult<std::process::Stdio> {
-    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let file = unsafe { File::from_raw_fd(dup) };
-    Ok(std::process::Stdio::from(file))
+fn stdio_from_fd(fd: fd_ops::RawFd) -> PyResult<std::process::Stdio> {
+    #[cfg(windows)]
+    {
+        let _ = fd;
+        return Err(PyNotImplementedError::new_err(
+            "subprocess fd redirection is not implemented on Windows",
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        let dup = fd_ops::dup_raw_fd(fd as fd_ops::RawFd)
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+        let file = unsafe { File::from_raw_fd(dup as i32) };
+        Ok(std::process::Stdio::from(file))
+    }
 }
 
 fn new_pipe() -> PyResult<(File, File)> {
-    let mut fds = [0_i32; 2];
-    let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if rc == -1 {
-        return Err(PyRuntimeError::new_err(
-            std::io::Error::last_os_error().to_string(),
+    #[cfg(windows)]
+    {
+        return Err(PyNotImplementedError::new_err(
+            "subprocess pipes are not implemented on Windows",
         ));
     }
-    let read_end = unsafe { File::from_raw_fd(fds[0]) };
-    let write_end = unsafe { File::from_raw_fd(fds[1]) };
-    Ok((read_end, write_end))
+
+    #[cfg(unix)]
+    {
+        let mut fds = [0_i32; 2];
+        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        if rc == -1 {
+            return Err(PyRuntimeError::new_err(
+                std::io::Error::last_os_error().to_string(),
+            ));
+        }
+        let read_end = unsafe { File::from_raw_fd(fds[0]) };
+        let write_end = unsafe { File::from_raw_fd(fds[1]) };
+        Ok((read_end, write_end))
+    }
 }
 
 fn apply_stdio(
@@ -697,7 +733,15 @@ fn apply_common_process_kwargs(
                     .getattr("fspath")?
                     .call1((value.clone(),))?
                     .extract::<String>()?;
+                #[cfg(unix)]
                 command.arg0(executable);
+                #[cfg(windows)]
+                {
+                    let _ = executable;
+                    return Err(PyNotImplementedError::new_err(
+                        "subprocess executable override is not implemented on Windows",
+                    ));
+                }
             }
             "restore_signals" => {
                 spawn_config.unix.restore_signals = value.is_truthy()?;
@@ -1249,6 +1293,11 @@ impl PyLoop {
         start_serving: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
         let _ = (ssl_handshake_timeout, ssl_shutdown_timeout);
+        #[cfg(not(unix))]
+        {
+            let _ = (slf, protocol_factory, path, sock, backlog, start_serving);
+            return Err(Self::not_implemented("create_unix_server"));
+        }
         if ssl.is_some() {
             return Err(Self::not_implemented("create_unix_server(..., ssl=...)"));
         }
@@ -1318,6 +1367,11 @@ impl PyLoop {
         ssl_shutdown_timeout: Option<f64>,
     ) -> PyResult<Bound<'_, PyAny>> {
         let _ = (server_hostname, ssl_handshake_timeout, ssl_shutdown_timeout);
+        #[cfg(not(unix))]
+        {
+            let _ = (slf, protocol_factory, path, sock);
+            return Err(Self::not_implemented("create_unix_connection"));
+        }
         if ssl.is_some() {
             return Err(Self::not_implemented(
                 "create_unix_connection(..., ssl=...)",
@@ -1819,6 +1873,14 @@ impl PyLoop {
         text: Option<bool>,
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        #[cfg(windows)]
+        {
+            let _ = (
+                slf, py, protocol_factory, cmd, stdin, stdout, stderr, universal_newlines, shell,
+                bufsize, encoding, errors, text, kwargs,
+            );
+            return Err(Self::not_implemented("subprocess_shell"));
+        }
         if !shell {
             return Err(PyRuntimeError::new_err(
                 "subprocess_shell() requires shell=True",
@@ -1929,6 +1991,14 @@ impl PyLoop {
         text: Option<bool>,
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        #[cfg(windows)]
+        {
+            let _ = (
+                slf, py, protocol_factory, program, args, stdin, stdout, stderr,
+                universal_newlines, shell, bufsize, encoding, errors, text, kwargs,
+            );
+            return Err(Self::not_implemented("subprocess_exec"));
+        }
         if shell {
             return Err(PyRuntimeError::new_err(
                 "subprocess_exec() requires shell=False",
@@ -2025,6 +2095,11 @@ impl PyLoop {
         protocol_factory: Py<PyAny>,
         pipe: Py<PyAny>,
     ) -> PyResult<Bound<'_, PyAny>> {
+        #[cfg(windows)]
+        {
+            let _ = (slf, py, protocol_factory, pipe);
+            return Err(Self::not_implemented("connect_read_pipe"));
+        }
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
         let core = slf.borrow(py).core.clone();
@@ -2065,6 +2140,11 @@ impl PyLoop {
         protocol_factory: Py<PyAny>,
         pipe: Py<PyAny>,
     ) -> PyResult<Bound<'_, PyAny>> {
+        #[cfg(windows)]
+        {
+            let _ = (slf, py, protocol_factory, pipe);
+            return Err(Self::not_implemented("connect_write_pipe"));
+        }
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
         let core = slf.borrow(py).core.clone();
