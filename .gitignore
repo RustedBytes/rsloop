@@ -5,6 +5,7 @@ dist/
 tmp/
 
 *.so
+*.pyd
 
 python/uvloop_rust_impl/_loop
 
