@@ -1,0 +1,41 @@
+[package]
+name = "rsloop"
+version = "0.1.0"
+edition = "2021"
+description = "An event loop for asyncio written in Rust"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/RustedBytes/rsloop"
+homepage = "https://github.com/RustedBytes/rsloop"
+documentation = "https://github.com/RustedBytes/rsloop#readme"
+
+[lib]
+name = "_loop"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+profiler = ["dep:pprof"]
+
+[dependencies]
+crossbeam-channel = "0.5"
+futures = { version = "0.3", default-features = false, features = ["std"] }
+libc = "0.2"
+pprof = { version = "0.15.0", default-features = false, features = ["flamegraph"], optional = true }
+pyo3 = { version = "0.28", features = ["extension-module"] }
+pyo3-async-runtimes = { version = "0.28", features = ["async-std-runtime"] }
+signal-hook = "0.3"
+socket2 = "0.6"
+
+[build-dependencies]
+pyo3-build-config = "0.28"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+incremental = false
+strip = true
+
+[profile.bench]
+inherits = "release"

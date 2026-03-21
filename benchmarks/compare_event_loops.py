@@ -1,0 +1,489 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import asyncio
+import gc
+import importlib
+import json
+import os
+import statistics
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from typing import Callable
+
+
+LOOP_CHOICES = ("asyncio", "uvloop", "rsloop")
+WORKLOAD_CHOICES = ("callbacks", "tasks", "tcp_streams")
+
+
+@dataclass(frozen=True)
+class ChildResult:
+    loop: str
+    workload: str
+    seconds: float
+    operations: int
+
+    @property
+    def ops_per_sec(self) -> float:
+        return self.operations / self.seconds if self.seconds > 0 else float("inf")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Compare stdlib asyncio, uvloop, and the Rust prototype event loop.",
+    )
+    parser.add_argument(
+        "--loops",
+        default="asyncio,uvloop,rsloop",
+        help="Comma-separated loops to benchmark. Choices: asyncio,uvloop,rsloop",
+    )
+    parser.add_argument(
+        "--workloads",
+        default="callbacks,tasks,tcp_streams",
+        help="Comma-separated workloads to benchmark. Choices: callbacks,tasks,tcp_streams",
+    )
+    parser.add_argument(
+        "--warmups", type=int, default=1, help="Warmup runs per loop/workload"
+    )
+    parser.add_argument(
+        "--repeat", type=int, default=5, help="Measured runs per loop/workload"
+    )
+    parser.add_argument(
+        "--callbacks",
+        type=int,
+        default=200_000,
+        help="Number of chained call_soon callbacks for the callbacks workload",
+    )
+    parser.add_argument(
+        "--tasks",
+        type=int,
+        default=50_000,
+        help="Number of tiny tasks for the tasks workload",
+    )
+    parser.add_argument(
+        "--task-batch-size",
+        type=int,
+        default=5_000,
+        help="Batch size for the tasks workload to avoid huge one-shot gathers",
+    )
+    parser.add_argument(
+        "--tcp-roundtrips",
+        type=int,
+        default=5_000,
+        help="Round trips for the tcp_streams workload",
+    )
+    parser.add_argument(
+        "--payload-size",
+        type=int,
+        default=1024,
+        help="Payload size in bytes for the tcp_streams workload",
+    )
+    stream_mode = parser.add_mutually_exclusive_group()
+    stream_mode.add_argument(
+        "--rsloop-fast-streams",
+        dest="rsloop_fast_streams",
+        action="store_true",
+        help="Use rsloop's native stream wrappers for tcp_streams (default).",
+    )
+    stream_mode.add_argument(
+        "--no-rsloop-fast-streams",
+        dest="rsloop_fast_streams",
+        action="store_false",
+        help="Use the stdlib asyncio streams layer for tcp_streams on rsloop.",
+    )
+    parser.set_defaults(rsloop_fast_streams=True)
+    parser.add_argument(
+        "--json-output",
+        type=str,
+        default=None,
+        help="Optional path to write raw benchmark results as JSON",
+    )
+    parser.add_argument(
+        "--profile-rsloop-dir",
+        type=str,
+        default=None,
+        help="Optional directory to write one rsloop flamegraph per workload before measured runs",
+    )
+    parser.add_argument(
+        "--profile-frequency",
+        type=int,
+        default=999,
+        help="Sampling frequency to use when rsloop profiling is enabled",
+    )
+    parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--loop", choices=LOOP_CHOICES, help=argparse.SUPPRESS)
+    parser.add_argument("--workload", choices=WORKLOAD_CHOICES, help=argparse.SUPPRESS)
+    parser.add_argument("--profile-output", help=argparse.SUPPRESS)
+    return parser.parse_args()
+
+
+def normalize_csv(value: str, *, allowed: tuple[str, ...], label: str) -> list[str]:
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    invalid = [item for item in items if item not in allowed]
+    if invalid:
+        raise SystemExit(f"invalid {label}: {', '.join(invalid)}")
+    if not items:
+        raise SystemExit(f"no {label} selected")
+    return items
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.warmups < 0:
+        raise SystemExit("--warmups must be >= 0")
+    if args.repeat <= 0:
+        raise SystemExit("--repeat must be > 0")
+    if args.callbacks <= 0:
+        raise SystemExit("--callbacks must be > 0")
+    if args.tasks <= 0:
+        raise SystemExit("--tasks must be > 0")
+    if args.task_batch_size <= 0:
+        raise SystemExit("--task-batch-size must be > 0")
+    if args.tcp_roundtrips <= 0:
+        raise SystemExit("--tcp-roundtrips must be > 0")
+    if args.payload_size <= 0:
+        raise SystemExit("--payload-size must be > 0")
+    if args.profile_frequency <= 0:
+        raise SystemExit("--profile-frequency must be > 0")
+
+
+def loop_factory_for(loop_name: str) -> Callable[[], asyncio.AbstractEventLoop]:
+    if loop_name == "asyncio":
+        return asyncio.new_event_loop
+    if loop_name == "uvloop":
+        return importlib.import_module("uvloop").new_event_loop
+    if loop_name == "rsloop":
+        return importlib.import_module("rsloop").new_event_loop
+    raise AssertionError(f"unsupported loop: {loop_name}")
+
+
+def is_loop_available(loop_name: str) -> tuple[bool, str | None]:
+    try:
+        loop_factory_for(loop_name)
+    except Exception as exc:  # pragma: no cover - exercised in real env
+        return False, f"{type(exc).__name__}: {exc}"
+    return True, None
+
+
+def run_with_loop(loop_name: str, coro: asyncio.coroutines) -> ChildResult:
+    loop_factory = loop_factory_for(loop_name)
+    if sys.version_info[:2] >= (3, 12):
+        return asyncio.run(coro, loop_factory=loop_factory)
+
+    loop = loop_factory()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        asyncio.set_event_loop(None)
+        loop.close()
+
+
+async def bench_callbacks(loop_name: str, iterations: int) -> ChildResult:
+    loop = asyncio.get_running_loop()
+    done = loop.create_future()
+    remaining = iterations
+
+    def callback() -> None:
+        nonlocal remaining
+        remaining -= 1
+        if remaining == 0:
+            done.set_result(None)
+            return
+        loop.call_soon(callback)
+
+    start = time.perf_counter()
+    loop.call_soon(callback)
+    await done
+    return ChildResult(loop_name, "callbacks", time.perf_counter() - start, iterations)
+
+
+async def bench_tasks(loop_name: str, iterations: int, batch_size: int) -> ChildResult:
+    async def tiny_task() -> None:
+        await asyncio.sleep(0)
+
+    start = time.perf_counter()
+    remaining = iterations
+    while remaining > 0:
+        current_batch = min(batch_size, remaining)
+        await asyncio.gather(*(tiny_task() for _ in range(current_batch)))
+        remaining -= current_batch
+    return ChildResult(loop_name, "tasks", time.perf_counter() - start, iterations)
+
+
+async def maybe_wait_closed(writer: asyncio.StreamWriter) -> None:
+    wait_closed = getattr(writer, "wait_closed", None)
+    if wait_closed is None:
+        return
+    try:
+        await wait_closed()
+    except Exception:
+        return
+
+
+async def bench_tcp_streams(
+    loop_name: str, roundtrips: int, payload_size: int
+) -> ChildResult:
+    payload = b"x" * payload_size
+
+    async def handle_echo(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        try:
+            while True:
+                data = await reader.read(64 * 1024)
+                if not data:
+                    break
+                writer.write(data)
+                await writer.drain()
+        finally:
+            writer.close()
+            await maybe_wait_closed(writer)
+
+    server = await asyncio.start_server(handle_echo, "127.0.0.1", 0)
+    host, port = server.sockets[0].getsockname()[:2]
+
+    try:
+        reader, writer = await asyncio.open_connection(host, port)
+        start = time.perf_counter()
+        for _ in range(roundtrips):
+            writer.write(payload)
+            await writer.drain()
+            response = await reader.readexactly(payload_size)
+            if response != payload:
+                raise RuntimeError("echo payload mismatch")
+        duration = time.perf_counter() - start
+        writer.close()
+        await maybe_wait_closed(writer)
+        return ChildResult(loop_name, "tcp_streams", duration, roundtrips)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+def child_main(args: argparse.Namespace) -> int:
+    gc.collect()
+    gc.disable()
+    try:
+        if args.workload == "callbacks":
+            coro = bench_callbacks(args.loop, args.callbacks)
+        elif args.workload == "tasks":
+            coro = bench_tasks(args.loop, args.tasks, args.task_batch_size)
+        elif args.workload == "tcp_streams":
+            coro = bench_tcp_streams(args.loop, args.tcp_roundtrips, args.payload_size)
+        else:  # pragma: no cover - parser guards this
+            raise AssertionError(f"unsupported workload: {args.workload}")
+
+        if args.profile_output:
+            if args.loop != "rsloop":
+                raise RuntimeError("profiling is only supported for rsloop")
+            rsloop = importlib.import_module("rsloop")
+            with rsloop.profile(args.profile_output, frequency=args.profile_frequency):
+                result = run_with_loop(args.loop, coro)
+        else:
+            result = run_with_loop(args.loop, coro)
+    finally:
+        gc.enable()
+
+    print(
+        json.dumps(
+            {
+                "loop": result.loop,
+                "workload": result.workload,
+                "seconds": result.seconds,
+                "operations": result.operations,
+                "ops_per_sec": result.ops_per_sec,
+            }
+        )
+    )
+    return 0
+
+
+def run_child(
+    script_path: str,
+    loop_name: str,
+    workload: str,
+    args: argparse.Namespace,
+    *,
+    profile_output: str | None = None,
+) -> ChildResult:
+    cmd = [
+        sys.executable,
+        script_path,
+        "--child",
+        "--loop",
+        loop_name,
+        "--workload",
+        workload,
+        "--callbacks",
+        str(args.callbacks),
+        "--tasks",
+        str(args.tasks),
+        "--task-batch-size",
+        str(args.task_batch_size),
+        "--tcp-roundtrips",
+        str(args.tcp_roundtrips),
+        "--payload-size",
+        str(args.payload_size),
+        "--profile-frequency",
+        str(args.profile_frequency),
+    ]
+    if profile_output is not None:
+        cmd.extend(["--profile-output", profile_output])
+    env = os.environ.copy()
+    if loop_name == "rsloop":
+        env["RSLOOP_USE_FAST_STREAMS"] = "1" if args.rsloop_fast_streams else "0"
+    proc = subprocess.run(
+        cmd,
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=os.path.dirname(script_path),
+        env=env,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"{loop_name}/{workload} failed with exit code {proc.returncode}\n"
+            f"stdout:\n{proc.stdout}\n"
+            f"stderr:\n{proc.stderr}"
+        )
+
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError(f"{loop_name}/{workload} produced no output")
+    payload = json.loads(lines[-1])
+    return ChildResult(
+        loop=payload["loop"],
+        workload=payload["workload"],
+        seconds=payload["seconds"],
+        operations=payload["operations"],
+    )
+
+
+def print_workload_table(workload: str, runs: dict[str, list[ChildResult]]) -> None:
+    rows: list[tuple[str, float, float, float, int]] = []
+    for loop_name, loop_runs in runs.items():
+        seconds = [item.seconds for item in loop_runs]
+        median_seconds = statistics.median(seconds)
+        operations = loop_runs[0].operations
+        ops_per_sec = (
+            operations / median_seconds if median_seconds > 0 else float("inf")
+        )
+        rows.append((loop_name, median_seconds, ops_per_sec, min(seconds), operations))
+
+    rows.sort(key=lambda item: item[1])
+    fastest = rows[0][1]
+
+    print()
+    print(f"{workload} ({rows[0][4]:,} ops)")
+    print(
+        f"{'loop':<10} {'median_s':>12} {'best_s':>12} {'ops_per_s':>14} {'vs_fastest':>12}"
+    )
+    for loop_name, median_seconds, ops_per_sec, best_seconds, _ in rows:
+        relative = median_seconds / fastest if fastest > 0 else 1.0
+        print(
+            f"{loop_name:<10} "
+            f"{median_seconds:>12.6f} "
+            f"{best_seconds:>12.6f} "
+            f"{ops_per_sec:>14,.0f} "
+            f"{relative:>11.2f}x"
+        )
+
+
+def parent_main(args: argparse.Namespace) -> int:
+    selected_loops = normalize_csv(args.loops, allowed=LOOP_CHOICES, label="loops")
+    selected_workloads = normalize_csv(
+        args.workloads, allowed=WORKLOAD_CHOICES, label="workloads"
+    )
+    profile_rsloop_dir = (
+        os.path.abspath(args.profile_rsloop_dir) if args.profile_rsloop_dir else None
+    )
+
+    available_loops: list[str] = []
+    skipped_loops: dict[str, str] = {}
+    for loop_name in selected_loops:
+        ok, reason = is_loop_available(loop_name)
+        if ok:
+            available_loops.append(loop_name)
+        else:
+            skipped_loops[loop_name] = reason or "unknown error"
+
+    if skipped_loops:
+        print("Skipping unavailable loops:")
+        for loop_name, reason in skipped_loops.items():
+            print(f"  - {loop_name}: {reason}")
+
+    if not available_loops:
+        raise SystemExit("no benchmarkable loops are available")
+
+    script_path = os.path.abspath(__file__)
+    all_results: list[dict[str, object]] = []
+
+    for workload in selected_workloads:
+        workload_runs: dict[str, list[ChildResult]] = {}
+        if workload == "tcp_streams":
+            stream_mode = (
+                "rsloop native fast streams"
+                if args.rsloop_fast_streams
+                else "stdlib asyncio streams"
+            )
+            print(f"tcp_streams mode: {stream_mode}")
+        for loop_name in available_loops:
+            print(f"Running {workload} on {loop_name}...")
+            if profile_rsloop_dir and loop_name == "rsloop":
+                os.makedirs(profile_rsloop_dir, exist_ok=True)
+                profile_output = os.path.join(
+                    profile_rsloop_dir, f"rsloop-{workload}.svg"
+                )
+                print(f"  profiling to {profile_output}")
+                run_child(
+                    script_path,
+                    loop_name,
+                    workload,
+                    args,
+                    profile_output=profile_output,
+                )
+            for _ in range(args.warmups):
+                run_child(script_path, loop_name, workload, args)
+            measured = [
+                run_child(script_path, loop_name, workload, args)
+                for _ in range(args.repeat)
+            ]
+            workload_runs[loop_name] = measured
+            all_results.append(
+                {
+                    "workload": workload,
+                    "loop": loop_name,
+                    "runs": [
+                        {
+                            "seconds": item.seconds,
+                            "operations": item.operations,
+                            "ops_per_sec": item.ops_per_sec,
+                        }
+                        for item in measured
+                    ],
+                }
+            )
+        print_workload_table(workload, workload_runs)
+
+    if args.json_output:
+        with open(args.json_output, "w", encoding="utf-8") as f:
+            json.dump(all_results, f, indent=2)
+        print()
+        print(f"Wrote raw results to {args.json_output}")
+
+    return 0
+
+
+def main() -> int:
+    args = parse_args()
+    validate_args(args)
+    if args.child:
+        return child_main(args)
+    return parent_main(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "rsloop"
+version = "0.1.0"
+description = "An event loop for asyncio written in Rust"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+authors = [
+  { name = "RustedBytes" },
+]
+keywords = ["asyncio", "event-loop", "pyo3", "python", "rust"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Rust",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: System :: Networking",
+]
+
+[project.urls]
+Homepage = "https://github.com/RustedBytes/rsloop"
+Repository = "https://github.com/RustedBytes/rsloop"
+Issues = "https://github.com/RustedBytes/rsloop/issues"
+
+[tool.maturin]
+python-source = "python"
+module-name = "rsloop._loop"
+features = ["pyo3/extension-module"]

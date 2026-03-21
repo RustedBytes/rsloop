@@ -1,0 +1,12 @@
+target/
+.venv/
+__pycache__/
+dist/
+tmp/
+
+*.so
+
+python/uvloop_rust_impl/_loop
+
+benchmarks/profiles*
+benchmarks/compare_event_loops.results.json

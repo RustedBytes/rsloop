@@ -1,0 +1,2178 @@
+use std::collections::{HashMap, VecDeque};
+use std::fs;
+use std::io::{self, Read, Write as _};
+use std::net::{Shutdown, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex, Weak};
+use std::thread;
+use std::time::Duration;
+
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
+use pyo3::types::{PyByteArray, PyByteArrayMethods, PyBytes, PyDict, PySlice, PyString, PyTuple};
+use pyo3_async_runtimes::TaskLocals;
+use socket2::Socket;
+
+use crate::async_event::AsyncEvent;
+use crate::context::{build_context_args, ensure_running_loop, run_in_context};
+use crate::fast_streams::{PyFastStreamProtocol, PyFastStreamReader};
+use crate::fd_ops;
+use crate::loop_core::{LoopCommand, LoopCore};
+use crate::python_names;
+
+enum WriterCommand {
+    Data(OwnedWriteBuffer),
+    WriteEof,
+    Close,
+    Abort,
+    Stop,
+}
+
+enum PendingReadEvent {
+    Data(Box<[u8]>),
+    Eof,
+    ConnectionLost(Option<String>),
+}
+
+struct OwnedWriteBuffer {
+    bytes: Box<[u8]>,
+    offset: usize,
+}
+
+impl OwnedWriteBuffer {
+    #[inline]
+    fn from_slice(data: &[u8]) -> Self {
+        Self {
+            bytes: Box::<[u8]>::from(data),
+            offset: 0,
+        }
+    }
+
+    #[inline]
+    fn remaining(&self) -> &[u8] {
+        &self.bytes[self.offset..]
+    }
+
+    #[inline]
+    fn advance(&mut self, written: usize) {
+        self.offset += written;
+    }
+
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+}
+
+pub enum ServerListener {
+    Tcp(StdTcpListener),
+    Unix(StdUnixListener),
+}
+
+pub struct TransportSpawnContext {
+    pub loop_core: Arc<LoopCore>,
+    pub loop_obj: Py<PyAny>,
+    pub protocol: Py<PyAny>,
+    pub context: Py<PyAny>,
+    pub context_needs_run: bool,
+}
+
+pub struct ServerCreateParams {
+    pub loop_core: Arc<LoopCore>,
+    pub loop_obj: Py<PyAny>,
+    pub protocol_factory: Py<PyAny>,
+    pub context: Py<PyAny>,
+    pub context_needs_run: bool,
+    pub sockets: Vec<Py<PyAny>>,
+    pub listeners: Vec<ServerListener>,
+    pub cleanup_path: Option<PathBuf>,
+}
+
+struct ProtocolCallbacks {
+    connection_made: Py<PyAny>,
+    data_received: Option<Py<PyAny>>,
+    eof_received: Option<Py<PyAny>>,
+    connection_lost: Py<PyAny>,
+    get_buffer: Option<Py<PyAny>>,
+    buffer_updated: Option<Py<PyAny>>,
+    stream_reader_fast_path: Option<StreamReaderFastPath>,
+}
+
+enum StreamReaderFastPath {
+    Native {
+        protocol: Py<PyFastStreamProtocol>,
+        reader: Py<PyFastStreamReader>,
+    },
+    Generic {
+        protocol: Option<Py<PyAny>>,
+        reader: Py<PyAny>,
+        buffer: Py<PyAny>,
+        limit: usize,
+    },
+}
+
+impl StreamReaderFastPath {
+    fn clone_ref(&self, py: Python<'_>) -> Self {
+        match self {
+            Self::Native { protocol, reader } => Self::Native {
+                protocol: protocol.clone_ref(py),
+                reader: reader.clone_ref(py),
+            },
+            Self::Generic {
+                protocol,
+                reader,
+                buffer,
+                limit,
+            } => Self::Generic {
+                protocol: protocol.as_ref().map(|value| value.clone_ref(py)),
+                reader: reader.clone_ref(py),
+                buffer: buffer.clone_ref(py),
+                limit: *limit,
+            },
+        }
+    }
+
+    fn connection_made(&self, py: Python<'_>, transport: Py<PyStreamTransport>) -> PyResult<bool> {
+        match self {
+            Self::Native { protocol, .. } => {
+                PyFastStreamProtocol::handle_connection_made(
+                    protocol.clone_ref(py),
+                    py,
+                    transport.into_any(),
+                )?;
+                Ok(true)
+            }
+            Self::Generic {
+                protocol, reader, ..
+            } => {
+                let has_client_connected_cb = protocol.as_ref().is_some_and(|protocol| {
+                    protocol
+                        .bind(py)
+                        .getattr("_client_connected_cb")
+                        .map(|value| !value.is_none())
+                        .unwrap_or(true)
+                });
+                if has_client_connected_cb {
+                    return Ok(false);
+                }
+
+                reader
+                    .bind(py)
+                    .setattr("_transport", transport.clone_ref(py).into_any())?;
+                if let Some(protocol) = protocol.as_ref() {
+                    protocol
+                        .bind(py)
+                        .setattr("_transport", transport.into_any())?;
+                }
+                Ok(true)
+            }
+        }
+    }
+
+    fn feed_data(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
+        match self {
+            Self::Native { reader, .. } => reader.borrow_mut(py).feed_data_internal(py, data),
+            Self::Generic {
+                reader,
+                buffer,
+                limit,
+                ..
+            } => {
+                if data.is_empty() {
+                    return Ok(());
+                }
+
+                let reader = reader.bind(py);
+                let buffer = buffer.bind(py).cast::<PyByteArray>()?;
+                if reader.getattr("_eof")?.extract::<bool>()? {
+                    return Err(PyRuntimeError::new_err("feed_data after feed_eof"));
+                }
+
+                let start = buffer.len();
+                let end = start + data.len();
+                buffer.resize(end)?;
+                unsafe {
+                    buffer.as_bytes_mut()[start..end].copy_from_slice(data);
+                }
+
+                let waiter = reader.getattr("_waiter")?;
+                if !waiter.is_none() {
+                    reader.setattr("_waiter", py.None())?;
+                    if !waiter.call_method0("cancelled")?.extract::<bool>()? {
+                        waiter.call_method1("set_result", (py.None(),))?;
+                    }
+                }
+
+                let transport = reader.getattr("_transport")?;
+                let paused = reader.getattr("_paused")?.extract::<bool>()?;
+                if !transport.is_none() && !paused && end > 2 * limit {
+                    match transport.call_method0(python_names::pause_reading(py)) {
+                        Ok(_) => {
+                            reader.setattr("_paused", true)?;
+                        }
+                        Err(err)
+                            if err
+                                .is_instance_of::<pyo3::exceptions::PyNotImplementedError>(py) =>
+                        {
+                            reader.setattr("_transport", py.None())?;
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+
+                Ok(())
+            }
+        }
+    }
+
+    fn feed_eof(&self, py: Python<'_>) -> PyResult<()> {
+        match self {
+            Self::Native { reader, .. } => reader.borrow_mut(py).feed_eof_internal(py),
+            Self::Generic { reader, .. } => {
+                let reader = reader.bind(py);
+                reader.setattr("_eof", true)?;
+                let waiter = reader.getattr("_waiter")?;
+                if !waiter.is_none() {
+                    reader.setattr("_waiter", py.None())?;
+                    if !waiter.call_method0("cancelled")?.extract::<bool>()? {
+                        waiter.call_method1("set_result", (py.None(),))?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn connection_lost(&self, py: Python<'_>, exc: Option<PyErr>) -> PyResult<()> {
+        match self {
+            Self::Native { protocol, .. } => protocol.borrow_mut(py).handle_connection_lost(
+                py,
+                exc.map(|err| err.value(py).clone().unbind().into_any()),
+            ),
+            Self::Generic {
+                protocol, reader, ..
+            } => {
+                let Some(protocol) = protocol.as_ref() else {
+                    return Ok(());
+                };
+
+                let protocol = protocol.bind(py);
+                protocol.setattr("_connection_lost", true)?;
+
+                match exc {
+                    Some(err) => {
+                        let err_value = err.value(py).clone().unbind().into_any();
+                        reader
+                            .bind(py)
+                            .setattr("_exception", err_value.clone_ref(py))?;
+                        let waiter = reader.bind(py).getattr("_waiter")?;
+                        if !waiter.is_none() {
+                            reader.bind(py).setattr("_waiter", py.None())?;
+                            if !waiter.call_method0("cancelled")?.extract::<bool>()? {
+                                waiter.call_method1("set_exception", (err_value.clone_ref(py),))?;
+                            }
+                        }
+                        let closed = protocol.getattr("_closed")?;
+                        if !closed.call_method0("done")?.extract::<bool>()? {
+                            closed.call_method1("set_exception", (err_value.clone_ref(py),))?;
+                        }
+                        if protocol.getattr("_paused")?.extract::<bool>()? {
+                            let waiters = protocol.getattr("_drain_waiters")?;
+                            for waiter in waiters.try_iter()? {
+                                let waiter = waiter?;
+                                if !waiter.call_method0("done")?.extract::<bool>()? {
+                                    waiter.call_method1(
+                                        "set_exception",
+                                        (err_value.clone_ref(py),),
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        self.feed_eof(py)?;
+                        let closed = protocol.getattr("_closed")?;
+                        if !closed.call_method0("done")?.extract::<bool>()? {
+                            closed.call_method1("set_result", (py.None(),))?;
+                        }
+                        if protocol.getattr("_paused")?.extract::<bool>()? {
+                            let waiters = protocol.getattr("_drain_waiters")?;
+                            for waiter in waiters.try_iter()? {
+                                let waiter = waiter?;
+                                if !waiter.call_method0("done")?.extract::<bool>()? {
+                                    waiter.call_method1("set_result", (py.None(),))?;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                protocol.setattr("_transport", py.None())?;
+                protocol.setattr("_task", py.None())?;
+                Ok(())
+            }
+        }
+    }
+
+    fn eof_received(&self, py: Python<'_>) -> PyResult<bool> {
+        match self {
+            Self::Native { reader, .. } => {
+                reader.borrow_mut(py).feed_eof_internal(py)?;
+                Ok(true)
+            }
+            Self::Generic { .. } => {
+                self.feed_eof(py)?;
+                Ok(true)
+            }
+        }
+    }
+}
+
+struct StreamTransportState {
+    protocol: Py<PyAny>,
+    callbacks: ProtocolCallbacks,
+    context: Py<PyAny>,
+    context_needs_run: bool,
+    extra: HashMap<String, Py<PyAny>>,
+    closing: bool,
+    read_paused: bool,
+    reading: bool,
+    writable: bool,
+    write_eof_requested: bool,
+    can_write_eof: bool,
+    close_on_write_eof: bool,
+    lost_called: bool,
+    writer_registered: bool,
+    server: Option<Weak<ServerCore>>,
+}
+
+pub struct StreamTransportCore {
+    loop_core: Arc<LoopCore>,
+    loop_obj: Py<PyAny>,
+    state: Mutex<StreamTransportState>,
+    pending_read_events: Mutex<VecDeque<PendingReadEvent>>,
+    read_events_scheduled: AtomicBool,
+    writer_tx: Sender<WriterCommand>,
+    direct_writer: Option<Mutex<TaskedDirectWriter>>,
+}
+
+struct ServerState {
+    closed: bool,
+    serving: bool,
+    listeners: Vec<ServerListener>,
+}
+
+pub struct ServerCore {
+    loop_core: Arc<LoopCore>,
+    loop_obj: Py<PyAny>,
+    protocol_factory: Py<PyAny>,
+    context: Py<PyAny>,
+    context_needs_run: bool,
+    sockets: Vec<Py<PyAny>>,
+    state: Mutex<ServerState>,
+    accept_tasks: Mutex<Vec<WorkerThread>>,
+    active_connections: AtomicUsize,
+    closed_notify: AsyncEvent,
+    cleanup_path: Option<PathBuf>,
+}
+
+#[pyclass(name = "Server", module = "rsloop._loop")]
+pub struct PyServer {
+    pub core: Arc<ServerCore>,
+}
+
+#[pyclass(name = "StreamTransport", module = "rsloop._loop")]
+pub struct PyStreamTransport {
+    pub core: Arc<StreamTransportCore>,
+}
+
+enum TaskedDirectWriter {
+    Tcp(StdTcpStream),
+    Unix(StdUnixStream),
+}
+
+impl TaskedDirectWriter {
+    fn shutdown_close(&self) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Both),
+            Self::Unix(stream) => shutdown_unix_stream(stream, Shutdown::Both),
+        }
+    }
+}
+
+enum ReaderTarget {
+    File(std::fs::File),
+    Tcp(StdTcpStream),
+    Unix(StdUnixStream),
+}
+
+impl ReaderTarget {
+    fn fd(&self) -> RawFd {
+        match self {
+            Self::File(file) => file.as_raw_fd(),
+            Self::Tcp(stream) => stream.as_raw_fd(),
+            Self::Unix(stream) => stream.as_raw_fd(),
+        }
+    }
+}
+
+impl Read for ReaderTarget {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::File(file) => file.read(buf),
+            Self::Tcp(stream) => stream.read(buf),
+            Self::Unix(stream) => stream.read(buf),
+        }
+    }
+}
+
+enum WriterTarget {
+    File(std::fs::File),
+    Tcp(StdTcpStream),
+    Unix(StdUnixStream),
+    Sink(io::Sink),
+}
+
+impl WriterTarget {
+    fn fd(&self) -> Option<RawFd> {
+        match self {
+            Self::File(file) => Some(file.as_raw_fd()),
+            Self::Tcp(stream) => Some(stream.as_raw_fd()),
+            Self::Unix(stream) => Some(stream.as_raw_fd()),
+            Self::Sink(_) => None,
+        }
+    }
+
+    fn shutdown_write(&self) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Write),
+            Self::Unix(stream) => shutdown_unix_stream(stream, Shutdown::Write),
+            Self::File(_) | Self::Sink(_) => Ok(()),
+        }
+    }
+
+    fn shutdown_close(&self) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Both),
+            Self::Unix(stream) => shutdown_unix_stream(stream, Shutdown::Both),
+            Self::File(_) | Self::Sink(_) => Ok(()),
+        }
+    }
+}
+
+impl io::Write for WriterTarget {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::File(file) => file.write(buf),
+            Self::Tcp(stream) => stream.write(buf),
+            Self::Unix(stream) => stream.write(buf),
+            Self::Sink(sink) => sink.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::File(file) => file.flush(),
+            Self::Tcp(stream) => stream.flush(),
+            Self::Unix(stream) => stream.flush(),
+            Self::Sink(sink) => sink.flush(),
+        }
+    }
+}
+
+struct WorkerThread {
+    stop: Arc<AtomicBool>,
+    join: thread::JoinHandle<()>,
+}
+
+impl WorkerThread {
+    fn spawn(name: String, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let join = thread::Builder::new()
+            .name(name)
+            .spawn(move || task(thread_stop))
+            .expect("failed to spawn stream worker");
+        Self { stop, join }
+    }
+
+    fn abort(self) {
+        self.stop.store(true, Ordering::Release);
+        let _ = self.join.join();
+    }
+}
+
+impl StreamTransportCore {
+    fn call_protocol_with_tuple(
+        &self,
+        py: Python<'_>,
+        callback: &Py<PyAny>,
+        context: &Py<PyAny>,
+        context_needs_run: bool,
+        args: &Bound<'_, PyTuple>,
+    ) -> PyResult<Py<PyAny>> {
+        let tuple = args.clone().unbind();
+        let context_args = build_context_args(py, callback, &tuple)?;
+        run_in_context(
+            py,
+            context,
+            context_needs_run,
+            callback,
+            &tuple,
+            &context_args,
+        )
+    }
+
+    fn server_ref(&self) -> Option<Weak<ServerCore>> {
+        self.state
+            .lock()
+            .expect("poisoned transport state")
+            .server
+            .as_ref()
+            .cloned()
+    }
+
+    fn call_in_loop_context<T>(
+        &self,
+        f: impl for<'py> FnOnce(Python<'py>) -> PyResult<T>,
+    ) -> PyResult<T> {
+        Python::attach(|py| {
+            if !self.loop_core.on_runtime_thread() {
+                ensure_running_loop(py, &self.loop_obj)?;
+            }
+            f(py)
+        })
+    }
+
+    fn enqueue_pending_read_event(self: &Arc<Self>, event: PendingReadEvent) {
+        self.pending_read_events
+            .lock()
+            .expect("poisoned pending read queue")
+            .push_back(event);
+
+        if !self.read_events_scheduled.swap(true, Ordering::AcqRel)
+            && self
+                .loop_core
+                .send_command(LoopCommand::ScheduleStreamTransportRead(Arc::clone(self)))
+                .is_err()
+        {
+            self.read_events_scheduled.store(false, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn drain_pending_read_events_with_py(&self, py: Python<'_>) -> PyResult<()> {
+        loop {
+            let mut pending = {
+                let mut queue = self
+                    .pending_read_events
+                    .lock()
+                    .expect("poisoned pending read queue");
+                if queue.is_empty() {
+                    self.read_events_scheduled.store(false, Ordering::Release);
+                    return Ok(());
+                }
+
+                let mut drained = VecDeque::new();
+                std::mem::swap(&mut drained, &mut *queue);
+                drained
+            };
+
+            while let Some(event) = pending.pop_front() {
+                match event {
+                    PendingReadEvent::Data(data) => {
+                        if self.is_closing_or_lost() {
+                            continue;
+                        }
+                        if let Err(err) = self.data_received_with_py(py, &data) {
+                            let _ = self.report_error_with_py(
+                                py,
+                                err,
+                                "stream data_received callback failed",
+                            );
+                            let _ = self.connection_lost_with_py(py, None);
+                            self.read_events_scheduled.store(false, Ordering::Release);
+                            return Ok(());
+                        }
+                    }
+                    PendingReadEvent::Eof => match self.eof_received_with_py(py) {
+                        Ok(true) => {
+                            self.read_events_scheduled.store(false, Ordering::Release);
+                            return Ok(());
+                        }
+                        Ok(false) => {
+                            self.set_closing();
+                            let _ = self.writer_tx.send(WriterCommand::Close);
+                            self.read_events_scheduled.store(false, Ordering::Release);
+                            return Ok(());
+                        }
+                        Err(err) => {
+                            let _ = self.report_error_with_py(
+                                py,
+                                err,
+                                "stream eof_received callback failed",
+                            );
+                            let _ = self.connection_lost_with_py(py, None);
+                            self.read_events_scheduled.store(false, Ordering::Release);
+                            return Ok(());
+                        }
+                    },
+                    PendingReadEvent::ConnectionLost(message) => {
+                        let err = message.map(PyRuntimeError::new_err);
+                        let _ = self.connection_lost_with_py(py, err);
+                        self.read_events_scheduled.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    fn call_protocol_method0(
+        &self,
+        py: Python<'_>,
+        callback: &Py<PyAny>,
+        context: &Py<PyAny>,
+        context_needs_run: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let args = PyTuple::empty(py);
+        self.call_protocol_with_tuple(py, callback, context, context_needs_run, &args)
+    }
+
+    fn call_protocol_method1(
+        &self,
+        py: Python<'_>,
+        callback: &Py<PyAny>,
+        context: &Py<PyAny>,
+        context_needs_run: bool,
+        arg: Py<PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let args = PyTuple::new(py, [arg])?;
+        self.call_protocol_with_tuple(py, callback, context, context_needs_run, &args)
+    }
+
+    fn report_error_with_py(&self, py: Python<'_>, err: PyErr, message: &str) -> PyResult<()> {
+        let context = PyDict::new(py);
+        context.set_item("message", message)?;
+        context.set_item("exception", err.value(py))?;
+        self.loop_core
+            .call_exception_handler(py, Some(&self.loop_obj), context.unbind().into_any())
+    }
+
+    pub fn connection_made(&self, transport: Py<PyStreamTransport>) -> PyResult<()> {
+        self.call_in_loop_context(|py| {
+            let (callback, fast_path, context, context_needs_run) = {
+                let state = self.state.lock().expect("poisoned transport state");
+                (
+                    state.callbacks.connection_made.clone_ref(py),
+                    state
+                        .callbacks
+                        .stream_reader_fast_path
+                        .as_ref()
+                        .map(|value| value.clone_ref(py)),
+                    state.context.clone_ref(py),
+                    state.context_needs_run,
+                )
+            };
+            if let Some(fast_path) = fast_path.as_ref() {
+                if fast_path.connection_made(py, transport.clone_ref(py))? {
+                    return Ok(());
+                }
+            }
+            self.call_protocol_method1(
+                py,
+                &callback,
+                &context,
+                context_needs_run,
+                transport.into_any(),
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn data_received(&self, data: &[u8]) -> PyResult<()> {
+        self.call_in_loop_context(|py| self.data_received_with_py(py, data))
+    }
+
+    pub fn eof_received(&self) -> PyResult<bool> {
+        self.call_in_loop_context(|py| self.eof_received_with_py(py))
+    }
+
+    pub fn connection_lost(self: &Arc<Self>, exc: Option<PyErr>) -> PyResult<()> {
+        if !self.loop_core.on_runtime_thread() {
+            self.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+                exc.map(|err| Python::attach(|py| err.value(py).to_string())),
+            ));
+            return Ok(());
+        }
+
+        self.call_in_loop_context(|py| self.connection_lost_with_py(py, exc))
+    }
+
+    fn data_received_with_py(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
+        let (data_received, get_buffer, buffer_updated, fast_path, context, context_needs_run) = {
+            let state = self.state.lock().expect("poisoned transport state");
+            (
+                state
+                    .callbacks
+                    .data_received
+                    .as_ref()
+                    .map(|value| value.clone_ref(py)),
+                state
+                    .callbacks
+                    .get_buffer
+                    .as_ref()
+                    .map(|value| value.clone_ref(py)),
+                state
+                    .callbacks
+                    .buffer_updated
+                    .as_ref()
+                    .map(|value| value.clone_ref(py)),
+                state
+                    .callbacks
+                    .stream_reader_fast_path
+                    .as_ref()
+                    .map(|value| value.clone_ref(py)),
+                state.context.clone_ref(py),
+                state.context_needs_run,
+            )
+        };
+
+        if let Some(fast_path) = fast_path.as_ref() {
+            return fast_path.feed_data(py, data);
+        }
+
+        if let (Some(get_buffer), Some(buffer_updated)) =
+            (get_buffer.as_ref(), buffer_updated.as_ref())
+        {
+            let args = PyTuple::new(py, [data.len()])?.unbind();
+            let context_args = build_context_args(py, get_buffer, &args)?;
+            let buffer_obj = run_in_context(
+                py,
+                &context,
+                context_needs_run,
+                get_buffer,
+                &args,
+                &context_args,
+            )?;
+            let memoryview = py
+                .import("builtins")?
+                .getattr("memoryview")?
+                .call1((buffer_obj.bind(py),))?;
+            memoryview.set_item(
+                PySlice::new(py, 0, data.len() as isize, 1),
+                PyBytes::new(py, data),
+            )?;
+            let updated_args = PyTuple::new(py, [data.len()])?.unbind();
+            let updated_context_args = build_context_args(py, buffer_updated, &updated_args)?;
+            run_in_context(
+                py,
+                &context,
+                context_needs_run,
+                buffer_updated,
+                &updated_args,
+                &updated_context_args,
+            )?;
+            return Ok(());
+        }
+
+        if let Some(data_received) = data_received.as_ref() {
+            self.call_protocol_method1(
+                py,
+                data_received,
+                &context,
+                context_needs_run,
+                PyBytes::new(py, data).unbind().into_any(),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn eof_received_with_py(&self, py: Python<'_>) -> PyResult<bool> {
+        let (callback, fast_path, context, context_needs_run) = {
+            let state = self.state.lock().expect("poisoned transport state");
+            (
+                state
+                    .callbacks
+                    .eof_received
+                    .as_ref()
+                    .map(|value| value.clone_ref(py)),
+                state
+                    .callbacks
+                    .stream_reader_fast_path
+                    .as_ref()
+                    .map(|value| value.clone_ref(py)),
+                state.context.clone_ref(py),
+                state.context_needs_run,
+            )
+        };
+        if let Some(fast_path) = fast_path.as_ref() {
+            return fast_path.eof_received(py);
+        }
+        let Some(callback) = callback else {
+            return Ok(false);
+        };
+        let result = self.call_protocol_method0(py, &callback, &context, context_needs_run)?;
+        result.bind(py).is_truthy()
+    }
+
+    fn connection_lost_with_py(&self, py: Python<'_>, exc: Option<PyErr>) -> PyResult<()> {
+        let (callback, fast_path, context, context_needs_run, server) = {
+            let mut state = self.state.lock().expect("poisoned transport state");
+            if state.lost_called {
+                return Ok(());
+            }
+            state.lost_called = true;
+            state.closing = true;
+            (
+                state.callbacks.connection_lost.clone_ref(py),
+                state
+                    .callbacks
+                    .stream_reader_fast_path
+                    .as_ref()
+                    .map(|value| value.clone_ref(py)),
+                state.context.clone_ref(py),
+                state.context_needs_run,
+                state.server.as_ref().cloned(),
+            )
+        };
+
+        if let Some(fast_path) = fast_path.as_ref() {
+            fast_path.connection_lost(py, exc)?;
+        } else {
+            let arg = exc
+                .map(|err| err.value(py).clone().unbind().into_any())
+                .unwrap_or_else(|| py.None());
+            self.call_protocol_method1(py, &callback, &context, context_needs_run, arg)?;
+        }
+
+        if let Some(server) = server.and_then(|weak| weak.upgrade()) {
+            server.connection_lost();
+        }
+        Ok(())
+    }
+
+    fn set_protocol(&self, py: Python<'_>, protocol: Py<PyAny>) -> PyResult<()> {
+        let callbacks = build_protocol_callbacks(py, &protocol)?;
+        let mut state = self.state.lock().expect("poisoned transport state");
+        state.protocol = protocol;
+        state.callbacks = callbacks;
+        Ok(())
+    }
+
+    fn get_protocol(&self, py: Python<'_>) -> Py<PyAny> {
+        self.state
+            .lock()
+            .expect("poisoned transport state")
+            .protocol
+            .clone_ref(py)
+    }
+
+    fn get_extra(&self, py: Python<'_>, name: &str) -> Option<Py<PyAny>> {
+        self.state
+            .lock()
+            .expect("poisoned transport state")
+            .extra
+            .get(name)
+            .map(|value| value.clone_ref(py))
+    }
+
+    fn set_closing(&self) {
+        self.state.lock().expect("poisoned transport state").closing = true;
+    }
+
+    fn is_closing_or_lost(&self) -> bool {
+        let state = self.state.lock().expect("poisoned transport state");
+        state.closing || state.lost_called
+    }
+
+    fn mark_write_eof(&self) {
+        self.state
+            .lock()
+            .expect("poisoned transport state")
+            .write_eof_requested = true;
+    }
+
+    fn is_closing(&self) -> bool {
+        self.state.lock().expect("poisoned transport state").closing
+    }
+
+    fn can_write_eof(&self) -> bool {
+        self.state
+            .lock()
+            .expect("poisoned transport state")
+            .can_write_eof
+    }
+
+    fn pause_reading(&self) {
+        let mut state = self.state.lock().expect("poisoned transport state");
+        state.read_paused = true;
+        state.reading = false;
+    }
+
+    fn resume_reading(&self) {
+        let mut state = self.state.lock().expect("poisoned transport state");
+        state.read_paused = false;
+        state.reading = true;
+    }
+
+    fn is_reading(&self) -> bool {
+        self.state.lock().expect("poisoned transport state").reading
+    }
+
+    fn wait_until_readable(&self) {
+        loop {
+            let paused = {
+                self.state
+                    .lock()
+                    .expect("poisoned transport state")
+                    .read_paused
+            };
+            if !paused || self.is_closing() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn is_writable(&self) -> bool {
+        self.state
+            .lock()
+            .expect("poisoned transport state")
+            .writable
+    }
+
+    fn write_backpressure_active(&self) -> bool {
+        self.state
+            .lock()
+            .expect("poisoned transport state")
+            .writer_registered
+    }
+
+    fn set_write_backpressure_active(&self, active: bool) {
+        self.state
+            .lock()
+            .expect("poisoned transport state")
+            .writer_registered = active;
+    }
+
+    fn close_on_write_eof(&self) -> bool {
+        self.state
+            .lock()
+            .expect("poisoned transport state")
+            .close_on_write_eof
+    }
+
+    fn try_direct_tasked_write(&self, data: &[u8]) -> io::Result<usize> {
+        let Some(writer) = &self.direct_writer else {
+            return Err(io::Error::other("not direct-tasked"));
+        };
+        let mut writer = writer.lock().expect("poisoned direct tasked writer");
+        match &mut *writer {
+            TaskedDirectWriter::Tcp(stream) => stream.write(data),
+            TaskedDirectWriter::Unix(stream) => stream.write(data),
+        }
+    }
+
+    fn fail_write(self: &Arc<Self>, err: Option<io::Error>) {
+        if self.is_closing() {
+            return;
+        }
+
+        self.set_closing();
+        self.set_write_backpressure_active(false);
+        self.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+            err.map(|err| err.to_string()),
+        ));
+        let _ = self.writer_tx.send(WriterCommand::Stop);
+    }
+
+    fn queue_write(self: &Arc<Self>, data: OwnedWriteBuffer) -> io::Result<()> {
+        if self.writer_tx.send(WriterCommand::Data(data)).is_err() {
+            self.fail_write(None);
+        }
+        Ok(())
+    }
+
+    fn try_write_bytes(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
+        if self.direct_writer.is_some() && !self.write_backpressure_active() {
+            match self.try_direct_tasked_write(data) {
+                Ok(written) if written == data.len() => return Ok(()),
+                Ok(written) => {
+                    let mut pending = OwnedWriteBuffer::from_slice(data);
+                    pending.advance(written);
+                    self.set_write_backpressure_active(true);
+                    return self.queue_write(pending);
+                }
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    self.set_write_backpressure_active(true);
+                    return self.queue_write(OwnedWriteBuffer::from_slice(data));
+                }
+                Err(err) => {
+                    self.fail_write(Some(err));
+                    return Ok(());
+                }
+            }
+        }
+
+        self.queue_write(OwnedWriteBuffer::from_slice(data))
+    }
+
+    pub async fn wait_readable(self: &Arc<Self>) -> io::Result<()> {
+        Err(io::Error::other(
+            "transport readiness is not used in std transport mode",
+        ))
+    }
+
+    pub async fn wait_writable(self: &Arc<Self>) -> io::Result<()> {
+        Err(io::Error::other(
+            "transport readiness is not used in std transport mode",
+        ))
+    }
+
+    pub fn handle_read_ready_with_py(self: &Arc<Self>, _py: Python<'_>) {}
+
+    pub fn handle_write_ready_with_py(self: &Arc<Self>, _py: Python<'_>) {}
+}
+
+impl ServerCore {
+    fn locals(&self, py: Python<'_>) -> PyResult<TaskLocals> {
+        task_locals_for_loop(py, &self.loop_obj)
+    }
+
+    fn is_closed(&self) -> bool {
+        self.state.lock().expect("poisoned server state").closed
+    }
+
+    fn is_serving(&self) -> bool {
+        let state = self.state.lock().expect("poisoned server state");
+        state.serving && !state.closed
+    }
+
+    fn connection_opened(&self) {
+        self.active_connections.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn connection_lost(&self) {
+        self.active_connections.fetch_sub(1, Ordering::SeqCst);
+        self.closed_notify.notify_all();
+    }
+
+    fn close(&self) {
+        {
+            let mut state = self.state.lock().expect("poisoned server state");
+            if state.closed {
+                return;
+            }
+            state.closed = true;
+            state.serving = false;
+            state.listeners.clear();
+        }
+
+        for task in self
+            .accept_tasks
+            .lock()
+            .expect("poisoned accept tasks")
+            .drain(..)
+        {
+            task.abort();
+        }
+
+        if let Some(path) = &self.cleanup_path {
+            let _ = fs::remove_file(path);
+        }
+
+        self.closed_notify.notify_all();
+    }
+
+    fn report_error(&self, err: PyErr, message: &str) {
+        let _ = Python::attach(|py| -> PyResult<()> {
+            let context = PyDict::new(py);
+            context.set_item("message", message)?;
+            context.set_item("exception", err.value(py))?;
+            self.loop_core.call_exception_handler(
+                py,
+                Some(&self.loop_obj),
+                context.unbind().into_any(),
+            )
+        });
+    }
+
+    fn create_protocol(&self) -> PyResult<Py<PyAny>> {
+        Python::attach(|py| {
+            ensure_running_loop(py, &self.loop_obj)?;
+            let callback = self.protocol_factory.bind(py).clone().unbind();
+            let args = PyTuple::empty(py).unbind();
+            let context_args = build_context_args(py, &callback, &args)?;
+            run_in_context(
+                py,
+                &self.context,
+                self.context_needs_run,
+                &callback,
+                &args,
+                &context_args,
+            )
+        })
+    }
+
+    pub fn spawn_accept_tasks(self: &Arc<Self>) {
+        let listeners = {
+            let mut state = self.state.lock().expect("poisoned server state");
+            if state.closed || state.serving {
+                return;
+            }
+            state.serving = true;
+            std::mem::take(&mut state.listeners)
+        };
+
+        let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
+        for listener in listeners {
+            let server = Arc::clone(self);
+            let task = match listener {
+                ServerListener::Tcp(listener) => {
+                    WorkerThread::spawn("rsloop-tcp-accept".to_owned(), move |stop| {
+                        run_tcp_accept_loop(server, listener, stop)
+                    })
+                }
+                ServerListener::Unix(listener) => {
+                    WorkerThread::spawn("rsloop-unix-accept".to_owned(), move |stop| {
+                        run_unix_accept_loop(server, listener, stop)
+                    })
+                }
+            };
+            tasks.push(task);
+        }
+    }
+}
+
+#[pymethods]
+impl PyStreamTransport {
+    fn write(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        if self.core.is_closing() {
+            return Ok(());
+        }
+        if !self.core.is_writable() {
+            return Err(PyRuntimeError::new_err("transport is not writable"));
+        }
+
+        let borrowed_bytes;
+        let converted = if let Some(encoding) = self.core.get_extra(py, "text_encoding") {
+            if data.is_instance_of::<PyString>() {
+                let errors = self
+                    .core
+                    .get_extra(py, "text_errors")
+                    .unwrap_or_else(|| PyString::new(py, "strict").unbind().into_any());
+                data.call_method1("encode", (encoding, errors))?
+            } else {
+                py.import("builtins")?.getattr("bytes")?.call1((data,))?
+            }
+        } else if let Ok(bytes) = data.cast::<PyBytes>() {
+            borrowed_bytes = bytes;
+            self.core
+                .try_write_bytes(borrowed_bytes.as_bytes())
+                .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+            return Ok(());
+        } else {
+            py.import("builtins")?.getattr("bytes")?.call1((data,))?
+        };
+        let bytes = converted.cast::<PyBytes>()?;
+        self.core
+            .try_write_bytes(bytes.as_bytes())
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+        Ok(())
+    }
+
+    fn writelines(&self, py: Python<'_>, seq: &Bound<'_, PyAny>) -> PyResult<()> {
+        for item in seq.try_iter()? {
+            self.write(py, &item?)?;
+        }
+        Ok(())
+    }
+
+    fn close(&self) -> PyResult<()> {
+        self.core.set_closing();
+        if !self.core.write_backpressure_active() {
+            if let Some(writer) = &self.core.direct_writer {
+                let writer = writer.lock().expect("poisoned direct tasked writer");
+                let _ = writer.shutdown_close();
+            }
+            let _ = self.core.writer_tx.send(WriterCommand::Stop);
+            let _ = self.core.connection_lost(None);
+            return Ok(());
+        }
+
+        let _ = self.core.writer_tx.send(WriterCommand::Close);
+        Ok(())
+    }
+
+    fn abort(&self) -> PyResult<()> {
+        self.core.set_closing();
+        if let Some(writer) = &self.core.direct_writer {
+            let writer = writer.lock().expect("poisoned direct tasked writer");
+            let _ = writer.shutdown_close();
+        }
+        let _ = self.core.writer_tx.send(WriterCommand::Abort);
+        let _ = self.core.connection_lost(None);
+        Ok(())
+    }
+
+    fn is_closing(&self) -> bool {
+        self.core.is_closing()
+    }
+
+    fn can_write_eof(&self) -> bool {
+        self.core.can_write_eof()
+    }
+
+    fn write_eof(&self) -> PyResult<()> {
+        if !self.core.can_write_eof() {
+            return Err(PyRuntimeError::new_err(
+                "transport does not support write_eof",
+            ));
+        }
+        self.core.mark_write_eof();
+        let _ = self.core.writer_tx.send(WriterCommand::WriteEof);
+        Ok(())
+    }
+
+    #[pyo3(signature=(name, default=None))]
+    fn get_extra_info(&self, py: Python<'_>, name: &str, default: Option<Py<PyAny>>) -> Py<PyAny> {
+        self.core
+            .get_extra(py, name)
+            .unwrap_or_else(|| default.unwrap_or_else(|| py.None()))
+    }
+
+    fn get_protocol(&self, py: Python<'_>) -> Py<PyAny> {
+        self.core.get_protocol(py)
+    }
+
+    fn set_protocol(&self, protocol: Py<PyAny>) {
+        Python::attach(|py| self.core.set_protocol(py, protocol))
+            .expect("failed to update transport protocol");
+    }
+
+    fn pause_reading(&self) {
+        self.core.pause_reading();
+    }
+
+    fn resume_reading(&self) {
+        self.core.resume_reading();
+    }
+
+    fn is_reading(&self) -> bool {
+        self.core.is_reading()
+    }
+
+    fn get_write_buffer_size(&self) -> usize {
+        0
+    }
+
+    fn get_write_buffer_limits(&self) -> (usize, usize) {
+        (0, 0)
+    }
+
+    fn set_write_buffer_limits(&self, _high: Option<usize>, _low: Option<usize>) {}
+
+    fn __repr__(&self) -> String {
+        format!("<StreamTransport closing={}>", self.is_closing())
+    }
+}
+
+#[pymethods]
+impl PyServer {
+    fn close(&self) {
+        self.core.close();
+    }
+
+    fn is_serving(&self) -> bool {
+        self.core.is_serving()
+    }
+
+    fn get_loop(&self, py: Python<'_>) -> Py<PyAny> {
+        self.core.loop_obj.clone_ref(py)
+    }
+
+    fn start_serving<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let locals = self.core.locals(py)?;
+        let core = Arc::clone(&self.core);
+        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+            core.spawn_accept_tasks();
+            Ok(Python::attach(|py| py.None()))
+        })
+    }
+
+    fn wait_closed<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let locals = self.core.locals(py)?;
+        let core = Arc::clone(&self.core);
+        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+            loop {
+                if core.is_closed() && core.active_connections.load(Ordering::SeqCst) == 0 {
+                    return Ok(Python::attach(|py| py.None()));
+                }
+                let wait = core.closed_notify.listen();
+                if core.is_closed() && core.active_connections.load(Ordering::SeqCst) == 0 {
+                    return Ok(Python::attach(|py| py.None()));
+                }
+                let _ = wait.await;
+            }
+        })
+    }
+
+    fn serve_forever<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let locals = self.core.locals(py)?;
+        let core = Arc::clone(&self.core);
+        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+            core.spawn_accept_tasks();
+            loop {
+                if core.is_closed() {
+                    return Ok(Python::attach(|py| py.None()));
+                }
+                let wait = core.closed_notify.listen();
+                if core.is_closed() {
+                    return Ok(Python::attach(|py| py.None()));
+                }
+                let _ = wait.await;
+            }
+        })
+    }
+
+    #[getter]
+    fn sockets(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let tuple = PyTuple::new(
+            py,
+            self.core
+                .sockets
+                .iter()
+                .map(|socket| socket.clone_ref(py))
+                .collect::<Vec<_>>(),
+        )?;
+        Ok(tuple.unbind().into_any())
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<Server serving={} closed={}>",
+            self.core.is_serving(),
+            self.core.is_closed()
+        )
+    }
+}
+
+pub fn task_locals_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<TaskLocals> {
+    TaskLocals::new(loop_obj.clone_ref(py).into_bound(py)).copy_context(py)
+}
+
+pub fn transport_from_socket(
+    py: Python<'_>,
+    loop_core: Arc<LoopCore>,
+    loop_obj: Py<PyAny>,
+    protocol: Py<PyAny>,
+    context: Py<PyAny>,
+    context_needs_run: bool,
+    socket_obj: Py<PyAny>,
+) -> PyResult<Py<PyStreamTransport>> {
+    let spawn_context = TransportSpawnContext {
+        loop_core,
+        loop_obj,
+        protocol,
+        context,
+        context_needs_run,
+    };
+    let family = socket_obj.getattr(py, "family")?.extract::<i32>(py)?;
+    let fd = fd_ops::fileobj_to_fd(py, socket_obj.bind(py))?;
+    if family == libc::AF_UNIX {
+        return spawn_unix_transport(py, spawn_context, unix_stream_from_socket_fd(fd)?, None);
+    }
+
+    spawn_tcp_transport(py, spawn_context, tcp_stream_from_socket_fd(fd)?, None)
+}
+
+pub fn spawn_read_pipe_transport(
+    py: Python<'_>,
+    loop_core: Arc<LoopCore>,
+    loop_obj: Py<PyAny>,
+    protocol: Py<PyAny>,
+    context: Py<PyAny>,
+    context_needs_run: bool,
+    pipe_obj: Py<PyAny>,
+) -> PyResult<Py<PyStreamTransport>> {
+    let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
+    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let file = unsafe { std::fs::File::from_raw_fd(dup) };
+    let callbacks = build_protocol_callbacks(py, &protocol)?;
+    let mut extra = HashMap::with_capacity(2);
+    extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
+    extra.insert("file".to_owned(), pipe_obj.clone_ref(py));
+
+    let (writer_tx, writer_rx) = mpsc::channel();
+    let core = Arc::new(StreamTransportCore {
+        loop_core,
+        loop_obj,
+        state: Mutex::new(StreamTransportState {
+            protocol,
+            callbacks,
+            context,
+            context_needs_run,
+            extra,
+            closing: false,
+            read_paused: false,
+            reading: true,
+            writable: false,
+            write_eof_requested: false,
+            can_write_eof: false,
+            close_on_write_eof: false,
+            lost_called: false,
+            writer_registered: false,
+            server: None,
+        }),
+        pending_read_events: Mutex::new(VecDeque::new()),
+        read_events_scheduled: AtomicBool::new(false),
+        writer_tx,
+        direct_writer: None,
+    });
+
+    let transport = Py::new(
+        py,
+        PyStreamTransport {
+            core: Arc::clone(&core),
+        },
+    )?;
+    core.connection_made(transport.clone_ref(py))?;
+    spawn_reader_worker(Arc::clone(&core), ReaderTarget::File(file));
+    spawn_writer_worker(core, WriterTarget::Sink(io::sink()), writer_rx);
+    Ok(transport)
+}
+
+pub fn spawn_write_pipe_transport(
+    py: Python<'_>,
+    spawn_context: TransportSpawnContext,
+    pipe_obj: Py<PyAny>,
+    extra_entries: Option<HashMap<String, Py<PyAny>>>,
+) -> PyResult<Py<PyStreamTransport>> {
+    let TransportSpawnContext {
+        loop_core,
+        loop_obj,
+        protocol,
+        context,
+        context_needs_run,
+    } = spawn_context;
+    let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
+    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let file = unsafe { std::fs::File::from_raw_fd(dup) };
+    let callbacks = build_protocol_callbacks(py, &protocol)?;
+    let mut extra = HashMap::with_capacity(2 + extra_entries.as_ref().map_or(0, HashMap::len));
+    extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
+    extra.insert("file".to_owned(), pipe_obj.clone_ref(py));
+    if let Some(extra_entries) = extra_entries {
+        extra.extend(extra_entries);
+    }
+
+    let (writer_tx, writer_rx) = mpsc::channel();
+    let core = Arc::new(StreamTransportCore {
+        loop_core,
+        loop_obj,
+        state: Mutex::new(StreamTransportState {
+            protocol,
+            callbacks,
+            context,
+            context_needs_run,
+            extra,
+            closing: false,
+            read_paused: false,
+            reading: false,
+            writable: true,
+            write_eof_requested: false,
+            can_write_eof: true,
+            close_on_write_eof: true,
+            lost_called: false,
+            writer_registered: false,
+            server: None,
+        }),
+        pending_read_events: Mutex::new(VecDeque::new()),
+        read_events_scheduled: AtomicBool::new(false),
+        writer_tx,
+        direct_writer: None,
+    });
+
+    let transport = Py::new(
+        py,
+        PyStreamTransport {
+            core: Arc::clone(&core),
+        },
+    )?;
+    core.connection_made(transport.clone_ref(py))?;
+    spawn_writer_worker(core, WriterTarget::File(file), writer_rx);
+    Ok(transport)
+}
+
+pub fn tcp_stream_from_socket_fd(fd: RawFd) -> PyResult<StdTcpStream> {
+    duplicate_configured_tcp_stream(fd)
+}
+
+pub fn unix_stream_from_socket_fd(fd: RawFd) -> PyResult<StdUnixStream> {
+    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let stream = unsafe { StdUnixStream::from_raw_fd(dup) };
+    stream
+        .set_nonblocking(true)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    Ok(stream)
+}
+
+pub fn tcp_listener_from_socket_fd(fd: RawFd) -> PyResult<StdTcpListener> {
+    duplicate_configured_tcp_listener(fd)
+}
+
+pub fn unix_listener_from_socket_fd(fd: RawFd) -> PyResult<StdUnixListener> {
+    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let listener = unsafe { StdUnixListener::from_raw_fd(dup) };
+    listener
+        .set_nonblocking(true)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    Ok(listener)
+}
+
+fn duplicate_configured_tcp_stream(fd: RawFd) -> PyResult<StdTcpStream> {
+    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let socket = unsafe { Socket::from_raw_fd(dup) };
+    socket
+        .set_nonblocking(true)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let _ = socket.set_tcp_nodelay(true);
+    Ok(socket.into())
+}
+
+fn duplicate_configured_tcp_listener(fd: RawFd) -> PyResult<StdTcpListener> {
+    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let socket = unsafe { Socket::from_raw_fd(dup) };
+    socket
+        .set_nonblocking(true)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    Ok(socket.into())
+}
+
+pub fn spawn_tcp_transport(
+    py: Python<'_>,
+    spawn_context: TransportSpawnContext,
+    stream: StdTcpStream,
+    server: Option<Weak<ServerCore>>,
+) -> PyResult<Py<PyStreamTransport>> {
+    let TransportSpawnContext {
+        loop_core,
+        loop_obj,
+        protocol,
+        context,
+        context_needs_run,
+    } = spawn_context;
+    let raw_fd = stream.as_raw_fd();
+    let extra = make_stream_extra(py, raw_fd, libc::AF_INET)?;
+    let callbacks = build_protocol_callbacks(py, &protocol)?;
+    let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
+    let direct_writer = duplicate_configured_tcp_stream(raw_fd)?;
+    let writer = stream
+        .try_clone()
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let (writer_tx, writer_rx) = mpsc::channel();
+    let core = Arc::new(StreamTransportCore {
+        loop_core,
+        loop_obj,
+        state: Mutex::new(StreamTransportState {
+            protocol,
+            callbacks,
+            context,
+            context_needs_run,
+            extra,
+            closing: false,
+            read_paused: false,
+            reading: true,
+            writable: true,
+            write_eof_requested: false,
+            can_write_eof: true,
+            close_on_write_eof: false,
+            lost_called: false,
+            writer_registered: false,
+            server,
+        }),
+        pending_read_events: Mutex::new(VecDeque::new()),
+        read_events_scheduled: AtomicBool::new(false),
+        writer_tx,
+        direct_writer: Some(Mutex::new(TaskedDirectWriter::Tcp(direct_writer))),
+    });
+
+    let transport = Py::new(
+        py,
+        PyStreamTransport {
+            core: Arc::clone(&core),
+        },
+    )?;
+    core.connection_made(transport.clone_ref(py))?;
+    if let Some(server) = core.server_ref().and_then(|weak| weak.upgrade()) {
+        server.connection_opened();
+    }
+
+    spawn_reader_worker(Arc::clone(&core), ReaderTarget::Tcp(stream));
+    spawn_writer_worker(core, WriterTarget::Tcp(writer), writer_rx);
+    Ok(transport)
+}
+
+pub fn spawn_unix_transport(
+    py: Python<'_>,
+    spawn_context: TransportSpawnContext,
+    stream: StdUnixStream,
+    server: Option<Weak<ServerCore>>,
+) -> PyResult<Py<PyStreamTransport>> {
+    let TransportSpawnContext {
+        loop_core,
+        loop_obj,
+        protocol,
+        context,
+        context_needs_run,
+    } = spawn_context;
+    let raw_fd = stream.as_raw_fd();
+    let extra = make_stream_extra(py, raw_fd, libc::AF_UNIX)?;
+    let callbacks = build_protocol_callbacks(py, &protocol)?;
+    let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
+    let writer_fd =
+        fd_ops::dup_raw_fd(raw_fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let direct_writer = unsafe { StdUnixStream::from_raw_fd(writer_fd) };
+    direct_writer
+        .set_nonblocking(true)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let writer = stream
+        .try_clone()
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let (writer_tx, writer_rx) = mpsc::channel();
+    let core = Arc::new(StreamTransportCore {
+        loop_core,
+        loop_obj,
+        state: Mutex::new(StreamTransportState {
+            protocol,
+            callbacks,
+            context,
+            context_needs_run,
+            extra,
+            closing: false,
+            read_paused: false,
+            reading: true,
+            writable: true,
+            write_eof_requested: false,
+            can_write_eof: true,
+            close_on_write_eof: false,
+            lost_called: false,
+            writer_registered: false,
+            server,
+        }),
+        pending_read_events: Mutex::new(VecDeque::new()),
+        read_events_scheduled: AtomicBool::new(false),
+        writer_tx,
+        direct_writer: Some(Mutex::new(TaskedDirectWriter::Unix(direct_writer))),
+    });
+
+    let transport = Py::new(
+        py,
+        PyStreamTransport {
+            core: Arc::clone(&core),
+        },
+    )?;
+    core.connection_made(transport.clone_ref(py))?;
+    if let Some(server) = core.server_ref().and_then(|weak| weak.upgrade()) {
+        server.connection_opened();
+    }
+
+    spawn_reader_worker(Arc::clone(&core), ReaderTarget::Unix(stream));
+    spawn_writer_worker(core, WriterTarget::Unix(writer), writer_rx);
+    Ok(transport)
+}
+
+pub fn create_server(py: Python<'_>, params: ServerCreateParams) -> PyResult<Py<PyServer>> {
+    let ServerCreateParams {
+        loop_core,
+        loop_obj,
+        protocol_factory,
+        context,
+        context_needs_run,
+        sockets,
+        listeners,
+        cleanup_path,
+    } = params;
+    let accept_tasks = Vec::with_capacity(listeners.len());
+    Py::new(
+        py,
+        PyServer {
+            core: Arc::new(ServerCore {
+                loop_core,
+                loop_obj,
+                protocol_factory,
+                context,
+                context_needs_run,
+                sockets,
+                state: Mutex::new(ServerState {
+                    closed: false,
+                    serving: false,
+                    listeners,
+                }),
+                accept_tasks: Mutex::new(accept_tasks),
+                active_connections: AtomicUsize::new(0),
+                closed_notify: AsyncEvent::new(),
+                cleanup_path,
+            }),
+        },
+    )
+}
+
+pub fn tcp_server_listener(listener: StdTcpListener) -> ServerListener {
+    ServerListener::Tcp(listener)
+}
+
+pub fn unix_server_listener(listener: StdUnixListener) -> ServerListener {
+    ServerListener::Unix(listener)
+}
+
+fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: Arc<AtomicBool>) {
+    loop {
+        if stop.load(Ordering::Acquire) || server.is_closed() {
+            return;
+        }
+
+        match fd_ops::poll_fd(listener.as_raw_fd(), true, false, 50) {
+            Ok((false, _)) => continue,
+            Ok((true, _)) => {}
+            Err(err) => {
+                if !server.is_closed() {
+                    server.report_error(
+                        PyRuntimeError::new_err(err.to_string()),
+                        "TCP server accept failed",
+                    );
+                }
+                return;
+            }
+        }
+
+        loop {
+            match listener.accept() {
+                Ok((stream, _addr)) => {
+                    let _ = stream.set_nonblocking(true);
+                    let _ = stream.set_nodelay(true);
+                    let protocol = match server.create_protocol() {
+                        Ok(protocol) => protocol,
+                        Err(err) => {
+                            server.report_error(err, "failed to create server protocol");
+                            continue;
+                        }
+                    };
+
+                    let context = Python::attach(|py| server.context.clone_ref(py));
+                    let result = Python::attach(|py| {
+                        spawn_tcp_transport(
+                            py,
+                            TransportSpawnContext {
+                                loop_core: Arc::clone(&server.loop_core),
+                                loop_obj: server.loop_obj.clone_ref(py),
+                                protocol,
+                                context,
+                                context_needs_run: server.context_needs_run,
+                            },
+                            stream,
+                            Some(Arc::downgrade(&server)),
+                        )
+                    });
+                    if let Err(err) = result {
+                        server.report_error(err, "failed to accept TCP connection");
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    if !server.is_closed() {
+                        server.report_error(
+                            PyRuntimeError::new_err(err.to_string()),
+                            "TCP server accept failed",
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop: Arc<AtomicBool>) {
+    loop {
+        if stop.load(Ordering::Acquire) || server.is_closed() {
+            return;
+        }
+
+        match fd_ops::poll_fd(listener.as_raw_fd(), true, false, 50) {
+            Ok((false, _)) => continue,
+            Ok((true, _)) => {}
+            Err(err) => {
+                if !server.is_closed() {
+                    server.report_error(
+                        PyRuntimeError::new_err(err.to_string()),
+                        "Unix server accept failed",
+                    );
+                }
+                return;
+            }
+        }
+
+        loop {
+            match listener.accept() {
+                Ok((stream, _addr)) => {
+                    let _ = stream.set_nonblocking(true);
+                    let protocol = match server.create_protocol() {
+                        Ok(protocol) => protocol,
+                        Err(err) => {
+                            server.report_error(err, "failed to create Unix server protocol");
+                            continue;
+                        }
+                    };
+
+                    let context = Python::attach(|py| server.context.clone_ref(py));
+                    let result = Python::attach(|py| {
+                        spawn_unix_transport(
+                            py,
+                            TransportSpawnContext {
+                                loop_core: Arc::clone(&server.loop_core),
+                                loop_obj: server.loop_obj.clone_ref(py),
+                                protocol,
+                                context,
+                                context_needs_run: server.context_needs_run,
+                            },
+                            stream,
+                            Some(Arc::downgrade(&server)),
+                        )
+                    });
+                    if let Err(err) = result {
+                        server.report_error(err, "failed to accept Unix connection");
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    if !server.is_closed() {
+                        server.report_error(
+                            PyRuntimeError::new_err(err.to_string()),
+                            "Unix server accept failed",
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn spawn_reader_worker(core: Arc<StreamTransportCore>, reader: ReaderTarget) {
+    thread::Builder::new()
+        .name("rsloop-stream-reader".to_owned())
+        .spawn(move || run_stream_reader(core, reader))
+        .expect("failed to spawn stream reader");
+}
+
+fn spawn_writer_worker(
+    core: Arc<StreamTransportCore>,
+    writer: WriterTarget,
+    writer_rx: Receiver<WriterCommand>,
+) {
+    thread::Builder::new()
+        .name("rsloop-stream-writer".to_owned())
+        .spawn(move || run_stream_writer(core, writer, writer_rx))
+        .expect("failed to spawn stream writer");
+}
+
+fn run_stream_reader(core: Arc<StreamTransportCore>, mut reader: ReaderTarget) {
+    let mut buf = [0_u8; 65_536];
+
+    loop {
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        core.wait_until_readable();
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        match fd_ops::poll_fd(reader.fd(), true, false, 50) {
+            Ok((false, _)) => continue,
+            Ok((true, _)) => {}
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return;
+            }
+        }
+
+        match reader.read(&mut buf) {
+            Ok(0) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                return;
+            }
+            Ok(n) => core
+                .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return;
+            }
+        }
+    }
+}
+
+fn run_stream_writer(
+    core: Arc<StreamTransportCore>,
+    mut writer: WriterTarget,
+    writer_rx: Receiver<WriterCommand>,
+) {
+    let mut pending_command = None;
+
+    loop {
+        let command = match pending_command.take() {
+            Some(command) => command,
+            None => match writer_rx.recv() {
+                Ok(command) => command,
+                Err(_) => break,
+            },
+        };
+
+        match command {
+            WriterCommand::Data(mut data) => {
+                if let Err(err) = write_all_owned(&mut writer, &mut data) {
+                    let _ = core.connection_lost(Some(PyRuntimeError::new_err(err.to_string())));
+                    return;
+                }
+
+                loop {
+                    match writer_rx.try_recv() {
+                        Ok(WriterCommand::Data(mut next)) => {
+                            if let Err(err) = write_all_owned(&mut writer, &mut next) {
+                                let _ = core.connection_lost(Some(PyRuntimeError::new_err(
+                                    err.to_string(),
+                                )));
+                                return;
+                            }
+                        }
+                        Ok(command) => {
+                            pending_command = Some(command);
+                            break;
+                        }
+                        Err(TryRecvError::Empty) => {
+                            core.set_write_backpressure_active(false);
+                            break;
+                        }
+                        Err(TryRecvError::Disconnected) => {
+                            core.set_write_backpressure_active(false);
+                            let _ = core.connection_lost(None);
+                            return;
+                        }
+                    }
+                }
+
+                if pending_command.is_none() {
+                    core.set_write_backpressure_active(false);
+                }
+            }
+            WriterCommand::WriteEof => {
+                let _ = writer.shutdown_write();
+                if core.close_on_write_eof() {
+                    let _ = core.connection_lost(None);
+                    return;
+                }
+            }
+            WriterCommand::Close => {
+                let _ = writer.shutdown_close();
+                let _ = core.connection_lost(None);
+                return;
+            }
+            WriterCommand::Abort => {
+                let _ = writer.shutdown_close();
+                let _ = core.connection_lost(None);
+                return;
+            }
+            WriterCommand::Stop => return,
+        }
+    }
+
+    let _ = core.connection_lost(None);
+}
+
+fn write_all_owned(writer: &mut WriterTarget, data: &mut OwnedWriteBuffer) -> io::Result<()> {
+    while !data.is_empty() {
+        match writer.write(data.remaining()) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write buffered transport data",
+                ));
+            }
+            Ok(written) => data.advance(written),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                if let Some(fd) = writer.fd() {
+                    loop {
+                        match fd_ops::poll_fd(fd, false, true, 50) {
+                            Ok((false, true)) => break,
+                            Ok(_) => continue,
+                            Err(err) => return Err(err),
+                        }
+                    }
+                } else {
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(())
+}
+
+fn shutdown_tcp_stream(stream: &StdTcpStream, how: Shutdown) -> io::Result<()> {
+    match stream.shutdown(how) {
+        Ok(()) => Ok(()),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotConnected | io::ErrorKind::BrokenPipe
+            ) =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn shutdown_unix_stream(stream: &StdUnixStream, how: Shutdown) -> io::Result<()> {
+    match stream.shutdown(how) {
+        Ok(()) => Ok(()),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotConnected | io::ErrorKind::BrokenPipe
+            ) =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn build_protocol_callbacks(py: Python<'_>, protocol: &Py<PyAny>) -> PyResult<ProtocolCallbacks> {
+    let bound = protocol.bind(py);
+    let data_received = match bound.getattr("data_received") {
+        Ok(callback) => Some(callback.unbind()),
+        Err(_) => None,
+    };
+    let eof_received = match bound.getattr("eof_received") {
+        Ok(callback) => Some(callback.unbind()),
+        Err(_) => None,
+    };
+    let get_buffer = match bound.getattr("get_buffer") {
+        Ok(callback) => Some(callback.unbind()),
+        Err(_) => None,
+    };
+    let buffer_updated = match bound.getattr("buffer_updated") {
+        Ok(callback) => Some(callback.unbind()),
+        Err(_) => None,
+    };
+    let stream_reader_fast_path = stream_reader_fast_path(py, bound)?;
+
+    Ok(ProtocolCallbacks {
+        connection_made: bound.getattr("connection_made")?.unbind(),
+        data_received,
+        eof_received,
+        connection_lost: bound.getattr("connection_lost")?.unbind(),
+        get_buffer,
+        buffer_updated,
+        stream_reader_fast_path,
+    })
+}
+
+fn stream_reader_fast_path(
+    py: Python<'_>,
+    protocol: &Bound<'_, PyAny>,
+) -> PyResult<Option<StreamReaderFastPath>> {
+    if let Ok(native_protocol) = protocol.extract::<Py<PyFastStreamProtocol>>() {
+        let reader = native_protocol.borrow(py).reader_ref(py);
+        return Ok(Some(StreamReaderFastPath::Native {
+            protocol: native_protocol,
+            reader,
+        }));
+    }
+
+    if let Ok(reader) = protocol.getattr("_rsloop_fast_reader") {
+        if !reader.is_none() {
+            let buffer = reader.getattr("_buffer")?;
+            let limit = reader.getattr("_limit")?.extract::<usize>()?;
+            return Ok(Some(StreamReaderFastPath::Generic {
+                protocol: Some(protocol.clone().unbind()),
+                reader: reader.unbind(),
+                buffer: buffer.unbind(),
+                limit,
+            }));
+        }
+    }
+
+    let asyncio_streams = py.import("asyncio.streams")?;
+    let stream_reader_protocol_cls = asyncio_streams.getattr("StreamReaderProtocol")?;
+    if !protocol.is_instance(&stream_reader_protocol_cls)? {
+        return Ok(None);
+    }
+
+    let reader = protocol.getattr("_stream_reader")?;
+    if reader.is_none() {
+        return Ok(None);
+    }
+
+    let buffer = reader.getattr("_buffer")?;
+    let limit = reader.getattr("_limit")?.extract::<usize>()?;
+
+    Ok(Some(StreamReaderFastPath::Generic {
+        protocol: Some(protocol.clone().unbind()),
+        reader: reader.unbind(),
+        buffer: buffer.unbind(),
+        limit,
+    }))
+}
+
+fn make_stream_extra(
+    py: Python<'_>,
+    fd: RawFd,
+    family: i32,
+) -> PyResult<HashMap<String, Py<PyAny>>> {
+    let socket_mod = py.import("socket")?;
+    let sock = socket_mod
+        .getattr("fromfd")?
+        .call1((fd, family, libc::SOCK_STREAM, 0))?;
+    sock.call_method1("setblocking", (false,))?;
+
+    let mut extra = HashMap::with_capacity(3);
+    extra.insert("socket".to_owned(), sock.clone().unbind().into_any());
+    if let Ok(sockname) = sock.call_method0("getsockname") {
+        extra.insert("sockname".to_owned(), sockname.unbind().into_any());
+    }
+    if let Ok(peername) = sock.call_method0("getpeername") {
+        extra.insert("peername".to_owned(), peername.unbind().into_any());
+    }
+    Ok(extra)
+}
+
+pub fn remove_unix_socket_if_present(path: &str) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
