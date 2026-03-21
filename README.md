@@ -2,14 +2,16 @@
 
 # `rsloop`: An event loop for asyncio written in Rust
 
-`rsloop` is a PyO3-based `asyncio` event loop. Each `rsloop.Loop` still owns a
-dedicated Rust runtime thread for timers, readiness polling, signal watchers,
-and transport coordination, but Python callbacks, tasks, and coroutines are
-driven on the thread that calls `run_forever()` / `run_until_complete()`
-(typically the main thread). The package exposes a Python module at
+`rsloop` is a PyO3-based `asyncio` event loop. Each `rsloop.Loop` owns a
+dedicated Rust runtime thread that handles loop coordination and I/O-related
+runtime work, while Python callbacks, tasks, and coroutines are executed on
+the thread that calls `run_forever()` / `run_until_complete()` (typically the
+main thread). The package exposes a Python module at
 `rsloop._loop` plus a small Python wrapper in `python/rsloop/__init__.py`.
 
-The project metadata currently targets Python `>=3.8`.
+The project metadata currently targets Python `>=3.8`. The current
+implementation is Unix-focused and intended for Linux and macOS; Windows is
+not supported by this codebase.
 
 ## Current Surface Area
 
@@ -61,7 +63,8 @@ Today’s codebase provides:
   - `create_unix_connection`
   - `connect_accepted_socket`
   - returned `Server` and `StreamTransport` objects
-  - `transport.close()` / `transport.abort()` fully close socket transports
+  - `transport.close()` / `transport.abort()` are implemented for socket
+    transports
 - pipe transports:
   - `connect_read_pipe`
   - `connect_write_pipe`
@@ -113,6 +116,12 @@ level transport implementation lives in `src/stream_transport.rs`.
   - `get_write_buffer_size()` returns `0`
   - `get_write_buffer_limits()` returns `(0, 0)`
   - `set_write_buffer_limits()` is a no-op
+- several asyncio compatibility parameters are currently accepted only for API
+  shape and are not implemented:
+  - `create_connection(..., server_hostname=..., happy_eyeballs_delay=..., interleave=..., all_errors=...)`
+  - TLS timeout parameters such as `ssl_handshake_timeout` /
+    `ssl_shutdown_timeout`
+  - `shutdown_default_executor(timeout=...)`
 - subprocess support is intentionally incomplete:
   - `preexec_fn` is unsupported
   - text mode is rejected for higher-level
@@ -196,6 +205,7 @@ This writes an SVG flamegraph that you can open directly in a browser. Run the
 profile against a release build or the stack samples will be dominated by debug
 overhead. If the extension was built without `--features profiler`,
 `start_profiler()` and `profile()` will raise a runtime error.
+Only `format="flamegraph"` is currently implemented.
 
 ## Usage
 
