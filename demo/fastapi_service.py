@@ -16,11 +16,11 @@ import uvicorn
 
 
 EventLoopFactory = Callable[[], asyncio.AbstractEventLoop]
-EVENT_LOOP_CHOICES = ("asyncio", "std-async", "uvloop", "rsloop")
+EVENT_LOOP_CHOICES = ("asyncio", "std-async", "uvloop", "winloop", "rsloop")
 
 app = FastAPI(
     title="rsloop FastAPI demo",
-    description="Run the same FastAPI app on stdlib asyncio, uvloop, or rsloop.",
+    description="Run the same FastAPI app on stdlib asyncio, uvloop, winloop, or rsloop.",
 )
 app.state.selected_event_loop = "asyncio"
 
@@ -47,6 +47,30 @@ def loop_factory_for(loop_name: str) -> EventLoopFactory:
             raise SystemExit(
                 "uvloop is not installed. Run with `uv run --with uvloop ...`."
             ) from exc
+    if normalized == "winloop":
+        if sys.platform != "win32":
+            raise SystemExit("winloop is only supported on Windows.")
+        try:
+            winloop = importlib.import_module("winloop")
+        except ImportError as exc:  # pragma: no cover - depends on local env
+            raise SystemExit(
+                "winloop is not installed. Run with `uv run --with winloop ...`."
+            ) from exc
+
+        factory = getattr(winloop, "new_event_loop", None)
+        if callable(factory):
+            return factory
+
+        policy_cls = getattr(winloop, "EventLoopPolicy", None) or getattr(
+            winloop, "WinLoopPolicy", None
+        )
+        if policy_cls is None:
+            raise SystemExit("winloop does not expose a usable event loop factory.")
+
+        def factory() -> asyncio.AbstractEventLoop:
+            return policy_cls().new_event_loop()
+
+        return factory
     if normalized == "rsloop":
         try:
             return importlib.import_module("rsloop").new_event_loop
@@ -214,13 +238,13 @@ async def serve(args: argparse.Namespace) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run the FastAPI demo on stdlib asyncio, uvloop, or rsloop.",
+        description="Run the FastAPI demo on stdlib asyncio, uvloop, winloop, or rsloop.",
     )
     parser.add_argument(
         "--event-loop",
         default="asyncio",
         choices=EVENT_LOOP_CHOICES,
-        help="Event loop to use: asyncio (stdlib), std-async (alias), uvloop, or rsloop.",
+        help="Event loop to use: asyncio (stdlib), std-async (alias), uvloop, winloop, or rsloop.",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Bind address for Uvicorn.")
     parser.add_argument("--port", type=int, default=8000, help="Bind port for Uvicorn.")

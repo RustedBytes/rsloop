@@ -4,11 +4,11 @@ use std::io::{self, Read, Write as _};
 use std::net::{Shutdown, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
-#[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawSocket, RawSocket};
 use std::os::raw::c_int;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawSocket, RawSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -1140,8 +1140,11 @@ impl ServerCore {
     }
 
     fn create_protocol(&self) -> PyResult<Py<PyAny>> {
-        Python::try_attach(|py| self.create_protocol_with_py(py))
-            .unwrap_or_else(|| Err(PyRuntimeError::new_err("Python interpreter is shutting down")))
+        Python::try_attach(|py| self.create_protocol_with_py(py)).unwrap_or_else(|| {
+            Err(PyRuntimeError::new_err(
+                "Python interpreter is shutting down",
+            ))
+        })
     }
 
     pub fn spawn_accept_tasks(self: &Arc<Self>) {
@@ -1900,7 +1903,9 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                     });
                     match result {
                         Some(Ok(_)) => {}
-                        Some(Err(err)) => server.report_error(err, "failed to accept TCP connection"),
+                        Some(Err(err)) => {
+                            server.report_error(err, "failed to accept TCP connection")
+                        }
                         None => return,
                     }
                 }
@@ -1962,7 +1967,9 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
                     });
                     match result {
                         Some(Ok(_)) => {}
-                        Some(Err(err)) => server.report_error(err, "failed to accept Unix connection"),
+                        Some(Err(err)) => {
+                            server.report_error(err, "failed to accept Unix connection")
+                        }
                         None => return,
                     }
                 }

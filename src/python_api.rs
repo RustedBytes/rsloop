@@ -18,9 +18,9 @@ use pyo3_async_runtimes::TaskLocals;
 use crate::callbacks::{CallbackKind, PyHandle, PyTimerHandle};
 use crate::context::{build_context_args, capture_context, ensure_running_loop, run_in_context};
 use crate::fd_ops;
-use crate::loop_core::{LoopCommand, LoopCore, LoopCoreError};
 #[cfg(unix)]
 use crate::loop_core::SignalHandlerTemplate;
+use crate::loop_core::{LoopCommand, LoopCore, LoopCoreError};
 use crate::process_transport::{
     spawn_process_transport, BoxedProcessReader, ProcessTextConfig, ProcessTransportParams,
 };
@@ -278,9 +278,10 @@ fn socket_so_error(py: Python<'_>, sock: &Py<PyAny>) -> PyResult<i32> {
 fn socket_os_error(py: Python<'_>, errno: i32) -> PyResult<()> {
     let builtins = py.import("builtins")?;
     let oserror = builtins.getattr("OSError")?;
-    Err(PyErr::from_value(
-        oserror.call1((errno, format!("socket connect failed: {errno}")))?,
-    ))
+    Err(PyErr::from_value(oserror.call1((
+        errno,
+        format!("socket connect failed: {errno}"),
+    ))?))
 }
 
 fn is_already_connected_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bool> {
@@ -312,7 +313,10 @@ fn listener_sources_from_sockets(
     let mut listeners = Vec::with_capacity(sockets.len());
     for socket in sockets {
         let family = socket.getattr(py, "family")?.extract::<i32>(py)?;
-        let fd = socket.call_method0(py, "dup")?.call_method0(py, "detach")?.extract(py)?;
+        let fd = socket
+            .call_method0(py, "dup")?
+            .call_method0(py, "detach")?
+            .extract(py)?;
         #[cfg(unix)]
         {
             listeners.push(if family == libc::AF_UNIX {
@@ -1895,8 +1899,20 @@ impl PyLoop {
         #[cfg(windows)]
         {
             let _ = (
-                slf, py, protocol_factory, cmd, stdin, stdout, stderr, universal_newlines, shell,
-                bufsize, encoding, errors, text, kwargs,
+                slf,
+                py,
+                protocol_factory,
+                cmd,
+                stdin,
+                stdout,
+                stderr,
+                universal_newlines,
+                shell,
+                bufsize,
+                encoding,
+                errors,
+                text,
+                kwargs,
             );
             return Err(Self::not_implemented("subprocess_shell"));
         }
@@ -2013,8 +2029,21 @@ impl PyLoop {
         #[cfg(windows)]
         {
             let _ = (
-                slf, py, protocol_factory, program, args, stdin, stdout, stderr,
-                universal_newlines, shell, bufsize, encoding, errors, text, kwargs,
+                slf,
+                py,
+                protocol_factory,
+                program,
+                args,
+                stdin,
+                stdout,
+                stderr,
+                universal_newlines,
+                shell,
+                bufsize,
+                encoding,
+                errors,
+                text,
+                kwargs,
             );
             return Err(Self::not_implemented("subprocess_exec"));
         }

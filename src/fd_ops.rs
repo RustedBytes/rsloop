@@ -107,10 +107,7 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
         return Err(io::Error::last_os_error());
     }
 
-    Ok((
-        read && readfds.fd_count > 0,
-        write && writefds.fd_count > 0,
-    ))
+    Ok((read && readfds.fd_count > 0, write && writefds.fd_count > 0))
 }
 
 pub async fn wait_readable(fd: RawFd) -> PyResult<()> {
