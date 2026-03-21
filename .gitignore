@@ -7,7 +7,7 @@ tmp/
 *.so
 *.pyd
 
-python/uvloop_rust_impl/_loop
+python/rsloop/_loop*
 
 benchmarks/profiles*
 benchmarks/compare_event_loops.results.json

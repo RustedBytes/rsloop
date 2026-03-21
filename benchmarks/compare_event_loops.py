@@ -15,8 +15,15 @@ from dataclasses import dataclass
 from typing import Callable
 
 
-LOOP_CHOICES = ("asyncio", "uvloop", "rsloop")
+LOOP_CHOICES = ("asyncio", "uvloop", "winloop", "rsloop")
 WORKLOAD_CHOICES = ("callbacks", "tasks", "tcp_streams")
+
+
+def default_loops_csv() -> str:
+    loops = ["asyncio", "uvloop", "rsloop"]
+    if sys.platform == "win32":
+        loops.insert(2, "winloop")
+    return ",".join(loops)
 
 
 @dataclass(frozen=True)
@@ -33,12 +40,12 @@ class ChildResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare stdlib asyncio, uvloop, and the Rust prototype event loop.",
+        description="Compare stdlib asyncio, uvloop, winloop, and the Rust prototype event loop.",
     )
     parser.add_argument(
         "--loops",
-        default="asyncio,uvloop,rsloop",
-        help="Comma-separated loops to benchmark. Choices: asyncio,uvloop,rsloop",
+        default=default_loops_csv(),
+        help="Comma-separated loops to benchmark. Choices: asyncio,uvloop,winloop,rsloop",
     )
     parser.add_argument(
         "--workloads",
@@ -154,6 +161,25 @@ def loop_factory_for(loop_name: str) -> Callable[[], asyncio.AbstractEventLoop]:
         return asyncio.new_event_loop
     if loop_name == "uvloop":
         return importlib.import_module("uvloop").new_event_loop
+    if loop_name == "winloop":
+        if sys.platform != "win32":
+            raise RuntimeError("winloop is only supported on Windows")
+
+        winloop = importlib.import_module("winloop")
+        factory = getattr(winloop, "new_event_loop", None)
+        if callable(factory):
+            return factory
+
+        policy_cls = getattr(winloop, "EventLoopPolicy", None) or getattr(
+            winloop, "WinLoopPolicy", None
+        )
+        if policy_cls is None:
+            raise RuntimeError("winloop does not expose a usable event loop factory")
+
+        def factory() -> asyncio.AbstractEventLoop:
+            return policy_cls().new_event_loop()
+
+        return factory
     if loop_name == "rsloop":
         return importlib.import_module("rsloop").new_event_loop
     raise AssertionError(f"unsupported loop: {loop_name}")
