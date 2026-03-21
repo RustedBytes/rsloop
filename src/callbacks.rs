@@ -13,7 +13,6 @@ pub type CallbackId = u64;
 
 enum CallbackArgs {
     None,
-    One(Py<PyAny>),
     Many(Py<PyTuple>),
 }
 
@@ -50,12 +49,6 @@ impl ReadyCallback {
     ) -> Self {
         let args = match args.bind(py).len() {
             0 => CallbackArgs::None,
-            1 => CallbackArgs::One(
-                args.bind(py)
-                    .get_item(0)
-                    .expect("single callback arg missing")
-                    .unbind(),
-            ),
             _ => CallbackArgs::Many(args),
         };
 
@@ -127,13 +120,6 @@ impl ReadyCallback {
                 )
                 .map(Bound::unbind)
             },
-            CallbackArgs::One(arg) => unsafe {
-                Bound::from_owned_ptr_or_err(
-                    py,
-                    ffi::PyObject_CallOneArg(self.callback.as_ptr(), arg.as_ptr()),
-                )
-                .map(Bound::unbind)
-            },
             CallbackArgs::Many(args) => self.callback.call1(py, args.clone_ref(py)),
         }
     }
@@ -141,9 +127,6 @@ impl ReadyCallback {
     pub fn clone_args_tuple(&self, py: Python<'_>) -> Py<PyTuple> {
         match &self.args {
             CallbackArgs::None => PyTuple::empty(py).unbind(),
-            CallbackArgs::One(arg) => PyTuple::new(py, [arg.clone_ref(py)])
-                .expect("failed to clone single callback arg")
-                .unbind(),
             CallbackArgs::Many(args) => args.clone_ref(py),
         }
     }

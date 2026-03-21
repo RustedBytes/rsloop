@@ -8,7 +8,6 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError};
-use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule, PySlice, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
@@ -123,13 +122,7 @@ fn create_asyncio_future_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyRes
 }
 
 fn create_asyncio_future_for_running_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    unsafe {
-        Bound::from_owned_ptr_or_err(
-            py,
-            ffi::compat::PyObject_CallNoArgs(asyncio_future_cls(py)?.as_ptr()),
-        )
-        .map(Bound::unbind)
-    }
+    asyncio_future_cls(py)?.call0(py)
 }
 
 fn create_asyncio_task_for_loop(
@@ -151,13 +144,7 @@ fn create_asyncio_task_for_loop(
 }
 
 fn create_asyncio_task_for_running_loop(py: Python<'_>, coro: Py<PyAny>) -> PyResult<Py<PyAny>> {
-    unsafe {
-        Bound::from_owned_ptr_or_err(
-            py,
-            ffi::PyObject_CallOneArg(asyncio_task_cls(py)?.as_ptr(), coro.as_ptr()),
-        )
-        .map(Bound::unbind)
-    }
+    asyncio_task_cls(py)?.call1(py, (coro,))
 }
 
 fn call_protocol_factory(

@@ -25,6 +25,31 @@ __all__: tuple[str, ...] = (
     "stop_profiler",
 )
 _T = __typing.TypeVar("_T")
+__ORIG_SET_EVENT_LOOP = __asyncio.set_event_loop
+
+
+def __set_event_loop(loop: Loop | None) -> None:
+    try:
+        __ORIG_SET_EVENT_LOOP(loop)
+        return
+    except (AssertionError, TypeError):
+        if loop is None or not isinstance(loop, Loop):
+            raise
+
+    # Python 3.8 rejects non-stdlib loop objects in set_event_loop() with a
+    # hard isinstance() assertion. Mirror the stdlib policy bookkeeping so
+    # get_event_loop() still returns the current rsloop instance.
+    policy = __asyncio.get_event_loop_policy()
+    local = getattr(policy, "_local", None)
+    if local is None:
+        raise
+    local._set_called = True
+    local._loop = loop
+
+
+if __asyncio.set_event_loop is __ORIG_SET_EVENT_LOOP:
+    __asyncio.set_event_loop = __set_event_loop
+    __asyncio.events.set_event_loop = __set_event_loop
 
 
 def new_event_loop() -> Loop:

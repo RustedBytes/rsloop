@@ -92,15 +92,20 @@ fi
 for version in "${PYTHON_VERSIONS[@]}"; do
   interpreter="$(uv python find "$version")"
   echo "Building release wheel for Python ${version} (${interpreter})"
-  uv run \
-    --no-project \
-    --python "$interpreter" \
-    --with maturin \
-    maturin build \
-    --release \
-    --interpreter "$interpreter" \
-    --out "$OUTPUT_DIR" \
-    "${MATURIN_ARGS[@]}"
+  maturin_cmd=(
+    uv run
+    --no-project
+    --python "$interpreter"
+    --with maturin
+    maturin build
+    --release
+    --interpreter "$interpreter"
+    --out "$OUTPUT_DIR"
+  )
+  if ((${#MATURIN_ARGS[@]})); then
+    maturin_cmd+=("${MATURIN_ARGS[@]}")
+  fi
+  "${maturin_cmd[@]}"
 done
 
 echo "Wheels written to $OUTPUT_DIR"
