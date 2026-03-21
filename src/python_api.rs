@@ -230,33 +230,79 @@ fn build_stream_socket(
 
 async fn connect_socket_to_address(sock: Py<PyAny>, address: Py<PyAny>) -> PyResult<()> {
     let fd = Python::attach(|py| fd_ops::fileobj_to_fd(py, sock.bind(py)))?;
-    loop {
-        match Python::attach(|py| -> PyResult<()> {
-            sock.call_method1(py, "connect", (address.clone_ref(py),))?;
-            Ok(())
-        }) {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                let retry = Python::attach(|py| fd_ops::is_retryable_socket_error(py, &err))?;
-                if !retry {
-                    let connected = Python::attach(|py| -> PyResult<bool> {
-                        let builtins = py.import("builtins")?;
-                        let oserror = builtins.getattr("OSError")?;
-                        if !err.is_instance(py, &oserror) {
-                            return Ok(false);
-                        }
-                        Ok(err.value(py).getattr("errno")?.extract::<i32>().ok()
-                            == Some(libc::EISCONN))
-                    })?;
-                    if connected {
-                        return Ok(());
-                    }
-                    return Err(err);
+    match Python::attach(|py| -> PyResult<()> {
+        sock.call_method1(py, "connect", (address.clone_ref(py),))?;
+        Ok(())
+    }) {
+        Ok(()) => return Ok(()),
+        Err(err) => {
+            let retry = Python::attach(|py| fd_ops::is_retryable_socket_error(py, &err))?;
+            if !retry {
+                if Python::attach(|py| is_already_connected_socket_error(py, &err))? {
+                    return Ok(());
                 }
+                return Err(err);
             }
         }
-        fd_ops::wait_writable(fd).await?;
     }
+
+    loop {
+        fd_ops::wait_writable(fd).await?;
+        let so_error = Python::attach(|py| socket_so_error(py, &sock))?;
+        if so_error == 0 {
+            return Ok(());
+        }
+        if is_connect_in_progress_errno(so_error) {
+            continue;
+        }
+        if is_already_connected_errno(so_error) {
+            return Ok(());
+        }
+        return Python::attach(|py| socket_os_error(py, so_error));
+    }
+}
+
+fn socket_so_error(py: Python<'_>, sock: &Py<PyAny>) -> PyResult<i32> {
+    let socket_mod = py.import("socket")?;
+    sock.call_method1(
+        py,
+        "getsockopt",
+        (
+            socket_mod.getattr("SOL_SOCKET")?,
+            socket_mod.getattr("SO_ERROR")?,
+        ),
+    )?
+    .extract(py)
+}
+
+fn socket_os_error(py: Python<'_>, errno: i32) -> PyResult<()> {
+    let builtins = py.import("builtins")?;
+    let oserror = builtins.getattr("OSError")?;
+    Err(PyErr::from_value(
+        oserror.call1((errno, format!("socket connect failed: {errno}")))?,
+    ))
+}
+
+fn is_already_connected_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bool> {
+    let builtins = py.import("builtins")?;
+    let oserror = builtins.getattr("OSError")?;
+    if !err.is_instance(py, &oserror) {
+        return Ok(false);
+    }
+    Ok(err
+        .value(py)
+        .getattr("errno")?
+        .extract::<i32>()
+        .ok()
+        .is_some_and(is_already_connected_errno))
+}
+
+fn is_already_connected_errno(errno: i32) -> bool {
+    errno == libc::EISCONN || errno == 10056
+}
+
+fn is_connect_in_progress_errno(errno: i32) -> bool {
+    errno == libc::EINPROGRESS || errno == libc::EALREADY || errno == libc::EWOULDBLOCK
 }
 
 fn listener_sources_from_sockets(
@@ -1706,36 +1752,9 @@ impl PyLoop {
         address: Py<PyAny>,
     ) -> PyResult<Bound<'_, PyAny>> {
         let locals = Self::task_locals(py, &slf)?;
-        let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
         pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
-            loop {
-                match Python::attach(|py| -> PyResult<()> {
-                    sock.call_method1(py, "connect", (address.clone_ref(py),))?;
-                    Ok(())
-                }) {
-                    Ok(()) => return Ok(Python::attach(|py| py.None())),
-                    Err(err) => {
-                        let retry =
-                            Python::attach(|py| fd_ops::is_retryable_socket_error(py, &err))?;
-                        if !retry {
-                            let connected = Python::attach(|py| -> PyResult<bool> {
-                                let builtins = py.import("builtins")?;
-                                let oserror = builtins.getattr("OSError")?;
-                                if !err.is_instance(py, &oserror) {
-                                    return Ok(false);
-                                }
-                                Ok(err.value(py).getattr("errno")?.extract::<i32>().ok()
-                                    == Some(libc::EISCONN))
-                            })?;
-                            if connected {
-                                return Ok(Python::attach(|py| py.None()));
-                            }
-                            return Err(err);
-                        }
-                    }
-                }
-                fd_ops::wait_writable(fd).await?;
-            }
+            connect_socket_to_address(sock, address).await?;
+            Ok(Python::attach(|py| py.None()))
         })
     }
 

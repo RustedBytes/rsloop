@@ -1062,6 +1062,34 @@ impl StreamTransportCore {
 }
 
 impl ServerCore {
+    fn report_error(&self, err: PyErr, message: &str) {
+        let _ = Python::try_attach(|py| -> PyResult<()> {
+            let context = PyDict::new(py);
+            context.set_item("message", message)?;
+            context.set_item("exception", err.value(py))?;
+            self.loop_core.call_exception_handler(
+                py,
+                Some(&self.loop_obj),
+                context.unbind().into_any(),
+            )
+        });
+    }
+
+    fn create_protocol_with_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        ensure_running_loop(py, &self.loop_obj)?;
+        let callback = self.protocol_factory.bind(py).clone().unbind();
+        let args = PyTuple::empty(py).unbind();
+        let context_args = build_context_args(py, &callback, &args)?;
+        run_in_context(
+            py,
+            &self.context,
+            self.context_needs_run,
+            &callback,
+            &args,
+            &context_args,
+        )
+    }
+
     fn locals(&self, py: Python<'_>) -> PyResult<TaskLocals> {
         task_locals_for_loop(py, &self.loop_obj)
     }
@@ -1111,34 +1139,9 @@ impl ServerCore {
         self.closed_notify.notify_all();
     }
 
-    fn report_error(&self, err: PyErr, message: &str) {
-        let _ = Python::attach(|py| -> PyResult<()> {
-            let context = PyDict::new(py);
-            context.set_item("message", message)?;
-            context.set_item("exception", err.value(py))?;
-            self.loop_core.call_exception_handler(
-                py,
-                Some(&self.loop_obj),
-                context.unbind().into_any(),
-            )
-        });
-    }
-
     fn create_protocol(&self) -> PyResult<Py<PyAny>> {
-        Python::attach(|py| {
-            ensure_running_loop(py, &self.loop_obj)?;
-            let callback = self.protocol_factory.bind(py).clone().unbind();
-            let args = PyTuple::empty(py).unbind();
-            let context_args = build_context_args(py, &callback, &args)?;
-            run_in_context(
-                py,
-                &self.context,
-                self.context_needs_run,
-                &callback,
-                &args,
-                &context_args,
-            )
-        })
+        Python::try_attach(|py| self.create_protocol_with_py(py))
+            .unwrap_or_else(|| Err(PyRuntimeError::new_err("Python interpreter is shutting down")))
     }
 
     pub fn spawn_accept_tasks(self: &Arc<Self>) {
@@ -1879,16 +1882,9 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                 Ok((stream, _addr)) => {
                     let _ = stream.set_nonblocking(true);
                     let _ = stream.set_nodelay(true);
-                    let protocol = match server.create_protocol() {
-                        Ok(protocol) => protocol,
-                        Err(err) => {
-                            server.report_error(err, "failed to create server protocol");
-                            continue;
-                        }
-                    };
-
-                    let context = Python::attach(|py| server.context.clone_ref(py));
-                    let result = Python::attach(|py| {
+                    let result = Python::try_attach(|py| -> PyResult<_> {
+                        let protocol = server.create_protocol_with_py(py)?;
+                        let context = server.context.clone_ref(py);
                         spawn_tcp_transport(
                             py,
                             TransportSpawnContext {
@@ -1902,8 +1898,10 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                             Some(Arc::downgrade(&server)),
                         )
                     });
-                    if let Err(err) = result {
-                        server.report_error(err, "failed to accept TCP connection");
+                    match result {
+                        Some(Ok(_)) => {}
+                        Some(Err(err)) => server.report_error(err, "failed to accept TCP connection"),
+                        None => return,
                     }
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
@@ -1946,16 +1944,9 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
             match listener.accept() {
                 Ok((stream, _addr)) => {
                     let _ = stream.set_nonblocking(true);
-                    let protocol = match server.create_protocol() {
-                        Ok(protocol) => protocol,
-                        Err(err) => {
-                            server.report_error(err, "failed to create Unix server protocol");
-                            continue;
-                        }
-                    };
-
-                    let context = Python::attach(|py| server.context.clone_ref(py));
-                    let result = Python::attach(|py| {
+                    let result = Python::try_attach(|py| -> PyResult<_> {
+                        let protocol = server.create_protocol_with_py(py)?;
+                        let context = server.context.clone_ref(py);
                         spawn_unix_transport(
                             py,
                             TransportSpawnContext {
@@ -1969,8 +1960,10 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
                             Some(Arc::downgrade(&server)),
                         )
                     });
-                    if let Err(err) = result {
-                        server.report_error(err, "failed to accept Unix connection");
+                    match result {
+                        Some(Ok(_)) => {}
+                        Some(Err(err)) => server.report_error(err, "failed to accept Unix connection"),
+                        None => return,
                     }
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
