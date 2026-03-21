@@ -2,6 +2,9 @@
 
 # `rsloop`: An event loop for asyncio written in Rust
 
+[![PyPI - Version](https://img.shields.io/pypi/v/rsloop)](https://pypi.org/project/rsloop/)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/rsloop?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/rsloop)
+
 `rsloop` is a PyO3-based `asyncio` event loop. Each `rsloop.Loop` owns a
 dedicated Rust runtime thread that handles loop coordination and I/O-related
 runtime work, while Python callbacks, tasks, and coroutines are executed on
