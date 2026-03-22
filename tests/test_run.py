@@ -63,7 +63,9 @@ class RunTests(unittest.TestCase):
             with os.fdopen(r_fd2, "rb", buffering=0) as rfile2, os.fdopen(
                 w_fd2, "wb", buffering=0
             ) as wfile2:
-                write_transport, _ = await loop.connect_write_pipe(WriteProtocol, wfile2)
+                write_transport, _ = await loop.connect_write_pipe(
+                    WriteProtocol, wfile2
+                )
                 write_value = rfile2.read(len(b"pipe-write-demo")).decode()
                 await asyncio.wait_for(write_done, 1.0)
                 write_transport.close()
