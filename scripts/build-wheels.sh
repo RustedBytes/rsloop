@@ -43,6 +43,48 @@ resolve_path() {
   fi
 }
 
+target_python_request() {
+  local version="$1"
+  local target="$2"
+  local arch=""
+  local os=""
+  local libc=""
+
+  case "$target" in
+    x86_64-unknown-linux-gnu)
+      arch="x86_64"
+      os="linux"
+      libc="gnu"
+      ;;
+    aarch64-apple-darwin)
+      arch="aarch64"
+      os="macos"
+      libc="none"
+      ;;
+    x86_64-apple-darwin)
+      arch="x86_64"
+      os="macos"
+      libc="none"
+      ;;
+    x86_64-pc-windows-msvc)
+      arch="x86_64"
+      os="windows"
+      libc="none"
+      ;;
+    aarch64-pc-windows-msvc)
+      arch="aarch64"
+      os="windows"
+      libc="none"
+      ;;
+    *)
+      printf '%s\n' "$version"
+      return 0
+      ;;
+  esac
+
+  printf 'cpython-%s-%s-%s-%s\n' "$version" "$os" "$arch" "$libc"
+}
+
 OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
 INSTALL_PYTHONS=1
 RUST_TARGET="${RSLOOP_RUST_TARGET:-}"
@@ -99,21 +141,40 @@ cd "$ROOT_DIR"
 mkdir -p "$OUTPUT_DIR"
 
 if (( INSTALL_PYTHONS )); then
-  echo "Installing Python interpreters with uv: ${PYTHON_VERSIONS[*]}"
-  uv python install "${PYTHON_VERSIONS[@]}"
+  if [[ -n "$RUST_TARGET" ]]; then
+    python_requests=()
+    for version in "${PYTHON_VERSIONS[@]}"; do
+      python_requests+=("$(target_python_request "$version" "$RUST_TARGET")")
+    done
+    echo "Installing Python interpreters with uv for ${RUST_TARGET}: ${python_requests[*]}"
+    uv python install "${python_requests[@]}"
+  else
+    echo "Installing Python interpreters with uv: ${PYTHON_VERSIONS[*]}"
+    uv python install "${PYTHON_VERSIONS[@]}"
+  fi
 fi
 
 for version in "${PYTHON_VERSIONS[@]}"; do
-  interpreter="$(uv python find "$version")"
-  echo "Building release wheel for Python ${version} (${interpreter})"
+  python_request="$version"
+  interpreter_selector=""
+
+  if [[ -n "$RUST_TARGET" ]]; then
+    python_request="$(target_python_request "$version" "$RUST_TARGET")"
+    interpreter_selector="python${version}"
+    echo "Building release wheel for Python ${version} targeting ${RUST_TARGET} (${python_request})"
+  else
+    interpreter_selector="$(uv python find "$version")"
+    echo "Building release wheel for Python ${version} (${interpreter_selector})"
+  fi
+
   maturin_cmd=(
     uv run
     --no-project
-    --python "$interpreter"
+    --python "$python_request"
     --with maturin
     maturin build
     --release
-    --interpreter "$interpreter"
+    --interpreter "$interpreter_selector"
     --out "$OUTPUT_DIR"
   )
   if [[ -n "$RUST_TARGET" ]]; then
