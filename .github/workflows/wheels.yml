@@ -19,8 +19,13 @@ jobs:
         include:
           - os_name: linux
             runner: ubuntu-latest
-          - os_name: macos
+            rust_target: x86_64-unknown-linux-gnu
+          - os_name: macos-intel
             runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+          - os_name: macos-arm64
+            runner: macos-15
+            rust_target: aarch64-apple-darwin
 
     steps:
       - name: Check out repository
@@ -45,7 +50,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build wheels
-        run: scripts/build-wheels.sh --out dist
+        run: scripts/build-wheels.sh --out dist --target "${{ matrix.rust_target }}"
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4

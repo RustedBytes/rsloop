@@ -10,10 +10,11 @@ usage() {
 Build release wheels for rsloop with uv-managed Python interpreters.
 
 Usage:
-  scripts/build-wheels.sh [--out DIR] [--skip-python-install] [-- maturin args...]
+  scripts/build-wheels.sh [--out DIR] [--target TRIPLE] [--skip-python-install] [-- maturin args...]
 
 Options:
   -o, --out DIR           Output directory for built wheels (default: dist/wheels)
+  -t, --target TRIPLE     Rust compilation target to pass to maturin
       --skip-python-install
                           Reuse installed interpreters instead of running `uv python install`
   -h, --help              Show this help
@@ -21,10 +22,12 @@ Options:
 Environment:
   RSLOOP_PYTHON_VERSIONS  Space-separated version list to override the defaults
                           (default: 3.8 3.9 3.10 3.11 3.12 3.13 3.14 3.14t)
+  RSLOOP_RUST_TARGET      Rust compilation target to pass to maturin
 
 Examples:
   scripts/build-wheels.sh
   scripts/build-wheels.sh --out wheelhouse
+  scripts/build-wheels.sh --target aarch64-apple-darwin
   RSLOOP_PYTHON_VERSIONS="3.12 3.13 3.14t" scripts/build-wheels.sh -- --features profiler
 EOF
 }
@@ -40,6 +43,7 @@ resolve_path() {
 
 OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
 INSTALL_PYTHONS=1
+RUST_TARGET="${RSLOOP_RUST_TARGET:-}"
 MATURIN_ARGS=()
 
 while (($#)); do
@@ -50,6 +54,14 @@ while (($#)); do
         exit 1
       fi
       OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    -t|--target)
+      if (($# < 2)); then
+        echo "missing value for $1" >&2
+        exit 1
+      fi
+      RUST_TARGET="$2"
       shift 2
       ;;
     --skip-python-install)
@@ -102,6 +114,11 @@ for version in "${PYTHON_VERSIONS[@]}"; do
     --interpreter "$interpreter"
     --out "$OUTPUT_DIR"
   )
+  if [[ -n "$RUST_TARGET" ]]; then
+    maturin_cmd+=(
+      --target "$RUST_TARGET"
+    )
+  fi
   if ((${#MATURIN_ARGS[@]})); then
     maturin_cmd+=("${MATURIN_ARGS[@]}")
   fi
