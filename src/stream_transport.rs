@@ -368,6 +368,7 @@ pub struct StreamTransportCore {
     read_events_scheduled: AtomicBool,
     writer_tx: Sender<WriterCommand>,
     direct_writer: Option<Mutex<TaskedDirectWriter>>,
+    lazy_writer: Mutex<Option<LazyWriterConfig>>,
     workers: Mutex<Vec<WorkerThread>>,
 }
 
@@ -463,6 +464,11 @@ enum WriterTarget {
     #[cfg(unix)]
     Unix(StdUnixStream),
     Sink(io::Sink),
+}
+
+struct LazyWriterConfig {
+    target: WriterTarget,
+    writer_rx: Receiver<WriterCommand>,
 }
 
 impl WriterTarget {
@@ -714,6 +720,18 @@ impl StreamTransportCore {
             .lock()
             .expect("poisoned transport workers")
             .push(worker);
+    }
+
+    fn ensure_writer_worker(self: &Arc<Self>) {
+        let lazy = self
+            .lazy_writer
+            .lock()
+            .expect("poisoned lazy writer")
+            .take();
+        let Some(LazyWriterConfig { target, writer_rx }) = lazy else {
+            return;
+        };
+        spawn_writer_worker(Arc::clone(self), target, writer_rx);
     }
 
     fn call_protocol_with_tuple(
@@ -1213,6 +1231,7 @@ impl StreamTransportCore {
     }
 
     fn queue_write(self: &Arc<Self>, data: OwnedWriteBuffer) -> io::Result<()> {
+        self.ensure_writer_worker();
         if self.writer_tx.send(WriterCommand::Data(data)).is_err() {
             self.fail_write(None);
         }
@@ -1523,6 +1542,24 @@ impl PyStreamTransport {
             ));
         }
         self.core.mark_write_eof();
+        if self.core.direct_writer.is_some() && !self.core.write_backpressure_active() {
+            if let Some(writer) = &self.core.direct_writer {
+                let writer = writer.lock().expect("poisoned direct tasked writer");
+                match &*writer {
+                    TaskedDirectWriter::Tcp(stream) => {
+                        let _ = shutdown_tcp_stream(stream, Shutdown::Write);
+                    }
+                    #[cfg(unix)]
+                    TaskedDirectWriter::Unix(stream) => {
+                        let _ = shutdown_unix_stream(stream, Shutdown::Write);
+                    }
+                }
+            }
+            if self.core.close_on_write_eof() {
+                let _ = self.core.connection_lost(None);
+            }
+            return Ok(());
+        }
         let _ = self.core.writer_tx.send(WriterCommand::WriteEof);
         Ok(())
     }
@@ -1911,6 +1948,7 @@ pub fn spawn_read_pipe_transport(
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: None,
+        lazy_writer: Mutex::new(None),
         workers: Mutex::new(Vec::new()),
     });
 
@@ -1971,6 +2009,7 @@ pub fn spawn_read_pipe_transport(
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: None,
+        lazy_writer: Mutex::new(None),
         workers: Mutex::new(Vec::new()),
     });
 
@@ -2037,6 +2076,7 @@ pub fn spawn_write_pipe_transport(
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: None,
+        lazy_writer: Mutex::new(None),
         workers: Mutex::new(Vec::new()),
     });
 
@@ -2103,6 +2143,7 @@ pub fn spawn_write_pipe_transport(
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: None,
+        lazy_writer: Mutex::new(None),
         workers: Mutex::new(Vec::new()),
     });
 
@@ -2211,6 +2252,10 @@ pub fn spawn_tcp_transport(
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: Some(Mutex::new(TaskedDirectWriter::Tcp(direct_writer))),
+        lazy_writer: Mutex::new(Some(LazyWriterConfig {
+            target: WriterTarget::Tcp(writer),
+            writer_rx,
+        })),
         workers: Mutex::new(Vec::new()),
     });
 
@@ -2226,7 +2271,6 @@ pub fn spawn_tcp_transport(
     }
 
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::Tcp(stream));
-    spawn_writer_worker(core, WriterTarget::Tcp(writer), writer_rx);
     Ok(transport)
 }
 
@@ -2283,6 +2327,10 @@ pub fn spawn_unix_transport(
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: Some(Mutex::new(TaskedDirectWriter::Unix(direct_writer))),
+        lazy_writer: Mutex::new(Some(LazyWriterConfig {
+            target: WriterTarget::Unix(writer),
+            writer_rx,
+        })),
         workers: Mutex::new(Vec::new()),
     });
 
@@ -2298,7 +2346,6 @@ pub fn spawn_unix_transport(
     }
 
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::Unix(stream));
-    spawn_writer_worker(core, WriterTarget::Unix(writer), writer_rx);
     Ok(transport)
 }
 
@@ -2415,6 +2462,7 @@ fn spawn_tls_transport(
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: None,
+        lazy_writer: Mutex::new(None),
         workers: Mutex::new(Vec::new()),
     });
 
