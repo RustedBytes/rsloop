@@ -28,6 +28,10 @@ class UppercaseProtocol(asyncio.Protocol):
 
 
 async def demo_unix_streams() -> None:
+    if os.name == "nt":
+        print("create_unix_connection/create_unix_server: skipped on Windows")
+        return
+
     loop = asyncio.get_running_loop()
 
     with tempfile.TemporaryDirectory() as tmpdir:
