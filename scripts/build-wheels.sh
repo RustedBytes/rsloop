@@ -85,6 +85,20 @@ target_python_request() {
   printf 'cpython-%s-%s-%s-%s\n' "$version" "$os" "$arch" "$libc"
 }
 
+default_versions_for_target() {
+  local target="$1"
+
+  case "$target" in
+    aarch64-pc-windows-msvc)
+      # Windows ARM64 Python distributions are only available for newer CPython releases.
+      printf '%s\n' 3.11 3.12 3.13 3.14 3.14t
+      ;;
+    *)
+      printf '%s\n' "${DEFAULT_VERSIONS[@]}"
+      ;;
+  esac
+}
+
 OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
 INSTALL_PYTHONS=1
 RUST_TARGET="${RSLOOP_RUST_TARGET:-}"
@@ -132,7 +146,7 @@ done
 if [[ -n "${RSLOOP_PYTHON_VERSIONS:-}" ]]; then
   read -r -a PYTHON_VERSIONS <<< "${RSLOOP_PYTHON_VERSIONS}"
 else
-  PYTHON_VERSIONS=("${DEFAULT_VERSIONS[@]}")
+  readarray -t PYTHON_VERSIONS < <(default_versions_for_target "$RUST_TARGET")
 fi
 
 OUTPUT_DIR="$(resolve_path "$OUTPUT_DIR")"

@@ -26,6 +26,7 @@ jobs:
           - os_name: windows-arm64
             runner: windows-11-arm
             rust_target: aarch64-pc-windows-msvc
+            python_versions: "3.11 3.12 3.13 3.14 3.14t"
           - os_name: macos-intel
             runner: macos-15-intel
             rust_target: x86_64-apple-darwin
@@ -57,6 +58,8 @@ jobs:
 
       - name: Build wheels
         shell: bash
+        env:
+          RSLOOP_PYTHON_VERSIONS: ${{ matrix.python_versions }}
         run: scripts/build-wheels.sh --out dist --target "${{ matrix.rust_target }}"
 
       - name: Upload wheel artifacts
