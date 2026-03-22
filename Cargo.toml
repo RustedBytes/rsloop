@@ -27,6 +27,7 @@ pprof = { version = "0.15.0", default-features = false, features = ["flamegraph"
 pyo3 = { version = "0.28", features = ["extension-module"] }
 pyo3-async-runtimes = { version = "0.28", features = ["async-std-runtime"] }
 rustls = "0.23"
+rustls-native-certs = "0.8"
 rustls-pemfile = "2"
 signal-hook = "0.4"
 socket2 = "0.6"

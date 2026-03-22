@@ -208,6 +208,26 @@ fn root_store_from_context(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<
             .add(CertificateDer::from(bytes.as_bytes().to_vec()))
             .map_err(to_py_tls_err)?;
     }
+
+    let use_default_verify_paths = ssl_context
+        .bind(py)
+        .getattr("__dict__")?
+        .cast::<PyDict>()?
+        .get_item("_rsloop_use_default_verify_paths")?
+        .and_then(|value| value.extract::<bool>().ok())
+        .unwrap_or(false);
+    if use_default_verify_paths {
+        let native = rustls_native_certs::load_native_certs();
+        for error in native.errors {
+            return Err(PyRuntimeError::new_err(format!(
+                "failed to load native CA certificates: {error}"
+            )));
+        }
+        for cert in native.certs {
+            roots.add(cert).map_err(to_py_tls_err)?;
+        }
+    }
+
     Ok(roots)
 }
 

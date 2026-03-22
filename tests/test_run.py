@@ -1,5 +1,6 @@
 import asyncio
 import os
+import socket
 import sys
 import unittest
 
@@ -158,6 +159,21 @@ class RunTests(unittest.TestCase):
                 "stderr": "",
                 "returncode": 0,
             },
+        )
+
+    def test_getaddrinfo_accepts_type_keyword(self) -> None:
+        async def main() -> list[tuple[object, ...]]:
+            loop = asyncio.get_running_loop()
+            return await loop.getaddrinfo(
+                "localhost",
+                80,
+                type=socket.SOCK_STREAM,
+            )
+
+        addrinfos = rsloop.run(main())
+        self.assertTrue(addrinfos)
+        self.assertTrue(
+            all(addrinfo[1] == socket.SOCK_STREAM for addrinfo in addrinfos),
         )
 
 

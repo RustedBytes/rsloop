@@ -2,6 +2,7 @@ import asyncio
 import os
 import pathlib
 import socket
+import ssl
 import tempfile
 import unittest
 
@@ -42,6 +43,10 @@ def make_ssl_contexts(tmpdir: str):
 
 
 class TlsTests(unittest.TestCase):
+    def test_create_default_context_marks_default_verify_paths(self) -> None:
+        context = ssl.create_default_context()
+        self.assertTrue(context.__dict__.get("_rsloop_use_default_verify_paths"))
+
     def test_create_connection_and_server_tls_round_trip(self) -> None:
         async def main() -> str:
             loop = asyncio.get_running_loop()

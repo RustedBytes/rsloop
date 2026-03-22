@@ -1994,7 +1994,7 @@ impl PyLoop {
         })
     }
 
-    #[pyo3(signature=(host, port, *, family=0, sock_type=0, proto=0, flags=0))]
+    #[pyo3(signature=(host, port, *, family=0, r#type=0, proto=0, flags=0))]
     #[expect(
         clippy::too_many_arguments,
         reason = "Mirrors asyncio loop.getaddrinfo()"
@@ -2005,7 +2005,7 @@ impl PyLoop {
         host: Option<Py<PyAny>>,
         port: Option<Py<PyAny>>,
         family: i32,
-        sock_type: i32,
+        r#type: i32,
         proto: i32,
         flags: i32,
     ) -> PyResult<Bound<'_, PyAny>> {
@@ -2016,7 +2016,7 @@ impl PyLoop {
                     let socket = py.import("socket")?;
                     let kwargs = PyDict::new(py);
                     kwargs.set_item("family", family)?;
-                    kwargs.set_item("type", sock_type)?;
+                    kwargs.set_item("type", r#type)?;
                     kwargs.set_item("proto", proto)?;
                     kwargs.set_item("flags", flags)?;
 

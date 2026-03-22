@@ -104,7 +104,17 @@ def __install_ssl_tracking() -> None:
     if getattr(context_cls, "_rsloop_tracking_installed", False):
         return
 
+    def mark_default_verify_paths(context):
+        context.__dict__["_rsloop_use_default_verify_paths"] = True
+        return context
+
+    orig_create_default_context = __ssl.create_default_context
     orig_load_cert_chain = context_cls.load_cert_chain
+    orig_load_default_certs = context_cls.load_default_certs
+    orig_set_default_verify_paths = context_cls.set_default_verify_paths
+
+    def create_default_context(*args, **kwargs):
+        return mark_default_verify_paths(orig_create_default_context(*args, **kwargs))
 
     def load_cert_chain(self, certfile, keyfile=None, password=None):
         result = orig_load_cert_chain(
@@ -128,7 +138,20 @@ def __install_ssl_tracking() -> None:
         self.__dict__["_rsloop_key_password"] = password_value
         return result
 
+    def load_default_certs(self, *args, **kwargs):
+        result = orig_load_default_certs(self, *args, **kwargs)
+        mark_default_verify_paths(self)
+        return result
+
+    def set_default_verify_paths(self):
+        result = orig_set_default_verify_paths(self)
+        mark_default_verify_paths(self)
+        return result
+
+    __ssl.create_default_context = create_default_context
     context_cls.load_cert_chain = load_cert_chain
+    context_cls.load_default_certs = load_default_certs
+    context_cls.set_default_verify_paths = set_default_verify_paths
     context_cls._rsloop_tracking_installed = True
 
 
