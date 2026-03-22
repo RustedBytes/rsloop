@@ -8,9 +8,11 @@
 `rsloop` is a PyO3-based `asyncio` event loop implemented in Rust.
 
 Each `rsloop.Loop` owns a dedicated Rust runtime thread for loop coordination
-and I/O work. Python callbacks, tasks, and coroutines still run on the thread
-that calls `run_forever()` or `run_until_complete()` (usually the main Python
-thread).
+and I/O work. On Linux, low-level fd watchers plus plain TCP / Unix socket
+readiness, socket reads, and non-TLS server accepts are driven from that thread
+through `compio` with `io_uring` support enabled. Python callbacks, tasks, and
+coroutines still run on the thread that calls `run_forever()` or
+`run_until_complete()` (usually the main Python thread).
 
 The package exposes:
 
@@ -146,6 +148,19 @@ Otherwise `rsloop` falls back to the stdlib `asyncio.streams` helpers.
 The implementation lives in `src/fast_streams.rs` and is backed by the lower
 level transport code in `src/stream_transport.rs`.
 
+## Runtime Model
+
+Today the runtime is hybrid rather than fully single-threaded:
+
+- the loop coordination thread is always the central scheduler
+- on Linux, `add_reader` / `add_writer`, plain socket reads, and non-TLS socket
+  accept loops use the `compio` runtime on that thread
+- some transport paths still fall back to helper threads, especially TLS I/O,
+  TLS server accept, and parts of the legacy transport write path
+
+That means the codebase has started the move toward a single-runtime-thread I/O
+model, but has not finished eliminating every helper thread yet.
+
 ## Current Limitations
 
 These gaps are visible in the current implementation.
@@ -163,7 +178,9 @@ These gaps are visible in the current implementation.
 - TLS uses a `rustls` backend with a narrower compatibility surface than
   CPython's OpenSSL-backed `ssl` module. In particular, encrypted private keys
   are not supported yet, and the fast-stream monkeypatch still falls back to
-  stdlib helpers whenever `ssl` is enabled.
+  stdlib helpers whenever `ssl` is enabled. TLS transport internals also still
+  use helper-thread paths instead of the newer runtime-thread `compio` socket
+  path.
 - Subprocess support is intentionally incomplete:
   `preexec_fn` is unsupported, and text mode is rejected for
   `asyncio.create_subprocess_exec()` /
@@ -178,6 +195,10 @@ These gaps are visible in the current implementation.
   Unix socket APIs and Unix signal handlers remain Unix-only, and several
   subprocess options such as `pass_fds`, `user`, `group`, and `umask` are
   still specific to Unix process spawning.
+- The transport runtime model is still in transition:
+  plain socket reads and non-TLS accepts now run on the loop runtime thread on
+  Linux, but writes and TLS-heavy paths are not fully collapsed onto that same
+  single-threaded I/O path yet.
 
 ## Build
 
