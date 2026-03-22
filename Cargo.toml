@@ -19,6 +19,7 @@ profiler = ["dep:pprof"]
 
 [dependencies]
 async-std = "1"
+compio = { version = "0.18", default-features = false, features = ["runtime", "net", "io", "signal", "io-uring"] }
 crossbeam-channel = "0.5"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 libc = "0.2"
