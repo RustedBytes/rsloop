@@ -8,7 +8,7 @@ use std::os::raw::c_int;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawSocket, RawSocket};
+use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawHandle, FromRawSocket, RawSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -428,6 +428,16 @@ impl ReaderTarget {
             Self::Unix(stream) => unix_raw_fd(stream.as_raw_fd()),
         }
     }
+
+    #[cfg(windows)]
+    fn pollable(&self) -> bool {
+        !matches!(self, Self::File(_))
+    }
+
+    #[cfg(not(windows))]
+    fn pollable(&self) -> bool {
+        true
+    }
 }
 
 impl Read for ReaderTarget {
@@ -458,6 +468,16 @@ impl WriterTarget {
             Self::Unix(stream) => Some(unix_raw_fd(stream.as_raw_fd())),
             Self::Sink(_) => None,
         }
+    }
+
+    #[cfg(windows)]
+    fn pollable(&self) -> bool {
+        !matches!(self, Self::File(_))
+    }
+
+    #[cfg(not(windows))]
+    fn pollable(&self) -> bool {
+        true
     }
 
     fn shutdown_write(&self) -> io::Result<()> {
@@ -1551,17 +1571,60 @@ pub fn spawn_read_pipe_transport(
 
 #[cfg(windows)]
 pub fn spawn_read_pipe_transport(
-    _py: Python<'_>,
-    _loop_core: Arc<LoopCore>,
-    _loop_obj: Py<PyAny>,
-    _protocol: Py<PyAny>,
-    _context: Py<PyAny>,
-    _context_needs_run: bool,
-    _pipe_obj: Py<PyAny>,
+    py: Python<'_>,
+    loop_core: Arc<LoopCore>,
+    loop_obj: Py<PyAny>,
+    protocol: Py<PyAny>,
+    context: Py<PyAny>,
+    context_needs_run: bool,
+    pipe_obj: Py<PyAny>,
 ) -> PyResult<Py<PyStreamTransport>> {
-    Err(PyRuntimeError::new_err(
-        "connect_read_pipe() is not implemented on Windows",
-    ))
+    let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
+    let handle = fd_ops::duplicate_handle_from_fd(fd)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let file = unsafe { std::fs::File::from_raw_handle(handle as _) };
+    let callbacks = build_protocol_callbacks(py, &protocol)?;
+    let mut extra = HashMap::with_capacity(2);
+    extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
+    extra.insert("file".to_owned(), pipe_obj.clone_ref(py));
+
+    let (writer_tx, writer_rx) = mpsc::channel();
+    let core = Arc::new(StreamTransportCore {
+        loop_core,
+        loop_obj,
+        state: Mutex::new(StreamTransportState {
+            protocol,
+            callbacks,
+            context,
+            context_needs_run,
+            extra,
+            closing: false,
+            read_paused: false,
+            reading: true,
+            writable: false,
+            write_eof_requested: false,
+            can_write_eof: false,
+            close_on_write_eof: false,
+            lost_called: false,
+            writer_registered: false,
+            server: None,
+        }),
+        pending_read_events: Mutex::new(VecDeque::new()),
+        read_events_scheduled: AtomicBool::new(false),
+        writer_tx,
+        direct_writer: None,
+    });
+
+    let transport = Py::new(
+        py,
+        PyStreamTransport {
+            core: Arc::clone(&core),
+        },
+    )?;
+    core.connection_made(transport.clone_ref(py))?;
+    spawn_reader_worker(Arc::clone(&core), ReaderTarget::File(file));
+    spawn_writer_worker(core, WriterTarget::Sink(io::sink()), writer_rx);
+    Ok(transport)
 }
 
 #[cfg(not(windows))]
@@ -1629,14 +1692,66 @@ pub fn spawn_write_pipe_transport(
 
 #[cfg(windows)]
 pub fn spawn_write_pipe_transport(
-    _py: Python<'_>,
-    _spawn_context: TransportSpawnContext,
-    _pipe_obj: Py<PyAny>,
-    _extra_entries: Option<HashMap<String, Py<PyAny>>>,
+    py: Python<'_>,
+    spawn_context: TransportSpawnContext,
+    pipe_obj: Py<PyAny>,
+    extra_entries: Option<HashMap<String, Py<PyAny>>>,
 ) -> PyResult<Py<PyStreamTransport>> {
-    Err(PyRuntimeError::new_err(
-        "connect_write_pipe() is not implemented on Windows",
-    ))
+    let TransportSpawnContext {
+        loop_core,
+        loop_obj,
+        protocol,
+        context,
+        context_needs_run,
+    } = spawn_context;
+    let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
+    let handle = fd_ops::duplicate_handle_from_fd(fd)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let file = unsafe { std::fs::File::from_raw_handle(handle as _) };
+    let callbacks = build_protocol_callbacks(py, &protocol)?;
+    let mut extra = HashMap::with_capacity(2 + extra_entries.as_ref().map_or(0, HashMap::len));
+    extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
+    extra.insert("file".to_owned(), pipe_obj.clone_ref(py));
+    if let Some(extra_entries) = extra_entries {
+        extra.extend(extra_entries);
+    }
+
+    let (writer_tx, writer_rx) = mpsc::channel();
+    let core = Arc::new(StreamTransportCore {
+        loop_core,
+        loop_obj,
+        state: Mutex::new(StreamTransportState {
+            protocol,
+            callbacks,
+            context,
+            context_needs_run,
+            extra,
+            closing: false,
+            read_paused: false,
+            reading: false,
+            writable: true,
+            write_eof_requested: false,
+            can_write_eof: true,
+            close_on_write_eof: true,
+            lost_called: false,
+            writer_registered: false,
+            server: None,
+        }),
+        pending_read_events: Mutex::new(VecDeque::new()),
+        read_events_scheduled: AtomicBool::new(false),
+        writer_tx,
+        direct_writer: None,
+    });
+
+    let transport = Py::new(
+        py,
+        PyStreamTransport {
+            core: Arc::clone(&core),
+        },
+    )?;
+    core.connection_made(transport.clone_ref(py))?;
+    spawn_writer_worker(core, WriterTarget::File(file), writer_rx);
+    Ok(transport)
 }
 
 pub fn tcp_stream_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
@@ -2024,14 +2139,16 @@ fn run_stream_reader(core: Arc<StreamTransportCore>, mut reader: ReaderTarget) {
             return;
         }
 
-        match fd_ops::poll_fd(reader.fd(), true, false, 50) {
-            Ok((false, _)) => continue,
-            Ok((true, _)) => {}
-            Err(err) => {
-                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-                    err.to_string(),
-                )));
-                return;
+        if reader.pollable() {
+            match fd_ops::poll_fd(reader.fd(), true, false, 50) {
+                Ok((false, _)) => continue,
+                Ok((true, _)) => {}
+                Err(err) => {
+                    core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                        err.to_string(),
+                    )));
+                    return;
+                }
             }
         }
 
@@ -2142,7 +2259,7 @@ fn write_all_owned(writer: &mut WriterTarget, data: &mut OwnedWriteBuffer) -> io
             }
             Ok(written) => data.advance(written),
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                if let Some(fd) = writer.fd() {
+                if let Some(fd) = writer.fd().filter(|_| writer.pollable()) {
                     loop {
                         match fd_ops::poll_fd(fd, false, true, 50) {
                             Ok((false, true)) => break,

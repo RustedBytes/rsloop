@@ -473,10 +473,10 @@ fn parse_process_stdio(
 fn stdio_from_fd(fd: fd_ops::RawFd) -> PyResult<std::process::Stdio> {
     #[cfg(windows)]
     {
-        let _ = fd;
-        return Err(PyNotImplementedError::new_err(
-            "subprocess fd redirection is not implemented on Windows",
-        ));
+        let handle = fd_ops::duplicate_handle_from_fd(fd)
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+        let file = unsafe { File::from_raw_handle(handle as _) };
+        return Ok(std::process::Stdio::from(file));
     }
 
     #[cfg(unix)]
@@ -491,9 +491,20 @@ fn stdio_from_fd(fd: fd_ops::RawFd) -> PyResult<std::process::Stdio> {
 fn new_pipe() -> PyResult<(File, File)> {
     #[cfg(windows)]
     {
-        return Err(PyNotImplementedError::new_err(
-            "subprocess pipes are not implemented on Windows",
-        ));
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::Pipes::CreatePipe;
+
+        let mut read_end: HANDLE = std::ptr::null_mut();
+        let mut write_end: HANDLE = std::ptr::null_mut();
+        let ok = unsafe { CreatePipe(&mut read_end, &mut write_end, std::ptr::null(), 0) };
+        if ok == 0 {
+            return Err(PyRuntimeError::new_err(
+                std::io::Error::last_os_error().to_string(),
+            ));
+        }
+        let read_end = unsafe { File::from_raw_handle(read_end as _) };
+        let write_end = unsafe { File::from_raw_handle(write_end as _) };
+        return Ok((read_end, write_end));
     }
 
     #[cfg(unix)]
@@ -1896,26 +1907,6 @@ impl PyLoop {
         text: Option<bool>,
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        #[cfg(windows)]
-        {
-            let _ = (
-                slf,
-                py,
-                protocol_factory,
-                cmd,
-                stdin,
-                stdout,
-                stderr,
-                universal_newlines,
-                shell,
-                bufsize,
-                encoding,
-                errors,
-                text,
-                kwargs,
-            );
-            return Err(Self::not_implemented("subprocess_shell"));
-        }
         if !shell {
             return Err(PyRuntimeError::new_err(
                 "subprocess_shell() requires shell=True",
@@ -1963,8 +1954,20 @@ impl PyLoop {
             }
 
             let child = Python::attach(|py| -> PyResult<_> {
-                let mut command = Command::new("/bin/sh");
-                command.arg("-c");
+                #[cfg(unix)]
+                let mut command = {
+                    let mut command = Command::new("/bin/sh");
+                    command.arg("-c");
+                    command
+                };
+                #[cfg(windows)]
+                let mut command = {
+                    let mut command = Command::new(
+                        std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()),
+                    );
+                    command.arg("/d").arg("/s").arg("/c");
+                    command
+                };
                 command.arg(cmd.bind(py).extract::<String>()?);
                 let (stdout_override, stderr_override) =
                     apply_stdio(&mut command, stdin_spec, stdout_spec, stderr_spec)?;
@@ -2026,27 +2029,6 @@ impl PyLoop {
         text: Option<bool>,
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        #[cfg(windows)]
-        {
-            let _ = (
-                slf,
-                py,
-                protocol_factory,
-                program,
-                args,
-                stdin,
-                stdout,
-                stderr,
-                universal_newlines,
-                shell,
-                bufsize,
-                encoding,
-                errors,
-                text,
-                kwargs,
-            );
-            return Err(Self::not_implemented("subprocess_exec"));
-        }
         if shell {
             return Err(PyRuntimeError::new_err(
                 "subprocess_exec() requires shell=False",
@@ -2143,11 +2125,6 @@ impl PyLoop {
         protocol_factory: Py<PyAny>,
         pipe: Py<PyAny>,
     ) -> PyResult<Bound<'_, PyAny>> {
-        #[cfg(windows)]
-        {
-            let _ = (slf, py, protocol_factory, pipe);
-            return Err(Self::not_implemented("connect_read_pipe"));
-        }
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
         let core = slf.borrow(py).core.clone();
@@ -2188,11 +2165,6 @@ impl PyLoop {
         protocol_factory: Py<PyAny>,
         pipe: Py<PyAny>,
     ) -> PyResult<Bound<'_, PyAny>> {
-        #[cfg(windows)]
-        {
-            let _ = (slf, py, protocol_factory, pipe);
-            return Err(Self::not_implemented("connect_write_pipe"));
-        }
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
         let core = slf.borrow(py).core.clone();

@@ -5,7 +5,13 @@ use futures::channel::oneshot;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 #[cfg(windows)]
+use windows_sys::Win32::Foundation::{
+    DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
+};
+#[cfg(windows)]
 use windows_sys::Win32::Networking::WinSock::{select, FD_SET, SOCKET, SOCKET_ERROR, TIMEVAL};
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 pub type RawFd = i64;
 
@@ -22,12 +28,68 @@ pub fn fileobj_keepalive(fileobj: &Bound<'_, PyAny>) -> Py<PyAny> {
 }
 
 pub fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
+    #[cfg(unix)]
+    {
+        let fd = raw_fd_to_c_int(fd)?;
+        let duped = unsafe { libc::dup(fd) };
+        if duped < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        return Ok(duped as RawFd);
+    }
+
+    #[cfg(windows)]
+    {
+        let fd = raw_fd_to_c_int(fd)?;
+        let duped = unsafe { libc::dup(fd) };
+        if duped < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(duped as RawFd)
+    }
+}
+
+#[cfg(windows)]
+pub fn raw_fd_to_handle(fd: RawFd) -> io::Result<HANDLE> {
     let fd = raw_fd_to_c_int(fd)?;
-    let duped = unsafe { libc::dup(fd) };
-    if duped < 0 {
+    let handle = unsafe { libc::get_osfhandle(fd) };
+    if handle == -1 {
         return Err(io::Error::last_os_error());
     }
-    Ok(duped as RawFd)
+    Ok(handle as HANDLE)
+}
+
+#[cfg(windows)]
+pub fn duplicate_handle(handle: HANDLE) -> io::Result<HANDLE> {
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid Windows handle",
+        ));
+    }
+
+    let current_process = unsafe { GetCurrentProcess() };
+    let mut duplicated = 0 as HANDLE;
+    let ok = unsafe {
+        DuplicateHandle(
+            current_process,
+            handle,
+            current_process,
+            &mut duplicated,
+            0,
+            0,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(duplicated)
+}
+
+#[cfg(windows)]
+pub fn duplicate_handle_from_fd(fd: RawFd) -> io::Result<HANDLE> {
+    duplicate_handle(raw_fd_to_handle(fd)?)
 }
 
 #[cfg(unix)]
