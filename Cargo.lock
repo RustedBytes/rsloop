@@ -1207,7 +1207,7 @@ dependencies = [
 name = "rsloop"
 version = "0.1.2"
 dependencies = [
- "crossbeam-channel",
+ "flume",
  "futures",
  "futures-lite 2.6.1",
  "glommio",

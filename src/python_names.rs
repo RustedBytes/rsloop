@@ -17,11 +17,6 @@ pub(crate) fn cancelled<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     interned(py, &NAME, "cancelled")
 }
 
-pub(crate) fn create_future<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
-    static NAME: OnceLock<Py<PyString>> = OnceLock::new();
-    interned(py, &NAME, "create_future")
-}
-
 pub(crate) fn done<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     static NAME: OnceLock<Py<PyString>> = OnceLock::new();
     interned(py, &NAME, "done")

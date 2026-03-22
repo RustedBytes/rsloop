@@ -12,7 +12,7 @@ use crate::context::{capture_context, clear_running_loop, ensure_running_loop};
 use crate::errors::handle_callback_error;
 use crate::runtime::run_runtime_thread;
 use crate::stream_transport::StreamTransportCore;
-use crossbeam_channel::Sender;
+use flume::Sender;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
@@ -159,7 +159,7 @@ pub struct LoopCore {
 
 impl LoopCore {
     pub fn new() -> Arc<Self> {
-        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (command_tx, command_rx) = flume::unbounded();
         let core = Arc::new(Self {
             state: Mutex::new(LoopState::new()),
             start: Instant::now(),

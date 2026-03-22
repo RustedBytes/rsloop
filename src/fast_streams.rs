@@ -1,12 +1,28 @@
+use std::sync::OnceLock;
+
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyTuple};
 
 use crate::python_api::PyLoop;
+use crate::python_api::{
+    create_asyncio_future_for_running_loop, create_asyncio_task_for_running_loop,
+};
 use crate::python_names;
 use crate::stream_transport::task_locals_for_loop;
 
 const DEFAULT_STREAM_LIMIT: usize = 65_536;
+
+static ASYNCIO_ISCOROUTINE_FN: OnceLock<Py<PyAny>> = OnceLock::new();
+
+fn asyncio_iscoroutine_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
+    if let Some(cached) = ASYNCIO_ISCOROUTINE_FN.get() {
+        return Ok(cached);
+    }
+
+    let loaded = py.import("asyncio")?.getattr("iscoroutine")?.unbind();
+    Ok(ASYNCIO_ISCOROUTINE_FN.get_or_init(|| loaded))
+}
 
 struct ReadBuffer {
     bytes: Vec<u8>,
@@ -160,10 +176,7 @@ impl PyFastStreamReader {
     }
 
     fn create_future(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.loop_obj
-            .bind(py)
-            .call_method0(python_names::create_future(py))
-            .map(Bound::unbind)
+        create_asyncio_future_for_running_loop(py)
     }
 
     fn ready_result_future(&self, py: Python<'_>, value: Py<PyAny>) -> PyResult<Py<PyAny>> {
@@ -525,11 +538,8 @@ impl PyFastStreamProtocol {
         reader: Py<PyFastStreamReader>,
         client_connected_cb: Py<PyAny>,
     ) -> PyResult<Self> {
-        let closed = loop_obj.call_method0(py, "create_future")?;
-        let ready_none = loop_obj
-            .bind(py)
-            .call_method0(python_names::create_future(py))?
-            .unbind();
+        let closed = create_asyncio_future_for_running_loop(py)?;
+        let ready_none = create_asyncio_future_for_running_loop(py)?;
         ready_none
             .bind(py)
             .call_method1(python_names::set_result(py), (py.None(),))?;
@@ -560,11 +570,7 @@ impl PyFastStreamProtocol {
     }
 
     fn ready_exception_future(&self, py: Python<'_>, exc: Py<PyAny>) -> PyResult<Py<PyAny>> {
-        let future = self
-            .loop_obj
-            .bind(py)
-            .call_method0(python_names::create_future(py))?
-            .unbind();
+        let future = create_asyncio_future_for_running_loop(py)?;
         future
             .bind(py)
             .call_method1(python_names::set_exception(py), (exc,))?;
@@ -572,11 +578,7 @@ impl PyFastStreamProtocol {
     }
 
     fn push_drain_waiter(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let future = self
-            .loop_obj
-            .bind(py)
-            .call_method0(python_names::create_future(py))?
-            .unbind();
+        let future = create_asyncio_future_for_running_loop(py)?;
         self.drain_waiters.push(future.clone_ref(py));
         Ok(future)
     }
@@ -658,15 +660,14 @@ impl PyFastStreamProtocol {
             },
         )?;
         let result = callback.call1(py, (reader.clone_ref(py), writer))?;
-        let asyncio = py.import("asyncio")?;
-        if !asyncio
-            .call_method1("iscoroutine", (result.clone_ref(py),))?
-            .extract::<bool>()?
+        if !asyncio_iscoroutine_fn(py)?
+            .call1(py, (result.clone_ref(py),))?
+            .extract::<bool>(py)?
         {
             return Ok(());
         }
 
-        let task = loop_obj.call_method1(py, "create_task", (result,))?;
+        let task = create_asyncio_task_for_running_loop(py, result)?;
         slf.borrow_mut(py).task = task.clone_ref(py);
         let done_cb = Py::new(
             py,

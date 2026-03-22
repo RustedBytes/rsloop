@@ -117,17 +117,20 @@ fn is_current_running_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<boo
     Ok(current.bind(py).is(loop_obj.bind(py)))
 }
 
-fn create_asyncio_future_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn create_asyncio_future_for_loop(
+    py: Python<'_>,
+    loop_obj: &Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
     let kwargs = PyDict::new(py);
     kwargs.set_item("loop", loop_obj.clone_ref(py))?;
     asyncio_future_cls(py)?.call(py, (), Some(&kwargs))
 }
 
-fn create_asyncio_future_for_running_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
+pub(crate) fn create_asyncio_future_for_running_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
     asyncio_future_cls(py)?.call0(py)
 }
 
-fn create_asyncio_task_for_loop(
+pub(crate) fn create_asyncio_task_for_loop(
     py: Python<'_>,
     loop_obj: &Py<PyAny>,
     coro: Py<PyAny>,
@@ -145,7 +148,10 @@ fn create_asyncio_task_for_loop(
     asyncio_task_cls(py)?.call(py, (coro,), Some(&kwargs))
 }
 
-fn create_asyncio_task_for_running_loop(py: Python<'_>, coro: Py<PyAny>) -> PyResult<Py<PyAny>> {
+pub(crate) fn create_asyncio_task_for_running_loop(
+    py: Python<'_>,
+    coro: Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
     asyncio_task_cls(py)?.call1(py, (coro,))
 }
 

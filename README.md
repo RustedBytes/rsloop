@@ -9,17 +9,39 @@
 dedicated Rust runtime thread that handles loop coordination and I/O-related
 runtime work, while Python callbacks, tasks, and coroutines are executed on
 the thread that calls `run_forever()` / `run_until_complete()` (typically the
-main thread). The package exposes a Python module at
-`rsloop._loop` plus a small Python wrapper in `python/rsloop/__init__.py`.
+main thread). On Linux, that runtime thread can run on top of a persistent
+[`glommio`](https://crates.io/crates/glommio) executor when the host supports
+its `io_uring` backend. The package exposes a Python module at `rsloop._loop`
+plus a small Python wrapper in `python/rsloop/__init__.py`.
 
 The project metadata currently targets Python `>=3.8`. The current
 implementation is Unix-focused and intended for Linux and macOS; Windows is
 not supported by this codebase.
 
-On Linux, `rsloop` now links `glommio` and uses its `io_uring`-backed socket
-I/O path for native `loop.sock_recv()` and `loop.sock_sendall()` on stream
-sockets. If the host kernel or process limits do not allow `glommio` to start,
-those calls automatically fall back to the existing `poll(2)`-driven path.
+## Linux `io_uring` Backend
+
+On Linux, `rsloop` links [`glommio`](https://crates.io/crates/glommio) and uses
+it as the current `io_uring` integration layer.
+
+Today that backend covers the core Linux runtime path plus selected socket I/O:
+
+- the loop runtime thread can run on a persistent `glommio` executor
+- timer waits on that runtime thread can use `glommio`
+- native `loop.sock_recv()` on stream sockets can use a `glommio` worker
+- native `loop.sock_sendall()` on stream sockets can use a `glommio` worker
+- TCP server accept loops can use a `glommio` worker
+- TCP and Unix stream transport read/write workers can use `glommio`
+
+Python callback execution, task execution, and coroutine stepping still happen
+on the Python thread that owns `run_forever()` / `run_until_complete()`.
+Generic fd watchers such as `add_reader` / `add_writer` and Unix accept loops
+still use the existing watcher-thread / `poll(2)` path because `glommio`
+does not expose a stable public raw-fd readiness API for that surface area.
+
+If `glommio` cannot start on the host, `rsloop` probes that once and falls
+back automatically to its existing non-`glommio` implementation. Common
+reasons include an older Linux kernel or `memlock` limits that are too low for
+`io_uring` setup.
 
 ## Current Surface Area
 

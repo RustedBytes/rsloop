@@ -18,7 +18,7 @@ default = []
 profiler = ["dep:pprof"]
 
 [dependencies]
-crossbeam-channel = "0.5"
+flume = "0.10"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 libc = "0.2"
 pprof = { version = "0.15.0", default-features = false, features = ["flamegraph"], optional = true }

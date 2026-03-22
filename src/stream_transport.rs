@@ -411,11 +411,41 @@ enum ReaderTarget {
 }
 
 impl ReaderTarget {
-    fn fd(&self) -> RawFd {
+    fn fd(&self) -> Option<RawFd> {
         match self {
-            Self::File(file) => file.as_raw_fd(),
-            Self::Tcp(stream) => stream.as_raw_fd(),
-            Self::Unix(stream) => stream.as_raw_fd(),
+            Self::Tcp(stream) => Some(stream.as_raw_fd()),
+            Self::Unix(stream) => Some(stream.as_raw_fd()),
+            Self::File(file) => Some(file.as_raw_fd()),
+        }
+    }
+
+    fn read_with_backend(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Tcp(stream) => {
+                if let Some(result) =
+                    crate::io_uring::recv_stream_socket_blocking(stream.as_raw_fd(), buf.len())
+                {
+                    let data = result?;
+                    let n = data.len();
+                    buf[..n].copy_from_slice(&data);
+                    Ok(n)
+                } else {
+                    stream.read(buf)
+                }
+            }
+            Self::Unix(stream) => {
+                if let Some(result) =
+                    crate::io_uring::recv_stream_socket_blocking(stream.as_raw_fd(), buf.len())
+                {
+                    let data = result?;
+                    let n = data.len();
+                    buf[..n].copy_from_slice(&data);
+                    Ok(n)
+                } else {
+                    stream.read(buf)
+                }
+            }
+            Self::File(file) => file.read(buf),
         }
     }
 }
@@ -486,23 +516,21 @@ impl io::Write for WriterTarget {
 
 struct WorkerThread {
     stop: Arc<AtomicBool>,
-    join: thread::JoinHandle<()>,
 }
 
 impl WorkerThread {
     fn spawn(name: String, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
-        let join = thread::Builder::new()
+        thread::Builder::new()
             .name(name)
             .spawn(move || task(thread_stop))
             .expect("failed to spawn stream worker");
-        Self { stop, join }
+        Self { stop }
     }
 
-    fn abort(self) {
+    fn request_stop(&self) {
         self.stop.store(true, Ordering::Release);
-        let _ = self.join.join();
     }
 }
 
@@ -1083,7 +1111,7 @@ impl ServerCore {
             .expect("poisoned accept tasks")
             .drain(..)
         {
-            task.abort();
+            task.request_stop();
         }
 
         if let Some(path) = &self.cleanup_path {
@@ -1888,6 +1916,7 @@ fn spawn_writer_worker(
 
 fn run_stream_reader(core: Arc<StreamTransportCore>, mut reader: ReaderTarget) {
     let mut buf = [0_u8; 65_536];
+    let use_glommio = crate::io_uring::glommio_available();
 
     loop {
         if core.is_closing() {
@@ -1901,26 +1930,36 @@ fn run_stream_reader(core: Arc<StreamTransportCore>, mut reader: ReaderTarget) {
             return;
         }
 
-        match fd_ops::poll_fd(reader.fd(), true, false, 50) {
-            Ok((false, _)) => continue,
-            Ok((true, _)) => {}
-            Err(err) => {
-                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-                    err.to_string(),
-                )));
-                return;
+        if !use_glommio {
+            if let Some(fd) = reader.fd() {
+                match fd_ops::poll_fd(fd, true, false, 50) {
+                    Ok((false, _)) => continue,
+                    Ok((true, _)) => {}
+                    Err(err) => {
+                        core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                            err.to_string(),
+                        )));
+                        return;
+                    }
+                }
             }
         }
 
-        match reader.read(&mut buf) {
+        match reader.read_with_backend(&mut buf) {
             Ok(0) => {
                 core.enqueue_pending_read_event(PendingReadEvent::Eof);
                 return;
             }
             Ok(n) => core
                 .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                continue
+            }
             Err(err) => {
                 core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
                     err.to_string(),
@@ -2009,6 +2048,15 @@ fn run_stream_writer(
 }
 
 fn write_all_owned(writer: &mut WriterTarget, data: &mut OwnedWriteBuffer) -> io::Result<()> {
+    if let Some(fd) = writer.fd() {
+        if let Some(result) = crate::io_uring::send_all_stream_socket_blocking(fd, data.remaining())
+        {
+            result?;
+            data.advance(data.remaining().len());
+            return Ok(());
+        }
+    }
+
     while !data.is_empty() {
         match writer.write(data.remaining()) {
             Ok(0) => {

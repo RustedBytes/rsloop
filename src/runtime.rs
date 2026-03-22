@@ -1,13 +1,20 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
+#[cfg(target_os = "linux")]
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError};
+use flume::{Receiver, RecvTimeoutError, TryRecvError};
 use pyo3::prelude::*;
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
+
+#[cfg(target_os = "linux")]
+use futures_lite::future;
+#[cfg(target_os = "linux")]
+use glommio::{timer, LocalExecutorBuilder};
 
 use crate::fd_ops;
 use crate::loop_core::{LoopCommand, LoopCore, ReadyItem};
@@ -87,23 +94,61 @@ impl Ord for TimerEntry {
 }
 
 pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>) {
-    let mut dispatcher = RuntimeDispatcher {
-        core: Arc::clone(&core),
-        command_rx,
-        ready_batch: VecDeque::new(),
-        timers: BinaryHeap::new(),
-        next_timer_id: 0,
-        active_run: None,
-        signal_tasks: HashMap::new(),
-        reader_tasks: HashMap::new(),
-        writer_tasks: HashMap::new(),
-        shutting_down: false,
-    };
-    dispatcher.run();
+    #[cfg(target_os = "linux")]
+    {
+        if !crate::io_uring::glommio_available() {
+            let mut dispatcher = RuntimeDispatcher::new(core, command_rx);
+            dispatcher.run_sync();
+            return;
+        }
+
+        let executor = match panic::catch_unwind(|| {
+            LocalExecutorBuilder::default()
+                .name("rsloop-runtime")
+                .make()
+        }) {
+            Ok(Ok(executor)) => executor,
+            Ok(Err(_)) | Err(_) => {
+                let mut dispatcher = RuntimeDispatcher::new(core, command_rx);
+                dispatcher.run_sync();
+                return;
+            }
+        };
+
+        let mut dispatcher = RuntimeDispatcher::new(core, command_rx);
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _ = executor.run(async move {
+                dispatcher.run_async().await;
+                Ok::<(), std::io::Error>(())
+            });
+        }));
+        return;
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut dispatcher = RuntimeDispatcher::new(core, command_rx);
+        dispatcher.run_sync();
+    }
 }
 
 impl RuntimeDispatcher {
-    fn run(&mut self) {
+    fn new(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>) -> Self {
+        Self {
+            core: Arc::clone(&core),
+            command_rx,
+            ready_batch: VecDeque::new(),
+            timers: BinaryHeap::new(),
+            next_timer_id: 0,
+            active_run: None,
+            signal_tasks: HashMap::new(),
+            reader_tasks: HashMap::new(),
+            writer_tasks: HashMap::new(),
+            shutting_down: false,
+        }
+    }
+
+    fn run_sync(&mut self) {
         loop {
             if self.shutting_down {
                 break;
@@ -119,6 +164,28 @@ impl RuntimeDispatcher {
             }
 
             if self.wait_for_work() {
+                break;
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn run_async(&mut self) {
+        loop {
+            if self.shutting_down {
+                break;
+            }
+
+            self.collect_expired_timers();
+
+            if self.active_run.is_some() && self.has_ready() {
+                if self.dispatch_ready_batch() {
+                    break;
+                }
+                continue;
+            }
+
+            if self.wait_for_work_async().await {
                 break;
             }
         }
@@ -145,6 +212,50 @@ impl RuntimeDispatcher {
                 Err(RecvTimeoutError::Disconnected) => true,
             },
             None => match self.command_rx.recv() {
+                Ok(command) => self.handle_received_command(command),
+                Err(_) => true,
+            },
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn wait_for_work_async(&mut self) -> bool {
+        if self.active_run.is_none() {
+            return match self.command_rx.recv_async().await {
+                Ok(command) => self.handle_received_command(command),
+                Err(_) => true,
+            };
+        }
+
+        match self.next_wait_timeout() {
+            Some(timeout) if timeout.is_zero() => false,
+            Some(timeout) => {
+                enum WaitOutcome {
+                    Command(LoopCommand),
+                    Timeout,
+                    Disconnected,
+                }
+
+                match future::race(
+                    async {
+                        match self.command_rx.recv_async().await {
+                            Ok(command) => WaitOutcome::Command(command),
+                            Err(_) => WaitOutcome::Disconnected,
+                        }
+                    },
+                    async {
+                        timer::sleep(timeout).await;
+                        WaitOutcome::Timeout
+                    },
+                )
+                .await
+                {
+                    WaitOutcome::Command(command) => self.handle_received_command(command),
+                    WaitOutcome::Timeout => false,
+                    WaitOutcome::Disconnected => true,
+                }
+            }
+            None => match self.command_rx.recv_async().await {
                 Ok(command) => self.handle_received_command(command),
                 Err(_) => true,
             },
