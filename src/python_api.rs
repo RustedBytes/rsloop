@@ -126,7 +126,7 @@ fn asyncio_get_running_loop_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
 
 #[inline]
 fn call_callable_noargs(py: Python<'_>, callable: &Py<PyAny>) -> PyResult<Py<PyAny>> {
-    unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyObject_CallNoArgs(callable.as_ptr())) }
+    unsafe { Bound::from_owned_ptr_or_err(py, ffi::compat::PyObject_CallNoArgs(callable.as_ptr())) }
         .map(Bound::unbind)
 }
 
