@@ -34,6 +34,7 @@ struct RuntimeDispatcher {
     signal_tasks: HashMap<i32, SignalWatcher>,
     reader_tasks: HashMap<fd_ops::RawFd, WatchTask>,
     writer_tasks: HashMap<fd_ops::RawFd, WatchTask>,
+    accept_tasks: HashMap<fd_ops::RawFd, WatchTask>,
     shutting_down: bool,
 }
 
@@ -135,6 +136,7 @@ pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>
         signal_tasks: HashMap::new(),
         reader_tasks: HashMap::new(),
         writer_tasks: HashMap::new(),
+        accept_tasks: HashMap::new(),
         shutting_down: false,
     };
     dispatcher.run();
@@ -144,6 +146,18 @@ pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>
 
 impl RuntimeDispatcher {
     fn run(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = self.io_runtime.clone();
+            runtime.enter(|| self.run_inner());
+            return;
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        self.run_inner();
+    }
+
+    fn run_inner(&mut self) {
         loop {
             if self.shutting_down {
                 break;
@@ -525,6 +539,58 @@ impl RuntimeDispatcher {
                     abort_watch_task(task);
                 }
             }
+            LoopCommand::StartSocketReader { fd, core, reader } => {
+                if let Some(task) = self.reader_tasks.remove(&fd) {
+                    abort_watch_task(task);
+                }
+
+                #[cfg(target_os = "linux")]
+                let task = self
+                    .io_runtime
+                    .spawn(crate::stream_transport::run_socket_reader_task(
+                        core, reader,
+                    ));
+
+                #[cfg(not(target_os = "linux"))]
+                let task = WatchTask::spawn(format!("rsloop-socket-reader-{fd}"), move |stop| {
+                    crate::stream_transport::run_socket_reader_blocking(core, reader, stop)
+                });
+
+                self.reader_tasks.insert(fd, task);
+            }
+            LoopCommand::StopSocketReader(fd) => {
+                if let Some(task) = self.reader_tasks.remove(&fd) {
+                    abort_watch_task(task);
+                }
+            }
+            LoopCommand::StartServerAccept {
+                fd,
+                server,
+                listener,
+            } => {
+                if let Some(task) = self.accept_tasks.remove(&fd) {
+                    abort_watch_task(task);
+                }
+
+                #[cfg(target_os = "linux")]
+                let task = self
+                    .io_runtime
+                    .spawn(crate::stream_transport::run_server_accept_task(
+                        server, listener,
+                    ));
+
+                #[cfg(not(target_os = "linux"))]
+                let task = WatchTask::spawn(format!("rsloop-accept-{fd}"), move |stop| {
+                    crate::stream_transport::run_server_accept_blocking(server, listener, stop)
+                });
+
+                self.accept_tasks.insert(fd, task);
+            }
+            LoopCommand::StopServerAccept(fd) => {
+                if let Some(task) = self.accept_tasks.remove(&fd) {
+                    abort_watch_task(task);
+                }
+            }
             LoopCommand::RequestStop => {
                 self.ready_batch.push_back(ReadyItem::Stop);
             }
@@ -586,6 +652,9 @@ impl RuntimeDispatcher {
             abort_watch_task(task);
         }
         for (_, task) in self.writer_tasks.drain() {
+            abort_watch_task(task);
+        }
+        for (_, task) in self.accept_tasks.drain() {
             abort_watch_task(task);
         }
     }

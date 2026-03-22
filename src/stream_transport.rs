@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Read, Write as _};
 use std::net::{Shutdown, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::raw::c_int;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
@@ -16,6 +16,10 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
+use compio::net::PollFd;
+#[cfg(target_os = "linux")]
+use compio::time::sleep as compio_sleep;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyByteArrayMethods, PyBytes, PyDict, PySlice, PyString, PyTuple};
@@ -342,6 +346,8 @@ impl StreamReaderFastPath {
 }
 
 struct StreamTransportState {
+    io_fd: Option<fd_ops::RawFd>,
+    runtime_socket_io: bool,
     protocol: Py<PyAny>,
     callbacks: ProtocolCallbacks,
     context: Py<PyAny>,
@@ -387,6 +393,7 @@ pub struct ServerCore {
     sockets: Vec<Py<PyAny>>,
     state: Mutex<ServerState>,
     accept_tasks: Mutex<Vec<WorkerThread>>,
+    accept_fds: Mutex<Vec<fd_ops::RawFd>>,
     active_connections: AtomicUsize,
     closed_notify: AsyncEvent,
     cleanup_path: Option<PathBuf>,
@@ -419,7 +426,7 @@ impl TaskedDirectWriter {
     }
 }
 
-enum ReaderTarget {
+pub enum ReaderTarget {
     File(std::fs::File),
     Tcp(StdTcpStream),
     #[cfg(unix)]
@@ -1115,6 +1122,15 @@ impl StreamTransportCore {
         self.state.lock().expect("poisoned transport state").closing = true;
     }
 
+    fn runtime_socket_fd(&self) -> Option<fd_ops::RawFd> {
+        let state = self.state.lock().expect("poisoned transport state");
+        if state.runtime_socket_io {
+            state.io_fd
+        } else {
+            None
+        }
+    }
+
     fn detach_underlying_stream(&self) {
         let mut state = self.state.lock().expect("poisoned transport state");
         state.detached = true;
@@ -1307,6 +1323,11 @@ impl StreamTransportCore {
 
         self.detach_underlying_stream();
         let _ = self.writer_tx.send(WriterCommand::Stop);
+        if let Some(fd) = self.runtime_socket_fd() {
+            let _ = self
+                .loop_core
+                .send_command(LoopCommand::StopSocketReader(fd));
+        }
         for worker in self
             .workers
             .lock()
@@ -1409,6 +1430,16 @@ impl ServerCore {
         {
             task.abort();
         }
+        for fd in self
+            .accept_fds
+            .lock()
+            .expect("poisoned accept fds")
+            .drain(..)
+        {
+            let _ = self
+                .loop_core
+                .send_command(LoopCommand::StopServerAccept(fd));
+        }
 
         if let Some(path) = &self.cleanup_path {
             let _ = fs::remove_file(path);
@@ -1427,7 +1458,50 @@ impl ServerCore {
             std::mem::take(&mut state.listeners)
         };
 
+        #[cfg(target_os = "linux")]
+        {
+            if self.tls.is_some() {
+                let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
+                for listener in listeners {
+                    let server = Arc::clone(self);
+                    let task = match listener {
+                        ServerListener::Tcp(listener) => {
+                            WorkerThread::spawn("rsloop-tcp-accept".to_owned(), move |stop| {
+                                run_tcp_accept_loop(server, listener, stop)
+                            })
+                        }
+                        #[cfg(unix)]
+                        ServerListener::Unix(listener) => {
+                            WorkerThread::spawn("rsloop-unix-accept".to_owned(), move |stop| {
+                                run_unix_accept_loop(server, listener, stop)
+                            })
+                        }
+                    };
+                    tasks.push(task);
+                }
+                return;
+            }
+
+            let mut accept_fds = self.accept_fds.lock().expect("poisoned accept fds");
+            for listener in listeners {
+                let fd = match &listener {
+                    ServerListener::Tcp(listener) => tcp_listener_raw_fd(listener),
+                    #[cfg(unix)]
+                    ServerListener::Unix(listener) => unix_raw_fd(listener.as_raw_fd()),
+                };
+                accept_fds.push(fd);
+                let _ = self.loop_core.send_command(LoopCommand::StartServerAccept {
+                    fd,
+                    server: Arc::clone(self),
+                    listener,
+                });
+            }
+            return;
+        }
+
+        #[cfg(not(target_os = "linux"))]
         let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
+        #[cfg(not(target_os = "linux"))]
         for listener in listeners {
             let server = Arc::clone(self);
             let task = match listener {
@@ -1494,6 +1568,12 @@ impl PyStreamTransport {
 
     fn close(&self) -> PyResult<()> {
         self.core.set_closing();
+        if let Some(fd) = self.core.runtime_socket_fd() {
+            let _ = self
+                .core
+                .loop_core
+                .send_command(LoopCommand::StopSocketReader(fd));
+        }
         if self.core.direct_writer.is_none() {
             let _ = self.core.writer_tx.send(WriterCommand::Close);
             return Ok(());
@@ -1514,6 +1594,12 @@ impl PyStreamTransport {
 
     fn abort(&self) -> PyResult<()> {
         self.core.set_closing();
+        if let Some(fd) = self.core.runtime_socket_fd() {
+            let _ = self
+                .core
+                .loop_core
+                .send_command(LoopCommand::StopSocketReader(fd));
+        }
         if self.core.direct_writer.is_none() {
             let _ = self.core.writer_tx.send(WriterCommand::Abort);
             return Ok(());
@@ -1927,6 +2013,8 @@ pub fn spawn_read_pipe_transport(
         loop_core,
         loop_obj,
         state: Mutex::new(StreamTransportState {
+            io_fd: None,
+            runtime_socket_io: false,
             protocol,
             callbacks,
             context,
@@ -1988,6 +2076,8 @@ pub fn spawn_read_pipe_transport(
         loop_core,
         loop_obj,
         state: Mutex::new(StreamTransportState {
+            io_fd: None,
+            runtime_socket_io: false,
             protocol,
             callbacks,
             context,
@@ -2055,6 +2145,8 @@ pub fn spawn_write_pipe_transport(
         loop_core,
         loop_obj,
         state: Mutex::new(StreamTransportState {
+            io_fd: None,
+            runtime_socket_io: false,
             protocol,
             callbacks,
             context,
@@ -2122,6 +2214,8 @@ pub fn spawn_write_pipe_transport(
         loop_core,
         loop_obj,
         state: Mutex::new(StreamTransportState {
+            io_fd: None,
+            runtime_socket_io: false,
             protocol,
             callbacks,
             context,
@@ -2231,6 +2325,8 @@ pub fn spawn_tcp_transport(
         loop_core,
         loop_obj,
         state: Mutex::new(StreamTransportState {
+            io_fd: Some(raw_fd),
+            runtime_socket_io: true,
             protocol,
             callbacks,
             context,
@@ -2270,6 +2366,13 @@ pub fn spawn_tcp_transport(
         server.connection_opened();
     }
 
+    #[cfg(target_os = "linux")]
+    let _ = core.loop_core.send_command(LoopCommand::StartSocketReader {
+        fd: raw_fd,
+        core: Arc::clone(&core),
+        reader: ReaderTarget::Tcp(stream),
+    });
+    #[cfg(not(target_os = "linux"))]
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::Tcp(stream));
     Ok(transport)
 }
@@ -2306,6 +2409,8 @@ pub fn spawn_unix_transport(
         loop_core,
         loop_obj,
         state: Mutex::new(StreamTransportState {
+            io_fd: Some(raw_fd),
+            runtime_socket_io: true,
             protocol,
             callbacks,
             context,
@@ -2345,6 +2450,13 @@ pub fn spawn_unix_transport(
         server.connection_opened();
     }
 
+    #[cfg(target_os = "linux")]
+    let _ = core.loop_core.send_command(LoopCommand::StartSocketReader {
+        fd: raw_fd,
+        core: Arc::clone(&core),
+        reader: ReaderTarget::Unix(stream),
+    });
+    #[cfg(not(target_os = "linux"))]
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::Unix(stream));
     Ok(transport)
 }
@@ -2432,6 +2544,7 @@ fn spawn_tls_transport(
     let callbacks = build_protocol_callbacks(py, &protocol)?;
     let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
     let (writer_tx, writer_rx) = mpsc::channel();
+    let stream_fd = stream.fd();
     let tls_state = Arc::new(Mutex::new(TlsIoState { stream, connection }));
 
     py.detach(|| complete_tls_handshake(&tls_state, handshake_timeout))
@@ -2441,6 +2554,8 @@ fn spawn_tls_transport(
         loop_core,
         loop_obj,
         state: Mutex::new(StreamTransportState {
+            io_fd: Some(stream_fd),
+            runtime_socket_io: true,
             protocol,
             callbacks,
             context,
@@ -2513,6 +2628,7 @@ pub fn create_server(py: Python<'_>, params: ServerCreateParams) -> PyResult<Py<
                     listeners,
                 }),
                 accept_tasks: Mutex::new(accept_tasks),
+                accept_fds: Mutex::new(Vec::new()),
                 active_connections: AtomicUsize::new(0),
                 closed_notify: AsyncEvent::new(),
                 cleanup_path,
@@ -2611,6 +2727,112 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
     }
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) async fn run_server_accept_task(server: Arc<ServerCore>, listener: ServerListener) {
+    match listener {
+        ServerListener::Tcp(listener) => run_tcp_accept_task(server, listener).await,
+        #[cfg(unix)]
+        ServerListener::Unix(listener) => run_unix_accept_task(server, listener).await,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn run_server_accept_blocking(
+    server: Arc<ServerCore>,
+    listener: ServerListener,
+    stop: Arc<AtomicBool>,
+) {
+    match listener {
+        ServerListener::Tcp(listener) => run_tcp_accept_loop(server, listener, stop),
+        #[cfg(unix)]
+        ServerListener::Unix(listener) => run_unix_accept_loop(server, listener, stop),
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
+    let Ok(poll_fd) = listener
+        .try_clone()
+        .and_then(|listener| PollFd::new(listener))
+    else {
+        return;
+    };
+
+    loop {
+        if server.is_closed() {
+            return;
+        }
+
+        if let Err(err) = poll_fd.accept_ready().await {
+            if !server.is_closed() {
+                server.report_error(
+                    PyRuntimeError::new_err(err.to_string()),
+                    "TCP server accept failed",
+                );
+            }
+            return;
+        }
+
+        loop {
+            match listener.accept() {
+                Ok((stream, _addr)) => {
+                    let _ = stream.set_nonblocking(true);
+                    let _ = stream.set_nodelay(true);
+                    let result = Python::try_attach(|py| -> PyResult<_> {
+                        let protocol = server.create_protocol_with_py(py)?;
+                        let context = server.context.clone_ref(py);
+                        let spawn_context = TransportSpawnContext {
+                            loop_core: Arc::clone(&server.loop_core),
+                            loop_obj: server.loop_obj.clone_ref(py),
+                            protocol,
+                            context,
+                            context_needs_run: server.context_needs_run,
+                        };
+                        if let Some(tls) = server.tls.as_ref() {
+                            spawn_tls_server_transport(
+                                py,
+                                spawn_context,
+                                StreamKind::Tcp(stream),
+                                ServerTlsSettings {
+                                    config: Arc::clone(&tls.config),
+                                    handshake_timeout: tls.handshake_timeout,
+                                    ssl_context: tls.ssl_context.clone_ref(py),
+                                },
+                                Some(Arc::downgrade(&server)),
+                                true,
+                            )
+                        } else {
+                            spawn_tcp_transport(
+                                py,
+                                spawn_context,
+                                stream,
+                                Some(Arc::downgrade(&server)),
+                            )
+                        }
+                    });
+                    match result {
+                        Some(Ok(_)) => {}
+                        Some(Err(err)) => {
+                            server.report_error(err, "failed to accept TCP connection")
+                        }
+                        None => return,
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    if !server.is_closed() {
+                        server.report_error(
+                            PyRuntimeError::new_err(err.to_string()),
+                            "TCP server accept failed",
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop: Arc<AtomicBool>) {
     loop {
@@ -2630,6 +2852,89 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
                 }
                 return;
             }
+        }
+
+        loop {
+            match listener.accept() {
+                Ok((stream, _addr)) => {
+                    let _ = stream.set_nonblocking(true);
+                    let result = Python::try_attach(|py| -> PyResult<_> {
+                        let protocol = server.create_protocol_with_py(py)?;
+                        let context = server.context.clone_ref(py);
+                        let spawn_context = TransportSpawnContext {
+                            loop_core: Arc::clone(&server.loop_core),
+                            loop_obj: server.loop_obj.clone_ref(py),
+                            protocol,
+                            context,
+                            context_needs_run: server.context_needs_run,
+                        };
+                        if let Some(tls) = server.tls.as_ref() {
+                            spawn_tls_server_transport(
+                                py,
+                                spawn_context,
+                                StreamKind::Unix(stream),
+                                ServerTlsSettings {
+                                    config: Arc::clone(&tls.config),
+                                    handshake_timeout: tls.handshake_timeout,
+                                    ssl_context: tls.ssl_context.clone_ref(py),
+                                },
+                                Some(Arc::downgrade(&server)),
+                                true,
+                            )
+                        } else {
+                            spawn_unix_transport(
+                                py,
+                                spawn_context,
+                                stream,
+                                Some(Arc::downgrade(&server)),
+                            )
+                        }
+                    });
+                    match result {
+                        Some(Ok(_)) => {}
+                        Some(Err(err)) => {
+                            server.report_error(err, "failed to accept Unix connection")
+                        }
+                        None => return,
+                    }
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    if !server.is_closed() {
+                        server.report_error(
+                            PyRuntimeError::new_err(err.to_string()),
+                            "Unix server accept failed",
+                        );
+                    }
+                    return;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", unix))]
+async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener) {
+    let Ok(poll_fd) = listener
+        .try_clone()
+        .and_then(|listener| PollFd::new(listener))
+    else {
+        return;
+    };
+
+    loop {
+        if server.is_closed() {
+            return;
+        }
+
+        if let Err(err) = poll_fd.accept_ready().await {
+            if !server.is_closed() {
+                server.report_error(
+                    PyRuntimeError::new_err(err.to_string()),
+                    "Unix server accept failed",
+                );
+            }
+            return;
         }
 
         loop {
@@ -2830,6 +3135,68 @@ fn run_stream_reader(
             }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) async fn run_socket_reader_task(
+    core: Arc<StreamTransportCore>,
+    mut reader: ReaderTarget,
+) {
+    let Ok(poll_fd) = poll_fd_from_raw(reader.fd()) else {
+        core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+            "failed to attach socket reader".to_owned(),
+        )));
+        return;
+    };
+    let mut buf = [0_u8; 65_536];
+
+    loop {
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        while !core.is_closing() && !core.is_reading() {
+            compio_sleep(Duration::from_millis(1)).await;
+        }
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        if let Err(err) = poll_fd.read_ready().await {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                err.to_string(),
+            )));
+            return;
+        }
+
+        match reader.read(&mut buf) {
+            Ok(0) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                return;
+            }
+            Ok(n) => core
+                .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn run_socket_reader_blocking(
+    core: Arc<StreamTransportCore>,
+    reader: ReaderTarget,
+    stop: Arc<AtomicBool>,
+) {
+    run_stream_reader(core, reader, stop)
 }
 
 fn run_tls_reader(
@@ -3180,6 +3547,15 @@ fn wait_socket_ready(fd: fd_ops::RawFd, pollable: bool, read: bool, write: bool)
 
     thread::sleep(Duration::from_millis(10));
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn poll_fd_from_raw(fd: fd_ops::RawFd) -> io::Result<PollFd<OwnedFd>> {
+    let dup = fd_ops::dup_raw_fd(fd)?;
+    let dup: i32 = dup
+        .try_into()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "fd out of range"))?;
+    PollFd::new(unsafe { OwnedFd::from_raw_fd(dup) })
 }
 
 fn tls_io_error(err: rustls::Error) -> io::Error {

@@ -13,7 +13,7 @@ use crate::context::{capture_context, clear_running_loop, ensure_running_loop};
 use crate::errors::handle_callback_error;
 use crate::fd_ops::RawFd;
 use crate::runtime::run_runtime_thread;
-use crate::stream_transport::StreamTransportCore;
+use crate::stream_transport::{ReaderTarget, ServerCore, ServerListener, StreamTransportCore};
 use crossbeam_channel::Sender;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -98,6 +98,18 @@ pub enum LoopCommand {
         value: Py<PyAny>,
     },
     ScheduleStreamTransportRead(Arc<StreamTransportCore>),
+    StartSocketReader {
+        fd: RawFd,
+        core: Arc<StreamTransportCore>,
+        reader: ReaderTarget,
+    },
+    StopSocketReader(RawFd),
+    StartServerAccept {
+        fd: RawFd,
+        server: Arc<ServerCore>,
+        listener: ServerListener,
+    },
+    StopServerAccept(RawFd),
     RequestStop,
     Close,
 }
