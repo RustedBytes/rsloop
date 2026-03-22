@@ -2,7 +2,6 @@ import asyncio
 import os
 import pathlib
 import socket
-import sys
 import tempfile
 import unittest
 
@@ -19,8 +18,12 @@ def make_cert_files(tmpdir: str) -> tuple[str, str, str]:
     pathlib.Path(ca_cert_path).write_bytes(
         TLS_FIXTURES_DIR.joinpath("ca-cert.pem").read_bytes()
     )
-    pathlib.Path(cert_path).write_bytes(TLS_FIXTURES_DIR.joinpath("cert.pem").read_bytes())
-    pathlib.Path(key_path).write_bytes(TLS_FIXTURES_DIR.joinpath("key.pem").read_bytes())
+    pathlib.Path(cert_path).write_bytes(
+        TLS_FIXTURES_DIR.joinpath("cert.pem").read_bytes()
+    )
+    pathlib.Path(key_path).write_bytes(
+        TLS_FIXTURES_DIR.joinpath("key.pem").read_bytes()
+    )
     return ca_cert_path, cert_path, key_path
 
 
@@ -220,7 +223,9 @@ class TlsTests(unittest.TestCase):
 
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
                     self.transport = transport
-                    if not isinstance(transport.get_extra_info("sslcontext"), type(None)):
+                    if not isinstance(
+                        transport.get_extra_info("sslcontext"), type(None)
+                    ):
                         if not self.upgraded.done():
                             self.upgraded.set_result(None)
                             server_upgraded.set()
