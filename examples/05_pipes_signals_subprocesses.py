@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import sys
 
 import rsloop
 
@@ -68,6 +69,10 @@ class ProcessProtocol(asyncio.SubprocessProtocol):
 
 
 async def demo_signal_handlers() -> None:
+    if os.name == "nt":
+        print("signal handler: skipped on Windows")
+        return
+
     loop = asyncio.get_running_loop()
     done: asyncio.Future[str] = loop.create_future()
 
@@ -116,13 +121,25 @@ async def demo_pipes() -> None:
 
 async def demo_subprocesses() -> None:
     loop = asyncio.get_running_loop()
+    if os.name == "nt":
+        exec_program = sys.executable
+        exec_args = (
+            "-c",
+            "import sys; data = sys.stdin.buffer.read(); "
+            "sys.stdout.buffer.write(data.upper()); "
+            "sys.stderr.write('shell-stderr')",
+        )
+        shell_cmd = "echo subprocess-shell-demo"
+    else:
+        exec_program = "/bin/sh"
+        exec_args = ("-c", "cat; printf shell-stderr >&2")
+        shell_cmd = "printf subprocess-shell-demo"
 
     exec_done: asyncio.Future[dict[str, object]] = loop.create_future()
     transport, _ = await loop.subprocess_exec(
         lambda: ProcessProtocol(exec_done),
-        "/bin/sh",
-        "-c",
-        "cat; printf shell-stderr >&2",
+        exec_program,
+        *exec_args,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -135,7 +152,7 @@ async def demo_subprocesses() -> None:
     shell_done: asyncio.Future[dict[str, object]] = loop.create_future()
     _, _ = await loop.subprocess_shell(
         lambda: ProcessProtocol(shell_done),
-        "printf subprocess-shell-demo",
+        shell_cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -143,10 +160,23 @@ async def demo_subprocesses() -> None:
 
 
 async def demo_high_level_subprocesses() -> None:
+    if os.name == "nt":
+        exec_program = sys.executable
+        exec_args = (
+            "-c",
+            "import sys; data = sys.stdin.buffer.read(); "
+            "sys.stdout.buffer.write(data.upper()); "
+            "sys.stderr.write('merged-stderr')",
+        )
+        shell_cmd = "echo create-subprocess-shell-demo"
+    else:
+        exec_program = "/bin/sh"
+        exec_args = ("-c", "cat; printf merged-stderr >&2")
+        shell_cmd = "printf create-subprocess-shell-demo"
+
     proc = await asyncio.create_subprocess_exec(
-        "/bin/sh",
-        "-c",
-        "cat; printf merged-stderr >&2",
+        exec_program,
+        *exec_args,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -165,7 +195,7 @@ async def demo_high_level_subprocesses() -> None:
     )
 
     shell_proc = await asyncio.create_subprocess_shell(
-        "printf create-subprocess-shell-demo",
+        shell_cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )

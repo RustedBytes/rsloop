@@ -4,6 +4,8 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -543,12 +545,8 @@ pub fn spawn_process_transport(
         #[cfg(unix)]
         let file_obj: Py<PyAny> = make_python_pipe_file(py, stdin.as_raw_fd() as i64, "wb")?;
         #[cfg(windows)]
-        let file_obj: Py<PyAny> = {
-            let _ = stdin;
-            return Err(PyRuntimeError::new_err(
-                "subprocess stdin pipe transport is not implemented on Windows",
-            ));
-        };
+        let file_obj: Py<PyAny> =
+            make_python_pipe_file_from_handle(py, stdin.as_raw_handle(), "wb")?;
         let stdin_protocol = Py::new(py, PyProcessStdinProtocol { core: core.clone() })?.into_any();
         let stdin_context = py
             .import("contextvars")?
@@ -619,6 +617,28 @@ fn make_python_pipe_file(py: Python<'_>, fd: fd_ops::RawFd, mode: &str) -> PyRes
     let os = py.import("os")?;
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     Ok(os.getattr("fdopen")?.call1((dup, mode, 0))?.unbind())
+}
+
+#[cfg(windows)]
+fn make_python_pipe_file_from_handle(
+    py: Python<'_>,
+    handle: std::os::windows::io::RawHandle,
+    mode: &str,
+) -> PyResult<Py<PyAny>> {
+    let duplicated =
+        fd_ops::duplicate_handle(handle).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let msvcrt = py.import("msvcrt")?;
+    let os = py.import("os")?;
+    let flags = if mode.starts_with('r') {
+        libc::O_RDONLY
+    } else {
+        libc::O_WRONLY
+    } | libc::O_BINARY;
+    let fd = msvcrt
+        .getattr("open_osfhandle")?
+        .call1((duplicated as isize, flags))?
+        .extract::<i64>()?;
+    Ok(os.getattr("fdopen")?.call1((fd, mode, 0))?.unbind())
 }
 
 fn run_process_reader(core: Arc<ProcessTransportCore>, fd: i32, mut reader: BoxedProcessReader) {

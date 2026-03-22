@@ -18,9 +18,9 @@ The package exposes:
 - a Python wrapper in `python/rsloop/__init__.py`
 - `rsloop.Loop`, `rsloop.new_event_loop()`, and `rsloop.run(...)`
 
-Repository metadata currently targets Python `>=3.8`. The packaged project is
-Linux/macOS-oriented today; Windows-specific scaffolding exists in the codebase,
-but major transport and subprocess paths are still intentionally unsupported.
+Repository metadata currently targets Python `>=3.8`. The packaged project now
+supports the core event-loop surface on Linux, macOS, and Windows, including
+Windows pipe transports and subprocess workflows.
 
 ## Install
 
@@ -175,8 +175,10 @@ These gaps are visible in the current implementation.
 - Unix-specific APIs remain Unix-specific:
   `create_unix_server`, `create_unix_connection`,
   `add_signal_handler`, `remove_signal_handler`.
-- Windows code paths are still incomplete for transports, pipes, and
-  subprocesses, so the project should be treated as Linux/macOS-focused.
+- Platform-specific limitations still apply:
+  Unix socket APIs and Unix signal handlers remain Unix-only, and several
+  subprocess options such as `pass_fds`, `user`, `group`, and `umask` are
+  still specific to Unix process spawning.
 
 ## Build
 
