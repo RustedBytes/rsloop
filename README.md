@@ -16,6 +16,20 @@ The project metadata currently targets Python `>=3.8`. The current
 implementation is Unix-focused and intended for Linux and macOS; Windows is
 not supported by this codebase.
 
+## Install
+
+Install the published package from PyPI:
+
+```bash
+pip install rsloop
+```
+
+With `uv`:
+
+```bash
+uv add rsloop
+```
+
 ## Current Surface Area
 
 Today’s codebase provides:
