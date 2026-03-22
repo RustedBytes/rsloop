@@ -5,6 +5,7 @@ mod context;
 mod errors;
 mod fast_streams;
 mod fd_ops;
+mod io_uring;
 mod loop_core;
 mod process_transport;
 mod profiler;

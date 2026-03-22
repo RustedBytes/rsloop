@@ -1,6 +1,6 @@
 [package]
 name = "rsloop"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "An event loop for asyncio written in Rust"
 license = "Apache-2.0"
@@ -27,6 +27,10 @@ pyo3-async-runtimes = { version = "0.28", features = ["async-std-runtime"] }
 signal-hook = "0.3"
 socket2 = "0.6"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+futures-lite = "2"
+glommio = { version = "0.9.0", default-features = false }
+
 [build-dependencies]
 pyo3-build-config = "0.28"
 
@@ -35,7 +39,7 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 incremental = false
-strip = true
+#strip = true
 
 [profile.bench]
 inherits = "release"

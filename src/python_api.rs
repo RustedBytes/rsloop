@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::exceptions::{
+    PyNotImplementedError, PyOSError, PyRuntimeError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule, PySlice, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
@@ -1535,6 +1537,13 @@ impl PyLoop {
         let locals = Self::task_locals(py, &slf)?;
         let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
         pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+            if let Some(result) = crate::io_uring::recv_stream_socket(fd, nbytes).await {
+                let bytes = result.map_err(|err| PyOSError::new_err(err.to_string()))?;
+                return Python::attach(|py| {
+                    Ok(pyo3::types::PyBytes::new(py, &bytes).unbind().into_any())
+                });
+            }
+
             loop {
                 match Python::attach(|py| sock.call_method1(py, "recv", (nbytes,))) {
                     Ok(value) => return Ok(value),
@@ -1587,6 +1596,12 @@ impl PyLoop {
         let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
         pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
             let total = Python::attach(|py| data.bind(py).len())?;
+            let payload = Python::attach(|py| data.bind(py).extract::<Vec<u8>>())?;
+            if let Some(result) = crate::io_uring::send_all_stream_socket(fd, payload).await {
+                result.map_err(|err| PyOSError::new_err(err.to_string()))?;
+                return Ok(Python::attach(|py| py.None()));
+            }
+
             let mut sent = 0usize;
 
             while sent < total {

@@ -16,6 +16,11 @@ The project metadata currently targets Python `>=3.8`. The current
 implementation is Unix-focused and intended for Linux and macOS; Windows is
 not supported by this codebase.
 
+On Linux, `rsloop` now links `glommio` and uses its `io_uring`-backed socket
+I/O path for native `loop.sock_recv()` and `loop.sock_sendall()` on stream
+sockets. If the host kernel or process limits do not allow `glommio` to start,
+those calls automatically fall back to the existing `poll(2)`-driven path.
+
 ## Current Surface Area
 
 Today’s codebase provides:
