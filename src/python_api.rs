@@ -26,11 +26,14 @@ use crate::process_transport::{
 };
 use crate::stream_transport::{
     create_server as create_py_server, remove_unix_socket_if_present, spawn_read_pipe_transport,
-    spawn_write_pipe_transport, tcp_listener_from_socket_fd, tcp_server_listener,
-    transport_from_socket, PyServer, ServerCreateParams, TransportSpawnContext,
+    spawn_write_pipe_transport, start_tls_transport, tcp_listener_from_socket_fd,
+    tcp_server_listener, transport_from_socket, transport_from_socket_server_tls,
+    transport_from_socket_tls, PyServer, PyStreamTransport, ServerCreateParams,
+    TransportSpawnContext,
 };
 #[cfg(unix)]
 use crate::stream_transport::{unix_listener_from_socket_fd, unix_server_listener};
+use crate::tls::{client_tls_settings, server_tls_settings};
 
 static ASYNCIO_TASK_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
 static ASYNCIO_FUTURE_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
@@ -74,6 +77,7 @@ impl PyLoop {
         Ok(Py::new(py, PyHandle::new(ready.id(), &ready))?.into_any())
     }
 
+    #[allow(dead_code)]
     fn not_implemented(feature: &str) -> PyErr {
         PyNotImplementedError::new_err(format!("{feature} is not implemented in rust-impl yet"))
     }
@@ -313,6 +317,9 @@ fn listener_sources_from_sockets(
     let mut listeners = Vec::with_capacity(sockets.len());
     for socket in sockets {
         let family = socket.getattr(py, "family")?.extract::<i32>(py)?;
+        #[cfg(windows)]
+        let fd = socket.call_method0(py, "fileno")?.extract(py)?;
+        #[cfg(not(windows))]
         let fd = socket
             .call_method0(py, "dup")?
             .call_method0(py, "detach")?
@@ -1166,10 +1173,12 @@ impl PyLoop {
         ssl_shutdown_timeout: Option<f64>,
         start_serving: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = (ssl_handshake_timeout, ssl_shutdown_timeout);
-        if ssl.is_some() {
-            return Err(Self::not_implemented("create_server(..., ssl=...)"));
-        }
+        let _ = ssl_shutdown_timeout;
+        let tls = ssl
+            .as_ref()
+            .map(|ssl| server_tls_settings(py, ssl.bind(py), ssl_handshake_timeout))
+            .transpose()?
+            .map(Arc::new);
 
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
@@ -1213,6 +1222,7 @@ impl PyLoop {
                         sockets: server_sockets,
                         listeners,
                         cleanup_path: None,
+                        tls: tls.clone(),
                     },
                 )?;
                 if start_serving {
@@ -1250,16 +1260,11 @@ impl PyLoop {
         all_errors: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
         let _ = (
-            server_hostname,
-            ssl_handshake_timeout,
             ssl_shutdown_timeout,
             happy_eyeballs_delay,
             interleave,
             all_errors,
         );
-        if ssl.is_some() {
-            return Err(Self::not_implemented("create_connection(..., ssl=...)"));
-        }
 
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
@@ -1318,15 +1323,34 @@ impl PyLoop {
             };
 
             let transport = Python::attach(|py| {
-                transport_from_socket(
-                    py,
-                    core.clone(),
-                    loop_obj.clone_ref(py),
-                    protocol.clone_ref(py),
-                    context.clone_ref(py),
-                    context_needs_run,
-                    socket_obj,
-                )
+                if let Some(ssl) = ssl.as_ref() {
+                    let tls = client_tls_settings(
+                        py,
+                        ssl.bind(py),
+                        server_hostname.as_ref().map(|value| value.bind(py)),
+                        ssl_handshake_timeout,
+                    )?;
+                    transport_from_socket_tls(
+                        py,
+                        core.clone(),
+                        loop_obj.clone_ref(py),
+                        protocol.clone_ref(py),
+                        context.clone_ref(py),
+                        context_needs_run,
+                        socket_obj,
+                        tls,
+                    )
+                } else {
+                    transport_from_socket(
+                        py,
+                        core.clone(),
+                        loop_obj.clone_ref(py),
+                        protocol.clone_ref(py),
+                        context.clone_ref(py),
+                        context_needs_run,
+                        socket_obj,
+                    )
+                }
             })?;
 
             Python::attach(|py| {
@@ -1353,15 +1377,17 @@ impl PyLoop {
         ssl_shutdown_timeout: Option<f64>,
         start_serving: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = (ssl_handshake_timeout, ssl_shutdown_timeout);
+        let _ = ssl_shutdown_timeout;
         #[cfg(not(unix))]
         {
             let _ = (slf, protocol_factory, path, sock, backlog, start_serving);
             return Err(Self::not_implemented("create_unix_server"));
         }
-        if ssl.is_some() {
-            return Err(Self::not_implemented("create_unix_server(..., ssl=...)"));
-        }
+        let tls = ssl
+            .as_ref()
+            .map(|ssl| server_tls_settings(py, ssl.bind(py), ssl_handshake_timeout))
+            .transpose()?
+            .map(Arc::new);
 
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
@@ -1399,6 +1425,7 @@ impl PyLoop {
                         sockets,
                         listeners,
                         cleanup_path,
+                        tls: tls.clone(),
                     },
                 )?;
                 if start_serving {
@@ -1427,16 +1454,11 @@ impl PyLoop {
         ssl_handshake_timeout: Option<f64>,
         ssl_shutdown_timeout: Option<f64>,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = (server_hostname, ssl_handshake_timeout, ssl_shutdown_timeout);
+        let _ = ssl_shutdown_timeout;
         #[cfg(not(unix))]
         {
             let _ = (slf, protocol_factory, path, sock);
             return Err(Self::not_implemented("create_unix_connection"));
-        }
-        if ssl.is_some() {
-            return Err(Self::not_implemented(
-                "create_unix_connection(..., ssl=...)",
-            ));
         }
 
         let locals = Self::task_locals(py, &slf)?;
@@ -1479,15 +1501,34 @@ impl PyLoop {
             };
 
             let transport = Python::attach(|py| {
-                transport_from_socket(
-                    py,
-                    core.clone(),
-                    loop_obj.clone_ref(py),
-                    protocol.clone_ref(py),
-                    context.clone_ref(py),
-                    context_needs_run,
-                    socket_obj,
-                )
+                if let Some(ssl) = ssl.as_ref() {
+                    let tls = client_tls_settings(
+                        py,
+                        ssl.bind(py),
+                        server_hostname.as_ref().map(|value| value.bind(py)),
+                        ssl_handshake_timeout,
+                    )?;
+                    transport_from_socket_tls(
+                        py,
+                        core.clone(),
+                        loop_obj.clone_ref(py),
+                        protocol.clone_ref(py),
+                        context.clone_ref(py),
+                        context_needs_run,
+                        socket_obj,
+                        tls,
+                    )
+                } else {
+                    transport_from_socket(
+                        py,
+                        core.clone(),
+                        loop_obj.clone_ref(py),
+                        protocol.clone_ref(py),
+                        context.clone_ref(py),
+                        context_needs_run,
+                        socket_obj,
+                    )
+                }
             })?;
 
             Python::attach(|py| {
@@ -1507,12 +1548,7 @@ impl PyLoop {
         ssl_handshake_timeout: Option<f64>,
         ssl_shutdown_timeout: Option<f64>,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = (ssl_handshake_timeout, ssl_shutdown_timeout);
-        if ssl.is_some() {
-            return Err(Self::not_implemented(
-                "connect_accepted_socket(..., ssl=...)",
-            ));
-        }
+        let _ = ssl_shutdown_timeout;
 
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
@@ -1534,15 +1570,29 @@ impl PyLoop {
                 Ok(sock.clone_ref(py))
             })?;
             let transport = Python::attach(|py| {
-                transport_from_socket(
-                    py,
-                    core.clone(),
-                    loop_obj.clone_ref(py),
-                    protocol.clone_ref(py),
-                    context.clone_ref(py),
-                    context_needs_run,
-                    socket_obj,
-                )
+                if let Some(ssl) = ssl.as_ref() {
+                    let tls = server_tls_settings(py, ssl.bind(py), ssl_handshake_timeout)?;
+                    transport_from_socket_server_tls(
+                        py,
+                        core.clone(),
+                        loop_obj.clone_ref(py),
+                        protocol.clone_ref(py),
+                        context.clone_ref(py),
+                        context_needs_run,
+                        socket_obj,
+                        tls,
+                    )
+                } else {
+                    transport_from_socket(
+                        py,
+                        core.clone(),
+                        loop_obj.clone_ref(py),
+                        protocol.clone_ref(py),
+                        context.clone_ref(py),
+                        context_needs_run,
+                        socket_obj,
+                    )
+                }
             })?;
             Python::attach(|py| {
                 let result = PyTuple::new(py, [transport.into_any(), protocol.clone_ref(py)])?;
@@ -1551,8 +1601,56 @@ impl PyLoop {
         })
     }
 
-    fn start_tls(&self) -> PyResult<()> {
-        Err(Self::not_implemented("start_tls"))
+    #[pyo3(signature=(transport, protocol, sslcontext, *, server_side=false, server_hostname=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None))]
+    fn start_tls(
+        slf: Py<Self>,
+        py: Python<'_>,
+        transport: Py<PyAny>,
+        protocol: Py<PyAny>,
+        sslcontext: Py<PyAny>,
+        server_side: bool,
+        server_hostname: Option<Py<PyAny>>,
+        ssl_handshake_timeout: Option<f64>,
+        ssl_shutdown_timeout: Option<f64>,
+    ) -> PyResult<Bound<'_, PyAny>> {
+        let _ = ssl_shutdown_timeout;
+        let locals = Self::task_locals(py, &slf)?;
+        let transport: Py<PyStreamTransport> = transport.extract(py)?;
+        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+            let upgraded = async_std::task::spawn_blocking(move || -> PyResult<Py<PyAny>> {
+                Python::attach(|py| {
+                    let sslcontext = sslcontext.clone_ref(py);
+                    let protocol = protocol.clone_ref(py);
+                    let transport = transport.clone_ref(py);
+                    let server_hostname = server_hostname.as_ref().map(|value| value.clone_ref(py));
+                    let client_tls = if server_side {
+                        None
+                    } else {
+                        Some(client_tls_settings(
+                            py,
+                            sslcontext.bind(py),
+                            server_hostname.as_ref().map(|value| value.bind(py)),
+                            ssl_handshake_timeout,
+                        )?)
+                    };
+                    let server_tls = if server_side {
+                        Some(server_tls_settings(
+                            py,
+                            sslcontext.bind(py),
+                            ssl_handshake_timeout,
+                        )?)
+                    } else {
+                        None
+                    };
+                    let upgraded =
+                        start_tls_transport(py, transport, protocol, client_tls, server_tls)?;
+                    Ok(upgraded.into_any())
+                })
+            })
+            .await
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+            Ok(upgraded)
+        })
     }
 
     #[pyo3(signature=(fd, callback, *args))]
