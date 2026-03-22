@@ -160,19 +160,6 @@ Build release wheels for CPython 3.8 through 3.14, plus the free-threaded
 scripts/build-wheels.sh
 ```
 
-## Publishing
-
-PyPI releases are published from Git tags that start with `v`, for example
-`v0.1.0`. The GitHub Actions workflow builds wheels by calling
-`scripts/build-wheels.sh`, builds an `sdist`, and then publishes the combined
-artifacts to PyPI with GitHub trusted publishing.
-
-Before the first release, configure the `rsloop` project on PyPI as a trusted
-publisher for this repository/workflow.
-
-Use a release build for benchmarks and runtime comparisons. A debug extension
-will make the Rust loop look much slower than it really is.
-
 ## Profiling
 
 Profiling support is behind the Cargo feature `profiler` and is disabled by
