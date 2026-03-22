@@ -20,6 +20,12 @@ jobs:
           - os_name: linux
             runner: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
+          - os_name: windows-amd64
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+          - os_name: windows-arm64
+            runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
           - os_name: macos-intel
             runner: macos-15-intel
             rust_target: x86_64-apple-darwin
@@ -50,6 +56,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build wheels
+        shell: bash
         run: scripts/build-wheels.sh --out dist --target "${{ matrix.rust_target }}"
 
       - name: Upload wheel artifacts
