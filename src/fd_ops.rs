@@ -5,6 +5,12 @@ use futures::channel::oneshot;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 #[cfg(windows)]
+use socket2::Socket;
+#[cfg(windows)]
+use std::mem;
+#[cfg(windows)]
+use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+#[cfg(windows)]
 use windows_sys::Win32::Foundation::{
     DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
 };
@@ -40,13 +46,29 @@ pub fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
 
     #[cfg(windows)]
     {
-        let fd = raw_fd_to_c_int(fd)?;
-        let duped = unsafe { libc::dup(fd) };
-        if duped < 0 {
-            return Err(io::Error::last_os_error());
+        match duplicate_socket(fd) {
+            Ok(duped) => return Ok(duped),
+            Err(socket_err) => {
+                if let Ok(fd) = raw_fd_to_c_int(fd) {
+                    let duped = unsafe { libc::dup(fd) };
+                    if duped >= 0 {
+                        return Ok(duped as RawFd);
+                    }
+                }
+                return Err(socket_err);
+            }
         }
-        Ok(duped as RawFd)
     }
+}
+
+#[cfg(windows)]
+fn duplicate_socket(fd: RawFd) -> io::Result<RawFd> {
+    let socket = raw_fd_to_socket(fd)?;
+    let socket = unsafe { Socket::from_raw_socket(socket as _) };
+    let duplicate = socket.try_clone()?;
+    let raw = duplicate.into_raw_socket();
+    mem::forget(socket);
+    Ok(raw as RawFd)
 }
 
 #[cfg(windows)]

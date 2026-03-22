@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufReader, Cursor};
 use std::sync::Arc;
@@ -18,13 +17,13 @@ pub struct ClientTlsSettings {
     pub config: Arc<ClientConfig>,
     pub server_name: ServerName<'static>,
     pub handshake_timeout: Duration,
-    pub extra: HashMap<String, Py<PyAny>>,
+    pub ssl_context: Py<PyAny>,
 }
 
 pub struct ServerTlsSettings {
     pub config: Arc<ServerConfig>,
     pub handshake_timeout: Duration,
-    pub extra: HashMap<String, Py<PyAny>>,
+    pub ssl_context: Py<PyAny>,
 }
 
 pub fn client_tls_settings(
@@ -37,14 +36,13 @@ pub fn client_tls_settings(
     let hostname = resolve_server_hostname(py, &ssl_context, server_hostname)?;
     let config = build_client_config(py, &ssl_context)?;
     let handshake_timeout = handshake_timeout(ssl_handshake_timeout)?;
-    let extra = tls_extra(py, &ssl_context)?;
 
     Ok(ClientTlsSettings {
         config: Arc::new(config),
         server_name: ServerName::try_from(hostname.clone())
             .map_err(|_| PyValueError::new_err(format!("invalid server_hostname: {hostname}")))?,
         handshake_timeout,
-        extra,
+        ssl_context,
     })
 }
 
@@ -56,12 +54,11 @@ pub fn server_tls_settings(
     let ssl_context = normalize_server_ssl_context(py, ssl)?;
     let config = build_server_config(py, &ssl_context)?;
     let handshake_timeout = handshake_timeout(ssl_handshake_timeout)?;
-    let extra = tls_extra(py, &ssl_context)?;
 
     Ok(ServerTlsSettings {
         config: Arc::new(config),
         handshake_timeout,
-        extra,
+        ssl_context,
     })
 }
 
@@ -75,14 +72,17 @@ fn handshake_timeout(value: Option<f64>) -> PyResult<Duration> {
     Ok(Duration::from_secs_f64(secs))
 }
 
-fn tls_extra(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<HashMap<String, Py<PyAny>>> {
-    let mut extra = HashMap::with_capacity(2);
+pub fn tls_extra(
+    py: Python<'_>,
+    ssl_context: &Py<PyAny>,
+) -> std::collections::HashMap<String, Py<PyAny>> {
+    let mut extra = std::collections::HashMap::with_capacity(2);
     extra.insert(
         "sslcontext".to_owned(),
         ssl_context.clone_ref(py).into_any(),
     );
     extra.insert("ssl_object".to_owned(), py.None());
-    Ok(extra)
+    extra
 }
 
 fn normalize_client_ssl_context(py: Python<'_>, ssl: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
@@ -139,7 +139,9 @@ fn resolve_server_hostname(
         return server_hostname.extract::<String>();
     }
 
-    let check_hostname = ssl_context.getattr(py, "check_hostname")?.extract::<bool>(py)?;
+    let check_hostname = ssl_context
+        .getattr(py, "check_hostname")?
+        .extract::<bool>(py)?;
     if check_hostname {
         return Err(PyValueError::new_err(
             "server_hostname is required when TLS hostname checks are enabled",

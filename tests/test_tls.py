@@ -2,7 +2,6 @@ import asyncio
 import os
 import pathlib
 import socket
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -10,86 +9,18 @@ import unittest
 import rsloop
 
 
+TLS_FIXTURES_DIR = pathlib.Path(__file__).with_name("fixtures").joinpath("tls")
+
+
 def make_cert_files(tmpdir: str) -> tuple[str, str, str]:
     ca_cert_path = os.path.join(tmpdir, "ca-cert.pem")
-    ca_key_path = os.path.join(tmpdir, "ca-key.pem")
     cert_path = os.path.join(tmpdir, "cert.pem")
     key_path = os.path.join(tmpdir, "key.pem")
-    csr_path = os.path.join(tmpdir, "cert.csr")
-    ext_path = os.path.join(tmpdir, "cert.ext")
-    pathlib.Path(ext_path).write_text(
-        "\n".join(
-            [
-                "basicConstraints=CA:FALSE",
-                "keyUsage=digitalSignature,keyEncipherment",
-                "extendedKeyUsage=serverAuth",
-                "subjectAltName=DNS:localhost",
-            ]
-        ),
-        encoding="ascii",
+    pathlib.Path(ca_cert_path).write_bytes(
+        TLS_FIXTURES_DIR.joinpath("ca-cert.pem").read_bytes()
     )
-    subprocess.run(
-        [
-            "openssl",
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-keyout",
-            ca_key_path,
-            "-out",
-            ca_cert_path,
-            "-subj",
-            "/CN=rsloop-test-ca",
-            "-days",
-            "1",
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    subprocess.run(
-        [
-            "openssl",
-            "req",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-keyout",
-            key_path,
-            "-out",
-            csr_path,
-            "-subj",
-            "/CN=localhost",
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    subprocess.run(
-        [
-            "openssl",
-            "x509",
-            "-req",
-            "-in",
-            csr_path,
-            "-CA",
-            ca_cert_path,
-            "-CAkey",
-            ca_key_path,
-            "-CAcreateserial",
-            "-out",
-            cert_path,
-            "-days",
-            "1",
-            "-extfile",
-            ext_path,
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    pathlib.Path(cert_path).write_bytes(TLS_FIXTURES_DIR.joinpath("cert.pem").read_bytes())
+    pathlib.Path(key_path).write_bytes(TLS_FIXTURES_DIR.joinpath("key.pem").read_bytes())
     return ca_cert_path, cert_path, key_path
 
 

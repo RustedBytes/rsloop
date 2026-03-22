@@ -26,9 +26,10 @@ use crate::process_transport::{
 };
 use crate::stream_transport::{
     create_server as create_py_server, remove_unix_socket_if_present, spawn_read_pipe_transport,
-    spawn_write_pipe_transport, start_tls_transport, tcp_listener_from_socket_fd, tcp_server_listener,
-    transport_from_socket, transport_from_socket_server_tls, transport_from_socket_tls, PyServer,
-    PyStreamTransport, ServerCreateParams, TransportSpawnContext,
+    spawn_write_pipe_transport, start_tls_transport, tcp_listener_from_socket_fd,
+    tcp_server_listener, transport_from_socket, transport_from_socket_server_tls,
+    transport_from_socket_tls, PyServer, PyStreamTransport, ServerCreateParams,
+    TransportSpawnContext,
 };
 #[cfg(unix)]
 use crate::stream_transport::{unix_listener_from_socket_fd, unix_server_listener};
@@ -316,6 +317,9 @@ fn listener_sources_from_sockets(
     let mut listeners = Vec::with_capacity(sockets.len());
     for socket in sockets {
         let family = socket.getattr(py, "family")?.extract::<i32>(py)?;
+        #[cfg(windows)]
+        let fd = socket.call_method0(py, "fileno")?.extract(py)?;
+        #[cfg(not(windows))]
         let fd = socket
             .call_method0(py, "dup")?
             .call_method0(py, "detach")?
@@ -1255,7 +1259,12 @@ impl PyLoop {
         interleave: Option<i32>,
         all_errors: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = (ssl_shutdown_timeout, happy_eyeballs_delay, interleave, all_errors);
+        let _ = (
+            ssl_shutdown_timeout,
+            happy_eyeballs_delay,
+            interleave,
+            all_errors,
+        );
 
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
@@ -1633,13 +1642,8 @@ impl PyLoop {
                     } else {
                         None
                     };
-                    let upgraded = start_tls_transport(
-                        py,
-                        transport,
-                        protocol,
-                        client_tls,
-                        server_tls,
-                    )?;
+                    let upgraded =
+                        start_tls_transport(py, transport, protocol, client_tls, server_tls)?;
                     Ok(upgraded.into_any())
                 })
             })

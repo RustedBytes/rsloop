@@ -29,7 +29,7 @@ use crate::fast_streams::{PyFastStreamProtocol, PyFastStreamReader};
 use crate::fd_ops;
 use crate::loop_core::{LoopCommand, LoopCore};
 use crate::python_names;
-use crate::tls::{ClientTlsSettings, ServerTlsSettings};
+use crate::tls::{tls_extra, ClientTlsSettings, ServerTlsSettings};
 
 enum WriterCommand {
     Data(OwnedWriteBuffer),
@@ -1712,8 +1712,16 @@ fn socket_from_owned_raw(fd: fd_ops::RawFd) -> PyResult<Socket> {
 }
 
 fn detached_socket_handle(py: Python<'_>, socket_obj: &Py<PyAny>) -> PyResult<fd_ops::RawFd> {
-    let dup = socket_obj.call_method0(py, "dup")?;
-    dup.call_method0(py, "detach")?.extract(py)
+    #[cfg(windows)]
+    {
+        return socket_obj.call_method0(py, "fileno")?.extract(py);
+    }
+
+    #[cfg(not(windows))]
+    {
+        let dup = socket_obj.call_method0(py, "dup")?;
+        dup.call_method0(py, "detach")?.extract(py)
+    }
 }
 
 fn tcp_family(stream: &StdTcpStream) -> c_int {
@@ -1853,12 +1861,8 @@ pub fn start_tls_transport(
     let (mut spawn_context, stream) = transport.borrow(py).core.upgrade_stream(py)?;
     spawn_context.protocol = protocol;
     match (client_tls, server_tls) {
-        (Some(tls), None) => {
-            spawn_tls_client_transport(py, spawn_context, stream, tls, None, true)
-        }
-        (None, Some(tls)) => {
-            spawn_tls_server_transport(py, spawn_context, stream, tls, None, true)
-        }
+        (Some(tls), None) => spawn_tls_client_transport(py, spawn_context, stream, tls, None, true),
+        (None, Some(tls)) => spawn_tls_server_transport(py, spawn_context, stream, tls, None, true),
         _ => Err(PyRuntimeError::new_err("invalid TLS upgrade configuration")),
     }
 }
@@ -2321,7 +2325,7 @@ fn spawn_tls_client_transport(
         spawn_context,
         stream,
         TlsConnectionKind::Client(connection),
-        tls.extra,
+        tls_extra(py, &tls.ssl_context),
         tls.handshake_timeout,
         server,
         call_connection_made,
@@ -2343,7 +2347,7 @@ fn spawn_tls_server_transport(
         spawn_context,
         stream,
         TlsConnectionKind::Server(connection),
-        tls.extra,
+        tls_extra(py, &tls.ssl_context),
         tls.handshake_timeout,
         server,
         call_connection_made,
@@ -2522,17 +2526,18 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                                 ServerTlsSettings {
                                     config: Arc::clone(&tls.config),
                                     handshake_timeout: tls.handshake_timeout,
-                                    extra: tls
-                                        .extra
-                                        .iter()
-                                        .map(|(key, value)| (key.clone(), value.clone_ref(py)))
-                                        .collect(),
+                                    ssl_context: tls.ssl_context.clone_ref(py),
                                 },
                                 Some(Arc::downgrade(&server)),
                                 true,
                             )
                         } else {
-                            spawn_tcp_transport(py, spawn_context, stream, Some(Arc::downgrade(&server)))
+                            spawn_tcp_transport(
+                                py,
+                                spawn_context,
+                                stream,
+                                Some(Arc::downgrade(&server)),
+                            )
                         }
                     });
                     match result {
@@ -2601,17 +2606,18 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
                                 ServerTlsSettings {
                                     config: Arc::clone(&tls.config),
                                     handshake_timeout: tls.handshake_timeout,
-                                    extra: tls
-                                        .extra
-                                        .iter()
-                                        .map(|(key, value)| (key.clone(), value.clone_ref(py)))
-                                        .collect(),
+                                    ssl_context: tls.ssl_context.clone_ref(py),
                                 },
                                 Some(Arc::downgrade(&server)),
                                 true,
                             )
                         } else {
-                            spawn_unix_transport(py, spawn_context, stream, Some(Arc::downgrade(&server)))
+                            spawn_unix_transport(
+                                py,
+                                spawn_context,
+                                stream,
+                                Some(Arc::downgrade(&server)),
+                            )
                         }
                     });
                     match result {
@@ -2677,10 +2683,7 @@ fn spawn_tls_writer_worker(
     core.register_worker(worker);
 }
 
-fn complete_tls_handshake(
-    tls_state: &Arc<Mutex<TlsIoState>>,
-    timeout: Duration,
-) -> io::Result<()> {
+fn complete_tls_handshake(tls_state: &Arc<Mutex<TlsIoState>>, timeout: Duration) -> io::Result<()> {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         if std::time::Instant::now() >= deadline {
@@ -3112,16 +3115,13 @@ fn flush_tls_io_locked(state: &mut TlsIoState) -> io::Result<()> {
     Ok(())
 }
 
-fn wait_socket_ready(
-    fd: fd_ops::RawFd,
-    pollable: bool,
-    read: bool,
-    write: bool,
-) -> io::Result<()> {
+fn wait_socket_ready(fd: fd_ops::RawFd, pollable: bool, read: bool, write: bool) -> io::Result<()> {
     if pollable {
         loop {
             match fd_ops::poll_fd(fd, read, write, 50) {
-                Ok((read_ready, write_ready)) if (!read || read_ready) && (!write || write_ready) => {
+                Ok((read_ready, write_ready))
+                    if (!read || read_ready) && (!write || write_ready) =>
+                {
                     return Ok(());
                 }
                 Ok(_) => continue,
@@ -3252,7 +3252,8 @@ fn make_stream_extra(
     fd: fd_ops::RawFd,
     family: i32,
 ) -> PyResult<HashMap<String, Py<PyAny>>> {
-    let socket_fd = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let socket_fd =
+        fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let socket_mod = py.import("socket")?;
     let kwargs = PyDict::new(py);
     kwargs.set_item("fileno", socket_fd)?;
