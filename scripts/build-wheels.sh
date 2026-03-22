@@ -99,9 +99,15 @@ default_versions_for_target() {
   esac
 }
 
+host_rust_target() {
+  rustc -vV | sed -n 's/^host: //p'
+}
+
 OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
 INSTALL_PYTHONS=1
 RUST_TARGET="${RSLOOP_RUST_TARGET:-}"
+HOST_RUST_TARGET=""
+IS_CROSS_COMPILE=0
 MATURIN_ARGS=()
 
 while (($#)); do
@@ -154,6 +160,13 @@ OUTPUT_DIR="$(resolve_path "$OUTPUT_DIR")"
 cd "$ROOT_DIR"
 mkdir -p "$OUTPUT_DIR"
 
+if [[ -n "$RUST_TARGET" ]]; then
+  HOST_RUST_TARGET="$(host_rust_target)"
+  if [[ "$RUST_TARGET" != "$HOST_RUST_TARGET" ]]; then
+    IS_CROSS_COMPILE=1
+  fi
+fi
+
 if (( INSTALL_PYTHONS )); then
   if [[ -n "$RUST_TARGET" ]]; then
     python_requests=()
@@ -174,8 +187,12 @@ for version in "${PYTHON_VERSIONS[@]}"; do
 
   if [[ -n "$RUST_TARGET" ]]; then
     python_request="$(target_python_request "$version" "$RUST_TARGET")"
-    interpreter_selector="python${version}"
-    echo "Building release wheel for Python ${version} targeting ${RUST_TARGET} (${python_request})"
+    if (( IS_CROSS_COMPILE )); then
+      interpreter_selector="python${version}"
+    else
+      interpreter_selector="$(uv python find "$python_request")"
+    fi
+    echo "Building release wheel for Python ${version} targeting ${RUST_TARGET} (${interpreter_selector})"
   else
     interpreter_selector="$(uv python find "$version")"
     echo "Building release wheel for Python ${version} (${interpreter_selector})"
