@@ -2,8 +2,13 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{self, Read, Write as _};
 use std::net::{Shutdown, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::raw::c_int;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawSocket, RawSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -70,6 +75,7 @@ impl OwnedWriteBuffer {
 
 pub enum ServerListener {
     Tcp(StdTcpListener),
+    #[cfg(unix)]
     Unix(StdUnixListener),
 }
 
@@ -392,6 +398,7 @@ pub struct PyStreamTransport {
 
 enum TaskedDirectWriter {
     Tcp(StdTcpStream),
+    #[cfg(unix)]
     Unix(StdUnixStream),
 }
 
@@ -399,6 +406,7 @@ impl TaskedDirectWriter {
     fn shutdown_close(&self) -> io::Result<()> {
         match self {
             Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Both),
+            #[cfg(unix)]
             Self::Unix(stream) => shutdown_unix_stream(stream, Shutdown::Both),
         }
     }
@@ -407,14 +415,16 @@ impl TaskedDirectWriter {
 enum ReaderTarget {
     File(std::fs::File),
     Tcp(StdTcpStream),
+    #[cfg(unix)]
     Unix(StdUnixStream),
 }
 
 impl ReaderTarget {
-    fn fd(&self) -> RawFd {
+    fn fd(&self) -> fd_ops::RawFd {
         match self {
-            Self::File(file) => file.as_raw_fd(),
-            Self::Tcp(stream) => stream.as_raw_fd(),
+            Self::File(file) => file_raw_fd(file),
+            Self::Tcp(stream) => tcp_stream_raw_fd(stream),
+            #[cfg(unix)]
             Self::Unix(stream) => stream.as_raw_fd(),
         }
     }
@@ -425,6 +435,7 @@ impl Read for ReaderTarget {
         match self {
             Self::File(file) => file.read(buf),
             Self::Tcp(stream) => stream.read(buf),
+            #[cfg(unix)]
             Self::Unix(stream) => stream.read(buf),
         }
     }
@@ -433,15 +444,17 @@ impl Read for ReaderTarget {
 enum WriterTarget {
     File(std::fs::File),
     Tcp(StdTcpStream),
+    #[cfg(unix)]
     Unix(StdUnixStream),
     Sink(io::Sink),
 }
 
 impl WriterTarget {
-    fn fd(&self) -> Option<RawFd> {
+    fn fd(&self) -> Option<fd_ops::RawFd> {
         match self {
-            Self::File(file) => Some(file.as_raw_fd()),
-            Self::Tcp(stream) => Some(stream.as_raw_fd()),
+            Self::File(file) => Some(file_raw_fd(file)),
+            Self::Tcp(stream) => Some(tcp_stream_raw_fd(stream)),
+            #[cfg(unix)]
             Self::Unix(stream) => Some(stream.as_raw_fd()),
             Self::Sink(_) => None,
         }
@@ -450,6 +463,7 @@ impl WriterTarget {
     fn shutdown_write(&self) -> io::Result<()> {
         match self {
             Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Write),
+            #[cfg(unix)]
             Self::Unix(stream) => shutdown_unix_stream(stream, Shutdown::Write),
             Self::File(_) | Self::Sink(_) => Ok(()),
         }
@@ -458,6 +472,7 @@ impl WriterTarget {
     fn shutdown_close(&self) -> io::Result<()> {
         match self {
             Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Both),
+            #[cfg(unix)]
             Self::Unix(stream) => shutdown_unix_stream(stream, Shutdown::Both),
             Self::File(_) | Self::Sink(_) => Ok(()),
         }
@@ -469,6 +484,7 @@ impl io::Write for WriterTarget {
         match self {
             Self::File(file) => file.write(buf),
             Self::Tcp(stream) => stream.write(buf),
+            #[cfg(unix)]
             Self::Unix(stream) => stream.write(buf),
             Self::Sink(sink) => sink.write(buf),
         }
@@ -478,6 +494,7 @@ impl io::Write for WriterTarget {
         match self {
             Self::File(file) => file.flush(),
             Self::Tcp(stream) => stream.flush(),
+            #[cfg(unix)]
             Self::Unix(stream) => stream.flush(),
             Self::Sink(sink) => sink.flush(),
         }
@@ -973,6 +990,7 @@ impl StreamTransportCore {
         let mut writer = writer.lock().expect("poisoned direct tasked writer");
         match &mut *writer {
             TaskedDirectWriter::Tcp(stream) => stream.write(data),
+            #[cfg(unix)]
             TaskedDirectWriter::Unix(stream) => stream.write(data),
         }
     }
@@ -1044,6 +1062,34 @@ impl StreamTransportCore {
 }
 
 impl ServerCore {
+    fn report_error(&self, err: PyErr, message: &str) {
+        let _ = Python::try_attach(|py| -> PyResult<()> {
+            let context = PyDict::new(py);
+            context.set_item("message", message)?;
+            context.set_item("exception", err.value(py))?;
+            self.loop_core.call_exception_handler(
+                py,
+                Some(&self.loop_obj),
+                context.unbind().into_any(),
+            )
+        });
+    }
+
+    fn create_protocol_with_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        ensure_running_loop(py, &self.loop_obj)?;
+        let callback = self.protocol_factory.bind(py).clone().unbind();
+        let args = PyTuple::empty(py).unbind();
+        let context_args = build_context_args(py, &callback, &args)?;
+        run_in_context(
+            py,
+            &self.context,
+            self.context_needs_run,
+            &callback,
+            &args,
+            &context_args,
+        )
+    }
+
     fn locals(&self, py: Python<'_>) -> PyResult<TaskLocals> {
         task_locals_for_loop(py, &self.loop_obj)
     }
@@ -1093,33 +1139,11 @@ impl ServerCore {
         self.closed_notify.notify_all();
     }
 
-    fn report_error(&self, err: PyErr, message: &str) {
-        let _ = Python::attach(|py| -> PyResult<()> {
-            let context = PyDict::new(py);
-            context.set_item("message", message)?;
-            context.set_item("exception", err.value(py))?;
-            self.loop_core.call_exception_handler(
-                py,
-                Some(&self.loop_obj),
-                context.unbind().into_any(),
-            )
-        });
-    }
-
     fn create_protocol(&self) -> PyResult<Py<PyAny>> {
-        Python::attach(|py| {
-            ensure_running_loop(py, &self.loop_obj)?;
-            let callback = self.protocol_factory.bind(py).clone().unbind();
-            let args = PyTuple::empty(py).unbind();
-            let context_args = build_context_args(py, &callback, &args)?;
-            run_in_context(
-                py,
-                &self.context,
-                self.context_needs_run,
-                &callback,
-                &args,
-                &context_args,
-            )
+        Python::try_attach(|py| self.create_protocol_with_py(py)).unwrap_or_else(|| {
+            Err(PyRuntimeError::new_err(
+                "Python interpreter is shutting down",
+            ))
         })
     }
 
@@ -1142,6 +1166,7 @@ impl ServerCore {
                         run_tcp_accept_loop(server, listener, stop)
                     })
                 }
+                #[cfg(unix)]
                 ServerListener::Unix(listener) => {
                     WorkerThread::spawn("rsloop-unix-accept".to_owned(), move |stop| {
                         run_unix_accept_loop(server, listener, stop)
@@ -1370,6 +1395,73 @@ pub fn task_locals_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<Ta
     TaskLocals::new(loop_obj.clone_ref(py).into_bound(py)).copy_context(py)
 }
 
+#[cfg(unix)]
+fn file_raw_fd(file: &std::fs::File) -> fd_ops::RawFd {
+    file.as_raw_fd() as fd_ops::RawFd
+}
+
+#[cfg(windows)]
+fn file_raw_fd(file: &std::fs::File) -> fd_ops::RawFd {
+    file.as_raw_handle() as isize as fd_ops::RawFd
+}
+
+#[cfg(unix)]
+fn tcp_stream_raw_fd(stream: &StdTcpStream) -> fd_ops::RawFd {
+    stream.as_raw_fd() as fd_ops::RawFd
+}
+
+#[cfg(windows)]
+fn tcp_stream_raw_fd(stream: &StdTcpStream) -> fd_ops::RawFd {
+    stream.as_raw_socket() as fd_ops::RawFd
+}
+
+#[cfg(unix)]
+fn tcp_listener_raw_fd(listener: &StdTcpListener) -> fd_ops::RawFd {
+    listener.as_raw_fd() as fd_ops::RawFd
+}
+
+#[cfg(windows)]
+fn tcp_listener_raw_fd(listener: &StdTcpListener) -> fd_ops::RawFd {
+    listener.as_raw_socket() as fd_ops::RawFd
+}
+
+#[cfg(unix)]
+fn socket_from_owned_raw(fd: fd_ops::RawFd) -> PyResult<Socket> {
+    let fd: i32 = fd
+        .try_into()
+        .map_err(|_| PyRuntimeError::new_err("socket fd out of range"))?;
+    Ok(unsafe { Socket::from_raw_fd(fd) })
+}
+
+#[cfg(windows)]
+fn socket_from_owned_raw(fd: fd_ops::RawFd) -> PyResult<Socket> {
+    let fd: RawSocket = fd
+        .try_into()
+        .map_err(|_| PyRuntimeError::new_err("socket handle out of range"))?;
+    Ok(unsafe { Socket::from_raw_socket(fd) })
+}
+
+fn detached_socket_handle(py: Python<'_>, socket_obj: &Py<PyAny>) -> PyResult<fd_ops::RawFd> {
+    let dup = socket_obj.call_method0(py, "dup")?;
+    dup.call_method0(py, "detach")?.extract(py)
+}
+
+fn tcp_family(stream: &StdTcpStream) -> c_int {
+    #[cfg(windows)]
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+
+    match stream.local_addr() {
+        #[cfg(unix)]
+        Ok(addr) if addr.is_ipv6() => libc::AF_INET6,
+        #[cfg(unix)]
+        _ => libc::AF_INET,
+        #[cfg(windows)]
+        Ok(addr) if addr.is_ipv6() => AF_INET6 as c_int,
+        #[cfg(windows)]
+        _ => AF_INET as c_int,
+    }
+}
+
 pub fn transport_from_socket(
     py: Python<'_>,
     loop_core: Arc<LoopCore>,
@@ -1387,14 +1479,17 @@ pub fn transport_from_socket(
         context_needs_run,
     };
     let family = socket_obj.getattr(py, "family")?.extract::<i32>(py)?;
-    let fd = fd_ops::fileobj_to_fd(py, socket_obj.bind(py))?;
+    #[cfg(unix)]
     if family == libc::AF_UNIX {
+        let fd = detached_socket_handle(py, &socket_obj)?;
         return spawn_unix_transport(py, spawn_context, unix_stream_from_socket_fd(fd)?, None);
     }
 
+    let fd = detached_socket_handle(py, &socket_obj)?;
     spawn_tcp_transport(py, spawn_context, tcp_stream_from_socket_fd(fd)?, None)
 }
 
+#[cfg(not(windows))]
 pub fn spawn_read_pipe_transport(
     py: Python<'_>,
     loop_core: Arc<LoopCore>,
@@ -1451,6 +1546,22 @@ pub fn spawn_read_pipe_transport(
     Ok(transport)
 }
 
+#[cfg(windows)]
+pub fn spawn_read_pipe_transport(
+    _py: Python<'_>,
+    _loop_core: Arc<LoopCore>,
+    _loop_obj: Py<PyAny>,
+    _protocol: Py<PyAny>,
+    _context: Py<PyAny>,
+    _context_needs_run: bool,
+    _pipe_obj: Py<PyAny>,
+) -> PyResult<Py<PyStreamTransport>> {
+    Err(PyRuntimeError::new_err(
+        "connect_read_pipe() is not implemented on Windows",
+    ))
+}
+
+#[cfg(not(windows))]
 pub fn spawn_write_pipe_transport(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -1513,11 +1624,24 @@ pub fn spawn_write_pipe_transport(
     Ok(transport)
 }
 
-pub fn tcp_stream_from_socket_fd(fd: RawFd) -> PyResult<StdTcpStream> {
+#[cfg(windows)]
+pub fn spawn_write_pipe_transport(
+    _py: Python<'_>,
+    _spawn_context: TransportSpawnContext,
+    _pipe_obj: Py<PyAny>,
+    _extra_entries: Option<HashMap<String, Py<PyAny>>>,
+) -> PyResult<Py<PyStreamTransport>> {
+    Err(PyRuntimeError::new_err(
+        "connect_write_pipe() is not implemented on Windows",
+    ))
+}
+
+pub fn tcp_stream_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
     duplicate_configured_tcp_stream(fd)
 }
 
-pub fn unix_stream_from_socket_fd(fd: RawFd) -> PyResult<StdUnixStream> {
+#[cfg(unix)]
+pub fn unix_stream_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixStream> {
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let stream = unsafe { StdUnixStream::from_raw_fd(dup) };
     stream
@@ -1526,11 +1650,12 @@ pub fn unix_stream_from_socket_fd(fd: RawFd) -> PyResult<StdUnixStream> {
     Ok(stream)
 }
 
-pub fn tcp_listener_from_socket_fd(fd: RawFd) -> PyResult<StdTcpListener> {
+pub fn tcp_listener_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpListener> {
     duplicate_configured_tcp_listener(fd)
 }
 
-pub fn unix_listener_from_socket_fd(fd: RawFd) -> PyResult<StdUnixListener> {
+#[cfg(unix)]
+pub fn unix_listener_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixListener> {
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let listener = unsafe { StdUnixListener::from_raw_fd(dup) };
     listener
@@ -1539,9 +1664,8 @@ pub fn unix_listener_from_socket_fd(fd: RawFd) -> PyResult<StdUnixListener> {
     Ok(listener)
 }
 
-fn duplicate_configured_tcp_stream(fd: RawFd) -> PyResult<StdTcpStream> {
-    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let socket = unsafe { Socket::from_raw_fd(dup) };
+fn duplicate_configured_tcp_stream(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
+    let socket = socket_from_owned_raw(fd)?;
     socket
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -1549,9 +1673,8 @@ fn duplicate_configured_tcp_stream(fd: RawFd) -> PyResult<StdTcpStream> {
     Ok(socket.into())
 }
 
-fn duplicate_configured_tcp_listener(fd: RawFd) -> PyResult<StdTcpListener> {
-    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let socket = unsafe { Socket::from_raw_fd(dup) };
+fn duplicate_configured_tcp_listener(fd: fd_ops::RawFd) -> PyResult<StdTcpListener> {
+    let socket = socket_from_owned_raw(fd)?;
     socket
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -1571,8 +1694,8 @@ pub fn spawn_tcp_transport(
         context,
         context_needs_run,
     } = spawn_context;
-    let raw_fd = stream.as_raw_fd();
-    let extra = make_stream_extra(py, raw_fd, libc::AF_INET)?;
+    let raw_fd = tcp_stream_raw_fd(&stream);
+    let extra = make_stream_extra(py, raw_fd, tcp_family(&stream))?;
     let callbacks = build_protocol_callbacks(py, &protocol)?;
     let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
     let direct_writer = duplicate_configured_tcp_stream(raw_fd)?;
@@ -1622,6 +1745,7 @@ pub fn spawn_tcp_transport(
     Ok(transport)
 }
 
+#[cfg(unix)]
 pub fn spawn_unix_transport(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -1635,7 +1759,7 @@ pub fn spawn_unix_transport(
         context,
         context_needs_run,
     } = spawn_context;
-    let raw_fd = stream.as_raw_fd();
+    let raw_fd = stream.as_raw_fd() as fd_ops::RawFd;
     let extra = make_stream_extra(py, raw_fd, libc::AF_UNIX)?;
     let callbacks = build_protocol_callbacks(py, &protocol)?;
     let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
@@ -1731,6 +1855,7 @@ pub fn tcp_server_listener(listener: StdTcpListener) -> ServerListener {
     ServerListener::Tcp(listener)
 }
 
+#[cfg(unix)]
 pub fn unix_server_listener(listener: StdUnixListener) -> ServerListener {
     ServerListener::Unix(listener)
 }
@@ -1741,7 +1866,7 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
             return;
         }
 
-        match fd_ops::poll_fd(listener.as_raw_fd(), true, false, 50) {
+        match fd_ops::poll_fd(tcp_listener_raw_fd(&listener), true, false, 50) {
             Ok((false, _)) => continue,
             Ok((true, _)) => {}
             Err(err) => {
@@ -1760,16 +1885,9 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                 Ok((stream, _addr)) => {
                     let _ = stream.set_nonblocking(true);
                     let _ = stream.set_nodelay(true);
-                    let protocol = match server.create_protocol() {
-                        Ok(protocol) => protocol,
-                        Err(err) => {
-                            server.report_error(err, "failed to create server protocol");
-                            continue;
-                        }
-                    };
-
-                    let context = Python::attach(|py| server.context.clone_ref(py));
-                    let result = Python::attach(|py| {
+                    let result = Python::try_attach(|py| -> PyResult<_> {
+                        let protocol = server.create_protocol_with_py(py)?;
+                        let context = server.context.clone_ref(py);
                         spawn_tcp_transport(
                             py,
                             TransportSpawnContext {
@@ -1783,8 +1901,12 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                             Some(Arc::downgrade(&server)),
                         )
                     });
-                    if let Err(err) = result {
-                        server.report_error(err, "failed to accept TCP connection");
+                    match result {
+                        Some(Ok(_)) => {}
+                        Some(Err(err)) => {
+                            server.report_error(err, "failed to accept TCP connection")
+                        }
+                        None => return,
                     }
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
@@ -1802,13 +1924,14 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
     }
 }
 
+#[cfg(unix)]
 fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop: Arc<AtomicBool>) {
     loop {
         if stop.load(Ordering::Acquire) || server.is_closed() {
             return;
         }
 
-        match fd_ops::poll_fd(listener.as_raw_fd(), true, false, 50) {
+        match fd_ops::poll_fd(listener.as_raw_fd() as fd_ops::RawFd, true, false, 50) {
             Ok((false, _)) => continue,
             Ok((true, _)) => {}
             Err(err) => {
@@ -1826,16 +1949,9 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
             match listener.accept() {
                 Ok((stream, _addr)) => {
                     let _ = stream.set_nonblocking(true);
-                    let protocol = match server.create_protocol() {
-                        Ok(protocol) => protocol,
-                        Err(err) => {
-                            server.report_error(err, "failed to create Unix server protocol");
-                            continue;
-                        }
-                    };
-
-                    let context = Python::attach(|py| server.context.clone_ref(py));
-                    let result = Python::attach(|py| {
+                    let result = Python::try_attach(|py| -> PyResult<_> {
+                        let protocol = server.create_protocol_with_py(py)?;
+                        let context = server.context.clone_ref(py);
                         spawn_unix_transport(
                             py,
                             TransportSpawnContext {
@@ -1849,8 +1965,12 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
                             Some(Arc::downgrade(&server)),
                         )
                     });
-                    if let Err(err) = result {
-                        server.report_error(err, "failed to accept Unix connection");
+                    match result {
+                        Some(Ok(_)) => {}
+                        Some(Err(err)) => {
+                            server.report_error(err, "failed to accept Unix connection")
+                        }
+                        None => return,
                     }
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
@@ -2054,6 +2174,7 @@ fn shutdown_tcp_stream(stream: &StdTcpStream, how: Shutdown) -> io::Result<()> {
     }
 }
 
+#[cfg(unix)]
 fn shutdown_unix_stream(stream: &StdUnixStream, how: Shutdown) -> io::Result<()> {
     match stream.shutdown(how) {
         Ok(()) => Ok(()),
@@ -2149,13 +2270,16 @@ fn stream_reader_fast_path(
 
 fn make_stream_extra(
     py: Python<'_>,
-    fd: RawFd,
+    fd: fd_ops::RawFd,
     family: i32,
 ) -> PyResult<HashMap<String, Py<PyAny>>> {
     let socket_mod = py.import("socket")?;
-    let sock = socket_mod
-        .getattr("fromfd")?
-        .call1((fd, family, libc::SOCK_STREAM, 0))?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("fileno", fd)?;
+    let sock = socket_mod.getattr("socket")?.call(
+        (family, socket_mod.getattr("SOCK_STREAM")?, 0),
+        Some(&kwargs),
+    )?;
     sock.call_method1("setblocking", (false,))?;
 
     let mut extra = HashMap::with_capacity(3);

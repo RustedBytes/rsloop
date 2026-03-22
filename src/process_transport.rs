@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -538,7 +540,15 @@ pub fn spawn_process_transport(
     });
 
     if let Some(stdin) = stdin {
-        let file_obj = make_python_pipe_file(py, stdin.as_raw_fd(), "wb")?;
+        #[cfg(unix)]
+        let file_obj: Py<PyAny> = make_python_pipe_file(py, stdin.as_raw_fd() as i64, "wb")?;
+        #[cfg(windows)]
+        let file_obj: Py<PyAny> = {
+            let _ = stdin;
+            return Err(PyRuntimeError::new_err(
+                "subprocess stdin pipe transport is not implemented on Windows",
+            ));
+        };
         let stdin_protocol = Py::new(py, PyProcessStdinProtocol { core: core.clone() })?.into_any();
         let stdin_context = py
             .import("contextvars")?
@@ -605,7 +615,7 @@ pub fn spawn_process_transport(
     Ok(transport)
 }
 
-fn make_python_pipe_file(py: Python<'_>, fd: i32, mode: &str) -> PyResult<Py<PyAny>> {
+fn make_python_pipe_file(py: Python<'_>, fd: fd_ops::RawFd, mode: &str) -> PyResult<Py<PyAny>> {
     let os = py.import("os")?;
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     Ok(os.getattr("fdopen")?.call1((dup, mode, 0))?.unbind())
@@ -640,15 +650,16 @@ fn run_process_waiter(
     mut child: Child,
     control_rx: Receiver<ProcessCommand>,
 ) {
-    let pid = core.state.lock().expect("poisoned process state").pid as i32;
-
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                #[cfg(unix)]
                 let code = status
                     .code()
                     .or_else(|| status.signal().map(|signal| -signal))
                     .unwrap_or(-1);
+                #[cfg(windows)]
+                let code = status.code().unwrap_or(-1);
                 if core
                     .state
                     .lock()
@@ -677,12 +688,18 @@ fn run_process_waiter(
                 ProcessCommand::Close | ProcessCommand::Kill => {
                     let _ = child.kill();
                 }
+                #[cfg(unix)]
                 ProcessCommand::Terminate => unsafe {
-                    libc::kill(pid, libc::SIGTERM);
+                    libc::kill(child.id() as i32, libc::SIGTERM);
                 },
+                #[cfg(unix)]
                 ProcessCommand::SendSignal(sig) => unsafe {
-                    libc::kill(pid, sig);
+                    libc::kill(child.id() as i32, sig);
                 },
+                #[cfg(windows)]
+                ProcessCommand::Terminate | ProcessCommand::SendSignal(_) => {
+                    let _ = child.kill();
+                }
             },
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,

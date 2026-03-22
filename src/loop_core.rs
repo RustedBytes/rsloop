@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::callbacks::{CallbackId, CallbackKind, ReadyCallback};
 use crate::context::{capture_context, clear_running_loop, ensure_running_loop};
 use crate::errors::handle_callback_error;
+use crate::fd_ops::RawFd;
 use crate::runtime::run_runtime_thread;
 use crate::stream_transport::StreamTransportCore;
 use crossbeam_channel::Sender;
@@ -72,21 +73,21 @@ pub enum LoopCommand {
     StopSignalWatcher(i32),
     SignalFired(i32),
     StartReader {
-        fd: i32,
+        fd: RawFd,
         callback: Py<PyAny>,
         args: Py<PyTuple>,
         context: Py<PyAny>,
         context_needs_run: bool,
     },
-    StopReader(i32),
+    StopReader(RawFd),
     StartWriter {
-        fd: i32,
+        fd: RawFd,
         callback: Py<PyAny>,
         args: Py<PyTuple>,
         context: Py<PyAny>,
         context_needs_run: bool,
     },
-    StopWriter(i32),
+    StopWriter(RawFd),
     ScheduleFutureSetResult {
         future: Py<PyAny>,
         value: Py<PyAny>,
@@ -120,8 +121,8 @@ pub struct LoopState {
     pub executor_shutdown_called: bool,
     pub signal_handlers: HashMap<i32, SignalHandlerTemplate>,
     pub previous_signal_handlers: HashMap<i32, Py<PyAny>>,
-    pub reader_keepalive: HashMap<i32, Py<PyAny>>,
-    pub writer_keepalive: HashMap<i32, Py<PyAny>>,
+    pub reader_keepalive: HashMap<RawFd, Py<PyAny>>,
+    pub writer_keepalive: HashMap<RawFd, Py<PyAny>>,
     pub task_factory: Option<Py<PyAny>>,
     pub exception_handler: Option<Py<PyAny>>,
     pub default_executor: Option<Py<PyAny>>,

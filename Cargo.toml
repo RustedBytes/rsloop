@@ -27,6 +27,9 @@ pyo3-async-runtimes = { version = "0.28", features = ["async-std-runtime"] }
 signal-hook = "0.3"
 socket2 = "0.6"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Networking_WinSock"] }
+
 [build-dependencies]
 pyo3-build-config = "0.28"
 
