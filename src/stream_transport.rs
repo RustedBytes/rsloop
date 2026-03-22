@@ -28,7 +28,7 @@ use rustls::{ClientConnection, ServerConnection};
 use socket2::Socket;
 
 use crate::async_event::AsyncEvent;
-use crate::context::{build_context_args, ensure_running_loop, run_in_context};
+use crate::context::{ensure_running_loop, run_in_context};
 use crate::fast_streams::{PyFastStreamProtocol, PyFastStreamReader};
 use crate::fd_ops;
 use crate::loop_core::{LoopCommand, LoopCore};
@@ -750,15 +750,7 @@ impl StreamTransportCore {
         args: &Bound<'_, PyTuple>,
     ) -> PyResult<Py<PyAny>> {
         let tuple = args.clone().unbind();
-        let context_args = build_context_args(py, callback, &tuple)?;
-        run_in_context(
-            py,
-            context,
-            context_needs_run,
-            callback,
-            &tuple,
-            &context_args,
-        )
+        run_in_context(py, context, context_needs_run, callback, &tuple)
     }
 
     fn server_ref(&self) -> Option<Weak<ServerCore>> {
@@ -983,15 +975,7 @@ impl StreamTransportCore {
             (get_buffer.as_ref(), buffer_updated.as_ref())
         {
             let args = PyTuple::new(py, [data.len()])?.unbind();
-            let context_args = build_context_args(py, get_buffer, &args)?;
-            let buffer_obj = run_in_context(
-                py,
-                &context,
-                context_needs_run,
-                get_buffer,
-                &args,
-                &context_args,
-            )?;
+            let buffer_obj = run_in_context(py, &context, context_needs_run, get_buffer, &args)?;
             let memoryview = py
                 .import("builtins")?
                 .getattr("memoryview")?
@@ -1001,14 +985,12 @@ impl StreamTransportCore {
                 PyBytes::new(py, data),
             )?;
             let updated_args = PyTuple::new(py, [data.len()])?.unbind();
-            let updated_context_args = build_context_args(py, buffer_updated, &updated_args)?;
             run_in_context(
                 py,
                 &context,
                 context_needs_run,
                 buffer_updated,
                 &updated_args,
-                &updated_context_args,
             )?;
             return Ok(());
         }
@@ -1378,15 +1360,7 @@ impl ServerCore {
         ensure_running_loop(py, &self.loop_obj)?;
         let callback = self.protocol_factory.bind(py).clone().unbind();
         let args = PyTuple::empty(py).unbind();
-        let context_args = build_context_args(py, &callback, &args)?;
-        run_in_context(
-            py,
-            &self.context,
-            self.context_needs_run,
-            &callback,
-            &args,
-            &context_args,
-        )
+        run_in_context(py, &self.context, self.context_needs_run, &callback, &args)
     }
 
     fn locals(&self, py: Python<'_>) -> PyResult<TaskLocals> {

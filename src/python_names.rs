@@ -1,5 +1,6 @@
 use std::sync::OnceLock;
 
+use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::PyString;
 
@@ -17,6 +18,11 @@ pub(crate) fn cancelled<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     interned(py, &NAME, "cancelled")
 }
 
+pub(crate) fn context_kw<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
+    static NAME: OnceLock<Py<PyString>> = OnceLock::new();
+    interned(py, &NAME, "context")
+}
+
 pub(crate) fn create_future<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     static NAME: OnceLock<Py<PyString>> = OnceLock::new();
     interned(py, &NAME, "create_future")
@@ -25,6 +31,16 @@ pub(crate) fn create_future<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
 pub(crate) fn done<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     static NAME: OnceLock<Py<PyString>> = OnceLock::new();
     interned(py, &NAME, "done")
+}
+
+pub(crate) fn loop_kw<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
+    static NAME: OnceLock<Py<PyString>> = OnceLock::new();
+    interned(py, &NAME, "loop")
+}
+
+pub(crate) fn name_kw<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
+    static NAME: OnceLock<Py<PyString>> = OnceLock::new();
+    interned(py, &NAME, "name")
 }
 
 pub(crate) fn pause_reading<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
@@ -45,4 +61,44 @@ pub(crate) fn set_exception<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
 pub(crate) fn set_result<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     static NAME: OnceLock<Py<PyString>> = OnceLock::new();
     interned(py, &NAME, "set_result")
+}
+
+#[inline]
+pub(crate) fn call_method0(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    method: &Bound<'_, PyString>,
+) -> PyResult<Py<PyAny>> {
+    unsafe {
+        Bound::from_owned_ptr_or_err(
+            py,
+            ffi::PyObject_CallMethodObjArgs(
+                obj.as_ptr(),
+                method.as_ptr(),
+                std::ptr::null_mut::<ffi::PyObject>(),
+            ),
+        )
+        .map(Bound::unbind)
+    }
+}
+
+#[inline]
+pub(crate) fn call_method1(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    method: &Bound<'_, PyString>,
+    arg: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    unsafe {
+        Bound::from_owned_ptr_or_err(
+            py,
+            ffi::PyObject_CallMethodObjArgs(
+                obj.as_ptr(),
+                method.as_ptr(),
+                arg.as_ptr(),
+                std::ptr::null_mut::<ffi::PyObject>(),
+            ),
+        )
+        .map(Bound::unbind)
+    }
 }

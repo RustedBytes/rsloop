@@ -124,6 +124,7 @@ pub struct SignalHandlerTemplate {
 struct ActiveReadyDispatch {
     pending_ready: Arc<Mutex<VecDeque<ReadyItem>>>,
     wake_tx: std::sync::mpsc::Sender<()>,
+    wake_pending: Arc<AtomicBool>,
 }
 
 pub struct LoopState {
@@ -328,6 +329,7 @@ impl LoopCore {
         let (wake_tx, wake_rx) = std::sync::mpsc::channel();
         let wake_rx = Arc::new(Mutex::new(wake_rx));
         let pending_ready = Arc::new(Mutex::new(VecDeque::new()));
+        let wake_pending = Arc::new(AtomicBool::new(false));
         {
             let mut active_dispatch = self
                 .active_ready_dispatch
@@ -336,6 +338,7 @@ impl LoopCore {
             *active_dispatch = Some(ActiveReadyDispatch {
                 pending_ready: Arc::clone(&pending_ready),
                 wake_tx: wake_tx.clone(),
+                wake_pending: Arc::clone(&wake_pending),
             });
         }
         self.send_command(LoopCommand::EnterRun {
@@ -368,6 +371,9 @@ impl LoopCore {
                             refreshed.extend(ready_batch.drain(..));
                             ready_batch = refreshed;
                         }
+                    }
+                    if pending.is_empty() {
+                        wake_pending.store(false, Ordering::Release);
                     }
                     drop(pending);
 
@@ -404,21 +410,38 @@ impl LoopCore {
                     }
                     ReadyItem::FutureSetResult { future, value } => {
                         let future = future.bind(py);
-                        if !future
-                            .call_method0(crate::python_names::done(py))?
-                            .extract::<bool>()?
+                        if !crate::python_names::call_method0(
+                            py,
+                            future,
+                            crate::python_names::done(py),
+                        )?
+                        .bind(py)
+                        .extract::<bool>()?
                         {
-                            future.call_method1(crate::python_names::set_result(py), (value,))?;
+                            crate::python_names::call_method1(
+                                py,
+                                future,
+                                crate::python_names::set_result(py),
+                                value.bind(py),
+                            )?;
                         }
                     }
                     ReadyItem::FutureSetException { future, value } => {
                         let future = future.bind(py);
-                        if !future
-                            .call_method0(crate::python_names::done(py))?
-                            .extract::<bool>()?
+                        if !crate::python_names::call_method0(
+                            py,
+                            future,
+                            crate::python_names::done(py),
+                        )?
+                        .bind(py)
+                        .extract::<bool>()?
                         {
-                            future
-                                .call_method1(crate::python_names::set_exception(py), (value,))?;
+                            crate::python_names::call_method1(
+                                py,
+                                future,
+                                crate::python_names::set_exception(py),
+                                value.bind(py),
+                            )?;
                         }
                     }
                     ReadyItem::StreamTransportRead(core) => {
@@ -777,7 +800,9 @@ impl LoopCore {
             .lock()
             .expect("poisoned pending ready queue")
             .push_back(item);
-        let _ = dispatch.wake_tx.send(());
+        if !dispatch.wake_pending.swap(true, Ordering::AcqRel) {
+            let _ = dispatch.wake_tx.send(());
+        }
         Ok(())
     }
 }

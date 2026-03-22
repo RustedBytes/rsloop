@@ -65,7 +65,6 @@ pub fn run_in_context(
     needs_run: bool,
     callback: &Py<PyAny>,
     args: &Py<PyTuple>,
-    _context_args: &Py<PyTuple>,
 ) -> PyResult<Py<PyAny>> {
     if !needs_run {
         return callback.call1(py, args.clone_ref(py));
@@ -87,18 +86,6 @@ pub fn run_in_context(
         (Err(err), _) => Err(err),
         (Ok(_), Err(err)) => Err(err),
     }
-}
-
-pub fn build_context_args(
-    py: Python<'_>,
-    callback: &Py<PyAny>,
-    args: &Py<PyTuple>,
-) -> PyResult<Py<PyTuple>> {
-    let args_bound = args.bind(py);
-    let mut run_args = Vec::with_capacity(args_bound.len() + 1);
-    run_args.push(callback.clone_ref(py));
-    run_args.extend(args_bound.iter().map(|item| item.unbind()));
-    Ok(PyTuple::new(py, run_args)?.unbind())
 }
 
 #[inline]

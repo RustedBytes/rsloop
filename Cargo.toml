@@ -42,7 +42,7 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 incremental = false
-strip = true
+# strip = true
 
 [profile.bench]
 inherits = "release"

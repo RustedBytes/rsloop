@@ -106,11 +106,11 @@ impl PyFastStreamReader {
         value: Py<PyAny>,
     ) -> PyResult<()> {
         let future = future.bind(py);
-        match future.call_method1(python_names::set_result(py), (value,)) {
+        match python_names::call_method1(py, future, python_names::set_result(py), value.bind(py)) {
             Ok(_) => Ok(()),
             Err(err) => {
-                if future
-                    .call_method0(python_names::cancelled(py))?
+                if python_names::call_method0(py, future, python_names::cancelled(py))?
+                    .bind(py)
                     .extract::<bool>()?
                 {
                     Ok(())
@@ -127,11 +127,12 @@ impl PyFastStreamReader {
         exc: Py<PyAny>,
     ) -> PyResult<()> {
         let future = future.bind(py);
-        match future.call_method1(python_names::set_exception(py), (exc,)) {
+        match python_names::call_method1(py, future, python_names::set_exception(py), exc.bind(py))
+        {
             Ok(_) => Ok(()),
             Err(err) => {
-                if future
-                    .call_method0(python_names::cancelled(py))?
+                if python_names::call_method0(py, future, python_names::cancelled(py))?
+                    .bind(py)
                     .extract::<bool>()?
                 {
                     Ok(())
@@ -160,25 +161,28 @@ impl PyFastStreamReader {
     }
 
     fn create_future(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.loop_obj
-            .bind(py)
-            .call_method0(python_names::create_future(py))
-            .map(Bound::unbind)
+        python_names::call_method0(py, self.loop_obj.bind(py), python_names::create_future(py))
     }
 
     fn ready_result_future(&self, py: Python<'_>, value: Py<PyAny>) -> PyResult<Py<PyAny>> {
         let future = self.create_future(py)?;
-        future
-            .bind(py)
-            .call_method1(python_names::set_result(py), (value,))?;
+        python_names::call_method1(
+            py,
+            future.bind(py),
+            python_names::set_result(py),
+            value.bind(py),
+        )?;
         Ok(future)
     }
 
     fn ready_exception_future(&self, py: Python<'_>, exc: Py<PyAny>) -> PyResult<Py<PyAny>> {
         let future = self.create_future(py)?;
-        future
-            .bind(py)
-            .call_method1(python_names::set_exception(py), (exc,))?;
+        python_names::call_method1(
+            py,
+            future.bind(py),
+            python_names::set_exception(py),
+            exc.bind(py),
+        )?;
         Ok(future)
     }
 
@@ -214,9 +218,11 @@ impl PyFastStreamReader {
     fn maybe_resume_transport(&mut self, py: Python<'_>) -> PyResult<()> {
         if self.paused && self.buffer.len() <= self.limit && !self.transport.bind(py).is_none() {
             self.paused = false;
-            self.transport
-                .bind(py)
-                .call_method0(python_names::resume_reading(py))?;
+            python_names::call_method0(
+                py,
+                self.transport.bind(py),
+                python_names::resume_reading(py),
+            )?;
         }
         Ok(())
     }
@@ -224,11 +230,11 @@ impl PyFastStreamReader {
     fn maybe_pause_transport(&mut self, py: Python<'_>) -> PyResult<()> {
         if !self.transport.bind(py).is_none() && !self.paused && self.buffer.len() > 2 * self.limit
         {
-            match self
-                .transport
-                .bind(py)
-                .call_method0(python_names::pause_reading(py))
-            {
+            match python_names::call_method0(
+                py,
+                self.transport.bind(py),
+                python_names::pause_reading(py),
+            ) {
                 Ok(_) => {
                     self.paused = true;
                 }
@@ -308,9 +314,11 @@ impl PyFastStreamReader {
         }
         if self.paused && !self.transport.bind(py).is_none() {
             self.paused = false;
-            self.transport
-                .bind(py)
-                .call_method0(python_names::resume_reading(py))?;
+            python_names::call_method0(
+                py,
+                self.transport.bind(py),
+                python_names::resume_reading(py),
+            )?;
         }
         let future = self.create_future(py)?;
         self.waiter = Some(ReadWaiter {
@@ -525,14 +533,16 @@ impl PyFastStreamProtocol {
         reader: Py<PyFastStreamReader>,
         client_connected_cb: Py<PyAny>,
     ) -> PyResult<Self> {
-        let closed = loop_obj.call_method0(py, "create_future")?;
-        let ready_none = loop_obj
-            .bind(py)
-            .call_method0(python_names::create_future(py))?
-            .unbind();
-        ready_none
-            .bind(py)
-            .call_method1(python_names::set_result(py), (py.None(),))?;
+        let closed =
+            python_names::call_method0(py, loop_obj.bind(py), python_names::create_future(py))?;
+        let ready_none =
+            python_names::call_method0(py, loop_obj.bind(py), python_names::create_future(py))?;
+        python_names::call_method1(
+            py,
+            ready_none.bind(py),
+            python_names::set_result(py),
+            py.None().bind(py),
+        )?;
         Ok(Self {
             closed,
             ready_none,
@@ -560,23 +570,26 @@ impl PyFastStreamProtocol {
     }
 
     fn ready_exception_future(&self, py: Python<'_>, exc: Py<PyAny>) -> PyResult<Py<PyAny>> {
-        let future = self
-            .loop_obj
-            .bind(py)
-            .call_method0(python_names::create_future(py))?
-            .unbind();
-        future
-            .bind(py)
-            .call_method1(python_names::set_exception(py), (exc,))?;
+        let future = python_names::call_method0(
+            py,
+            self.loop_obj.bind(py),
+            python_names::create_future(py),
+        )?;
+        python_names::call_method1(
+            py,
+            future.bind(py),
+            python_names::set_exception(py),
+            exc.bind(py),
+        )?;
         Ok(future)
     }
 
     fn push_drain_waiter(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let future = self
-            .loop_obj
-            .bind(py)
-            .call_method0(python_names::create_future(py))?
-            .unbind();
+        let future = python_names::call_method0(
+            py,
+            self.loop_obj.bind(py),
+            python_names::create_future(py),
+        )?;
         self.drain_waiters.push(future.clone_ref(py));
         Ok(future)
     }
@@ -584,18 +597,28 @@ impl PyFastStreamProtocol {
     fn resolve_drain_waiters(&mut self, py: Python<'_>, exc: Option<Py<PyAny>>) -> PyResult<()> {
         for future in self.drain_waiters.drain(..) {
             let future = future.bind(py);
-            if future
-                .call_method0(python_names::done(py))?
+            if python_names::call_method0(py, future, python_names::done(py))?
+                .bind(py)
                 .extract::<bool>()?
             {
                 continue;
             }
             match exc.as_ref() {
                 Some(exc) => {
-                    future.call_method1(python_names::set_exception(py), (exc.clone_ref(py),))?;
+                    python_names::call_method1(
+                        py,
+                        future,
+                        python_names::set_exception(py),
+                        exc.bind(py),
+                    )?;
                 }
                 None => {
-                    future.call_method1(python_names::set_result(py), (py.None(),))?;
+                    python_names::call_method1(
+                        py,
+                        future,
+                        python_names::set_result(py),
+                        py.None().bind(py),
+                    )?;
                 }
             }
         }
@@ -690,16 +713,31 @@ impl PyFastStreamProtocol {
                 self.reader
                     .borrow_mut(py)
                     .set_exception_internal(py, exc.clone_ref(py))?;
-                if !self.closed.call_method0(py, "done")?.extract::<bool>(py)? {
-                    self.closed
-                        .call_method1(py, "set_exception", (exc.clone_ref(py),))?;
+                if !python_names::call_method0(py, self.closed.bind(py), python_names::done(py))?
+                    .bind(py)
+                    .extract::<bool>()?
+                {
+                    python_names::call_method1(
+                        py,
+                        self.closed.bind(py),
+                        python_names::set_exception(py),
+                        exc.bind(py),
+                    )?;
                 }
                 self.resolve_drain_waiters(py, Some(exc))?;
             }
             None => {
                 self.reader.borrow_mut(py).feed_eof_internal(py)?;
-                if !self.closed.call_method0(py, "done")?.extract::<bool>(py)? {
-                    self.closed.call_method1(py, "set_result", (py.None(),))?;
+                if !python_names::call_method0(py, self.closed.bind(py), python_names::done(py))?
+                    .bind(py)
+                    .extract::<bool>()?
+                {
+                    python_names::call_method1(
+                        py,
+                        self.closed.bind(py),
+                        python_names::set_result(py),
+                        py.None().bind(py),
+                    )?;
                 }
                 self.resolve_drain_waiters(py, None)?;
             }
