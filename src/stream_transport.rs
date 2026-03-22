@@ -425,7 +425,7 @@ impl ReaderTarget {
             Self::File(file) => file_raw_fd(file),
             Self::Tcp(stream) => tcp_stream_raw_fd(stream),
             #[cfg(unix)]
-            Self::Unix(stream) => stream.as_raw_fd(),
+            Self::Unix(stream) => unix_raw_fd(stream.as_raw_fd()),
         }
     }
 }
@@ -455,7 +455,7 @@ impl WriterTarget {
             Self::File(file) => Some(file_raw_fd(file)),
             Self::Tcp(stream) => Some(tcp_stream_raw_fd(stream)),
             #[cfg(unix)]
-            Self::Unix(stream) => Some(stream.as_raw_fd()),
+            Self::Unix(stream) => Some(unix_raw_fd(stream.as_raw_fd())),
             Self::Sink(_) => None,
         }
     }
@@ -1139,14 +1139,6 @@ impl ServerCore {
         self.closed_notify.notify_all();
     }
 
-    fn create_protocol(&self) -> PyResult<Py<PyAny>> {
-        Python::try_attach(|py| self.create_protocol_with_py(py)).unwrap_or_else(|| {
-            Err(PyRuntimeError::new_err(
-                "Python interpreter is shutting down",
-            ))
-        })
-    }
-
     pub fn spawn_accept_tasks(self: &Arc<Self>) {
         let listeners = {
             let mut state = self.state.lock().expect("poisoned server state");
@@ -1426,6 +1418,17 @@ fn tcp_listener_raw_fd(listener: &StdTcpListener) -> fd_ops::RawFd {
 }
 
 #[cfg(unix)]
+fn unix_raw_fd(fd: std::os::fd::RawFd) -> fd_ops::RawFd {
+    fd as fd_ops::RawFd
+}
+
+#[cfg(unix)]
+fn raw_fd_for_std(fd: fd_ops::RawFd) -> PyResult<std::os::fd::RawFd> {
+    fd.try_into()
+        .map_err(|_| PyRuntimeError::new_err("fd out of range"))
+}
+
+#[cfg(unix)]
 fn socket_from_owned_raw(fd: fd_ops::RawFd) -> PyResult<Socket> {
     let fd: i32 = fd
         .try_into()
@@ -1501,7 +1504,7 @@ pub fn spawn_read_pipe_transport(
 ) -> PyResult<Py<PyStreamTransport>> {
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let file = unsafe { std::fs::File::from_raw_fd(dup) };
+    let file = unsafe { std::fs::File::from_raw_fd(raw_fd_for_std(dup)?) };
     let callbacks = build_protocol_callbacks(py, &protocol)?;
     let mut extra = HashMap::with_capacity(2);
     extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
@@ -1577,7 +1580,7 @@ pub fn spawn_write_pipe_transport(
     } = spawn_context;
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let file = unsafe { std::fs::File::from_raw_fd(dup) };
+    let file = unsafe { std::fs::File::from_raw_fd(raw_fd_for_std(dup)?) };
     let callbacks = build_protocol_callbacks(py, &protocol)?;
     let mut extra = HashMap::with_capacity(2 + extra_entries.as_ref().map_or(0, HashMap::len));
     extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
@@ -1643,7 +1646,7 @@ pub fn tcp_stream_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
 #[cfg(unix)]
 pub fn unix_stream_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixStream> {
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let stream = unsafe { StdUnixStream::from_raw_fd(dup) };
+    let stream = unsafe { StdUnixStream::from_raw_fd(raw_fd_for_std(dup)?) };
     stream
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -1657,7 +1660,7 @@ pub fn tcp_listener_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpListener
 #[cfg(unix)]
 pub fn unix_listener_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixListener> {
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let listener = unsafe { StdUnixListener::from_raw_fd(dup) };
+    let listener = unsafe { StdUnixListener::from_raw_fd(raw_fd_for_std(dup)?) };
     listener
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -1759,13 +1762,13 @@ pub fn spawn_unix_transport(
         context,
         context_needs_run,
     } = spawn_context;
-    let raw_fd = stream.as_raw_fd() as fd_ops::RawFd;
+    let raw_fd = unix_raw_fd(stream.as_raw_fd());
     let extra = make_stream_extra(py, raw_fd, libc::AF_UNIX)?;
     let callbacks = build_protocol_callbacks(py, &protocol)?;
     let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
     let writer_fd =
         fd_ops::dup_raw_fd(raw_fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let direct_writer = unsafe { StdUnixStream::from_raw_fd(writer_fd) };
+    let direct_writer = unsafe { StdUnixStream::from_raw_fd(raw_fd_for_std(writer_fd)?) };
     direct_writer
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
