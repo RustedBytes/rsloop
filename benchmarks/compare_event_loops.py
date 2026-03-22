@@ -20,9 +20,11 @@ WORKLOAD_CHOICES = ("callbacks", "tasks", "tcp_streams")
 
 
 def default_loops_csv() -> str:
-    loops = ["asyncio", "uvloop", "rsloop"]
+    loops = ["asyncio", "rsloop"]
     if sys.platform == "win32":
         loops.insert(2, "winloop")
+    else:
+        loops.insert(2, "uvloop")
     return ",".join(loops)
 
 
