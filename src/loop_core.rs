@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::task::Waker;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -12,7 +13,7 @@ use crate::context::{capture_context, clear_running_loop, ensure_running_loop};
 use crate::errors::handle_callback_error;
 use crate::fd_ops::RawFd;
 use crate::runtime::run_runtime_thread;
-use crate::stream_transport::StreamTransportCore;
+use crate::stream_transport::{ReaderTarget, ServerCore, ServerListener, StreamTransportCore};
 use crossbeam_channel::Sender;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -97,6 +98,18 @@ pub enum LoopCommand {
         value: Py<PyAny>,
     },
     ScheduleStreamTransportRead(Arc<StreamTransportCore>),
+    StartSocketReader {
+        fd: RawFd,
+        core: Arc<StreamTransportCore>,
+        reader: ReaderTarget,
+    },
+    StopSocketReader(RawFd),
+    StartServerAccept {
+        fd: RawFd,
+        server: Arc<ServerCore>,
+        listener: ServerListener,
+    },
+    StopServerAccept(RawFd),
     RequestStop,
     Close,
 }
@@ -111,6 +124,7 @@ pub struct SignalHandlerTemplate {
 struct ActiveReadyDispatch {
     pending_ready: Arc<Mutex<VecDeque<ReadyItem>>>,
     wake_tx: std::sync::mpsc::Sender<()>,
+    wake_pending: Arc<AtomicBool>,
 }
 
 pub struct LoopState {
@@ -155,6 +169,7 @@ pub struct LoopCore {
     next_callback_id: AtomicU64,
     command_tx: Sender<LoopCommand>,
     runtime_thread: Mutex<Option<JoinHandle<()>>>,
+    runtime_waker: Mutex<Option<Waker>>,
     active_ready_dispatch: Mutex<Option<ActiveReadyDispatch>>,
 }
 
@@ -169,6 +184,7 @@ impl LoopCore {
             next_callback_id: AtomicU64::new(1),
             command_tx,
             runtime_thread: Mutex::new(None),
+            runtime_waker: Mutex::new(None),
             active_ready_dispatch: Mutex::new(None),
         });
 
@@ -192,7 +208,16 @@ impl LoopCore {
         };
         self.command_tx
             .send(command)
-            .map_err(|_| LoopCoreError::ChannelClosed)
+            .map_err(|_| LoopCoreError::ChannelClosed)?;
+        if let Some(waker) = self
+            .runtime_waker
+            .lock()
+            .expect("poisoned runtime waker")
+            .as_ref()
+        {
+            waker.wake_by_ref();
+        }
+        Ok(())
     }
 
     pub fn is_running(&self) -> bool {
@@ -304,6 +329,7 @@ impl LoopCore {
         let (wake_tx, wake_rx) = std::sync::mpsc::channel();
         let wake_rx = Arc::new(Mutex::new(wake_rx));
         let pending_ready = Arc::new(Mutex::new(VecDeque::new()));
+        let wake_pending = Arc::new(AtomicBool::new(false));
         {
             let mut active_dispatch = self
                 .active_ready_dispatch
@@ -312,6 +338,7 @@ impl LoopCore {
             *active_dispatch = Some(ActiveReadyDispatch {
                 pending_ready: Arc::clone(&pending_ready),
                 wake_tx: wake_tx.clone(),
+                wake_pending: Arc::clone(&wake_pending),
             });
         }
         self.send_command(LoopCommand::EnterRun {
@@ -344,6 +371,9 @@ impl LoopCore {
                             refreshed.extend(ready_batch.drain(..));
                             ready_batch = refreshed;
                         }
+                    }
+                    if pending.is_empty() {
+                        wake_pending.store(false, Ordering::Release);
                     }
                     drop(pending);
 
@@ -380,21 +410,38 @@ impl LoopCore {
                     }
                     ReadyItem::FutureSetResult { future, value } => {
                         let future = future.bind(py);
-                        if !future
-                            .call_method0(crate::python_names::done(py))?
-                            .extract::<bool>()?
+                        if !crate::python_names::call_method0(
+                            py,
+                            future,
+                            crate::python_names::done(py),
+                        )?
+                        .bind(py)
+                        .extract::<bool>()?
                         {
-                            future.call_method1(crate::python_names::set_result(py), (value,))?;
+                            crate::python_names::call_method1(
+                                py,
+                                future,
+                                crate::python_names::set_result(py),
+                                value.bind(py),
+                            )?;
                         }
                     }
                     ReadyItem::FutureSetException { future, value } => {
                         let future = future.bind(py);
-                        if !future
-                            .call_method0(crate::python_names::done(py))?
-                            .extract::<bool>()?
+                        if !crate::python_names::call_method0(
+                            py,
+                            future,
+                            crate::python_names::done(py),
+                        )?
+                        .bind(py)
+                        .extract::<bool>()?
                         {
-                            future
-                                .call_method1(crate::python_names::set_exception(py), (value,))?;
+                            crate::python_names::call_method1(
+                                py,
+                                future,
+                                crate::python_names::set_exception(py),
+                                value.bind(py),
+                            )?;
                         }
                     }
                     ReadyItem::StreamTransportRead(core) => {
@@ -621,6 +668,10 @@ impl LoopCore {
         ACTIVE_LOOP_CORE.with(|current| current.set(self as *const Self));
     }
 
+    pub(crate) fn set_runtime_waker(&self, waker: Option<Waker>) {
+        *self.runtime_waker.lock().expect("poisoned runtime waker") = waker;
+    }
+
     #[inline]
     pub(crate) fn install_local_ready_queue(&self, ready: *mut VecDeque<ReadyItem>) {
         ACTIVE_READY_QUEUE.with(|current| current.set(ready));
@@ -749,7 +800,9 @@ impl LoopCore {
             .lock()
             .expect("poisoned pending ready queue")
             .push_back(item);
-        let _ = dispatch.wake_tx.send(());
+        if !dispatch.wake_pending.swap(true, Ordering::AcqRel) {
+            let _ = dispatch.wake_tx.send(());
+        }
         Ok(())
     }
 }

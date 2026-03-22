@@ -11,12 +11,13 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule, PySlice, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
 
 use crate::callbacks::{CallbackKind, PyHandle, PyTimerHandle};
-use crate::context::{build_context_args, capture_context, ensure_running_loop, run_in_context};
+use crate::context::{capture_context, ensure_running_loop, run_in_context};
 use crate::fd_ops;
 #[cfg(unix)]
 use crate::loop_core::SignalHandlerTemplate;
@@ -24,6 +25,7 @@ use crate::loop_core::{LoopCommand, LoopCore, LoopCoreError};
 use crate::process_transport::{
     spawn_process_transport, BoxedProcessReader, ProcessTextConfig, ProcessTransportParams,
 };
+use crate::python_names;
 use crate::stream_transport::{
     create_server as create_py_server, remove_unix_socket_if_present, spawn_read_pipe_transport,
     spawn_write_pipe_transport, start_tls_transport, tcp_listener_from_socket_fd,
@@ -38,6 +40,11 @@ use crate::tls::{client_tls_settings, server_tls_settings};
 static ASYNCIO_TASK_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
 static ASYNCIO_FUTURE_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
 static ASYNCIO_GET_RUNNING_LOOP_FN: OnceLock<Py<PyAny>> = OnceLock::new();
+static ASYNCIO_FUTURE_LOOP_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
+static ASYNCIO_TASK_LOOP_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
+static ASYNCIO_TASK_LOOP_NAME_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
+static ASYNCIO_TASK_LOOP_CONTEXT_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
+static ASYNCIO_TASK_LOOP_NAME_CONTEXT_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
 
 type ResolvedStreamAddrinfo = (i32, i32, i32, Py<PyAny>);
 
@@ -117,6 +124,78 @@ fn asyncio_get_running_loop_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     Ok(ASYNCIO_GET_RUNNING_LOOP_FN.get_or_init(|| loaded))
 }
 
+#[inline]
+fn call_callable_noargs(py: Python<'_>, callable: &Py<PyAny>) -> PyResult<Py<PyAny>> {
+    unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyObject_CallNoArgs(callable.as_ptr())) }
+        .map(Bound::unbind)
+}
+
+#[inline]
+fn call_callable_onearg(
+    py: Python<'_>,
+    callable: &Py<PyAny>,
+    arg: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    unsafe {
+        Bound::from_owned_ptr_or_err(
+            py,
+            ffi::PyObject_CallFunctionObjArgs(
+                callable.as_ptr(),
+                arg.as_ptr(),
+                std::ptr::null_mut::<ffi::PyObject>(),
+            ),
+        )
+    }
+    .map(Bound::unbind)
+}
+
+fn asyncio_future_loop_kwnames(py: Python<'_>) -> &Py<PyTuple> {
+    ASYNCIO_FUTURE_LOOP_KWNAMES.get_or_init(|| {
+        PyTuple::new(py, [python_names::loop_kw(py)])
+            .expect("loop keyword tuple")
+            .unbind()
+    })
+}
+
+fn asyncio_task_kwnames_for_options(
+    py: Python<'_>,
+    include_name: bool,
+    include_context: bool,
+) -> &Py<PyTuple> {
+    match (include_name, include_context) {
+        (false, false) => ASYNCIO_TASK_LOOP_KWNAMES.get_or_init(|| {
+            PyTuple::new(py, [python_names::loop_kw(py)])
+                .expect("loop keyword tuple")
+                .unbind()
+        }),
+        (true, false) => ASYNCIO_TASK_LOOP_NAME_KWNAMES.get_or_init(|| {
+            PyTuple::new(py, [python_names::loop_kw(py), python_names::name_kw(py)])
+                .expect("loop/name keyword tuple")
+                .unbind()
+        }),
+        (false, true) => ASYNCIO_TASK_LOOP_CONTEXT_KWNAMES.get_or_init(|| {
+            PyTuple::new(
+                py,
+                [python_names::loop_kw(py), python_names::context_kw(py)],
+            )
+            .expect("loop/context keyword tuple")
+            .unbind()
+        }),
+        (true, true) => ASYNCIO_TASK_LOOP_NAME_CONTEXT_KWNAMES.get_or_init(|| {
+            PyTuple::new(
+                py,
+                [
+                    python_names::loop_kw(py),
+                    python_names::name_kw(py),
+                    python_names::context_kw(py),
+                ],
+            )
+            .expect("loop/name/context keyword tuple")
+            .unbind()
+        }),
+    }
+}
+
 fn is_current_running_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<bool> {
     let current = asyncio_get_running_loop_fn(py)?.call0(py)?;
     if current.is_none(py) {
@@ -126,13 +205,33 @@ fn is_current_running_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<boo
 }
 
 fn create_asyncio_future_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<Py<PyAny>> {
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("loop", loop_obj.clone_ref(py))?;
-    asyncio_future_cls(py)?.call(py, (), Some(&kwargs))
+    #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+    {
+        let args = [loop_obj.as_ptr()];
+        return unsafe {
+            Bound::from_owned_ptr_or_err(
+                py,
+                ffi::PyObject_Vectorcall(
+                    asyncio_future_cls(py)?.as_ptr(),
+                    args.as_ptr(),
+                    0,
+                    asyncio_future_loop_kwnames(py).as_ptr(),
+                ),
+            )
+        }
+        .map(Bound::unbind);
+    }
+
+    #[cfg(not(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API)))))]
+    {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("loop", loop_obj.clone_ref(py))?;
+        asyncio_future_cls(py)?.call(py, (), Some(&kwargs))
+    }
 }
 
 fn create_asyncio_future_for_running_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
-    asyncio_future_cls(py)?.call0(py)
+    call_callable_noargs(py, asyncio_future_cls(py)?)
 }
 
 fn create_asyncio_task_for_loop(
@@ -142,19 +241,51 @@ fn create_asyncio_task_for_loop(
     name: Option<Py<PyAny>>,
     context: Option<Py<PyAny>>,
 ) -> PyResult<Py<PyAny>> {
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("loop", loop_obj.clone_ref(py))?;
-    if let Some(name) = name {
-        kwargs.set_item("name", name)?;
+    #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+    {
+        let name = name.as_ref();
+        let context = context.as_ref();
+        let mut args = Vec::with_capacity(4);
+        args.push(coro.as_ptr());
+        args.push(loop_obj.as_ptr());
+        if let Some(name) = name {
+            args.push(name.as_ptr());
+        }
+        if let Some(context) = context {
+            args.push(context.as_ptr());
+        }
+
+        return unsafe {
+            Bound::from_owned_ptr_or_err(
+                py,
+                ffi::PyObject_Vectorcall(
+                    asyncio_task_cls(py)?.as_ptr(),
+                    args.as_ptr(),
+                    1,
+                    asyncio_task_kwnames_for_options(py, name.is_some(), context.is_some())
+                        .as_ptr(),
+                ),
+            )
+        }
+        .map(Bound::unbind);
     }
-    if let Some(context) = context {
-        kwargs.set_item("context", context)?;
+
+    #[cfg(not(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API)))))]
+    {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("loop", loop_obj.clone_ref(py))?;
+        if let Some(name) = name {
+            kwargs.set_item("name", name)?;
+        }
+        if let Some(context) = context {
+            kwargs.set_item("context", context)?;
+        }
+        asyncio_task_cls(py)?.call(py, (coro,), Some(&kwargs))
     }
-    asyncio_task_cls(py)?.call(py, (coro,), Some(&kwargs))
 }
 
 fn create_asyncio_task_for_running_loop(py: Python<'_>, coro: Py<PyAny>) -> PyResult<Py<PyAny>> {
-    asyncio_task_cls(py)?.call1(py, (coro,))
+    call_callable_onearg(py, asyncio_task_cls(py)?, coro.bind(py))
 }
 
 fn call_protocol_factory(
@@ -166,15 +297,7 @@ fn call_protocol_factory(
 ) -> PyResult<Py<PyAny>> {
     ensure_running_loop(py, loop_obj)?;
     let args = PyTuple::empty(py).unbind();
-    let context_args = build_context_args(py, protocol_factory, &args)?;
-    run_in_context(
-        py,
-        context,
-        context_needs_run,
-        protocol_factory,
-        &args,
-        &context_args,
-    )
+    run_in_context(py, context, context_needs_run, protocol_factory, &args)
 }
 
 fn is_asyncio_subprocess_stream_protocol(py: Python<'_>, protocol: &Py<PyAny>) -> PyResult<bool> {

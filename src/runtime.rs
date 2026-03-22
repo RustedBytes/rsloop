@@ -1,11 +1,20 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
+#[cfg(target_os = "linux")]
+use std::os::fd::{FromRawFd, OwnedFd};
+#[cfg(not(target_os = "linux"))]
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError};
+#[cfg(target_os = "linux")]
+use compio::net::PollFd;
+#[cfg(target_os = "linux")]
+use compio::runtime::{JoinHandle as CompioJoinHandle, Runtime as CompioRuntime};
+#[cfg(not(target_os = "linux"))]
+use crossbeam_channel::RecvTimeoutError;
+use crossbeam_channel::{Receiver, TryRecvError};
 use pyo3::prelude::*;
 #[cfg(unix)]
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
@@ -16,6 +25,8 @@ use crate::loop_core::{LoopCommand, LoopCore, ReadyItem};
 struct RuntimeDispatcher {
     core: Arc<LoopCore>,
     command_rx: Receiver<LoopCommand>,
+    #[cfg(target_os = "linux")]
+    io_runtime: CompioRuntime,
     ready_batch: VecDeque<ReadyItem>,
     timers: BinaryHeap<TimerEntry>,
     next_timer_id: u64,
@@ -23,6 +34,7 @@ struct RuntimeDispatcher {
     signal_tasks: HashMap<i32, SignalWatcher>,
     reader_tasks: HashMap<fd_ops::RawFd, WatchTask>,
     writer_tasks: HashMap<fd_ops::RawFd, WatchTask>,
+    accept_tasks: HashMap<fd_ops::RawFd, WatchTask>,
     shutting_down: bool,
 }
 
@@ -40,11 +52,16 @@ struct SignalWatcher {
 #[cfg(not(unix))]
 struct SignalWatcher;
 
+#[cfg(target_os = "linux")]
+type WatchTask = CompioJoinHandle<()>;
+
+#[cfg(not(target_os = "linux"))]
 struct WatchTask {
     stop: Arc<AtomicBool>,
     join: thread::JoinHandle<()>,
 }
 
+#[cfg(not(target_os = "linux"))]
 impl WatchTask {
     fn spawn(name: String, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
@@ -60,6 +77,16 @@ impl WatchTask {
         self.stop.store(true, AtomicOrdering::Release);
         let _ = self.join.join();
     }
+}
+
+#[cfg(target_os = "linux")]
+fn abort_watch_task(task: WatchTask) {
+    drop(task);
+}
+
+#[cfg(not(target_os = "linux"))]
+fn abort_watch_task(task: WatchTask) {
+    task.abort();
 }
 
 struct TimerEntry {
@@ -92,9 +119,16 @@ impl Ord for TimerEntry {
 }
 
 pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>) {
+    #[cfg(target_os = "linux")]
+    let io_runtime = CompioRuntime::new().expect("failed to initialize compio runtime");
+    #[cfg(target_os = "linux")]
+    core.set_runtime_waker(Some(io_runtime.waker()));
+
     let mut dispatcher = RuntimeDispatcher {
         core: Arc::clone(&core),
         command_rx,
+        #[cfg(target_os = "linux")]
+        io_runtime,
         ready_batch: VecDeque::new(),
         timers: BinaryHeap::new(),
         next_timer_id: 0,
@@ -102,13 +136,28 @@ pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>
         signal_tasks: HashMap::new(),
         reader_tasks: HashMap::new(),
         writer_tasks: HashMap::new(),
+        accept_tasks: HashMap::new(),
         shutting_down: false,
     };
     dispatcher.run();
+    #[cfg(target_os = "linux")]
+    core.set_runtime_waker(None);
 }
 
 impl RuntimeDispatcher {
     fn run(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = self.io_runtime.clone();
+            runtime.enter(|| self.run_inner());
+            return;
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        self.run_inner();
+    }
+
+    fn run_inner(&mut self) {
         loop {
             if self.shutting_down {
                 break;
@@ -135,24 +184,48 @@ impl RuntimeDispatcher {
     }
 
     fn wait_for_work(&mut self) -> bool {
-        if self.active_run.is_none() {
-            return match self.command_rx.recv() {
-                Ok(command) => self.handle_received_command(command),
-                Err(_) => true,
-            };
+        #[cfg(target_os = "linux")]
+        {
+            self.io_runtime.run();
+
+            loop {
+                match self.command_rx.try_recv() {
+                    Ok(command) => {
+                        if self.handle_received_command(command) {
+                            return true;
+                        }
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => return true,
+                }
+            }
+
+            self.io_runtime.poll_with(self.next_wait_timeout());
+            self.io_runtime.run();
+            return false;
         }
 
-        match self.next_wait_timeout() {
-            Some(timeout) if timeout.is_zero() => false,
-            Some(timeout) => match self.command_rx.recv_timeout(timeout) {
-                Ok(command) => self.handle_received_command(command),
-                Err(RecvTimeoutError::Timeout) => false,
-                Err(RecvTimeoutError::Disconnected) => true,
-            },
-            None => match self.command_rx.recv() {
-                Ok(command) => self.handle_received_command(command),
-                Err(_) => true,
-            },
+        #[cfg(not(target_os = "linux"))]
+        {
+            if self.active_run.is_none() {
+                return match self.command_rx.recv() {
+                    Ok(command) => self.handle_received_command(command),
+                    Err(_) => true,
+                };
+            }
+
+            match self.next_wait_timeout() {
+                Some(timeout) if timeout.is_zero() => false,
+                Some(timeout) => match self.command_rx.recv_timeout(timeout) {
+                    Ok(command) => self.handle_received_command(command),
+                    Err(RecvTimeoutError::Timeout) => false,
+                    Err(RecvTimeoutError::Disconnected) => true,
+                },
+                None => match self.command_rx.recv() {
+                    Ok(command) => self.handle_received_command(command),
+                    Err(_) => true,
+                },
+            }
         }
     }
 
@@ -314,43 +387,76 @@ impl RuntimeDispatcher {
                 context_needs_run,
             } => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
-                    task.abort();
+                    abort_watch_task(task);
                 }
 
-                let sender = Arc::clone(&self.core);
-                let task = WatchTask::spawn(format!("rsloop-reader-{fd}"), move |stop| {
-                    loop {
-                        if stop.load(AtomicOrdering::Acquire) {
+                #[cfg(target_os = "linux")]
+                let task = {
+                    let sender = Arc::clone(&self.core);
+                    self.io_runtime.spawn(async move {
+                        let Ok(owned_fd) = dup_owned_fd(fd) else {
+                            return;
+                        };
+                        let Ok(poll_fd) = PollFd::new(owned_fd) else {
+                            return;
+                        };
+                        if poll_fd.read_ready().await.is_err() {
                             return;
                         }
-                        match fd_ops::poll_fd(fd, true, false, 50) {
-                            Ok((true, _)) => break,
-                            Ok((false, false)) => continue,
-                            Ok((false, true)) => continue,
-                            Err(_) => return,
+
+                        let ready = Python::attach(|py| {
+                            Arc::new(crate::callbacks::ReadyCallback::new(
+                                py,
+                                sender.next_callback_id(),
+                                crate::callbacks::CallbackKind::Reader(fd),
+                                callback.clone_ref(py),
+                                args.clone_ref(py),
+                                context.clone_ref(py),
+                                context_needs_run,
+                            ))
+                        });
+
+                        let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                    })
+                };
+
+                #[cfg(not(target_os = "linux"))]
+                let task = {
+                    let sender = Arc::clone(&self.core);
+                    WatchTask::spawn(format!("rsloop-reader-{fd}"), move |stop| {
+                        loop {
+                            if stop.load(AtomicOrdering::Acquire) {
+                                return;
+                            }
+                            match fd_ops::poll_fd(fd, true, false, 50) {
+                                Ok((true, _)) => break,
+                                Ok((false, false)) => continue,
+                                Ok((false, true)) => continue,
+                                Err(_) => return,
+                            }
                         }
-                    }
 
-                    let ready = Python::attach(|py| {
-                        Arc::new(crate::callbacks::ReadyCallback::new(
-                            py,
-                            sender.next_callback_id(),
-                            crate::callbacks::CallbackKind::Reader(fd),
-                            callback.clone_ref(py),
-                            args.clone_ref(py),
-                            context.clone_ref(py),
-                            context_needs_run,
-                        ))
-                    });
+                        let ready = Python::attach(|py| {
+                            Arc::new(crate::callbacks::ReadyCallback::new(
+                                py,
+                                sender.next_callback_id(),
+                                crate::callbacks::CallbackKind::Reader(fd),
+                                callback.clone_ref(py),
+                                args.clone_ref(py),
+                                context.clone_ref(py),
+                                context_needs_run,
+                            ))
+                        });
 
-                    let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
-                });
+                        let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                    })
+                };
 
                 self.reader_tasks.insert(fd, task);
             }
             LoopCommand::StopReader(fd) => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
-                    task.abort();
+                    abort_watch_task(task);
                 }
             }
             LoopCommand::StartWriter {
@@ -361,43 +467,128 @@ impl RuntimeDispatcher {
                 context_needs_run,
             } => {
                 if let Some(task) = self.writer_tasks.remove(&fd) {
-                    task.abort();
+                    abort_watch_task(task);
                 }
 
-                let sender = Arc::clone(&self.core);
-                let task = WatchTask::spawn(format!("rsloop-writer-{fd}"), move |stop| {
-                    loop {
-                        if stop.load(AtomicOrdering::Acquire) {
+                #[cfg(target_os = "linux")]
+                let task = {
+                    let sender = Arc::clone(&self.core);
+                    self.io_runtime.spawn(async move {
+                        let Ok(owned_fd) = dup_owned_fd(fd) else {
+                            return;
+                        };
+                        let Ok(poll_fd) = PollFd::new(owned_fd) else {
+                            return;
+                        };
+                        if poll_fd.write_ready().await.is_err() {
                             return;
                         }
-                        match fd_ops::poll_fd(fd, false, true, 50) {
-                            Ok((false, true)) => break,
-                            Ok((false, false)) => continue,
-                            Ok((true, _)) => continue,
-                            Err(_) => return,
+
+                        let ready = Python::attach(|py| {
+                            Arc::new(crate::callbacks::ReadyCallback::new(
+                                py,
+                                sender.next_callback_id(),
+                                crate::callbacks::CallbackKind::Writer(fd),
+                                callback.clone_ref(py),
+                                args.clone_ref(py),
+                                context.clone_ref(py),
+                                context_needs_run,
+                            ))
+                        });
+
+                        let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                    })
+                };
+
+                #[cfg(not(target_os = "linux"))]
+                let task = {
+                    let sender = Arc::clone(&self.core);
+                    WatchTask::spawn(format!("rsloop-writer-{fd}"), move |stop| {
+                        loop {
+                            if stop.load(AtomicOrdering::Acquire) {
+                                return;
+                            }
+                            match fd_ops::poll_fd(fd, false, true, 50) {
+                                Ok((false, true)) => break,
+                                Ok((false, false)) => continue,
+                                Ok((true, _)) => continue,
+                                Err(_) => return,
+                            }
                         }
-                    }
 
-                    let ready = Python::attach(|py| {
-                        Arc::new(crate::callbacks::ReadyCallback::new(
-                            py,
-                            sender.next_callback_id(),
-                            crate::callbacks::CallbackKind::Writer(fd),
-                            callback.clone_ref(py),
-                            args.clone_ref(py),
-                            context.clone_ref(py),
-                            context_needs_run,
-                        ))
-                    });
+                        let ready = Python::attach(|py| {
+                            Arc::new(crate::callbacks::ReadyCallback::new(
+                                py,
+                                sender.next_callback_id(),
+                                crate::callbacks::CallbackKind::Writer(fd),
+                                callback.clone_ref(py),
+                                args.clone_ref(py),
+                                context.clone_ref(py),
+                                context_needs_run,
+                            ))
+                        });
 
-                    let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
-                });
+                        let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                    })
+                };
 
                 self.writer_tasks.insert(fd, task);
             }
             LoopCommand::StopWriter(fd) => {
                 if let Some(task) = self.writer_tasks.remove(&fd) {
-                    task.abort();
+                    abort_watch_task(task);
+                }
+            }
+            LoopCommand::StartSocketReader { fd, core, reader } => {
+                if let Some(task) = self.reader_tasks.remove(&fd) {
+                    abort_watch_task(task);
+                }
+
+                #[cfg(target_os = "linux")]
+                let task = self
+                    .io_runtime
+                    .spawn(crate::stream_transport::run_socket_reader_task(
+                        core, reader,
+                    ));
+
+                #[cfg(not(target_os = "linux"))]
+                let task = WatchTask::spawn(format!("rsloop-socket-reader-{fd}"), move |stop| {
+                    crate::stream_transport::run_socket_reader_blocking(core, reader, stop)
+                });
+
+                self.reader_tasks.insert(fd, task);
+            }
+            LoopCommand::StopSocketReader(fd) => {
+                if let Some(task) = self.reader_tasks.remove(&fd) {
+                    abort_watch_task(task);
+                }
+            }
+            LoopCommand::StartServerAccept {
+                fd,
+                server,
+                listener,
+            } => {
+                if let Some(task) = self.accept_tasks.remove(&fd) {
+                    abort_watch_task(task);
+                }
+
+                #[cfg(target_os = "linux")]
+                let task = self
+                    .io_runtime
+                    .spawn(crate::stream_transport::run_server_accept_task(
+                        server, listener,
+                    ));
+
+                #[cfg(not(target_os = "linux"))]
+                let task = WatchTask::spawn(format!("rsloop-accept-{fd}"), move |stop| {
+                    crate::stream_transport::run_server_accept_blocking(server, listener, stop)
+                });
+
+                self.accept_tasks.insert(fd, task);
+            }
+            LoopCommand::StopServerAccept(fd) => {
+                if let Some(task) = self.accept_tasks.remove(&fd) {
+                    abort_watch_task(task);
                 }
             }
             LoopCommand::RequestStop => {
@@ -458,10 +649,22 @@ impl RuntimeDispatcher {
         #[cfg(not(unix))]
         self.signal_tasks.clear();
         for (_, task) in self.reader_tasks.drain() {
-            task.abort();
+            abort_watch_task(task);
         }
         for (_, task) in self.writer_tasks.drain() {
-            task.abort();
+            abort_watch_task(task);
+        }
+        for (_, task) in self.accept_tasks.drain() {
+            abort_watch_task(task);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn dup_owned_fd(fd: fd_ops::RawFd) -> std::io::Result<OwnedFd> {
+    let dup = fd_ops::dup_raw_fd(fd)?;
+    let dup: i32 = dup
+        .try_into()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "fd out of range"))?;
+    Ok(unsafe { OwnedFd::from_raw_fd(dup) })
 }

@@ -18,7 +18,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
 use crate::async_event::AsyncEvent;
-use crate::context::{build_context_args, ensure_running_loop, run_in_context};
+use crate::context::{ensure_running_loop, run_in_context};
 use crate::fd_ops;
 use crate::loop_core::LoopCore;
 use crate::stream_transport::spawn_write_pipe_transport;
@@ -111,15 +111,7 @@ impl ProcessTransportCore {
         };
         let callback = protocol.bind(py).getattr(method)?.unbind();
         let tuple = args.clone().unbind();
-        let context_args = build_context_args(py, &callback, &tuple)?;
-        run_in_context(
-            py,
-            &context,
-            context_needs_run,
-            &callback,
-            &tuple,
-            &context_args,
-        )
+        run_in_context(py, &context, context_needs_run, &callback, &tuple)
     }
 
     fn call_in_loop_context<T>(

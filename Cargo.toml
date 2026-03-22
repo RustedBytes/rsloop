@@ -1,6 +1,6 @@
 [package]
 name = "rsloop"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "An event loop for asyncio written in Rust"
 license = "Apache-2.0"
@@ -19,6 +19,7 @@ profiler = ["dep:pprof"]
 
 [dependencies]
 async-std = "1"
+compio = { version = "0.18", default-features = false, features = ["runtime", "net", "io", "signal", "time", "io-uring"] }
 crossbeam-channel = "0.5"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 libc = "0.2"
@@ -41,7 +42,7 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 incremental = false
-strip = true
+# strip = true
 
 [profile.bench]
 inherits = "release"
