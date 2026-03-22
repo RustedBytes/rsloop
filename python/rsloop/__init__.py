@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio as __asyncio
 import contextlib as __contextlib
 import os as __os
+import ssl as __ssl
 import sys as __sys
 import typing as __typing
 
@@ -96,6 +97,42 @@ if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
     __asyncio.open_connection = __open_connection
 if __USE_FAST_STREAMS and __asyncio.start_server is __ORIG_START_SERVER:
     __asyncio.start_server = __start_server
+
+
+def __install_ssl_tracking() -> None:
+    context_cls = __ssl.SSLContext
+    if getattr(context_cls, "_rsloop_tracking_installed", False):
+        return
+
+    orig_load_cert_chain = context_cls.load_cert_chain
+
+    def load_cert_chain(self, certfile, keyfile=None, password=None):
+        result = orig_load_cert_chain(
+            self,
+            certfile,
+            keyfile=keyfile,
+            password=password,
+        )
+        if callable(password):
+            password_value = password()
+        else:
+            password_value = password
+        if isinstance(password_value, str):
+            password_value = password_value.encode()
+        if password_value is not None and not isinstance(password_value, bytes):
+            password_value = bytes(password_value)
+        self.__dict__["_rsloop_certfile"] = __os.fspath(certfile)
+        self.__dict__["_rsloop_keyfile"] = (
+            __os.fspath(keyfile) if keyfile is not None else __os.fspath(certfile)
+        )
+        self.__dict__["_rsloop_key_password"] = password_value
+        return result
+
+    context_cls.load_cert_chain = load_cert_chain
+    context_cls._rsloop_tracking_installed = True
+
+
+__install_ssl_tracking()
 
 
 if __typing.TYPE_CHECKING:

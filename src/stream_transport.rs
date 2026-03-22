@@ -20,6 +20,7 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyByteArrayMethods, PyBytes, PyDict, PySlice, PyString, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
+use rustls::{ClientConnection, ServerConnection};
 use socket2::Socket;
 
 use crate::async_event::AsyncEvent;
@@ -28,6 +29,7 @@ use crate::fast_streams::{PyFastStreamProtocol, PyFastStreamReader};
 use crate::fd_ops;
 use crate::loop_core::{LoopCommand, LoopCore};
 use crate::python_names;
+use crate::tls::{ClientTlsSettings, ServerTlsSettings};
 
 enum WriterCommand {
     Data(OwnedWriteBuffer),
@@ -96,6 +98,7 @@ pub struct ServerCreateParams {
     pub sockets: Vec<Py<PyAny>>,
     pub listeners: Vec<ServerListener>,
     pub cleanup_path: Option<PathBuf>,
+    pub tls: Option<Arc<ServerTlsSettings>>,
 }
 
 struct ProtocolCallbacks {
@@ -353,6 +356,7 @@ struct StreamTransportState {
     close_on_write_eof: bool,
     lost_called: bool,
     writer_registered: bool,
+    detached: bool,
     server: Option<Weak<ServerCore>>,
 }
 
@@ -364,6 +368,7 @@ pub struct StreamTransportCore {
     read_events_scheduled: AtomicBool,
     writer_tx: Sender<WriterCommand>,
     direct_writer: Option<Mutex<TaskedDirectWriter>>,
+    workers: Mutex<Vec<WorkerThread>>,
 }
 
 struct ServerState {
@@ -384,6 +389,7 @@ pub struct ServerCore {
     active_connections: AtomicUsize,
     closed_notify: AsyncEvent,
     cleanup_path: Option<PathBuf>,
+    tls: Option<Arc<ServerTlsSettings>>,
 }
 
 #[pyclass(name = "Server", module = "rsloop._loop")]
@@ -499,6 +505,165 @@ impl WriterTarget {
     }
 }
 
+enum StreamKind {
+    Tcp(StdTcpStream),
+    #[cfg(unix)]
+    Unix(StdUnixStream),
+}
+
+impl StreamKind {
+    fn fd(&self) -> fd_ops::RawFd {
+        match self {
+            Self::Tcp(stream) => tcp_stream_raw_fd(stream),
+            #[cfg(unix)]
+            Self::Unix(stream) => unix_raw_fd(stream.as_raw_fd()),
+        }
+    }
+
+    #[cfg(windows)]
+    fn pollable(&self) -> bool {
+        true
+    }
+
+    #[cfg(not(windows))]
+    fn pollable(&self) -> bool {
+        true
+    }
+
+    fn shutdown_close(&self) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Both),
+            #[cfg(unix)]
+            Self::Unix(stream) => shutdown_unix_stream(stream, Shutdown::Both),
+        }
+    }
+}
+
+impl Read for StreamKind {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Tcp(stream) => stream.read(buf),
+            #[cfg(unix)]
+            Self::Unix(stream) => stream.read(buf),
+        }
+    }
+}
+
+impl io::Write for StreamKind {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Tcp(stream) => stream.write(buf),
+            #[cfg(unix)]
+            Self::Unix(stream) => stream.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Tcp(stream) => stream.flush(),
+            #[cfg(unix)]
+            Self::Unix(stream) => stream.flush(),
+        }
+    }
+}
+
+enum TlsConnectionKind {
+    Client(ClientConnection),
+    Server(ServerConnection),
+}
+
+impl TlsConnectionKind {
+    fn is_handshaking(&self) -> bool {
+        match self {
+            Self::Client(conn) => conn.is_handshaking(),
+            Self::Server(conn) => conn.is_handshaking(),
+        }
+    }
+
+    fn wants_read(&self) -> bool {
+        match self {
+            Self::Client(conn) => conn.wants_read(),
+            Self::Server(conn) => conn.wants_read(),
+        }
+    }
+
+    fn wants_write(&self) -> bool {
+        match self {
+            Self::Client(conn) => conn.wants_write(),
+            Self::Server(conn) => conn.wants_write(),
+        }
+    }
+
+    fn read_tls(&mut self, stream: &mut StreamKind) -> io::Result<usize> {
+        match self {
+            Self::Client(conn) => conn.read_tls(stream),
+            Self::Server(conn) => conn.read_tls(stream),
+        }
+    }
+
+    fn write_tls(&mut self, stream: &mut StreamKind) -> io::Result<usize> {
+        match self {
+            Self::Client(conn) => conn.write_tls(stream),
+            Self::Server(conn) => conn.write_tls(stream),
+        }
+    }
+
+    fn process_new_packets(&mut self) -> Result<(), rustls::Error> {
+        match self {
+            Self::Client(conn) => conn.process_new_packets().map(|_| ()),
+            Self::Server(conn) => conn.process_new_packets().map(|_| ()),
+        }
+    }
+
+    fn reader_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Client(conn) => conn.reader().read(buf),
+            Self::Server(conn) => conn.reader().read(buf),
+        }
+    }
+
+    fn writer_write_all(&mut self, data: &[u8]) -> io::Result<()> {
+        match self {
+            Self::Client(conn) => conn.writer().write_all(data),
+            Self::Server(conn) => conn.writer().write_all(data),
+        }
+    }
+
+    fn send_close_notify(&mut self) {
+        match self {
+            Self::Client(conn) => conn.send_close_notify(),
+            Self::Server(conn) => conn.send_close_notify(),
+        }
+    }
+}
+
+struct TlsIoState {
+    stream: StreamKind,
+    connection: TlsConnectionKind,
+}
+
+impl TlsIoState {
+    fn fd(&self) -> fd_ops::RawFd {
+        self.stream.fd()
+    }
+
+    fn pollable(&self) -> bool {
+        self.stream.pollable()
+    }
+
+    fn shutdown_close(&self) -> io::Result<()> {
+        self.stream.shutdown_close()
+    }
+
+    fn read_tls(&mut self) -> io::Result<usize> {
+        self.connection.read_tls(&mut self.stream)
+    }
+
+    fn write_tls(&mut self) -> io::Result<usize> {
+        self.connection.write_tls(&mut self.stream)
+    }
+}
+
 impl io::Write for WriterTarget {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
@@ -544,6 +709,13 @@ impl WorkerThread {
 }
 
 impl StreamTransportCore {
+    fn register_worker(&self, worker: WorkerThread) {
+        self.workers
+            .lock()
+            .expect("poisoned transport workers")
+            .push(worker);
+    }
+
     fn call_protocol_with_tuple(
         &self,
         py: Python<'_>,
@@ -859,6 +1031,10 @@ impl StreamTransportCore {
     fn connection_lost_with_py(&self, py: Python<'_>, exc: Option<PyErr>) -> PyResult<()> {
         let (callback, fast_path, context, context_needs_run, server) = {
             let mut state = self.state.lock().expect("poisoned transport state");
+            if state.detached {
+                state.lost_called = true;
+                return Ok(());
+            }
             if state.lost_called {
                 return Ok(());
             }
@@ -919,6 +1095,14 @@ impl StreamTransportCore {
 
     fn set_closing(&self) {
         self.state.lock().expect("poisoned transport state").closing = true;
+    }
+
+    fn detach_underlying_stream(&self) {
+        let mut state = self.state.lock().expect("poisoned transport state");
+        state.detached = true;
+        state.closing = true;
+        state.reading = false;
+        state.writable = false;
     }
 
     fn is_closing_or_lost(&self) -> bool {
@@ -1079,6 +1263,61 @@ impl StreamTransportCore {
     pub fn handle_read_ready_with_py(self: &Arc<Self>, _py: Python<'_>) {}
 
     pub fn handle_write_ready_with_py(self: &Arc<Self>, _py: Python<'_>) {}
+
+    fn upgrade_stream(
+        self: &Arc<Self>,
+        py: Python<'_>,
+    ) -> PyResult<(TransportSpawnContext, StreamKind)> {
+        let protocol = self.get_protocol(py);
+        let context = self
+            .state
+            .lock()
+            .expect("poisoned transport state")
+            .context
+            .clone_ref(py);
+        let context_needs_run = self
+            .state
+            .lock()
+            .expect("poisoned transport state")
+            .context_needs_run;
+        let socket = self
+            .get_extra(py, "socket")
+            .ok_or_else(|| PyRuntimeError::new_err("transport does not expose a socket"))?;
+        let fd = fd_ops::dup_raw_fd(socket.bind(py).call_method0("fileno")?.extract()?)
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+
+        self.detach_underlying_stream();
+        let _ = self.writer_tx.send(WriterCommand::Stop);
+        for worker in self
+            .workers
+            .lock()
+            .expect("poisoned transport workers")
+            .drain(..)
+        {
+            worker.abort();
+        }
+
+        let family = socket.bind(py).getattr("family")?.extract::<i32>()?;
+        #[cfg(unix)]
+        let stream = if family == libc::AF_UNIX {
+            StreamKind::Unix(unix_stream_from_socket_fd(fd)?)
+        } else {
+            StreamKind::Tcp(tcp_stream_from_socket_fd(fd)?)
+        };
+        #[cfg(not(unix))]
+        let stream = StreamKind::Tcp(tcp_stream_from_socket_fd(fd)?);
+
+        Ok((
+            TransportSpawnContext {
+                loop_core: Arc::clone(&self.loop_core),
+                loop_obj: self.loop_obj.clone_ref(py),
+                protocol,
+                context,
+                context_needs_run,
+            },
+            stream,
+        ))
+    }
 }
 
 impl ServerCore {
@@ -1236,6 +1475,10 @@ impl PyStreamTransport {
 
     fn close(&self) -> PyResult<()> {
         self.core.set_closing();
+        if self.core.direct_writer.is_none() {
+            let _ = self.core.writer_tx.send(WriterCommand::Close);
+            return Ok(());
+        }
         if !self.core.write_backpressure_active() {
             if let Some(writer) = &self.core.direct_writer {
                 let writer = writer.lock().expect("poisoned direct tasked writer");
@@ -1252,6 +1495,10 @@ impl PyStreamTransport {
 
     fn abort(&self) -> PyResult<()> {
         self.core.set_closing();
+        if self.core.direct_writer.is_none() {
+            let _ = self.core.writer_tx.send(WriterCommand::Abort);
+            return Ok(());
+        }
         if let Some(writer) = &self.core.direct_writer {
             let writer = writer.lock().expect("poisoned direct tasked writer");
             let _ = writer.shutdown_close();
@@ -1512,6 +1759,110 @@ pub fn transport_from_socket(
     spawn_tcp_transport(py, spawn_context, tcp_stream_from_socket_fd(fd)?, None)
 }
 
+pub fn transport_from_socket_tls(
+    py: Python<'_>,
+    loop_core: Arc<LoopCore>,
+    loop_obj: Py<PyAny>,
+    protocol: Py<PyAny>,
+    context: Py<PyAny>,
+    context_needs_run: bool,
+    socket_obj: Py<PyAny>,
+    tls: ClientTlsSettings,
+) -> PyResult<Py<PyStreamTransport>> {
+    let spawn_context = TransportSpawnContext {
+        loop_core,
+        loop_obj,
+        protocol,
+        context,
+        context_needs_run,
+    };
+    let family = socket_obj.getattr(py, "family")?.extract::<i32>(py)?;
+    #[cfg(unix)]
+    if family == libc::AF_UNIX {
+        let fd = detached_socket_handle(py, &socket_obj)?;
+        return spawn_tls_client_transport(
+            py,
+            spawn_context,
+            StreamKind::Unix(unix_stream_from_socket_fd(fd)?),
+            tls,
+            None,
+            true,
+        );
+    }
+
+    let fd = detached_socket_handle(py, &socket_obj)?;
+    spawn_tls_client_transport(
+        py,
+        spawn_context,
+        StreamKind::Tcp(tcp_stream_from_socket_fd(fd)?),
+        tls,
+        None,
+        true,
+    )
+}
+
+pub fn transport_from_socket_server_tls(
+    py: Python<'_>,
+    loop_core: Arc<LoopCore>,
+    loop_obj: Py<PyAny>,
+    protocol: Py<PyAny>,
+    context: Py<PyAny>,
+    context_needs_run: bool,
+    socket_obj: Py<PyAny>,
+    tls: ServerTlsSettings,
+) -> PyResult<Py<PyStreamTransport>> {
+    let spawn_context = TransportSpawnContext {
+        loop_core,
+        loop_obj,
+        protocol,
+        context,
+        context_needs_run,
+    };
+    let family = socket_obj.getattr(py, "family")?.extract::<i32>(py)?;
+    #[cfg(unix)]
+    if family == libc::AF_UNIX {
+        let fd = detached_socket_handle(py, &socket_obj)?;
+        return spawn_tls_server_transport(
+            py,
+            spawn_context,
+            StreamKind::Unix(unix_stream_from_socket_fd(fd)?),
+            tls,
+            None,
+            true,
+        );
+    }
+
+    let fd = detached_socket_handle(py, &socket_obj)?;
+    spawn_tls_server_transport(
+        py,
+        spawn_context,
+        StreamKind::Tcp(tcp_stream_from_socket_fd(fd)?),
+        tls,
+        None,
+        true,
+    )
+}
+
+pub fn start_tls_transport(
+    py: Python<'_>,
+    transport: Py<PyStreamTransport>,
+    protocol: Py<PyAny>,
+    client_tls: Option<ClientTlsSettings>,
+    server_tls: Option<ServerTlsSettings>,
+) -> PyResult<Py<PyStreamTransport>> {
+    let (mut spawn_context, stream) = transport.borrow(py).core.upgrade_stream(py)?;
+    spawn_context.protocol = protocol;
+    match (client_tls, server_tls) {
+        (Some(tls), None) => {
+            spawn_tls_client_transport(py, spawn_context, stream, tls, None, true)
+        }
+        (None, Some(tls)) => {
+            spawn_tls_server_transport(py, spawn_context, stream, tls, None, true)
+        }
+        _ => Err(PyRuntimeError::new_err("invalid TLS upgrade configuration")),
+    }
+}
+
 #[cfg(not(windows))]
 pub fn spawn_read_pipe_transport(
     py: Python<'_>,
@@ -1549,12 +1900,14 @@ pub fn spawn_read_pipe_transport(
             close_on_write_eof: false,
             lost_called: false,
             writer_registered: false,
+            detached: false,
             server: None,
         }),
         pending_read_events: Mutex::new(VecDeque::new()),
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: None,
+        workers: Mutex::new(Vec::new()),
     });
 
     let transport = Py::new(
@@ -1607,12 +1960,14 @@ pub fn spawn_read_pipe_transport(
             close_on_write_eof: false,
             lost_called: false,
             writer_registered: false,
+            detached: false,
             server: None,
         }),
         pending_read_events: Mutex::new(VecDeque::new()),
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: None,
+        workers: Mutex::new(Vec::new()),
     });
 
     let transport = Py::new(
@@ -1671,12 +2026,14 @@ pub fn spawn_write_pipe_transport(
             close_on_write_eof: true,
             lost_called: false,
             writer_registered: false,
+            detached: false,
             server: None,
         }),
         pending_read_events: Mutex::new(VecDeque::new()),
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: None,
+        workers: Mutex::new(Vec::new()),
     });
 
     let transport = Py::new(
@@ -1735,12 +2092,14 @@ pub fn spawn_write_pipe_transport(
             close_on_write_eof: true,
             lost_called: false,
             writer_registered: false,
+            detached: false,
             server: None,
         }),
         pending_read_events: Mutex::new(VecDeque::new()),
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: None,
+        workers: Mutex::new(Vec::new()),
     });
 
     let transport = Py::new(
@@ -1783,7 +2142,8 @@ pub fn unix_listener_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixListen
 }
 
 fn duplicate_configured_tcp_stream(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
-    let socket = socket_from_owned_raw(fd)?;
+    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let socket = socket_from_owned_raw(dup)?;
     socket
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -1792,7 +2152,8 @@ fn duplicate_configured_tcp_stream(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> 
 }
 
 fn duplicate_configured_tcp_listener(fd: fd_ops::RawFd) -> PyResult<StdTcpListener> {
-    let socket = socket_from_owned_raw(fd)?;
+    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let socket = socket_from_owned_raw(dup)?;
     socket
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -1839,12 +2200,14 @@ pub fn spawn_tcp_transport(
             close_on_write_eof: false,
             lost_called: false,
             writer_registered: false,
+            detached: false,
             server,
         }),
         pending_read_events: Mutex::new(VecDeque::new()),
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: Some(Mutex::new(TaskedDirectWriter::Tcp(direct_writer))),
+        workers: Mutex::new(Vec::new()),
     });
 
     let transport = Py::new(
@@ -1909,12 +2272,14 @@ pub fn spawn_unix_transport(
             close_on_write_eof: false,
             lost_called: false,
             writer_registered: false,
+            detached: false,
             server,
         }),
         pending_read_events: Mutex::new(VecDeque::new()),
         read_events_scheduled: AtomicBool::new(false),
         writer_tx,
         direct_writer: Some(Mutex::new(TaskedDirectWriter::Unix(direct_writer))),
+        workers: Mutex::new(Vec::new()),
     });
 
     let transport = Py::new(
@@ -1933,6 +2298,140 @@ pub fn spawn_unix_transport(
     Ok(transport)
 }
 
+fn merge_extra(
+    mut base: HashMap<String, Py<PyAny>>,
+    extra: HashMap<String, Py<PyAny>>,
+) -> HashMap<String, Py<PyAny>> {
+    base.extend(extra);
+    base
+}
+
+fn spawn_tls_client_transport(
+    py: Python<'_>,
+    spawn_context: TransportSpawnContext,
+    stream: StreamKind,
+    tls: ClientTlsSettings,
+    server: Option<Weak<ServerCore>>,
+    call_connection_made: bool,
+) -> PyResult<Py<PyStreamTransport>> {
+    let connection = ClientConnection::new(tls.config, tls.server_name)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    spawn_tls_transport(
+        py,
+        spawn_context,
+        stream,
+        TlsConnectionKind::Client(connection),
+        tls.extra,
+        tls.handshake_timeout,
+        server,
+        call_connection_made,
+    )
+}
+
+fn spawn_tls_server_transport(
+    py: Python<'_>,
+    spawn_context: TransportSpawnContext,
+    stream: StreamKind,
+    tls: ServerTlsSettings,
+    server: Option<Weak<ServerCore>>,
+    call_connection_made: bool,
+) -> PyResult<Py<PyStreamTransport>> {
+    let connection = ServerConnection::new(tls.config)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    spawn_tls_transport(
+        py,
+        spawn_context,
+        stream,
+        TlsConnectionKind::Server(connection),
+        tls.extra,
+        tls.handshake_timeout,
+        server,
+        call_connection_made,
+    )
+}
+
+fn spawn_tls_transport(
+    py: Python<'_>,
+    spawn_context: TransportSpawnContext,
+    stream: StreamKind,
+    connection: TlsConnectionKind,
+    tls_extra: HashMap<String, Py<PyAny>>,
+    handshake_timeout: Duration,
+    server: Option<Weak<ServerCore>>,
+    call_connection_made: bool,
+) -> PyResult<Py<PyStreamTransport>> {
+    let TransportSpawnContext {
+        loop_core,
+        loop_obj,
+        protocol,
+        context,
+        context_needs_run,
+    } = spawn_context;
+    let extra = match &stream {
+        StreamKind::Tcp(stream) => merge_extra(
+            make_stream_extra(py, tcp_stream_raw_fd(stream), tcp_family(stream))?,
+            tls_extra,
+        ),
+        #[cfg(unix)]
+        StreamKind::Unix(stream) => merge_extra(
+            make_stream_extra(py, unix_raw_fd(stream.as_raw_fd()), libc::AF_UNIX)?,
+            tls_extra,
+        ),
+    };
+    let callbacks = build_protocol_callbacks(py, &protocol)?;
+    let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
+    let (writer_tx, writer_rx) = mpsc::channel();
+    let tls_state = Arc::new(Mutex::new(TlsIoState { stream, connection }));
+
+    py.detach(|| complete_tls_handshake(&tls_state, handshake_timeout))
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+
+    let core = Arc::new(StreamTransportCore {
+        loop_core,
+        loop_obj,
+        state: Mutex::new(StreamTransportState {
+            protocol,
+            callbacks,
+            context,
+            context_needs_run,
+            extra,
+            closing: false,
+            read_paused: false,
+            reading: true,
+            writable: true,
+            write_eof_requested: false,
+            can_write_eof: false,
+            close_on_write_eof: false,
+            lost_called: false,
+            writer_registered: false,
+            detached: false,
+            server,
+        }),
+        pending_read_events: Mutex::new(VecDeque::new()),
+        read_events_scheduled: AtomicBool::new(false),
+        writer_tx,
+        direct_writer: None,
+        workers: Mutex::new(Vec::new()),
+    });
+
+    let transport = Py::new(
+        py,
+        PyStreamTransport {
+            core: Arc::clone(&core),
+        },
+    )?;
+    if call_connection_made {
+        core.connection_made(transport.clone_ref(py))?;
+    }
+    if let Some(server) = core.server_ref().and_then(|weak| weak.upgrade()) {
+        server.connection_opened();
+    }
+
+    spawn_tls_reader_worker(Arc::clone(&core), Arc::clone(&tls_state));
+    spawn_tls_writer_worker(core, tls_state, writer_rx);
+    Ok(transport)
+}
+
 pub fn create_server(py: Python<'_>, params: ServerCreateParams) -> PyResult<Py<PyServer>> {
     let ServerCreateParams {
         loop_core,
@@ -1943,6 +2442,7 @@ pub fn create_server(py: Python<'_>, params: ServerCreateParams) -> PyResult<Py<
         sockets,
         listeners,
         cleanup_path,
+        tls,
     } = params;
     let accept_tasks = Vec::with_capacity(listeners.len());
     Py::new(
@@ -1964,6 +2464,7 @@ pub fn create_server(py: Python<'_>, params: ServerCreateParams) -> PyResult<Py<
                 active_connections: AtomicUsize::new(0),
                 closed_notify: AsyncEvent::new(),
                 cleanup_path,
+                tls,
             }),
         },
     )
@@ -2006,18 +2507,33 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                     let result = Python::try_attach(|py| -> PyResult<_> {
                         let protocol = server.create_protocol_with_py(py)?;
                         let context = server.context.clone_ref(py);
-                        spawn_tcp_transport(
-                            py,
-                            TransportSpawnContext {
-                                loop_core: Arc::clone(&server.loop_core),
-                                loop_obj: server.loop_obj.clone_ref(py),
-                                protocol,
-                                context,
-                                context_needs_run: server.context_needs_run,
-                            },
-                            stream,
-                            Some(Arc::downgrade(&server)),
-                        )
+                        let spawn_context = TransportSpawnContext {
+                            loop_core: Arc::clone(&server.loop_core),
+                            loop_obj: server.loop_obj.clone_ref(py),
+                            protocol,
+                            context,
+                            context_needs_run: server.context_needs_run,
+                        };
+                        if let Some(tls) = server.tls.as_ref() {
+                            spawn_tls_server_transport(
+                                py,
+                                spawn_context,
+                                StreamKind::Tcp(stream),
+                                ServerTlsSettings {
+                                    config: Arc::clone(&tls.config),
+                                    handshake_timeout: tls.handshake_timeout,
+                                    extra: tls
+                                        .extra
+                                        .iter()
+                                        .map(|(key, value)| (key.clone(), value.clone_ref(py)))
+                                        .collect(),
+                                },
+                                Some(Arc::downgrade(&server)),
+                                true,
+                            )
+                        } else {
+                            spawn_tcp_transport(py, spawn_context, stream, Some(Arc::downgrade(&server)))
+                        }
                     });
                     match result {
                         Some(Ok(_)) => {}
@@ -2070,18 +2586,33 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
                     let result = Python::try_attach(|py| -> PyResult<_> {
                         let protocol = server.create_protocol_with_py(py)?;
                         let context = server.context.clone_ref(py);
-                        spawn_unix_transport(
-                            py,
-                            TransportSpawnContext {
-                                loop_core: Arc::clone(&server.loop_core),
-                                loop_obj: server.loop_obj.clone_ref(py),
-                                protocol,
-                                context,
-                                context_needs_run: server.context_needs_run,
-                            },
-                            stream,
-                            Some(Arc::downgrade(&server)),
-                        )
+                        let spawn_context = TransportSpawnContext {
+                            loop_core: Arc::clone(&server.loop_core),
+                            loop_obj: server.loop_obj.clone_ref(py),
+                            protocol,
+                            context,
+                            context_needs_run: server.context_needs_run,
+                        };
+                        if let Some(tls) = server.tls.as_ref() {
+                            spawn_tls_server_transport(
+                                py,
+                                spawn_context,
+                                StreamKind::Unix(stream),
+                                ServerTlsSettings {
+                                    config: Arc::clone(&tls.config),
+                                    handshake_timeout: tls.handshake_timeout,
+                                    extra: tls
+                                        .extra
+                                        .iter()
+                                        .map(|(key, value)| (key.clone(), value.clone_ref(py)))
+                                        .collect(),
+                                },
+                                Some(Arc::downgrade(&server)),
+                                true,
+                            )
+                        } else {
+                            spawn_unix_transport(py, spawn_context, stream, Some(Arc::downgrade(&server)))
+                        }
                     });
                     match result {
                         Some(Ok(_)) => {}
@@ -2107,10 +2638,19 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
 }
 
 fn spawn_reader_worker(core: Arc<StreamTransportCore>, reader: ReaderTarget) {
-    thread::Builder::new()
-        .name("rsloop-stream-reader".to_owned())
-        .spawn(move || run_stream_reader(core, reader))
-        .expect("failed to spawn stream reader");
+    let thread_core = Arc::clone(&core);
+    let worker = WorkerThread::spawn("rsloop-stream-reader".to_owned(), move |stop| {
+        run_stream_reader(thread_core, reader, stop)
+    });
+    core.register_worker(worker);
+}
+
+fn spawn_tls_reader_worker(core: Arc<StreamTransportCore>, tls_state: Arc<Mutex<TlsIoState>>) {
+    let thread_core = Arc::clone(&core);
+    let worker = WorkerThread::spawn("rsloop-tls-reader".to_owned(), move |stop| {
+        run_tls_reader(thread_core, tls_state, stop)
+    });
+    core.register_worker(worker);
 }
 
 fn spawn_writer_worker(
@@ -2118,16 +2658,86 @@ fn spawn_writer_worker(
     writer: WriterTarget,
     writer_rx: Receiver<WriterCommand>,
 ) {
-    thread::Builder::new()
-        .name("rsloop-stream-writer".to_owned())
-        .spawn(move || run_stream_writer(core, writer, writer_rx))
-        .expect("failed to spawn stream writer");
+    let thread_core = Arc::clone(&core);
+    let worker = WorkerThread::spawn("rsloop-stream-writer".to_owned(), move |stop| {
+        run_stream_writer(thread_core, writer, writer_rx, stop)
+    });
+    core.register_worker(worker);
 }
 
-fn run_stream_reader(core: Arc<StreamTransportCore>, mut reader: ReaderTarget) {
+fn spawn_tls_writer_worker(
+    core: Arc<StreamTransportCore>,
+    tls_state: Arc<Mutex<TlsIoState>>,
+    writer_rx: Receiver<WriterCommand>,
+) {
+    let thread_core = Arc::clone(&core);
+    let worker = WorkerThread::spawn("rsloop-tls-writer".to_owned(), move |stop| {
+        run_tls_writer(thread_core, tls_state, writer_rx, stop)
+    });
+    core.register_worker(worker);
+}
+
+fn complete_tls_handshake(
+    tls_state: &Arc<Mutex<TlsIoState>>,
+    timeout: Duration,
+) -> io::Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "TLS handshake timed out",
+            ));
+        }
+
+        let mut state = tls_state.lock().expect("poisoned tls state");
+        if !state.connection.is_handshaking() {
+            if state.connection.wants_write() {
+                flush_tls_io_locked(&mut state)?;
+            }
+            return Ok(());
+        }
+
+        if state.connection.wants_write() {
+            flush_tls_io_locked(&mut state)?;
+            continue;
+        }
+
+        if state.connection.wants_read() {
+            let fd = state.fd();
+            let pollable = state.pollable();
+            drop(state);
+            wait_socket_ready(fd, pollable, true, false)?;
+            let mut state = tls_state.lock().expect("poisoned tls state");
+            let n = state.read_tls()?;
+            if n == 0 && state.connection.is_handshaking() {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "TLS handshake ended before completion",
+                ));
+            }
+            state
+                .connection
+                .process_new_packets()
+                .map_err(tls_io_error)?;
+            continue;
+        }
+
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn run_stream_reader(
+    core: Arc<StreamTransportCore>,
+    mut reader: ReaderTarget,
+    stop: Arc<AtomicBool>,
+) {
     let mut buf = [0_u8; 65_536];
 
     loop {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
         if core.is_closing() {
             core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
             return;
@@ -2171,14 +2781,128 @@ fn run_stream_reader(core: Arc<StreamTransportCore>, mut reader: ReaderTarget) {
     }
 }
 
+fn run_tls_reader(
+    core: Arc<StreamTransportCore>,
+    tls_state: Arc<Mutex<TlsIoState>>,
+    stop: Arc<AtomicBool>,
+) {
+    let mut plaintext = [0_u8; 65_536];
+
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        core.wait_until_readable();
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        let (fd, pollable) = {
+            let state = tls_state.lock().expect("poisoned tls state");
+            (state.fd(), state.pollable())
+        };
+        if let Err(err) = wait_socket_ready(fd, pollable, true, false) {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                err.to_string(),
+            )));
+            return;
+        }
+
+        let mut state = tls_state.lock().expect("poisoned tls state");
+        match state.read_tls() {
+            Ok(0) => {
+                match state.connection.process_new_packets().map_err(tls_io_error) {
+                    Ok(()) => {}
+                    Err(err) => {
+                        core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                            err.to_string(),
+                        )));
+                        return;
+                    }
+                }
+                let mut saw_data = false;
+                loop {
+                    match state.connection.reader_read(&mut plaintext) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            saw_data = true;
+                            core.enqueue_pending_read_event(PendingReadEvent::Data(
+                                Box::<[u8]>::from(&plaintext[..n]),
+                            ));
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                        Err(err) => {
+                            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+                                Some(err.to_string()),
+                            ));
+                            return;
+                        }
+                    }
+                }
+                if !saw_data {
+                    core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                    return;
+                }
+            }
+            Ok(_) => {
+                if let Err(err) = state.connection.process_new_packets().map_err(tls_io_error) {
+                    core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                        err.to_string(),
+                    )));
+                    return;
+                }
+                if let Err(err) = flush_tls_io_locked(&mut state) {
+                    core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                        err.to_string(),
+                    )));
+                    return;
+                }
+                loop {
+                    match state.connection.reader_read(&mut plaintext) {
+                        Ok(0) => break,
+                        Ok(n) => core.enqueue_pending_read_event(PendingReadEvent::Data(
+                            Box::<[u8]>::from(&plaintext[..n]),
+                        )),
+                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                        Err(err) => {
+                            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+                                Some(err.to_string()),
+                            ));
+                            return;
+                        }
+                    }
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return;
+            }
+        }
+    }
+}
+
 fn run_stream_writer(
     core: Arc<StreamTransportCore>,
     mut writer: WriterTarget,
     writer_rx: Receiver<WriterCommand>,
+    stop: Arc<AtomicBool>,
 ) {
     let mut pending_command = None;
 
     loop {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
         let command = match pending_command.take() {
             Some(command) => command,
             None => match writer_rx.recv() {
@@ -2248,6 +2972,95 @@ fn run_stream_writer(
     let _ = core.connection_lost(None);
 }
 
+fn run_tls_writer(
+    core: Arc<StreamTransportCore>,
+    tls_state: Arc<Mutex<TlsIoState>>,
+    writer_rx: Receiver<WriterCommand>,
+    stop: Arc<AtomicBool>,
+) {
+    let mut pending_command = None;
+
+    loop {
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        let command = match pending_command.take() {
+            Some(command) => command,
+            None => match writer_rx.recv() {
+                Ok(command) => command,
+                Err(_) => break,
+            },
+        };
+
+        match command {
+            WriterCommand::Data(data) => {
+                let result = {
+                    let mut state = tls_state.lock().expect("poisoned tls state");
+                    match state.connection.writer_write_all(data.remaining()) {
+                        Ok(()) => flush_tls_io_locked(&mut state),
+                        Err(err) => Err(err),
+                    }
+                };
+                if let Err(err) = result {
+                    let _ = core.connection_lost(Some(PyRuntimeError::new_err(err.to_string())));
+                    return;
+                }
+
+                loop {
+                    match writer_rx.try_recv() {
+                        Ok(WriterCommand::Data(next)) => {
+                            let result = {
+                                let mut state = tls_state.lock().expect("poisoned tls state");
+                                match state.connection.writer_write_all(next.remaining()) {
+                                    Ok(()) => flush_tls_io_locked(&mut state),
+                                    Err(err) => Err(err),
+                                }
+                            };
+                            if let Err(err) = result {
+                                let _ = core.connection_lost(Some(PyRuntimeError::new_err(
+                                    err.to_string(),
+                                )));
+                                return;
+                            }
+                        }
+                        Ok(command) => {
+                            pending_command = Some(command);
+                            break;
+                        }
+                        Err(TryRecvError::Empty) => {
+                            core.set_write_backpressure_active(false);
+                            break;
+                        }
+                        Err(TryRecvError::Disconnected) => {
+                            core.set_write_backpressure_active(false);
+                            let _ = core.connection_lost(None);
+                            return;
+                        }
+                    }
+                }
+
+                if pending_command.is_none() {
+                    core.set_write_backpressure_active(false);
+                }
+            }
+            WriterCommand::WriteEof => {}
+            WriterCommand::Close | WriterCommand::Abort => {
+                {
+                    let mut state = tls_state.lock().expect("poisoned tls state");
+                    state.connection.send_close_notify();
+                    let _ = flush_tls_io_locked(&mut state);
+                    let _ = state.shutdown_close();
+                }
+                let _ = core.connection_lost(None);
+                return;
+            }
+            WriterCommand::Stop => return,
+        }
+    }
+
+    let _ = core.connection_lost(None);
+}
+
 fn write_all_owned(writer: &mut WriterTarget, data: &mut OwnedWriteBuffer) -> io::Result<()> {
     while !data.is_empty() {
         match writer.write(data.remaining()) {
@@ -2277,6 +3090,52 @@ fn write_all_owned(writer: &mut WriterTarget, data: &mut OwnedWriteBuffer) -> io
     }
 
     Ok(())
+}
+
+fn flush_tls_io_locked(state: &mut TlsIoState) -> io::Result<()> {
+    while state.connection.wants_write() {
+        match state.write_tls() {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to flush TLS records",
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                wait_socket_ready(state.fd(), state.pollable(), false, true)?;
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
+fn wait_socket_ready(
+    fd: fd_ops::RawFd,
+    pollable: bool,
+    read: bool,
+    write: bool,
+) -> io::Result<()> {
+    if pollable {
+        loop {
+            match fd_ops::poll_fd(fd, read, write, 50) {
+                Ok((read_ready, write_ready)) if (!read || read_ready) && (!write || write_ready) => {
+                    return Ok(());
+                }
+                Ok(_) => continue,
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    thread::sleep(Duration::from_millis(10));
+    Ok(())
+}
+
+fn tls_io_error(err: rustls::Error) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, err.to_string())
 }
 
 fn shutdown_tcp_stream(stream: &StdTcpStream, how: Shutdown) -> io::Result<()> {
@@ -2393,9 +3252,10 @@ fn make_stream_extra(
     fd: fd_ops::RawFd,
     family: i32,
 ) -> PyResult<HashMap<String, Py<PyAny>>> {
+    let socket_fd = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let socket_mod = py.import("socket")?;
     let kwargs = PyDict::new(py);
-    kwargs.set_item("fileno", fd)?;
+    kwargs.set_item("fileno", socket_fd)?;
     let sock = socket_mod.getattr("socket")?.call(
         (family, socket_mod.getattr("SOCK_STREAM")?, 0),
         Some(&kwargs),

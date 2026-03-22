@@ -150,11 +150,6 @@ level transport code in `src/stream_transport.rs`.
 
 These gaps are visible in the current implementation.
 
-- TLS is not implemented.
-- `start_tls()` is stubbed.
-- `ssl=...` is rejected for `create_server`, `create_connection`,
-  `create_unix_server`, `create_unix_connection`, and
-  `connect_accepted_socket`.
 - Stream transport flow control is partial:
   `pause_reading()` and `resume_reading()` work, but
   `get_write_buffer_size()` returns `0`,
@@ -162,9 +157,13 @@ These gaps are visible in the current implementation.
   `set_write_buffer_limits()` is a no-op.
 - Several compatibility parameters are currently accepted only to preserve API
   shape, not to provide full behavior:
-  `server_hostname`, `happy_eyeballs_delay`, `interleave`, `all_errors`,
-  `ssl_handshake_timeout`, `ssl_shutdown_timeout`, and
+  `happy_eyeballs_delay`, `interleave`, `all_errors`,
+  `ssl_shutdown_timeout`, and
   `shutdown_default_executor(timeout=...)`.
+- TLS uses a `rustls` backend with a narrower compatibility surface than
+  CPython's OpenSSL-backed `ssl` module. In particular, encrypted private keys
+  are not supported yet, and the fast-stream monkeypatch still falls back to
+  stdlib helpers whenever `ssl` is enabled.
 - Subprocess support is intentionally incomplete:
   `preexec_fn` is unsupported, and text mode is rejected for
   `asyncio.create_subprocess_exec()` /

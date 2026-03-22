@@ -12,6 +12,7 @@ mod python_api;
 mod python_names;
 mod runtime;
 mod stream_transport;
+mod tls;
 
 pub use callbacks::{PyHandle, PyTimerHandle, ReadyCallback};
 pub use fast_streams::{open_connection, start_server, PyFastStreamReader, PyFastStreamWriter};

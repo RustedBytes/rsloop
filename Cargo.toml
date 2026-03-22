@@ -18,12 +18,15 @@ default = []
 profiler = ["dep:pprof"]
 
 [dependencies]
+async-std = "1"
 crossbeam-channel = "0.5"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 libc = "0.2"
 pprof = { version = "0.15.0", default-features = false, features = ["flamegraph"], optional = true }
 pyo3 = { version = "0.28", features = ["extension-module"] }
 pyo3-async-runtimes = { version = "0.28", features = ["async-std-runtime"] }
+rustls = "0.23"
+rustls-pemfile = "2"
 signal-hook = "0.4"
 socket2 = "0.6"
 
