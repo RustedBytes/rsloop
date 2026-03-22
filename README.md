@@ -1,6 +1,6 @@
 <img src="./rsloop.png" alt="rsloop logo" align="center">
 
-# `rsloop`: An event loop for asyncio written in Rust
+# An event loop for asyncio written in Rust
 
 [![PyPI - Version](https://img.shields.io/pypi/v/rsloop)](https://pypi.org/project/rsloop/)
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/rsloop?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/rsloop)
