@@ -103,6 +103,16 @@ host_rust_target() {
   rustc -vV | sed -n 's/^host: //p'
 }
 
+load_default_versions() {
+  local target="$1"
+  local version=""
+
+  PYTHON_VERSIONS=()
+  while IFS= read -r version; do
+    PYTHON_VERSIONS+=("$version")
+  done < <(default_versions_for_target "$target")
+}
+
 OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
 INSTALL_PYTHONS=1
 RUST_TARGET="${RSLOOP_RUST_TARGET:-}"
@@ -152,7 +162,7 @@ done
 if [[ -n "${RSLOOP_PYTHON_VERSIONS:-}" ]]; then
   read -r -a PYTHON_VERSIONS <<< "${RSLOOP_PYTHON_VERSIONS}"
 else
-  readarray -t PYTHON_VERSIONS < <(default_versions_for_target "$RUST_TARGET")
+  load_default_versions "$RUST_TARGET"
 fi
 
 OUTPUT_DIR="$(resolve_path "$OUTPUT_DIR")"
