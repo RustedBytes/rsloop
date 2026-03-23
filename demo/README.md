@@ -30,6 +30,8 @@ uv run --with fastapi --with uvicorn --with uvloop python demo/fastapi_service.p
 uv run --with fastapi --with uvicorn --with uvloop python demo/fastapi_service.py --event-loop rsloop
 ```
 
+Service entrypoint: [`demo/fastapi_service.py`](./fastapi_service.py)
+
 `std-async` is also accepted as an alias for stdlib `asyncio`:
 
 ```bash

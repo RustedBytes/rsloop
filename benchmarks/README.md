@@ -13,6 +13,8 @@ uv run --with maturin maturin develop --release
 uv run --with uvloop python benchmarks/compare_event_loops.py
 ```
 
+Benchmark runner: [`benchmarks/compare_event_loops.py`](./compare_event_loops.py)
+
 The Rust prototype should be installed in release mode before benchmarking.
 Using the default debug build will heavily skew the comparison against
 `asyncio` and `uvloop`.
@@ -42,7 +44,7 @@ uv run --with uvloop python benchmarks/compare_event_loops.py \
 ```
 
 This writes one SVG per workload, such as
-`benchmarks/profiles/rsloop-callbacks.svg`, before the warmup and measured
+[`benchmarks/profiles/rsloop-callbacks.svg`](./profiles/rsloop-callbacks.svg), before the warmup and measured
 passes.
 
 The runner executes each loop/workload in a fresh subprocess and reports:
