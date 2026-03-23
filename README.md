@@ -17,7 +17,7 @@ coroutines still run on the thread that calls `run_forever()` or
 The package exposes:
 
 - a native extension module at `rsloop._loop`
-- a Python wrapper in `python/rsloop/__init__.py`
+- a Python wrapper in [`python/rsloop/__init__.py`](./python/rsloop/__init__.py)
 - `rsloop.Loop`, `rsloop.new_event_loop()`, and `rsloop.run(...)`
 
 Repository metadata currently targets Python `>=3.8`. The packaged project now
@@ -68,7 +68,7 @@ finally:
 
 Importing `rsloop` also patches `asyncio.set_event_loop()` so Python 3.8 can
 accept an `rsloop.Loop` instance, matching the behavior exercised by
-`tests/test_run.py`.
+[`tests/test_run.py`](./tests/test_run.py).
 
 ## Verified Surface Area
 
@@ -145,8 +145,9 @@ The native fast-stream path is used only when:
 
 Otherwise `rsloop` falls back to the stdlib `asyncio.streams` helpers.
 
-The implementation lives in `src/fast_streams.rs` and is backed by the lower
-level transport code in `src/stream_transport.rs`.
+The implementation lives in [`src/fast_streams.rs`](./src/fast_streams.rs) and
+is backed by the lower level transport code in
+[`src/stream_transport.rs`](./src/stream_transport.rs).
 
 ## Runtime Model
 
@@ -207,9 +208,9 @@ Build release wheels into `dist/wheels`:
 scripts/build-wheels.sh
 ```
 
-That script currently defaults to CPython `3.8 3.9 3.10 3.11 3.12 3.13 3.14`
-plus free-threaded `3.14t`, and uses `uv python install` / `uv python find` to
-locate interpreters.
+[`scripts/build-wheels.sh`](./scripts/build-wheels.sh) currently defaults to
+CPython `3.8 3.9 3.10 3.11 3.12 3.13 3.14` plus free-threaded `3.14t`, and
+uses `uv python install` / `uv python find` to locate interpreters.
 
 ## Profiling
 
@@ -258,12 +259,19 @@ uv run python examples/04_unix_and_accepted_socket.py
 uv run python examples/05_pipes_signals_subprocesses.py
 ```
 
+Example files:
+[`examples/01_basics.py`](./examples/01_basics.py),
+[`examples/02_fd_and_sockets.py`](./examples/02_fd_and_sockets.py),
+[`examples/03_streams.py`](./examples/03_streams.py),
+[`examples/04_unix_and_accepted_socket.py`](./examples/04_unix_and_accepted_socket.py),
+[`examples/05_pipes_signals_subprocesses.py`](./examples/05_pipes_signals_subprocesses.py).
+
 The repository also includes:
 
-- `demo/fastapi_service.py` for running the same FastAPI app on stdlib
-  `asyncio`, `uvloop`, or `rsloop`
-- `benchmarks/compare_event_loops.py` for callback, task, and TCP stream
-  comparisons
+- [`demo/fastapi_service.py`](./demo/fastapi_service.py) for running the same
+  FastAPI app on stdlib `asyncio`, `uvloop`, or `rsloop`
+- [`benchmarks/compare_event_loops.py`](./benchmarks/compare_event_loops.py)
+  for callback, task, and TCP stream comparisons
 
 ## Benchmark
 
@@ -295,8 +303,9 @@ uvloop         0.119582     0.116446         41,812        1.00x
 asyncio        0.138408     0.134438         36,125        1.16x
 ```
 
-See `benchmarks/README.md` for workload details and extra flags, and
-`demo/README.md` for the FastAPI loop comparison demo.
+See [`benchmarks/README.md`](./benchmarks/README.md) for workload details and
+extra flags, and [`demo/README.md`](./demo/README.md) for the FastAPI loop
+comparison demo.
 
 ## Acknowledgements
 
