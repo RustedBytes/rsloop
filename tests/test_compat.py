@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import os
 import signal
 import socket
+import tempfile
 import time
 import threading
 import unittest
@@ -325,6 +327,85 @@ class CompatibilityTests(unittest.TestCase):
             rsloop.run(main()),
             "Executor shutdown has been called",
         )
+
+    def test_create_task_passes_kwargs_to_task_factory(self) -> None:
+        async def main() -> tuple[dict[str, object], str]:
+            loop = asyncio.get_running_loop()
+            captured = {}
+
+            async def coro():
+                return "ok"
+
+            def factory(loop, coro, **kwargs):
+                if "custom_flag" in kwargs:
+                    captured.update(kwargs)
+                forwarded = dict(kwargs)
+                forwarded.pop("custom_flag", None)
+                return asyncio.Task(coro, loop=loop, **forwarded)
+
+            loop.set_task_factory(factory)
+            task = loop.create_task(
+                coro(),
+                name="demo",
+                eager_start=False,
+                custom_flag="seen",
+            )
+            return captured, await task
+
+        captured, result = rsloop.run(main())
+        self.assertEqual(result, "ok")
+        self.assertEqual(captured["name"], "demo")
+        self.assertEqual(captured["eager_start"], False)
+        self.assertEqual(captured["custom_flag"], "seen")
+
+    def test_create_task_accepts_eager_start_without_task_factory(self) -> None:
+        async def main() -> tuple[bool, str]:
+            loop = asyncio.get_running_loop()
+
+            async def coro():
+                await asyncio.sleep(0)
+                return "done"
+
+            task = loop.create_task(coro(), eager_start=False)
+            pending_before = not task.done()
+            return pending_before, await task
+
+        self.assertEqual(rsloop.run(main()), (True, "done"))
+
+    def test_create_server_accepts_keep_alive(self) -> None:
+        async def main() -> int:
+            loop = asyncio.get_running_loop()
+            server = await loop.create_server(
+                asyncio.Protocol,
+                "127.0.0.1",
+                0,
+                keep_alive=True,
+            )
+            try:
+                sock = server.sockets[0]
+                return sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        self.assertEqual(rsloop.run(main()), 1)
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "unix sockets required")
+    def test_create_unix_server_cleanup_socket_false_leaves_path(self) -> None:
+        async def main(path: str) -> bool:
+            loop = asyncio.get_running_loop()
+            server = await loop.create_unix_server(
+                asyncio.Protocol,
+                path,
+                cleanup_socket=False,
+            )
+            server.close()
+            await server.wait_closed()
+            return os.path.exists(path)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "sock")
+            self.assertTrue(rsloop.run(main(path)))
 
     @unittest.skipUnless(hasattr(signal, "SIGUSR1"), "unix only")
     def test_add_signal_handler_rejects_non_main_thread(self) -> None:
