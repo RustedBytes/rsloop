@@ -374,7 +374,7 @@ dependencies = [
  "crossbeam-queue",
  "flume",
  "futures-util",
- "io-uring",
+ "io-uring 0.7.11",
  "io_uring_buf_ring",
  "libc",
  "once_cell",
@@ -880,6 +880,16 @@ dependencies = [
 
 [[package]]
 name = "io-uring"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "595a0399f411a508feb2ec1e970a4a30c249351e30208960d58298de8660b0e5"
+dependencies = [
+ "bitflags 1.3.2",
+ "libc",
+]
+
+[[package]]
+name = "io-uring"
 version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fdd7bddefd0a8833b88a4b68f90dae22c7450d11b354198baee3874fd811b344"
@@ -896,7 +906,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1838759bb8c2f24cf05a35429d83145c4aa6af43f8ad38477295e12a7320a80e"
 dependencies = [
  "bytes",
- "io-uring",
+ "io-uring 0.7.11",
  "rustix",
 ]
 
@@ -1036,6 +1046,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mio"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a69bcab0ad47271a0234d9422b131806bf3968021e5dc9328caf2d4cd58557fc"
+dependencies = [
+ "libc",
+ "log",
+ "wasi",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "nix"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1089,6 +1111,12 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "oneshot"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfe21416a02c693fb9f980befcb230ecc70b0b3d1cc4abf88b9675c4c1457f0c"
 
 [[package]]
 name = "openssl-probe"
@@ -1362,6 +1390,8 @@ dependencies = [
  "rustls-pemfile",
  "signal-hook",
  "socket2",
+ "tokio",
+ "vibeio",
  "windows-sys 0.61.2",
 ]
 
@@ -1730,6 +1760,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "tm-wheel"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77555380a341278942ff24ae5a39cb4f0afe93971755ce91f4370b9d209c1520"
+dependencies = [
+ "slab",
+]
+
+[[package]]
+name = "tokio"
+version = "1.50.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27ad5e34374e03cfffefc301becb44e9dc3c17584f414349ebe29ed26661822d"
+dependencies = [
+ "bytes",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "tracing"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1823,6 +1872,24 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vibeio"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78dce705a708cacdd5822824342a8843abcceb9619e7079dc0e97b77dcc4ce1c"
+dependencies = [
+ "crossbeam-queue",
+ "futures-util",
+ "io-uring 0.6.4",
+ "libc",
+ "mio",
+ "oneshot",
+ "slab",
+ "tm-wheel",
+ "tokio",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "wasi"

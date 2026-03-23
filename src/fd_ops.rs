@@ -11,6 +11,8 @@ use socket2::Socket;
 #[cfg(windows)]
 use std::mem;
 #[cfg(windows)]
+use std::net::TcpStream as StdTcpStream;
+#[cfg(windows)]
 use std::os::windows::io::{FromRawSocket, IntoRawSocket};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{
@@ -199,6 +201,33 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
 }
 
 pub async fn wait_readable(fd: RawFd) -> PyResult<()> {
+    #[cfg(windows)]
+    {
+        if let Ok(stream) = duplicate_tcp_stream(fd) {
+            if stream.peer_addr().is_ok() {
+                let (tx, rx) = futures::channel::oneshot::channel();
+                let task = crate::windows_vibeio::spawn(move || async move {
+                    let result = async {
+                        let stream = vibeio::net::PollTcpStream::from_std(stream)?;
+                        let mut buf = [0_u8; 1];
+                        stream.peek(&mut buf).await.map(|_| ())
+                    }
+                    .await;
+                    let _ = tx.send(result);
+                });
+
+                if let Ok(task) = task {
+                    let result = rx
+                        .await
+                        .map_err(|_| PyRuntimeError::new_err("vibeio wait dropped"))?
+                        .map_err(|err| PyRuntimeError::new_err(err.to_string()));
+                    crate::windows_vibeio::cancel(task);
+                    return result;
+                }
+            }
+        }
+    }
+
     wait_for_interest(fd, true, false).await
 }
 
@@ -272,4 +301,13 @@ fn new_fd_set(socket: SOCKET, enabled: bool) -> FD_SET {
         set.fd_array[0] = socket;
     }
     set
+}
+
+#[cfg(windows)]
+pub fn duplicate_tcp_stream(fd: RawFd) -> io::Result<StdTcpStream> {
+    let dup = duplicate_socket(fd)?;
+    let socket = raw_fd_to_socket(dup)?;
+    let socket = unsafe { Socket::from_raw_socket(socket as _) };
+    socket.set_nonblocking(true)?;
+    Ok(socket.into())
 }

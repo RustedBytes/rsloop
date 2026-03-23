@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 use crate::fd_ops;
 use crate::loop_core::{LoopCommand, LoopCore, ReadyItem};
+#[cfg(windows)]
+use crate::windows_vibeio;
 #[cfg(target_os = "linux")]
 use compio::net::PollFd;
 #[cfg(target_os = "linux")]
@@ -54,13 +56,13 @@ struct SignalWatcher;
 #[cfg(target_os = "linux")]
 type WatchTask = CompioJoinHandle<()>;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(windows)))]
 struct WatchTask {
     stop: Arc<AtomicBool>,
     join: thread::JoinHandle<()>,
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), not(windows)))]
 impl WatchTask {
     fn spawn(name: String, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
@@ -75,6 +77,38 @@ impl WatchTask {
     fn abort(self) {
         self.stop.store(true, AtomicOrdering::Release);
         let _ = self.join.join();
+    }
+}
+
+#[cfg(windows)]
+enum WatchTask {
+    Thread {
+        stop: Arc<AtomicBool>,
+        join: thread::JoinHandle<()>,
+    },
+    Vibeio(windows_vibeio::TaskHandle),
+}
+
+#[cfg(windows)]
+impl WatchTask {
+    fn spawn_thread(name: String, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let join = thread::Builder::new()
+            .name(name)
+            .spawn(move || task(thread_stop))
+            .expect("failed to spawn watch task");
+        Self::Thread { stop, join }
+    }
+
+    fn abort(self) {
+        match self {
+            Self::Thread { stop, join } => {
+                stop.store(true, AtomicOrdering::Release);
+                let _ = join.join();
+            }
+            Self::Vibeio(task) => windows_vibeio::cancel(task),
+        }
     }
 }
 
@@ -420,7 +454,84 @@ impl RuntimeDispatcher {
                     })
                 };
 
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(windows)]
+                let task = {
+                    let sender = Arc::clone(&self.core);
+                    let (service_callback, service_args, service_context) = Python::attach(|py| {
+                        (
+                            callback.clone_ref(py),
+                            args.clone_ref(py),
+                            context.clone_ref(py),
+                        )
+                    });
+                    match fd_ops::duplicate_tcp_stream(fd).and_then(|stream| {
+                        if stream.peer_addr().is_err() {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidInput,
+                                "listener sockets stay on the blocking watcher path",
+                            ));
+                        }
+                        windows_vibeio::spawn(move || async move {
+                            let ready_result = async {
+                                let stream = vibeio::net::PollTcpStream::from_std(stream)?;
+                                let mut buf = [0_u8; 1];
+                                stream.peek(&mut buf).await.map(|_| ())
+                            }
+                            .await;
+                            if ready_result.is_err() {
+                                return;
+                            }
+
+                            let ready = Python::attach(|py| {
+                                Arc::new(crate::callbacks::ReadyCallback::new(
+                                    py,
+                                    sender.next_callback_id(),
+                                    crate::callbacks::CallbackKind::Reader(fd),
+                                    service_callback.clone_ref(py),
+                                    service_args.clone_ref(py),
+                                    service_context.clone_ref(py),
+                                    context_needs_run,
+                                ))
+                            });
+
+                            let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                        })
+                    }) {
+                        Ok(task) => WatchTask::Vibeio(task),
+                        Err(_) => {
+                            let sender = Arc::clone(&self.core);
+                            WatchTask::spawn_thread(format!("rsloop-reader-{fd}"), move |stop| {
+                                loop {
+                                    if stop.load(AtomicOrdering::Acquire) {
+                                        return;
+                                    }
+                                    match fd_ops::poll_fd(fd, true, false, 50) {
+                                        Ok((true, _)) => break,
+                                        Ok((false, false)) => continue,
+                                        Ok((false, true)) => continue,
+                                        Err(_) => return,
+                                    }
+                                }
+
+                                let ready = Python::attach(|py| {
+                                    Arc::new(crate::callbacks::ReadyCallback::new(
+                                        py,
+                                        sender.next_callback_id(),
+                                        crate::callbacks::CallbackKind::Reader(fd),
+                                        callback.clone_ref(py),
+                                        args.clone_ref(py),
+                                        context.clone_ref(py),
+                                        context_needs_run,
+                                    ))
+                                });
+
+                                let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                            })
+                        }
+                    }
+                };
+
+                #[cfg(all(not(target_os = "linux"), not(windows)))]
                 let task = {
                     let sender = Arc::clone(&self.core);
                     WatchTask::spawn(format!("rsloop-reader-{fd}"), move |stop| {
@@ -497,7 +608,39 @@ impl RuntimeDispatcher {
                     })
                 };
 
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(windows)]
+                let task = {
+                    let sender = Arc::clone(&self.core);
+                    WatchTask::spawn_thread(format!("rsloop-writer-{fd}"), move |stop| {
+                        loop {
+                            if stop.load(AtomicOrdering::Acquire) {
+                                return;
+                            }
+                            match fd_ops::poll_fd(fd, false, true, 50) {
+                                Ok((false, true)) => break,
+                                Ok((false, false)) => continue,
+                                Ok((true, _)) => continue,
+                                Err(_) => return,
+                            }
+                        }
+
+                        let ready = Python::attach(|py| {
+                            Arc::new(crate::callbacks::ReadyCallback::new(
+                                py,
+                                sender.next_callback_id(),
+                                crate::callbacks::CallbackKind::Writer(fd),
+                                callback.clone_ref(py),
+                                args.clone_ref(py),
+                                context.clone_ref(py),
+                                context_needs_run,
+                            ))
+                        });
+
+                        let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                    })
+                };
+
+                #[cfg(all(not(target_os = "linux"), not(windows)))]
                 let task = {
                     let sender = Arc::clone(&self.core);
                     WatchTask::spawn(format!("rsloop-writer-{fd}"), move |stop| {
@@ -548,7 +691,39 @@ impl RuntimeDispatcher {
                         core, reader,
                     ));
 
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(windows)]
+                let task = match reader {
+                    crate::stream_transport::ReaderTarget::Tcp(stream) => {
+                        let service_core = core.clone();
+                        match stream.try_clone().and_then(|dup| {
+                            windows_vibeio::spawn(move || {
+                                crate::stream_transport::run_tcp_socket_reader_task(
+                                    service_core.clone(),
+                                    dup,
+                                )
+                            })
+                        }) {
+                            Ok(task) => WatchTask::Vibeio(task),
+                            Err(_) => WatchTask::spawn_thread(
+                                format!("rsloop-socket-reader-{fd}"),
+                                move |stop| {
+                                    crate::stream_transport::run_socket_reader_blocking(
+                                        core,
+                                        crate::stream_transport::ReaderTarget::Tcp(stream),
+                                        stop,
+                                    )
+                                },
+                            ),
+                        }
+                    }
+                    other => {
+                        WatchTask::spawn_thread(format!("rsloop-socket-reader-{fd}"), move |stop| {
+                            crate::stream_transport::run_socket_reader_blocking(core, other, stop)
+                        })
+                    }
+                };
+
+                #[cfg(all(not(target_os = "linux"), not(windows)))]
                 let task = WatchTask::spawn(format!("rsloop-socket-reader-{fd}"), move |stop| {
                     crate::stream_transport::run_socket_reader_blocking(core, reader, stop)
                 });
@@ -576,7 +751,38 @@ impl RuntimeDispatcher {
                         server, listener,
                     ));
 
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(windows)]
+                let task = match listener {
+                    crate::stream_transport::ServerListener::Tcp(listener) => {
+                        let service_server = server.clone();
+                        match listener.try_clone().and_then(|dup| {
+                            windows_vibeio::spawn(move || {
+                                crate::stream_transport::run_tcp_accept_task(
+                                    service_server.clone(),
+                                    dup,
+                                )
+                            })
+                        }) {
+                            Ok(task) => WatchTask::Vibeio(task),
+                            Err(_) => WatchTask::spawn_thread(
+                                format!("rsloop-accept-{fd}"),
+                                move |stop| {
+                                    crate::stream_transport::run_server_accept_blocking(
+                                        server,
+                                        crate::stream_transport::ServerListener::Tcp(listener),
+                                        stop,
+                                    )
+                                },
+                            ),
+                        }
+                    }
+                    #[cfg(unix)]
+                    other => WatchTask::spawn_thread(format!("rsloop-accept-{fd}"), move |stop| {
+                        crate::stream_transport::run_server_accept_blocking(server, other, stop)
+                    }),
+                };
+
+                #[cfg(all(not(target_os = "linux"), not(windows)))]
                 let task = WatchTask::spawn(format!("rsloop-accept-{fd}"), move |stop| {
                     crate::stream_transport::run_server_accept_blocking(server, listener, stop)
                 });
