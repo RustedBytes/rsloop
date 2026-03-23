@@ -170,11 +170,6 @@ These gaps are visible in the current implementation.
   `get_write_buffer_size()` returns `0`,
   `get_write_buffer_limits()` returns `(0, 0)`, and
   `set_write_buffer_limits()` is a no-op.
-- Several compatibility parameters are currently accepted only to preserve API
-  shape, not to provide full behavior:
-  `happy_eyeballs_delay`, `interleave`, `all_errors`,
-  `ssl_shutdown_timeout`, and
-  `shutdown_default_executor(timeout=...)`.
 - TLS uses a `rustls` backend with a narrower compatibility surface than
   CPython's OpenSSL-backed `ssl` module. In particular, encrypted private keys
   are not supported yet, and the fast-stream monkeypatch still falls back to

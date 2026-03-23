@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio as __asyncio
+import builtins as __builtins
+import collections as __collections
 import contextlib as __contextlib
+import itertools as __itertools
+import math as __math
 import os as __os
+import socket as __socket
 import ssl as __ssl
 import sys as __sys
 import typing as __typing
@@ -90,6 +95,7 @@ def profile(
 
 __ORIG_OPEN_CONNECTION = __asyncio.open_connection
 __ORIG_START_SERVER = __asyncio.start_server
+__ORIG_CREATE_CONNECTION = Loop.create_connection
 __USE_FAST_STREAMS = __os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
 
 
@@ -97,6 +103,276 @@ if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
     __asyncio.open_connection = __open_connection
 if __USE_FAST_STREAMS and __asyncio.start_server is __ORIG_START_SERVER:
     __asyncio.start_server = __start_server
+
+
+def __interleave_addrinfos(addrinfos, first_address_family_count=1):
+    grouped = __collections.OrderedDict()
+    for addrinfo in addrinfos:
+        grouped.setdefault(addrinfo[0], []).append(addrinfo)
+
+    lists = list(grouped.values())
+    reordered = []
+    if first_address_family_count > 1 and lists:
+        reordered.extend(lists[0][: first_address_family_count - 1])
+        del lists[0][: first_address_family_count - 1]
+
+    for addrinfo in __itertools.zip_longest(*lists):
+        reordered.extend(item for item in addrinfo if item is not None)
+    return reordered
+
+
+def __flatten_connection_exceptions(exceptions):
+    return [exc for group in exceptions for exc in group]
+
+
+def __raise_connection_error(exceptions, *, all_errors):
+    if all_errors and hasattr(__builtins, "ExceptionGroup"):
+        raise __builtins.ExceptionGroup("create_connection failed", exceptions)
+    if len(exceptions) == 1:
+        raise exceptions[0]
+
+    model = str(exceptions[0])
+    if all(str(exc) == model for exc in exceptions):
+        raise exceptions[0]
+
+    raise OSError(
+        "Multiple exceptions: " + ", ".join(str(exc) for exc in exceptions)
+    )
+
+
+def __bind_error(address, exc):
+    detail = exc.strerror.lower() if exc.strerror else str(exc)
+    return OSError(
+        exc.errno,
+        f"error while attempting to bind on address {address!r}: {detail}",
+    )
+
+
+def __prepare_stream_socket(addrinfo, local_addrinfos):
+    family, socktype, proto, _, address = addrinfo
+    sock = __socket.socket(family=family, type=socktype, proto=proto)
+    sock.setblocking(False)
+    attempt_exceptions = []
+    if local_addrinfos is None:
+        return sock, address, attempt_exceptions
+
+    for local_family, _, _, _, local_address in local_addrinfos:
+        if local_family != family:
+            continue
+        try:
+            sock.bind(local_address)
+            return sock, address, attempt_exceptions
+        except OSError as exc:
+            attempt_exceptions.append(__bind_error(local_address, exc))
+
+    sock.close()
+    if attempt_exceptions:
+        return None, None, attempt_exceptions
+    return (
+        None,
+        None,
+        [OSError(f"no matching local address with family={family} found")],
+    )
+
+
+def __consume_connection_attempts(done, pending, exceptions):
+    for task in done:
+        sock, attempt_exceptions = pending.pop(task)
+        try:
+            task.result()
+        except OSError as exc:
+            attempt_exceptions.append(exc)
+            exceptions.append(attempt_exceptions)
+            sock.close()
+            continue
+        except BaseException:
+            sock.close()
+            raise
+        return sock
+    return None
+
+
+async def __connect_with_happy_eyeballs(
+    loop,
+    addrinfos,
+    local_addrinfos,
+    delay,
+):
+    exceptions = []
+    pending = {}
+    if not __math.isfinite(delay) or delay <= 0:
+        delay = 0.0
+
+    for index, addrinfo in enumerate(addrinfos):
+        sock, address, attempt_exceptions = __prepare_stream_socket(
+            addrinfo, local_addrinfos
+        )
+        if sock is None:
+            exceptions.append(attempt_exceptions)
+        else:
+            pending[__asyncio.create_task(loop.sock_connect(sock, address))] = (
+                sock,
+                attempt_exceptions,
+            )
+
+        if not pending:
+            continue
+        if index + 1 >= len(addrinfos):
+            continue
+
+        done, _ = await __asyncio.wait(
+            tuple(pending),
+            timeout=delay,
+            return_when=__asyncio.FIRST_COMPLETED,
+        )
+        winner = __consume_connection_attempts(done, pending, exceptions)
+        if winner is not None:
+            return winner, pending, exceptions
+
+    while pending:
+        done, _ = await __asyncio.wait(
+            tuple(pending),
+            return_when=__asyncio.FIRST_COMPLETED,
+        )
+        winner = __consume_connection_attempts(done, pending, exceptions)
+        if winner is not None:
+            return winner, pending, exceptions
+
+    return None, pending, exceptions
+
+
+async def __loop_create_connection(
+    self,
+    protocol_factory,
+    host=None,
+    port=None,
+    *,
+    ssl=None,
+    family=0,
+    proto=0,
+    flags=0,
+    sock=None,
+    local_addr=None,
+    server_hostname=None,
+    ssl_handshake_timeout=None,
+    ssl_shutdown_timeout=None,
+    happy_eyeballs_delay=None,
+    interleave=None,
+    all_errors=False,
+):
+    if server_hostname is not None and not ssl:
+        raise ValueError("server_hostname is only meaningful with ssl")
+    if server_hostname is None and ssl:
+        if not host:
+            raise ValueError("You must set server_hostname when using ssl without a host")
+        server_hostname = host
+    if ssl_handshake_timeout is not None and not ssl:
+        raise ValueError("ssl_handshake_timeout is only meaningful with ssl")
+    if ssl_shutdown_timeout is not None and not ssl:
+        raise ValueError("ssl_shutdown_timeout is only meaningful with ssl")
+    if happy_eyeballs_delay is not None and interleave is None:
+        interleave = 1
+
+    created_sock = None
+    if host is not None or port is not None:
+        if sock is not None:
+            raise ValueError("host/port and sock can not be specified at the same time")
+
+        addrinfos = await self.getaddrinfo(
+            host,
+            port,
+            family=family,
+            type=__socket.SOCK_STREAM,
+            proto=proto,
+            flags=flags,
+        )
+        if not addrinfos:
+            raise OSError("getaddrinfo() returned empty list")
+
+        if local_addr is not None:
+            local_addrinfos = await self.getaddrinfo(
+                *local_addr,
+                family=family,
+                type=__socket.SOCK_STREAM,
+                proto=proto,
+                flags=flags,
+            )
+            if not local_addrinfos:
+                raise OSError("getaddrinfo() returned empty list")
+        else:
+            local_addrinfos = None
+
+        if interleave:
+            addrinfos = __interleave_addrinfos(addrinfos, interleave)
+
+        if happy_eyeballs_delay is None:
+            connection_exceptions = []
+            for addrinfo in addrinfos:
+                created_sock, address, attempt_exceptions = __prepare_stream_socket(
+                    addrinfo, local_addrinfos
+                )
+                if created_sock is None:
+                    connection_exceptions.append(attempt_exceptions)
+                    continue
+                try:
+                    await self.sock_connect(created_sock, address)
+                    break
+                except OSError as exc:
+                    attempt_exceptions.append(exc)
+                    connection_exceptions.append(attempt_exceptions)
+                    created_sock.close()
+                    created_sock = None
+                except BaseException:
+                    created_sock.close()
+                    raise
+            if created_sock is None:
+                __raise_connection_error(
+                    __flatten_connection_exceptions(connection_exceptions),
+                    all_errors=all_errors,
+                )
+        else:
+            created_sock, pending, connection_exceptions = await __connect_with_happy_eyeballs(
+                self,
+                addrinfos,
+                local_addrinfos,
+                happy_eyeballs_delay,
+            )
+            for task, (pending_sock, _) in pending.items():
+                task.cancel()
+                pending_sock.close()
+            if pending:
+                await __asyncio.gather(*pending, return_exceptions=True)
+            if created_sock is None:
+                __raise_connection_error(
+                    __flatten_connection_exceptions(connection_exceptions),
+                    all_errors=all_errors,
+                )
+
+        sock = created_sock
+    elif sock is None:
+        raise ValueError("host and port was not specified and no sock specified")
+
+    try:
+        return await __ORIG_CREATE_CONNECTION(
+            self,
+            protocol_factory,
+            ssl=ssl,
+            family=family,
+            proto=proto,
+            flags=flags,
+            sock=sock,
+            server_hostname=server_hostname,
+            ssl_handshake_timeout=ssl_handshake_timeout,
+            ssl_shutdown_timeout=ssl_shutdown_timeout,
+        )
+    except BaseException:
+        if created_sock is not None:
+            created_sock.close()
+        raise
+
+
+if Loop.create_connection is __ORIG_CREATE_CONNECTION:
+    Loop.create_connection = __loop_create_connection
 
 
 def __install_ssl_tracking() -> None:

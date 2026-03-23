@@ -20,7 +20,7 @@ use std::time::Duration;
 use compio::net::PollFd;
 #[cfg(target_os = "linux")]
 use compio::time::sleep as compio_sleep;
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyTimeoutError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyByteArrayMethods, PyBytes, PyDict, PySlice, PyString, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
@@ -664,6 +664,7 @@ impl TlsConnectionKind {
 struct TlsIoState {
     stream: StreamKind,
     connection: TlsConnectionKind,
+    shutdown_timeout: Duration,
 }
 
 impl TlsIoState {
@@ -2671,6 +2672,7 @@ fn spawn_tls_client_transport(
         TlsConnectionKind::Client(connection),
         tls_extra(py, &tls.ssl_context),
         tls.handshake_timeout,
+        tls.shutdown_timeout,
         server,
         call_connection_made,
     )
@@ -2693,6 +2695,7 @@ fn spawn_tls_server_transport(
         TlsConnectionKind::Server(connection),
         tls_extra(py, &tls.ssl_context),
         tls.handshake_timeout,
+        tls.shutdown_timeout,
         server,
         call_connection_made,
     )
@@ -2705,6 +2708,7 @@ fn spawn_tls_transport(
     connection: TlsConnectionKind,
     tls_extra: HashMap<String, Py<PyAny>>,
     handshake_timeout: Duration,
+    shutdown_timeout: Duration,
     server: Option<Weak<ServerCore>>,
     call_connection_made: bool,
 ) -> PyResult<Py<PyStreamTransport>> {
@@ -2730,7 +2734,11 @@ fn spawn_tls_transport(
     let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
     let (writer_tx, writer_rx) = mpsc::channel();
     let stream_fd = stream.fd();
-    let tls_state = Arc::new(Mutex::new(TlsIoState { stream, connection }));
+    let tls_state = Arc::new(Mutex::new(TlsIoState {
+        stream,
+        connection,
+        shutdown_timeout,
+    }));
 
     py.detach(|| complete_tls_handshake(&tls_state, handshake_timeout))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -2879,6 +2887,7 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                                 ServerTlsSettings {
                                     config: Arc::clone(&tls.config),
                                     handshake_timeout: tls.handshake_timeout,
+                                    shutdown_timeout: tls.shutdown_timeout,
                                     ssl_context: tls.ssl_context.clone_ref(py),
                                 },
                                 Some(Arc::downgrade(&server)),
@@ -2985,6 +2994,7 @@ async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) 
                                 ServerTlsSettings {
                                     config: Arc::clone(&tls.config),
                                     handshake_timeout: tls.handshake_timeout,
+                                    shutdown_timeout: tls.shutdown_timeout,
                                     ssl_context: tls.ssl_context.clone_ref(py),
                                 },
                                 Some(Arc::downgrade(&server)),
@@ -3065,6 +3075,7 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
                                 ServerTlsSettings {
                                     config: Arc::clone(&tls.config),
                                     handshake_timeout: tls.handshake_timeout,
+                                    shutdown_timeout: tls.shutdown_timeout,
                                     ssl_context: tls.ssl_context.clone_ref(py),
                                 },
                                 Some(Arc::downgrade(&server)),
@@ -3148,6 +3159,7 @@ async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener
                                 ServerTlsSettings {
                                     config: Arc::clone(&tls.config),
                                     handshake_timeout: tls.handshake_timeout,
+                                    shutdown_timeout: tls.shutdown_timeout,
                                     ssl_context: tls.ssl_context.clone_ref(py),
                                 },
                                 Some(Arc::downgrade(&server)),
@@ -3659,11 +3671,34 @@ fn run_tls_writer(
                 }
             }
             WriterCommand::WriteEof => {}
-            WriterCommand::Close | WriterCommand::Abort => {
-                {
+            WriterCommand::Close => {
+                let close_result = {
                     let mut state = tls_state.lock().expect("poisoned tls state");
+                    let shutdown_timeout = state.shutdown_timeout;
                     state.connection.send_close_notify();
-                    let _ = flush_tls_io_locked(&mut state);
+                    let result = flush_tls_close_io_locked(&mut state, shutdown_timeout);
+                    let _ = state.shutdown_close();
+                    result
+                };
+                match close_result {
+                    Ok(()) => {
+                        let _ = core.connection_lost(None);
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::TimedOut => {
+                        let _ = core.connection_lost(Some(PyTimeoutError::new_err(
+                            "SSL shutdown timed out",
+                        )));
+                    }
+                    Err(err) => {
+                        let _ =
+                            core.connection_lost(Some(PyRuntimeError::new_err(err.to_string())));
+                    }
+                }
+                return;
+            }
+            WriterCommand::Abort => {
+                {
+                    let state = tls_state.lock().expect("poisoned tls state");
                     let _ = state.shutdown_close();
                 }
                 let _ = core.connection_lost(None);
@@ -3727,6 +3762,29 @@ fn flush_tls_io_locked(state: &mut TlsIoState) -> io::Result<()> {
     Ok(())
 }
 
+fn flush_tls_close_io_locked(state: &mut TlsIoState, timeout: Duration) -> io::Result<()> {
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(std::time::Instant::now);
+    while state.connection.wants_write() {
+        match state.write_tls() {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to flush TLS records",
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                wait_socket_ready_until(state.fd(), state.pollable(), false, true, deadline)?;
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
 fn wait_socket_ready(fd: fd_ops::RawFd, pollable: bool, read: bool, write: bool) -> io::Result<()> {
     if pollable {
         loop {
@@ -3742,6 +3800,49 @@ fn wait_socket_ready(fd: fd_ops::RawFd, pollable: bool, read: bool, write: bool)
         }
     }
 
+    thread::sleep(Duration::from_millis(10));
+    Ok(())
+}
+
+fn wait_socket_ready_until(
+    fd: fd_ops::RawFd,
+    pollable: bool,
+    read: bool,
+    write: bool,
+    deadline: std::time::Instant,
+) -> io::Result<()> {
+    if pollable {
+        loop {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "SSL shutdown timed out",
+                ));
+            }
+
+            let remaining_ms = deadline
+                .saturating_duration_since(now)
+                .as_millis()
+                .clamp(1, i32::MAX as u128) as i32;
+            match fd_ops::poll_fd(fd, read, write, remaining_ms) {
+                Ok((read_ready, write_ready))
+                    if (!read || read_ready) && (!write || write_ready) =>
+                {
+                    return Ok(());
+                }
+                Ok(_) => continue,
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    if std::time::Instant::now() >= deadline {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "SSL shutdown timed out",
+        ));
+    }
     thread::sleep(Duration::from_millis(10));
     Ok(())
 }
