@@ -135,9 +135,7 @@ def __raise_connection_error(exceptions, *, all_errors):
     if all(str(exc) == model for exc in exceptions):
         raise exceptions[0]
 
-    raise OSError(
-        "Multiple exceptions: " + ", ".join(str(exc) for exc in exceptions)
-    )
+    raise OSError("Multiple exceptions: " + ", ".join(str(exc) for exc in exceptions))
 
 
 def __bind_error(address, exc):
@@ -264,7 +262,9 @@ async def __loop_create_connection(
         raise ValueError("server_hostname is only meaningful with ssl")
     if server_hostname is None and ssl:
         if not host:
-            raise ValueError("You must set server_hostname when using ssl without a host")
+            raise ValueError(
+                "You must set server_hostname when using ssl without a host"
+            )
         server_hostname = host
     if ssl_handshake_timeout is not None and not ssl:
         raise ValueError("ssl_handshake_timeout is only meaningful with ssl")
@@ -331,7 +331,11 @@ async def __loop_create_connection(
                     all_errors=all_errors,
                 )
         else:
-            created_sock, pending, connection_exceptions = await __connect_with_happy_eyeballs(
+            (
+                created_sock,
+                pending,
+                connection_exceptions,
+            ) = await __connect_with_happy_eyeballs(
                 self,
                 addrinfos,
                 local_addrinfos,

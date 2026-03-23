@@ -26,7 +26,9 @@ class CompatibilityTests(unittest.TestCase):
                 raise OSError(errno.ECONNREFUSED, f"connect failed: {address!r}")
 
             with mock.patch("socket.getaddrinfo", new=fake_getaddrinfo):
-                with mock.patch.object(rsloop.Loop, "sock_connect", new=fake_sock_connect):
+                with mock.patch.object(
+                    rsloop.Loop, "sock_connect", new=fake_sock_connect
+                ):
                     with self.assertRaises(ExceptionGroup) as ctx:
                         await loop.create_connection(
                             asyncio.Protocol,
@@ -59,7 +61,9 @@ class CompatibilityTests(unittest.TestCase):
                 raise OSError(errno.ECONNREFUSED, "boom")
 
             with mock.patch("socket.getaddrinfo", new=fake_getaddrinfo):
-                with mock.patch.object(rsloop.Loop, "sock_connect", new=fake_sock_connect):
+                with mock.patch.object(
+                    rsloop.Loop, "sock_connect", new=fake_sock_connect
+                ):
                     with self.assertRaises(OSError):
                         await loop.create_connection(
                             asyncio.Protocol,
@@ -96,8 +100,20 @@ class CompatibilityTests(unittest.TestCase):
 
                 def fake_getaddrinfo(*args, **kwargs):
                     return [
-                        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", slow_port)),
-                        (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", port)),
+                        (
+                            socket.AF_INET,
+                            socket.SOCK_STREAM,
+                            0,
+                            "",
+                            ("127.0.0.1", slow_port),
+                        ),
+                        (
+                            socket.AF_INET,
+                            socket.SOCK_STREAM,
+                            0,
+                            "",
+                            ("127.0.0.1", port),
+                        ),
                     ]
 
                 async def fake_sock_connect(self, sock, address):
@@ -126,7 +142,9 @@ class CompatibilityTests(unittest.TestCase):
 
         self.assertLess(rsloop.run(main()), 0.15)
 
-    def test_shutdown_default_executor_timeout_warns_and_falls_back_to_nowait(self) -> None:
+    def test_shutdown_default_executor_timeout_warns_and_falls_back_to_nowait(
+        self,
+    ) -> None:
         async def main() -> tuple[list[bool], list[str]]:
             loop = asyncio.get_running_loop()
             calls = []
