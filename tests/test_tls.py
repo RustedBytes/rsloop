@@ -50,9 +50,11 @@ class TlsTests(unittest.TestCase):
         self.assertTrue(context.__dict__.get("_rsloop_use_default_verify_paths"))
 
     def test_create_connection_and_server_tls_round_trip(self) -> None:
-        async def main() -> str:
+        async def main() -> tuple[str, tuple[int, ...]]:
             loop = asyncio.get_running_loop()
             done: asyncio.Future[str] = loop.create_future()
+            result = ""
+            server_fds: tuple[int, ...] = ()
 
             class ServerProtocol(asyncio.Protocol):
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -104,17 +106,24 @@ class TlsTests(unittest.TestCase):
                         await asyncio.wait_for(client_protocol.result, 5.0), "TLS-OK"
                     )
                     self.assertEqual(await asyncio.wait_for(done, 5.0), "server-closed")
-                    return "ok"
+                    result = "ok"
                 finally:
                     server.close()
                     await server.wait_closed()
+                    server_fds = tuple(sock.fileno() for sock in server.sockets)
 
-        self.assertEqual(rsloop.run(main()), "ok")
+            return result, server_fds
+
+        result, server_fds = rsloop.run(main())
+        self.assertEqual(result, "ok")
+        self.assertEqual(server_fds, (-1,))
 
     @unittest.skipIf(os.name == "nt", "Unix sockets are Unix-only")
     def test_create_unix_connection_and_server_tls_round_trip(self) -> None:
-        async def main() -> str:
+        async def main() -> tuple[str, tuple[int, ...]]:
             loop = asyncio.get_running_loop()
+            result = ""
+            server_fds: tuple[int, ...] = ()
 
             class ServerProtocol(asyncio.Protocol):
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -155,12 +164,17 @@ class TlsTests(unittest.TestCase):
                         ssl=client_ctx,
                         server_hostname="localhost",
                     )
-                    return await asyncio.wait_for(client_protocol.done, 5.0)
+                    result = await asyncio.wait_for(client_protocol.done, 5.0)
                 finally:
                     server.close()
                     await server.wait_closed()
+                    server_fds = tuple(sock.fileno() for sock in server.sockets)
 
-        self.assertEqual(rsloop.run(main()), "unix:tls")
+            return result, server_fds
+
+        result, server_fds = rsloop.run(main())
+        self.assertEqual(result, "unix:tls")
+        self.assertEqual(server_fds, (-1,))
 
     def test_connect_accepted_socket_tls_round_trip(self) -> None:
         async def main() -> str:

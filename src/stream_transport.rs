@@ -734,6 +734,19 @@ impl WorkerThread {
 }
 
 impl StreamTransportCore {
+    fn close_extra_socket_with_py(&self, py: Python<'_>) {
+        let socket = self
+            .state
+            .lock()
+            .expect("poisoned transport state")
+            .extra
+            .get("socket")
+            .map(|value| value.clone_ref(py));
+        if let Some(socket) = socket {
+            let _ = socket.bind(py).call_method0("close");
+        }
+    }
+
     fn register_worker(&self, worker: WorkerThread) {
         self.workers
             .lock()
@@ -1089,6 +1102,8 @@ impl StreamTransportCore {
             self.call_protocol_method1(py, &callback, &context, context_needs_run, arg)?;
         }
 
+        self.close_extra_socket_with_py(py);
+
         if let Some(server) = server.and_then(|weak| weak.upgrade()) {
             server.connection_lost();
         }
@@ -1133,7 +1148,8 @@ impl StreamTransportCore {
         }
     }
 
-    fn detach_underlying_stream(&self) {
+    fn detach_underlying_stream(&self, py: Python<'_>) {
+        self.close_extra_socket_with_py(py);
         let mut state = self.state.lock().expect("poisoned transport state");
         state.detached = true;
         state.closing = true;
@@ -1387,7 +1403,7 @@ impl StreamTransportCore {
         let fd = fd_ops::dup_raw_fd(socket.bind(py).call_method0("fileno")?.extract()?)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
 
-        self.detach_underlying_stream();
+        self.detach_underlying_stream(py);
         let _ = self.writer_tx.send(WriterCommand::Stop);
         if let Some(fd) = self.runtime_socket_fd() {
             let _ = self
@@ -1529,6 +1545,15 @@ impl StreamTransportCore {
 }
 
 impl ServerCore {
+    fn close_python_sockets(&self) {
+        let _ = Python::try_attach(|py| -> PyResult<()> {
+            for socket in &self.sockets {
+                let _ = socket.bind(py).call_method0("close");
+            }
+            Ok(())
+        });
+    }
+
     fn report_error(&self, err: PyErr, message: &str) {
         let _ = Python::try_attach(|py| -> PyResult<()> {
             let context = PyDict::new(py);
@@ -1581,6 +1606,8 @@ impl ServerCore {
             state.serving = false;
             state.listeners.clear();
         }
+
+        self.close_python_sockets();
 
         for task in self
             .accept_tasks
@@ -1997,16 +2024,7 @@ fn socket_from_owned_raw(fd: fd_ops::RawFd) -> PyResult<Socket> {
 }
 
 fn detached_socket_handle(py: Python<'_>, socket_obj: &Py<PyAny>) -> PyResult<fd_ops::RawFd> {
-    #[cfg(windows)]
-    {
-        return socket_obj.call_method0(py, "fileno")?.extract(py);
-    }
-
-    #[cfg(not(windows))]
-    {
-        let dup = socket_obj.call_method0(py, "dup")?;
-        dup.call_method0(py, "detach")?.extract(py)
-    }
+    socket_obj.call_method0(py, "detach")?.extract(py)
 }
 
 fn tcp_family(stream: &StdTcpStream) -> c_int {

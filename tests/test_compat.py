@@ -80,7 +80,7 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(rsloop.run(main()), [42001, 42003, 42002, 42004])
 
     def test_create_connection_happy_eyeballs_staggers_attempts(self) -> None:
-        async def main() -> float:
+        async def main() -> tuple[float, int]:
             loop = asyncio.get_running_loop()
             done = loop.create_future()
 
@@ -139,12 +139,16 @@ class CompatibilityTests(unittest.TestCase):
                         )
                         await asyncio.wait_for(done, 1.0)
                         transport.close()
-                return time.monotonic() - started
+                        await asyncio.sleep(0)
+                        socket_fileno = transport.get_extra_info("socket").fileno()
+                return time.monotonic() - started, socket_fileno
             finally:
                 server.close()
                 await server.wait_closed()
 
-        self.assertLess(rsloop.run(main()), 0.15)
+        elapsed, socket_fileno = rsloop.run(main())
+        self.assertLess(elapsed, 0.15)
+        self.assertEqual(socket_fileno, -1)
 
     def test_shutdown_default_executor_timeout_warns_and_falls_back_to_nowait(
         self,
@@ -161,6 +165,7 @@ class CompatibilityTests(unittest.TestCase):
                         time.sleep(0.2)
 
             loop.set_default_executor(DummyExecutor())
+
             def capture_warning(message, category=None, stacklevel=1, source=None):
                 messages.append(str(message))
                 return None
