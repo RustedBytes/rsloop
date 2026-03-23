@@ -64,7 +64,7 @@ PYTHON_VERSIONS=("${RSLOOP_PYTHON_VERSIONS[@]}")
 
 cd "$ROOT_DIR"
 
-if (( GENERATE_TLS_CERTS )) && [[ ! -f "tests/fixtures/tls/ca-cert.pem" ]]; then
+if (( GENERATE_TLS_CERTS )); then
   echo "Generating TLS test certificates"
   "${ROOT_DIR}/scripts/generate-test-tls-certs.sh"
 fi

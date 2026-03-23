@@ -18,6 +18,7 @@ import locale as __locale
 import warnings as __warnings
 import asyncio.base_events as __asyncio_base_events
 import io as __io
+import inspect as __inspect
 
 __DLL_DIR_HANDLES: list[object] = []
 
@@ -152,9 +153,20 @@ __ORIG_RUN_FOREVER = Loop.run_forever
 __ORIG_RUN_UNTIL_COMPLETE = Loop.run_until_complete
 __ORIG_SHUTDOWN_ASYNCGENS = Loop.shutdown_asyncgens
 __ORIG_CLOSE = Loop.close
+__ORIG_CREATE_TASK = Loop.create_task
 __USE_FAST_STREAMS = __os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
 __ASYNCGEN_STATE: dict[Loop, dict[str, object]] = {}
 __LOOP_CONFIG: dict[Loop, dict[str, object]] = {}
+
+try:
+    __TASK_SIGNATURE = __inspect.signature(__asyncio.Task)
+    __TASK_KWARGS = {
+        name
+        for name, parameter in __TASK_SIGNATURE.parameters.items()
+        if parameter.kind is __inspect.Parameter.KEYWORD_ONLY
+    }
+except (TypeError, ValueError):
+    __TASK_KWARGS = {"loop", "name"}
 
 
 if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
@@ -272,6 +284,41 @@ def __loop_close(self):
     finally:
         __ASYNCGEN_STATE.pop(self, None)
         __LOOP_CONFIG.pop(self, None)
+
+
+def __loop_create_task(self, coro, *, name=None, context=None, **kwargs):
+    factory = self.get_task_factory()
+    if factory is not None:
+        factory_kwargs = dict(kwargs)
+        factory_kwargs["name"] = name
+        if context is not None:
+            factory_kwargs["context"] = context
+        task = factory(self, coro, **factory_kwargs)
+        return task
+
+    task_kwargs = {}
+    extra_kwargs = dict(kwargs)
+
+    if "name" in __TASK_KWARGS:
+        task_kwargs["name"] = name
+    if context is not None and "context" in __TASK_KWARGS:
+        task_kwargs["context"] = context
+    if "eager_start" in extra_kwargs:
+        eager_start = extra_kwargs.pop("eager_start")
+        if "eager_start" in __TASK_KWARGS:
+            task_kwargs["eager_start"] = eager_start
+
+    if extra_kwargs:
+        unexpected = next(iter(extra_kwargs))
+        raise TypeError(
+            f"create_task() got an unexpected keyword argument {unexpected!r}"
+        )
+
+    task = __asyncio.Task(coro, loop=self, **task_kwargs)
+    source_traceback = getattr(task, "_source_traceback", None)
+    if source_traceback:
+        del source_traceback[-1]
+    return task
 
 
 def __cancel_all_tasks(loop: Loop) -> None:
@@ -1527,6 +1574,9 @@ if Loop.shutdown_asyncgens is __ORIG_SHUTDOWN_ASYNCGENS:
 
 if Loop.close is __ORIG_CLOSE:
     Loop.close = __loop_close
+
+if Loop.create_task is __ORIG_CREATE_TASK:
+    Loop.create_task = __loop_create_task
 
 
 def __install_ssl_tracking() -> None:

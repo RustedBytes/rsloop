@@ -7,5 +7,5 @@ fmt:
     uv run ruff format .
     cargo fmt --all
 
-test:
+test: tls-test-certs
     uv run python -m unittest discover -s tests

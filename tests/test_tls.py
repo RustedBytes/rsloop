@@ -5,6 +5,7 @@ import os
 import pathlib
 import socket
 import ssl
+import subprocess
 import tempfile
 import unittest
 
@@ -12,6 +13,22 @@ import rsloop
 
 
 TLS_FIXTURES_DIR = pathlib.Path(__file__).with_name("fixtures").joinpath("tls")
+TLS_GENERATOR = pathlib.Path(__file__).resolve().parents[1].joinpath(
+    "scripts", "generate-test-tls-certs.sh"
+)
+
+
+def ensure_tls_fixtures() -> None:
+    if all(
+        TLS_FIXTURES_DIR.joinpath(name).is_file()
+        for name in ("ca-cert.pem", "cert.pem", "key.pem")
+    ):
+        return
+
+    subprocess.run([str(TLS_GENERATOR), str(TLS_FIXTURES_DIR)], check=True)
+
+
+ensure_tls_fixtures()
 
 
 def make_cert_files(tmpdir: str) -> tuple[str, str, str]:
