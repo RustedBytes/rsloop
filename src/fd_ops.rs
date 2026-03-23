@@ -1,6 +1,8 @@
 use std::io;
+#[cfg(not(windows))]
 use std::thread;
 
+#[cfg(not(windows))]
 use futures::channel::oneshot;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -9,13 +11,17 @@ use socket2::Socket;
 #[cfg(windows)]
 use std::mem;
 #[cfg(windows)]
+use std::net::TcpStream as StdTcpStream;
+#[cfg(windows)]
 use std::os::windows::io::{FromRawSocket, IntoRawSocket};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{
     DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
 };
 #[cfg(windows)]
-use windows_sys::Win32::Networking::WinSock::{select, FD_SET, SOCKET, SOCKET_ERROR, TIMEVAL};
+use windows_sys::Win32::Networking::WinSock::{
+    select as winsock_select, FD_SET, SOCKET, SOCKET_ERROR, TIMEVAL,
+};
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -171,7 +177,7 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     let mut writefds = new_fd_set(socket, write);
 
     let ready = unsafe {
-        select(
+        winsock_select(
             0,
             if read {
                 &mut readfds
@@ -195,6 +201,33 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
 }
 
 pub async fn wait_readable(fd: RawFd) -> PyResult<()> {
+    #[cfg(windows)]
+    {
+        if let Ok(stream) = duplicate_tcp_stream(fd) {
+            if stream.peer_addr().is_ok() {
+                let (tx, rx) = futures::channel::oneshot::channel();
+                let task = crate::windows_vibeio::spawn(move || async move {
+                    let result = async {
+                        let stream = vibeio::net::PollTcpStream::from_std(stream)?;
+                        let mut buf = [0_u8; 1];
+                        stream.peek(&mut buf).await.map(|_| ())
+                    }
+                    .await;
+                    let _ = tx.send(result);
+                });
+
+                if let Ok(task) = task {
+                    let result = rx
+                        .await
+                        .map_err(|_| PyRuntimeError::new_err("vibeio wait dropped"))?
+                        .map_err(|err| PyRuntimeError::new_err(err.to_string()));
+                    crate::windows_vibeio::cancel(task);
+                    return result;
+                }
+            }
+        }
+    }
+
     wait_for_interest(fd, true, false).await
 }
 
@@ -203,25 +236,43 @@ pub async fn wait_writable(fd: RawFd) -> PyResult<()> {
 }
 
 async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
-    let (tx, rx) = oneshot::channel();
-    thread::Builder::new()
-        .name(format!("rsloop-fd-wait-{fd}"))
-        .spawn(move || {
-            let result = loop {
-                match poll_fd(fd, read, write, 50) {
-                    Ok((true, _)) if read => break Ok(()),
-                    Ok((_, true)) if write => break Ok(()),
-                    Ok(_) => continue,
-                    Err(err) => break Err(err),
+    #[cfg(windows)]
+    {
+        return crate::blocking::run(format!("rsloop-fd-wait-{fd}"), move || loop {
+            match poll_fd(fd, read, write, 50)? {
+                (read_ready, write_ready) if (!read || read_ready) && (!write || write_ready) => {
+                    return Ok::<(), io::Error>(());
                 }
-            };
-            let _ = tx.send(result);
+                _ => {}
+            }
         })
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+        .await
+        .map_err(PyRuntimeError::new_err)?
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()));
+    }
 
-    rx.await
-        .map_err(|_| PyRuntimeError::new_err("fd wait worker dropped"))?
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    #[cfg(not(windows))]
+    {
+        let (tx, rx) = oneshot::channel();
+        thread::Builder::new()
+            .name(format!("rsloop-fd-wait-{fd}"))
+            .spawn(move || {
+                let result = loop {
+                    match poll_fd(fd, read, write, 50) {
+                        Ok((true, _)) if read => break Ok(()),
+                        Ok((_, true)) if write => break Ok(()),
+                        Ok(_) => continue,
+                        Err(err) => break Err(err),
+                    }
+                };
+                let _ = tx.send(result);
+            })
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+
+        rx.await
+            .map_err(|_| PyRuntimeError::new_err("fd wait worker dropped"))?
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    }
 }
 
 pub fn is_retryable_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bool> {
@@ -250,4 +301,13 @@ fn new_fd_set(socket: SOCKET, enabled: bool) -> FD_SET {
         set.fd_array[0] = socket;
     }
     set
+}
+
+#[cfg(windows)]
+pub fn duplicate_tcp_stream(fd: RawFd) -> io::Result<StdTcpStream> {
+    let dup = duplicate_socket(fd)?;
+    let socket = raw_fd_to_socket(dup)?;
+    let socket = unsafe { Socket::from_raw_socket(socket as _) };
+    socket.set_nonblocking(true)?;
+    Ok(socket.into())
 }

@@ -8,7 +8,9 @@ use std::os::raw::c_int;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, AsRawSocket, FromRawHandle, FromRawSocket, RawSocket};
+use std::os::windows::io::{
+    AsRawHandle, AsRawSocket, FromRawHandle, FromRawSocket, IntoRawSocket, RawSocket,
+};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -26,6 +28,10 @@ use pyo3::types::{PyByteArray, PyByteArrayMethods, PyBytes, PyDict, PySlice, PyS
 use pyo3_async_runtimes::TaskLocals;
 use rustls::{ClientConnection, ServerConnection};
 use socket2::Socket;
+#[cfg(windows)]
+use tokio::io::AsyncReadExt;
+#[cfg(windows)]
+use vibeio::net::{PollTcpStream as VibePollTcpStream, TcpListener as VibeTcpListener};
 
 use crate::async_event::AsyncEvent;
 use crate::context::{ensure_running_loop, run_in_context};
@@ -2967,10 +2973,11 @@ pub(crate) fn run_server_accept_blocking(
 
 #[cfg(target_os = "linux")]
 async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
-    let Ok(poll_fd) = listener
+    let poll_fd = listener
         .try_clone()
-        .and_then(|listener| PollFd::new(listener))
-    else {
+        .and_then(|listener| PollFd::new(listener));
+
+    let Ok(poll_fd) = poll_fd else {
         return;
     };
 
@@ -2990,7 +2997,8 @@ async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) 
         }
 
         loop {
-            match listener.accept() {
+            let accept_result = listener.accept();
+            match accept_result {
                 Ok((stream, _addr)) => {
                     let _ = stream.set_nonblocking(true);
                     let _ = stream.set_nodelay(true);
@@ -3045,6 +3053,84 @@ async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) 
                     }
                     return;
                 }
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
+    let listener = match VibeTcpListener::from_std(listener) {
+        Ok(listener) => listener,
+        Err(err) => {
+            if !server.is_closed() {
+                server.report_error(
+                    PyRuntimeError::new_err(err.to_string()),
+                    "TCP server accept failed",
+                );
+            }
+            return;
+        }
+    };
+
+    loop {
+        if server.is_closed() {
+            return;
+        }
+
+        match listener.accept().await {
+            Ok((stream, _addr)) => {
+                let raw = stream.into_raw_socket();
+                let stream = unsafe { StdTcpStream::from_raw_socket(raw) };
+                let _ = stream.set_nonblocking(true);
+                let _ = stream.set_nodelay(true);
+                let result = Python::try_attach(|py| -> PyResult<_> {
+                    let protocol = server.create_protocol_with_py(py)?;
+                    let context = server.context.clone_ref(py);
+                    let spawn_context = TransportSpawnContext {
+                        loop_core: Arc::clone(&server.loop_core),
+                        loop_obj: server.loop_obj.clone_ref(py),
+                        protocol,
+                        context,
+                        context_needs_run: server.context_needs_run,
+                    };
+                    if let Some(tls) = server.tls.as_ref() {
+                        spawn_tls_server_transport(
+                            py,
+                            spawn_context,
+                            StreamKind::Tcp(stream),
+                            ServerTlsSettings {
+                                config: Arc::clone(&tls.config),
+                                handshake_timeout: tls.handshake_timeout,
+                                shutdown_timeout: tls.shutdown_timeout,
+                                ssl_context: tls.ssl_context.clone_ref(py),
+                            },
+                            Some(Arc::downgrade(&server)),
+                            true,
+                        )
+                    } else {
+                        spawn_tcp_transport(
+                            py,
+                            spawn_context,
+                            stream,
+                            Some(Arc::downgrade(&server)),
+                        )
+                    }
+                });
+                match result {
+                    Some(Ok(_)) => {}
+                    Some(Err(err)) => server.report_error(err, "failed to accept TCP connection"),
+                    None => return,
+                }
+            }
+            Err(err) => {
+                if !server.is_closed() {
+                    server.report_error(
+                        PyRuntimeError::new_err(err.to_string()),
+                        "TCP server accept failed",
+                    );
+                }
+                return;
             }
         }
     }
@@ -3131,7 +3217,7 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
     }
 }
 
-#[cfg(all(target_os = "linux", unix))]
+#[cfg(target_os = "linux")]
 async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener) {
     let Ok(poll_fd) = listener
         .try_clone()
@@ -3391,6 +3477,55 @@ pub(crate) async fn run_socket_reader_task(
         }
 
         match reader.read(&mut buf) {
+            Ok(0) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                return;
+            }
+            Ok(n) => core
+                .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+pub(crate) async fn run_tcp_socket_reader_task(
+    core: Arc<StreamTransportCore>,
+    stream: StdTcpStream,
+) {
+    let mut reader = match VibePollTcpStream::from_std(stream) {
+        Ok(reader) => reader,
+        Err(err) => {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                err.to_string(),
+            )));
+            return;
+        }
+    };
+    let mut buf = vec![0_u8; 65_536];
+
+    loop {
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        while !core.is_closing() && !core.is_reading() {
+            thread::sleep(Duration::from_millis(1));
+        }
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        match reader.read(&mut buf).await {
             Ok(0) => {
                 core.enqueue_pending_read_event(PendingReadEvent::Eof);
                 return;

@@ -13,6 +13,8 @@ mod python_names;
 mod runtime;
 mod stream_transport;
 mod tls;
+#[cfg(windows)]
+mod windows_vibeio;
 
 pub use callbacks::{PyHandle, PyTimerHandle, ReadyCallback};
 pub use fast_streams::{open_connection, start_server, PyFastStreamReader, PyFastStreamWriter};
