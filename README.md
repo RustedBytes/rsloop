@@ -297,3 +297,15 @@ asyncio        0.138408     0.134438         36,125        1.16x
 
 See `benchmarks/README.md` for workload details and extra flags, and
 `demo/README.md` for the FastAPI loop comparison demo.
+
+## Acknowledgements
+
+`rsloop` builds on the Python `asyncio` model and is implemented with
+[PyO3](https://pyo3.rs/) on the Rust side. The runtime and I/O work in the
+current implementation rely in part on
+[compio](https://github.com/compio-rs/compio).
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. See
+[`LICENSE`](./LICENSE) for the full text.
