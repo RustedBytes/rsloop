@@ -152,6 +152,7 @@ class CompatibilityTests(unittest.TestCase):
         async def main() -> tuple[list[bool], list[str]]:
             loop = asyncio.get_running_loop()
             calls = []
+            messages = []
 
             class DummyExecutor:
                 def shutdown(self, wait):
@@ -160,10 +161,13 @@ class CompatibilityTests(unittest.TestCase):
                         time.sleep(0.2)
 
             loop.set_default_executor(DummyExecutor())
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
+            def capture_warning(message, category=None, stacklevel=1, source=None):
+                messages.append(str(message))
+                return None
+
+            with mock.patch.object(warnings, "warn", side_effect=capture_warning):
                 await loop.shutdown_default_executor(timeout=0.01)
-            return calls, [str(item.message) for item in caught]
+            return calls, messages
 
         calls, messages = rsloop.run(main())
         self.assertEqual(calls, [True, False])
