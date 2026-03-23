@@ -1099,8 +1099,26 @@ impl PyLoop {
         self.core.schedule_stop().map_err(Self::map_loop_error)
     }
 
-    fn close(&self) -> PyResult<()> {
-        self.core.close().map_err(Self::map_loop_error)
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        let executor = {
+            let mut state = self.core.state.lock().expect("poisoned loop state");
+            if state.running {
+                return Err(Self::map_loop_error(LoopCoreError::Running));
+            }
+            if state.closed {
+                return Ok(());
+            }
+            state.executor_shutdown_called = true;
+            state.default_executor.take()
+        };
+
+        self.core.close().map_err(Self::map_loop_error)?;
+
+        if let Some(executor) = executor {
+            executor.call_method1(py, "shutdown", (false,))?;
+        }
+
+        Ok(())
     }
 
     fn is_running(&self) -> bool {
@@ -2106,35 +2124,24 @@ impl PyLoop {
         proto: i32,
         flags: i32,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let locals = Self::task_locals(py, &slf)?;
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
-            crate::blocking::run("rsloop-getaddrinfo", move || {
-                Python::attach(|py| -> PyResult<Py<PyAny>> {
-                    let socket = py.import("socket")?;
-                    let kwargs = PyDict::new(py);
-                    kwargs.set_item("family", family)?;
-                    kwargs.set_item("type", r#type)?;
-                    kwargs.set_item("proto", proto)?;
-                    kwargs.set_item("flags", flags)?;
-
-                    let host = host
-                        .as_ref()
-                        .map(|value| value.clone_ref(py))
-                        .unwrap_or_else(|| py.None());
-                    let port = port
-                        .as_ref()
-                        .map(|value| value.clone_ref(py))
-                        .unwrap_or_else(|| py.None());
-
-                    Ok(socket
-                        .getattr("getaddrinfo")?
-                        .call((host, port), Some(&kwargs))?
-                        .unbind())
-                })
-            })
-            .await
-            .map_err(PyRuntimeError::new_err)?
-        })
+        let socket = py.import("socket")?;
+        let host = host.unwrap_or_else(|| py.None());
+        let port = port.unwrap_or_else(|| py.None());
+        let run_args = PyTuple::new(
+            py,
+            [
+                py.None(),
+                socket.getattr("getaddrinfo")?.unbind(),
+                host,
+                port,
+                family.into_pyobject(py)?.unbind().into(),
+                r#type.into_pyobject(py)?.unbind().into(),
+                proto.into_pyobject(py)?.unbind().into(),
+                flags.into_pyobject(py)?.unbind().into(),
+            ],
+        )?;
+        slf.call_method1(py, "run_in_executor", run_args)
+            .map(|awaitable| awaitable.into_bound(py))
     }
 
     #[pyo3(signature=(sockaddr, flags=0))]
@@ -2144,20 +2151,18 @@ impl PyLoop {
         sockaddr: Py<PyAny>,
         flags: i32,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let locals = Self::task_locals(py, &slf)?;
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
-            crate::blocking::run("rsloop-getnameinfo", move || {
-                Python::attach(|py| -> PyResult<Py<PyAny>> {
-                    let socket = py.import("socket")?;
-                    Ok(socket
-                        .getattr("getnameinfo")?
-                        .call1((sockaddr.clone_ref(py), flags))?
-                        .unbind())
-                })
-            })
-            .await
-            .map_err(PyRuntimeError::new_err)?
-        })
+        let socket = py.import("socket")?;
+        let run_args = PyTuple::new(
+            py,
+            [
+                py.None(),
+                socket.getattr("getnameinfo")?.unbind(),
+                sockaddr,
+                flags.into_pyobject(py)?.unbind().into(),
+            ],
+        )?;
+        slf.call_method1(py, "run_in_executor", run_args)
+            .map(|awaitable| awaitable.into_bound(py))
     }
 
     #[pyo3(signature=(executor, func, *args))]
@@ -2168,16 +2173,19 @@ impl PyLoop {
         func: Py<PyAny>,
         args: &Bound<'py, PyTuple>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let selected_executor = executor.or_else(|| {
-            slf.borrow(py)
-                .core
-                .state
-                .lock()
-                .expect("poisoned loop state")
+        let selected_executor = if let Some(executor) = executor {
+            Some(executor)
+        } else {
+            let core = slf.borrow(py).core.clone();
+            let state = core.state.lock().expect("poisoned loop state");
+            if state.executor_shutdown_called {
+                return Err(PyRuntimeError::new_err("Executor shutdown has been called"));
+            }
+            state
                 .default_executor
                 .as_ref()
                 .map(|value| value.clone_ref(py))
-        });
+        };
 
         if let Some(executor) = selected_executor {
             let mut submit_items = Vec::with_capacity(args.len() + 1);
@@ -2535,6 +2543,15 @@ impl PyLoop {
         }
         #[cfg(unix)]
         {
+            let threading = py.import("threading")?;
+            let current_thread = threading.getattr("current_thread")?.call0()?;
+            let main_thread = threading.getattr("main_thread")?.call0()?;
+            if !current_thread.is(&main_thread) {
+                return Err(PyValueError::new_err(
+                    "set_wakeup_fd only works in main thread of the main interpreter",
+                ));
+            }
+
             let loop_ref = slf.borrow(py);
             let core = loop_ref.core.clone();
             drop(loop_ref);

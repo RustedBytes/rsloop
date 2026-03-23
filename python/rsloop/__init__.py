@@ -13,6 +13,7 @@ import ssl as __ssl
 import sys as __sys
 import typing as __typing
 import locale as __locale
+import warnings as __warnings
 
 __DLL_DIR_HANDLES: list[object] = []
 
@@ -130,7 +131,12 @@ __ORIG_START_SERVER = __asyncio.start_server
 __ORIG_CREATE_SUBPROCESS_EXEC = __asyncio.create_subprocess_exec
 __ORIG_CREATE_SUBPROCESS_SHELL = __asyncio.create_subprocess_shell
 __ORIG_CREATE_CONNECTION = Loop.create_connection
+__ORIG_RUN_FOREVER = Loop.run_forever
+__ORIG_RUN_UNTIL_COMPLETE = Loop.run_until_complete
+__ORIG_SHUTDOWN_ASYNCGENS = Loop.shutdown_asyncgens
+__ORIG_CLOSE = Loop.close
 __USE_FAST_STREAMS = __os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
+__ASYNCGEN_STATE: dict[Loop, dict[str, object]] = {}
 
 
 if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
@@ -141,6 +147,98 @@ if __USE_FAST_STREAMS and __asyncio.start_server is __ORIG_START_SERVER:
 _asyncio = __asyncio
 _locale = __locale
 _os = __os
+
+
+def __get_asyncgen_state(loop: Loop) -> dict[str, object]:
+    state = __ASYNCGEN_STATE.get(loop)
+    if state is None:
+        state = {
+            "active": set(),
+            "shutdown_called": False,
+            "old_hooks": None,
+        }
+        __ASYNCGEN_STATE[loop] = state
+    return state
+
+
+@__contextlib.contextmanager
+def __asyncgen_hooks_installed(loop: Loop) -> __typing.Iterator[None]:
+    state = __get_asyncgen_state(loop)
+    old_hooks = __sys.get_asyncgen_hooks()
+    state["old_hooks"] = old_hooks
+    __sys.set_asyncgen_hooks(
+        firstiter=lambda agen: __asyncgen_firstiter_hook(loop, agen),
+        finalizer=lambda agen: __asyncgen_finalizer_hook(loop, agen),
+    )
+    try:
+        yield None
+    finally:
+        saved_hooks = state.get("old_hooks")
+        if saved_hooks is not None:
+            __sys.set_asyncgen_hooks(*saved_hooks)
+            state["old_hooks"] = None
+
+
+def __asyncgen_firstiter_hook(loop: Loop, agen) -> None:
+    state = __get_asyncgen_state(loop)
+    if state["shutdown_called"]:
+        __warnings.warn(
+            f"asynchronous generator {agen!r} was scheduled after "
+            f"loop.shutdown_asyncgens() call",
+            ResourceWarning,
+            source=loop,
+        )
+    state["active"].add(agen)
+
+
+def __asyncgen_finalizer_hook(loop: Loop, agen) -> None:
+    state = __get_asyncgen_state(loop)
+    state["active"].discard(agen)
+    if not loop.is_closed():
+        loop.call_soon_threadsafe(loop.create_task, agen.aclose())
+
+
+async def __loop_shutdown_asyncgens(self):
+    state = __get_asyncgen_state(self)
+    state["shutdown_called"] = True
+
+    if not state["active"]:
+        return
+
+    closing_agens = list(state["active"])
+    state["active"].clear()
+
+    results = await __asyncio.gather(
+        *(agen.aclose() for agen in closing_agens),
+        return_exceptions=True,
+    )
+
+    for result, agen in zip(results, closing_agens):
+        if isinstance(result, Exception):
+            self.call_exception_handler(
+                {
+                    "message": f"an error occurred during closing of asynchronous generator {agen!r}",
+                    "exception": result,
+                    "asyncgen": agen,
+                }
+            )
+
+
+def __loop_run_forever(self):
+    with __asyncgen_hooks_installed(self):
+        return __ORIG_RUN_FOREVER(self)
+
+
+def __loop_run_until_complete(self, future):
+    with __asyncgen_hooks_installed(self):
+        return __ORIG_RUN_UNTIL_COMPLETE(self, future)
+
+
+def __loop_close(self):
+    try:
+        return __ORIG_CLOSE(self)
+    finally:
+        __ASYNCGEN_STATE.pop(self, None)
 
 
 def __subprocess_text_requested(kwds: dict[str, object]) -> bool:
@@ -883,6 +981,18 @@ async def __loop_create_connection(
 
 if Loop.create_connection is __ORIG_CREATE_CONNECTION:
     Loop.create_connection = __loop_create_connection
+
+if Loop.run_forever is __ORIG_RUN_FOREVER:
+    Loop.run_forever = __loop_run_forever
+
+if Loop.run_until_complete is __ORIG_RUN_UNTIL_COMPLETE:
+    Loop.run_until_complete = __loop_run_until_complete
+
+if Loop.shutdown_asyncgens is __ORIG_SHUTDOWN_ASYNCGENS:
+    Loop.shutdown_asyncgens = __loop_shutdown_asyncgens
+
+if Loop.close is __ORIG_CLOSE:
+    Loop.close = __loop_close
 
 
 def __install_ssl_tracking() -> None:

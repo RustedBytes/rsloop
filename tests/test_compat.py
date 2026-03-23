@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import signal
 import socket
 import time
+import threading
 import unittest
 import warnings
 import builtins
@@ -180,6 +182,171 @@ class CompatibilityTests(unittest.TestCase):
             any("within 0.01 seconds" in message for message in messages),
             messages,
         )
+
+    def test_shutdown_default_executor_blocks_later_default_submissions(self) -> None:
+        async def main() -> str:
+            loop = asyncio.get_running_loop()
+
+            class DummyExecutor:
+                def submit(self, func, *args):
+                    raise AssertionError("submit should not be called after shutdown")
+
+                def shutdown(self, wait):
+                    return None
+
+            loop.set_default_executor(DummyExecutor())
+            await loop.shutdown_default_executor()
+
+            try:
+                await loop.run_in_executor(None, lambda: 1)
+            except RuntimeError as exc:
+                return str(exc)
+            raise AssertionError("run_in_executor(None, ...) should fail after shutdown")
+
+        self.assertEqual(
+            rsloop.run(main()),
+            "Executor shutdown has been called",
+        )
+
+    def test_close_shuts_down_default_executor_without_waiting(self) -> None:
+        calls = []
+
+        class DummyExecutor:
+            def shutdown(self, wait):
+                calls.append(wait)
+
+        loop = rsloop.new_event_loop()
+        loop.set_default_executor(DummyExecutor())
+        loop.close()
+        loop.close()
+
+        self.assertEqual(calls, [False])
+
+    def test_shutdown_asyncgens_closes_active_generators(self) -> None:
+        async def main() -> list[str]:
+            loop = asyncio.get_running_loop()
+            events = []
+
+            async def gen():
+                try:
+                    yield "value"
+                    await asyncio.sleep(10)
+                finally:
+                    events.append("closed")
+
+            agen = gen()
+            self.assertEqual(await agen.__anext__(), "value")
+            await loop.shutdown_asyncgens()
+            return events
+
+        self.assertEqual(rsloop.run(main()), ["closed"])
+
+    def test_shutdown_asyncgens_warns_on_new_iteration_after_shutdown(self) -> None:
+        async def main() -> tuple[list[str], list[object]]:
+            loop = asyncio.get_running_loop()
+            messages = []
+            sources = []
+
+            async def gen():
+                try:
+                    yield "value"
+                finally:
+                    pass
+
+            def capture_warning(message, category=None, stacklevel=1, source=None):
+                messages.append(str(message))
+                sources.append(source)
+                return None
+
+            with mock.patch.object(warnings, "warn", side_effect=capture_warning):
+                await loop.shutdown_asyncgens()
+                agen = gen()
+                self.assertEqual(await agen.__anext__(), "value")
+                await agen.aclose()
+
+            return messages, sources
+
+        messages, sources = rsloop.run(main())
+        self.assertTrue(
+            any("shutdown_asyncgens() call" in message for message in messages),
+            messages,
+        )
+        self.assertEqual(len(sources), 1)
+        self.assertIsInstance(sources[0], rsloop.Loop)
+
+    def test_getaddrinfo_and_getnameinfo_use_default_executor(self) -> None:
+        async def main() -> tuple[list[str], tuple[str, str]]:
+            loop = asyncio.get_running_loop()
+            calls = []
+
+            class DummyExecutor:
+                def submit(self, func, *args):
+                    calls.append(func.__name__)
+                    future = __import__("concurrent.futures").futures.Future()
+                    try:
+                        future.set_result(func(*args))
+                    except BaseException as exc:
+                        future.set_exception(exc)
+                    return future
+
+                def shutdown(self, wait):
+                    return None
+
+            loop.set_default_executor(DummyExecutor())
+            addrinfos = await loop.getaddrinfo("localhost", 80, type=socket.SOCK_STREAM)
+            host, service = await loop.getnameinfo(("127.0.0.1", 80))
+            self.assertTrue(addrinfos)
+            return calls, (host, service)
+
+        calls, nameinfo = rsloop.run(main())
+        self.assertEqual(calls, ["getaddrinfo", "getnameinfo"])
+        self.assertEqual(nameinfo[1], "http")
+
+    def test_getaddrinfo_honors_default_executor_shutdown(self) -> None:
+        async def main() -> str:
+            loop = asyncio.get_running_loop()
+
+            class DummyExecutor:
+                def submit(self, func, *args):
+                    raise AssertionError("submit should not be called after shutdown")
+
+                def shutdown(self, wait):
+                    return None
+
+            loop.set_default_executor(DummyExecutor())
+            await loop.shutdown_default_executor()
+            try:
+                await loop.getaddrinfo("localhost", 80)
+            except RuntimeError as exc:
+                return str(exc)
+            raise AssertionError("getaddrinfo should fail after default executor shutdown")
+
+        self.assertEqual(
+            rsloop.run(main()),
+            "Executor shutdown has been called",
+        )
+
+    @unittest.skipUnless(hasattr(signal, "SIGUSR1"), "unix only")
+    def test_add_signal_handler_rejects_non_main_thread(self) -> None:
+        loop = rsloop.new_event_loop()
+        try:
+            errors = []
+
+            def worker():
+                try:
+                    loop.add_signal_handler(signal.SIGUSR1, lambda: None)
+                except BaseException as exc:
+                    errors.append(exc)
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join()
+
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], ValueError)
+            self.assertIn("main thread", str(errors[0]))
+        finally:
+            loop.close()
 
     def test_ssl_shutdown_timeout_requires_ssl(self) -> None:
         async def main() -> tuple[str, str]:
