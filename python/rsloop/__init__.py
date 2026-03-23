@@ -78,6 +78,13 @@ _T = __typing.TypeVar("_T")
 __ORIG_SET_EVENT_LOOP = __asyncio.set_event_loop
 
 
+def __get_event_loop_policy():
+    getter = getattr(__asyncio.events, "_get_event_loop_policy", None)
+    if getter is not None:
+        return getter()
+    return __asyncio.get_event_loop_policy()
+
+
 def __set_event_loop(loop: Loop | None) -> None:
     try:
         __ORIG_SET_EVENT_LOOP(loop)
@@ -89,7 +96,7 @@ def __set_event_loop(loop: Loop | None) -> None:
     # Python 3.8 rejects non-stdlib loop objects in set_event_loop() with a
     # hard isinstance() assertion. Mirror the stdlib policy bookkeeping so
     # get_event_loop() still returns the current rsloop instance.
-    policy = __asyncio.get_event_loop_policy()
+    policy = __get_event_loop_policy()
     local = getattr(policy, "_local", None)
     if local is None:
         raise
@@ -265,6 +272,31 @@ def __loop_close(self):
     finally:
         __ASYNCGEN_STATE.pop(self, None)
         __LOOP_CONFIG.pop(self, None)
+
+
+def __cancel_all_tasks(loop: Loop) -> None:
+    to_cancel = __asyncio.all_tasks(loop)
+    if not to_cancel:
+        return
+
+    for task in to_cancel:
+        task.cancel()
+
+    loop.run_until_complete(__asyncio.gather(*to_cancel, return_exceptions=True))
+
+    for task in to_cancel:
+        if task.cancelled():
+            continue
+        exception = task.exception()
+        if exception is None:
+            continue
+        loop.call_exception_handler(
+            {
+                "message": "unhandled exception during rsloop.run() shutdown",
+                "exception": exception,
+                "task": task,
+            }
+        )
 
 
 class __RsloopDatagramTransport:
@@ -1588,5 +1620,12 @@ else:
                 loop.set_debug(debug)
             return loop.run_until_complete(wrapper())
         finally:
-            __asyncio.set_event_loop(None)
-            loop.close()
+            try:
+                __cancel_all_tasks(loop)
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                shutdown_default_executor = getattr(loop, "shutdown_default_executor", None)
+                if shutdown_default_executor is not None:
+                    loop.run_until_complete(shutdown_default_executor())
+            finally:
+                __asyncio.set_event_loop(None)
+                loop.close()

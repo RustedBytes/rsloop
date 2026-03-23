@@ -437,11 +437,20 @@ class CompatibilityTests(unittest.TestCase):
             loop = asyncio.get_running_loop()
             done = loop.create_future()
             client_done = loop.create_future()
+            server_done = loop.create_future()
 
             class ServerProtocol(asyncio.Protocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+
                 def data_received(self, data):
                     if not done.done():
                         done.set_result(bytes(data))
+                    self.transport.close()
+
+                def connection_lost(self, exc):
+                    if not server_done.done():
+                        server_done.set_result(None)
 
             class ClientProtocol(asyncio.Protocol):
                 def connection_made(self, transport):
@@ -465,6 +474,7 @@ class CompatibilityTests(unittest.TestCase):
                     transport.close()
                     received = await asyncio.wait_for(done, 1.0)
                     await asyncio.wait_for(client_done, 1.0)
+                    await asyncio.wait_for(server_done, 1.0)
                     return sent, received
                 finally:
                     transport.close()
@@ -545,11 +555,20 @@ class CompatibilityTests(unittest.TestCase):
         async def main(path: str) -> tuple[int, bytes]:
             loop = asyncio.get_running_loop()
             recv_done = loop.create_future()
+            server_done = loop.create_future()
 
             class ServerProtocol(asyncio.Protocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+
                 def data_received(self, data):
                     if not recv_done.done():
                         recv_done.set_result(bytes(data))
+                    self.transport.close()
+
+                def connection_lost(self, exc):
+                    if not server_done.done():
+                        server_done.set_result(None)
 
             server = await loop.create_server(ServerProtocol, "127.0.0.1", 0)
             try:
@@ -564,6 +583,7 @@ class CompatibilityTests(unittest.TestCase):
                     with open(path, "rb") as f:
                         sent = await loop.sock_sendfile(sock, f)
                     received = await asyncio.wait_for(recv_done, 1.0)
+                    await asyncio.wait_for(server_done, 1.0)
                     return sent, received
                 finally:
                     sock.close()
