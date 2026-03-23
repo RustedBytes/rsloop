@@ -305,7 +305,6 @@ loop           median_s       best_s      ops_per_s   vs_fastest
 uvloop         0.084425     0.083497        592,239        1.00x
 rsloop         0.091845     0.090982        544,397        1.09x
 asyncio        0.138782     0.137716        360,276        1.64x
-tcp_streams mode: rsloop native fast streams
 
 tcp_streams (5,000 ops)
 loop           median_s       best_s      ops_per_s   vs_fastest
