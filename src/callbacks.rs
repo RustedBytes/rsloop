@@ -33,6 +33,7 @@ pub struct ReadyCallback {
     kind: CallbackKind,
     callback: Py<PyAny>,
     args: CallbackArgs,
+    args_tuple: Py<PyTuple>,
     context: Py<PyAny>,
     context_needs_run: bool,
     cancelled: AtomicBool,
@@ -45,19 +46,20 @@ impl ReadyCallback {
         id: CallbackId,
         kind: CallbackKind,
         callback: Py<PyAny>,
-        args: Py<PyTuple>,
+        args_tuple: Py<PyTuple>,
         context: Py<PyAny>,
         context_needs_run: bool,
     ) -> Self {
-        let args = match args.bind(py).len() {
+        let args = match args_tuple.bind(py).len() {
             0 => CallbackArgs::None,
             1 => CallbackArgs::One(
-                args.bind(py)
+                args_tuple
+                    .bind(py)
                     .get_item(0)
                     .expect("single callback arg")
                     .unbind(),
             ),
-            _ => CallbackArgs::Many(args),
+            _ => CallbackArgs::Many(args_tuple.clone_ref(py)),
         };
 
         Self {
@@ -65,6 +67,7 @@ impl ReadyCallback {
             kind,
             callback,
             args,
+            args_tuple,
             context,
             context_needs_run,
             cancelled: AtomicBool::new(false),
@@ -146,13 +149,7 @@ impl ReadyCallback {
     }
 
     pub fn clone_args_tuple(&self, py: Python<'_>) -> Py<PyTuple> {
-        match &self.args {
-            CallbackArgs::None => PyTuple::empty(py).unbind(),
-            CallbackArgs::One(arg) => PyTuple::new(py, [arg.bind(py)])
-                .expect("single callback arg tuple")
-                .unbind(),
-            CallbackArgs::Many(args) => args.clone_ref(py),
-        }
+        self.args_tuple.clone_ref(py)
     }
 
     #[inline]
