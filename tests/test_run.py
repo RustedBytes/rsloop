@@ -1,10 +1,23 @@
+from __future__ import annotations
+
 import asyncio
 import os
+import shlex
 import socket
+import subprocess
 import sys
 import unittest
 
 import rsloop
+
+
+async def run_in_thread(func, /, *args):
+    to_thread = getattr(asyncio, "to_thread", None)
+    if to_thread is not None:
+        return await to_thread(func, *args)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, func, *args)
 
 
 class RunTests(unittest.TestCase):
@@ -75,6 +88,85 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(rsloop.run(main()), ("pipe-read-demo", "pipe-write-demo"))
 
+    def test_write_pipe_transport_reports_write_buffer_flow_control(self) -> None:
+        async def main() -> dict[str, object]:
+            loop = asyncio.get_running_loop()
+            done: asyncio.Future[dict[str, object]] = loop.create_future()
+            payload = b"x" * (256 * 1024)
+
+            def drain_pipe(fd: int, expected: int) -> int:
+                total = 0
+                while total < expected:
+                    chunk = os.read(fd, min(65536, expected - total))
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                return total
+
+            class WriteProtocol(asyncio.Protocol):
+                def __init__(self) -> None:
+                    self.events: list[str] = []
+
+                def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    self.transport = transport
+                    self.default_limits = transport.get_write_buffer_limits()
+                    transport.set_write_buffer_limits(high=1, low=0)
+                    self.updated_limits = transport.get_write_buffer_limits()
+                    self.invalid_limits_raised = False
+                    try:
+                        transport.set_write_buffer_limits(high=1, low=2)
+                    except ValueError:
+                        self.invalid_limits_raised = True
+                    transport.write(payload)
+                    self.size_after_write = transport.get_write_buffer_size()
+
+                def pause_writing(self) -> None:
+                    self.events.append("pause")
+
+                def resume_writing(self) -> None:
+                    self.events.append("resume")
+                    if not done.done():
+                        done.set_result(
+                            {
+                                "default_limits": self.default_limits,
+                                "updated_limits": self.updated_limits,
+                                "invalid_limits_raised": self.invalid_limits_raised,
+                                "size_after_write": self.size_after_write,
+                                "size_after_resume": self.transport.get_write_buffer_size(),
+                                "events": list(self.events),
+                            }
+                        )
+                    self.transport.close()
+
+            r_fd, w_fd = os.pipe()
+            with os.fdopen(r_fd, "rb", buffering=0) as rfile, os.fdopen(
+                w_fd, "wb", buffering=0
+            ) as wfile:
+                read_task = asyncio.create_task(
+                    run_in_thread(drain_pipe, rfile.fileno(), len(payload))
+                )
+                transport, _ = await loop.connect_write_pipe(WriteProtocol, wfile)
+                try:
+                    result = await asyncio.wait_for(done, 3.0)
+                    self.assertEqual(
+                        await asyncio.wait_for(read_task, 3.0), len(payload)
+                    )
+                    return result
+                finally:
+                    transport.close()
+
+        self.assertEqual(
+            rsloop.run(main()),
+            {
+                "default_limits": (16384, 65536),
+                "updated_limits": (0, 1),
+                "invalid_limits_raised": True,
+                "size_after_write": 256 * 1024,
+                "size_after_resume": 0,
+                "events": ["pause", "resume"],
+            },
+        )
+
     def test_subprocess_exec_round_trip(self) -> None:
         async def main() -> dict[str, object]:
             loop = asyncio.get_running_loop()
@@ -140,23 +232,116 @@ class RunTests(unittest.TestCase):
 
     def test_subprocess_shell_round_trip(self) -> None:
         async def main() -> dict[str, object]:
-            proc = await asyncio.create_subprocess_shell(
-                "echo shell-ok",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            return {
-                "stdout": stdout.decode().strip(),
-                "stderr": stderr.decode().strip(),
-                "returncode": proc.returncode,
-            }
+            result: dict[str, object] | None = None
+            for _ in range(10):
+                proc = await asyncio.create_subprocess_shell(
+                    "echo shell-ok",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), 3.0)
+                result = {
+                    "stdout": stdout.decode().strip(),
+                    "stderr": stderr.decode().strip(),
+                    "returncode": proc.returncode,
+                }
+            assert result is not None
+            return result
 
         self.assertEqual(
             rsloop.run(main()),
             {
                 "stdout": "shell-ok",
                 "stderr": "",
+                "returncode": 0,
+            },
+        )
+
+    def test_subprocess_exec_text_mode_round_trip(self) -> None:
+        async def main() -> dict[str, object]:
+            script = (
+                "import sys; "
+                "data = sys.stdin.read().rstrip('\\n'); "
+                "sys.stdout.write('out:' + data + '\\r\\nsecond\\n'); "
+                "sys.stderr.write('err:' + data + '\\r')"
+            )
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                script,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            assert proc.stdin is not None
+            assert proc.stdout is not None
+            assert proc.stderr is not None
+            proc.stdin.write("cafe\n")
+            await proc.stdin.drain()
+            proc.stdin.close()
+            first_line = await asyncio.wait_for(proc.stdout.readline(), 3.0)
+            rest = await asyncio.wait_for(proc.stdout.read(), 3.0)
+            stderr = await asyncio.wait_for(proc.stderr.read(), 3.0)
+            return {
+                "stdin_type": type(proc.stdin).__name__,
+                "stdout_type": type(proc.stdout).__name__,
+                "stderr_type": type(proc.stderr).__name__,
+                "first_line": first_line,
+                "rest": rest,
+                "stderr": stderr,
+                "returncode": await asyncio.wait_for(proc.wait(), 3.0),
+            }
+
+        self.assertEqual(
+            rsloop.run(main()),
+            {
+                "stdin_type": "_TextStreamWriter",
+                "stdout_type": "_TextStreamReader",
+                "stderr_type": "_TextStreamReader",
+                "first_line": "out:cafe\n",
+                "rest": "second\n",
+                "stderr": "err:cafe\n",
+                "returncode": 0,
+            },
+        )
+
+    def test_subprocess_shell_text_mode_round_trip(self) -> None:
+        async def main() -> dict[str, object]:
+            script = (
+                "import sys; "
+                "sys.stdout.write('shell-out\\r\\n'); "
+                "sys.stderr.write('shell-err\\r')"
+            )
+            if os.name == "nt":
+                cmd = subprocess.list2cmdline([sys.executable, "-c", script])
+            else:
+                cmd = shlex.join([sys.executable, "-c", script])
+
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), 3.0)
+            return {
+                "stdout": stdout,
+                "stderr": stderr,
+                "stdout_value_type": type(stdout).__name__,
+                "stderr_value_type": type(stderr).__name__,
+                "returncode": proc.returncode,
+            }
+
+        self.assertEqual(
+            rsloop.run(main()),
+            {
+                "stdout": "shell-out\n",
+                "stderr": "shell-err\n",
+                "stdout_value_type": "str",
+                "stderr_value_type": "str",
                 "returncode": 0,
             },
         )

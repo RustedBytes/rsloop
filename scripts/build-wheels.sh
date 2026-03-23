@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${ROOT_DIR}/scripts/python-versions.sh"
+
 DEFAULT_OUTPUT_DIR="dist/wheels"
-DEFAULT_VERSIONS=(3.8 3.9 3.10 3.11 3.12 3.13 3.14 3.14t)
 
 usage() {
   cat <<'EOF'
@@ -43,74 +44,8 @@ resolve_path() {
   fi
 }
 
-target_python_request() {
-  local version="$1"
-  local target="$2"
-  local arch=""
-  local os=""
-  local libc=""
-
-  case "$target" in
-    x86_64-unknown-linux-gnu)
-      arch="x86_64"
-      os="linux"
-      libc="gnu"
-      ;;
-    aarch64-apple-darwin)
-      arch="aarch64"
-      os="macos"
-      libc="none"
-      ;;
-    x86_64-apple-darwin)
-      arch="x86_64"
-      os="macos"
-      libc="none"
-      ;;
-    x86_64-pc-windows-msvc)
-      arch="x86_64"
-      os="windows"
-      libc="none"
-      ;;
-    aarch64-pc-windows-msvc)
-      arch="aarch64"
-      os="windows"
-      libc="none"
-      ;;
-    *)
-      printf '%s\n' "$version"
-      return 0
-      ;;
-  esac
-
-  printf 'cpython-%s-%s-%s-%s\n' "$version" "$os" "$arch" "$libc"
-}
-
-default_versions_for_target() {
-  local target="$1"
-
-  case "$target" in
-    aarch64-pc-windows-msvc)
-      # Windows ARM64 Python distributions are only available for newer CPython releases.
-      printf '%s\n' 3.11 3.12 3.13 3.14 3.14t
-      ;;
-    *)
-      printf '%s\n' "${DEFAULT_VERSIONS[@]}"
-      ;;
-  esac
-}
-
 host_rust_target() {
   rustc -vV | sed -n 's/^host: //p'
-}
-
-load_default_versions() {
-  local target="$1"
-  local version=""
-
-  PYTHON_VERSIONS=()
-  while IFS= read -r version; do
-    PYTHON_VERSIONS+=("$version")
-  done < <(default_versions_for_target "$target")
 }
 
 OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
@@ -159,11 +94,9 @@ while (($#)); do
   esac
 done
 
-if [[ -n "${RSLOOP_PYTHON_VERSIONS:-}" ]]; then
-  read -r -a PYTHON_VERSIONS <<< "${RSLOOP_PYTHON_VERSIONS}"
-else
-  load_default_versions "$RUST_TARGET"
-fi
+RSLOOP_PYTHON_VERSIONS_OVERRIDE="${RSLOOP_PYTHON_VERSIONS:-}"
+rsloop_load_python_versions "$RUST_TARGET"
+PYTHON_VERSIONS=("${RSLOOP_PYTHON_VERSIONS[@]}")
 
 OUTPUT_DIR="$(resolve_path "$OUTPUT_DIR")"
 
@@ -181,7 +114,7 @@ if (( INSTALL_PYTHONS )); then
   if [[ -n "$RUST_TARGET" ]]; then
     python_requests=()
     for version in "${PYTHON_VERSIONS[@]}"; do
-      python_requests+=("$(target_python_request "$version" "$RUST_TARGET")")
+      python_requests+=("$(rsloop_target_python_request "$version" "$RUST_TARGET")")
     done
     echo "Installing Python interpreters with uv for ${RUST_TARGET}: ${python_requests[*]}"
     uv python install "${python_requests[@]}"
@@ -196,7 +129,7 @@ for version in "${PYTHON_VERSIONS[@]}"; do
   interpreter_selector=""
 
   if [[ -n "$RUST_TARGET" ]]; then
-    python_request="$(target_python_request "$version" "$RUST_TARGET")"
+    python_request="$(rsloop_target_python_request "$version" "$RUST_TARGET")"
     if (( IS_CROSS_COMPILE )); then
       interpreter_selector="python${version}"
     else

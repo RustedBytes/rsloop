@@ -94,6 +94,24 @@ impl PyLoop {
     }
 }
 
+fn warn_default_executor_timeout(py: Python<'_>, timeout: f64) -> PyResult<()> {
+    let warnings = py.import("warnings")?;
+    let builtins = py.import("builtins")?;
+    warnings.call_method(
+        "warn",
+        (
+            format!("The executor did not finishing joining its threads within {timeout} seconds."),
+            builtins.getattr("RuntimeWarning")?,
+        ),
+        Some(&{
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("stacklevel", 2)?;
+            kwargs
+        }),
+    )?;
+    Ok(())
+}
+
 fn asyncio_task_cls(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     if let Some(cached) = ASYNCIO_TASK_CLS.get() {
         return Ok(cached);
@@ -1296,10 +1314,26 @@ impl PyLoop {
         ssl_shutdown_timeout: Option<f64>,
         start_serving: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = ssl_shutdown_timeout;
+        if ssl_handshake_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_handshake_timeout is only meaningful with ssl",
+            ));
+        }
+        if ssl_shutdown_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_shutdown_timeout is only meaningful with ssl",
+            ));
+        }
         let tls = ssl
             .as_ref()
-            .map(|ssl| server_tls_settings(py, ssl.bind(py), ssl_handshake_timeout))
+            .map(|ssl| {
+                server_tls_settings(
+                    py,
+                    ssl.bind(py),
+                    ssl_handshake_timeout,
+                    ssl_shutdown_timeout,
+                )
+            })
             .transpose()?
             .map(Arc::new);
 
@@ -1382,12 +1416,22 @@ impl PyLoop {
         interleave: Option<i32>,
         all_errors: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = (
-            ssl_shutdown_timeout,
-            happy_eyeballs_delay,
-            interleave,
-            all_errors,
-        );
+        let _ = (happy_eyeballs_delay, interleave, all_errors);
+        if server_hostname.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "server_hostname is only meaningful with ssl",
+            ));
+        }
+        if ssl_handshake_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_handshake_timeout is only meaningful with ssl",
+            ));
+        }
+        if ssl_shutdown_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_shutdown_timeout is only meaningful with ssl",
+            ));
+        }
 
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
@@ -1452,6 +1496,7 @@ impl PyLoop {
                         ssl.bind(py),
                         server_hostname.as_ref().map(|value| value.bind(py)),
                         ssl_handshake_timeout,
+                        ssl_shutdown_timeout,
                     )?;
                     transport_from_socket_tls(
                         py,
@@ -1500,7 +1545,16 @@ impl PyLoop {
         ssl_shutdown_timeout: Option<f64>,
         start_serving: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = ssl_shutdown_timeout;
+        if ssl_handshake_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_handshake_timeout is only meaningful with ssl",
+            ));
+        }
+        if ssl_shutdown_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_shutdown_timeout is only meaningful with ssl",
+            ));
+        }
         #[cfg(not(unix))]
         {
             let _ = (slf, protocol_factory, path, sock, backlog, start_serving);
@@ -1508,7 +1562,14 @@ impl PyLoop {
         }
         let tls = ssl
             .as_ref()
-            .map(|ssl| server_tls_settings(py, ssl.bind(py), ssl_handshake_timeout))
+            .map(|ssl| {
+                server_tls_settings(
+                    py,
+                    ssl.bind(py),
+                    ssl_handshake_timeout,
+                    ssl_shutdown_timeout,
+                )
+            })
             .transpose()?
             .map(Arc::new);
 
@@ -1577,7 +1638,21 @@ impl PyLoop {
         ssl_handshake_timeout: Option<f64>,
         ssl_shutdown_timeout: Option<f64>,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = ssl_shutdown_timeout;
+        if server_hostname.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "server_hostname is only meaningful with ssl",
+            ));
+        }
+        if ssl_handshake_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_handshake_timeout is only meaningful with ssl",
+            ));
+        }
+        if ssl_shutdown_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_shutdown_timeout is only meaningful with ssl",
+            ));
+        }
         #[cfg(not(unix))]
         {
             let _ = (slf, protocol_factory, path, sock);
@@ -1630,6 +1705,7 @@ impl PyLoop {
                         ssl.bind(py),
                         server_hostname.as_ref().map(|value| value.bind(py)),
                         ssl_handshake_timeout,
+                        ssl_shutdown_timeout,
                     )?;
                     transport_from_socket_tls(
                         py,
@@ -1671,7 +1747,16 @@ impl PyLoop {
         ssl_handshake_timeout: Option<f64>,
         ssl_shutdown_timeout: Option<f64>,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = ssl_shutdown_timeout;
+        if ssl_handshake_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_handshake_timeout is only meaningful with ssl",
+            ));
+        }
+        if ssl_shutdown_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_shutdown_timeout is only meaningful with ssl",
+            ));
+        }
 
         let locals = Self::task_locals(py, &slf)?;
         let loop_obj = Self::as_py_any(py, &slf);
@@ -1694,7 +1779,12 @@ impl PyLoop {
             })?;
             let transport = Python::attach(|py| {
                 if let Some(ssl) = ssl.as_ref() {
-                    let tls = server_tls_settings(py, ssl.bind(py), ssl_handshake_timeout)?;
+                    let tls = server_tls_settings(
+                        py,
+                        ssl.bind(py),
+                        ssl_handshake_timeout,
+                        ssl_shutdown_timeout,
+                    )?;
                     transport_from_socket_server_tls(
                         py,
                         core.clone(),
@@ -1736,7 +1826,6 @@ impl PyLoop {
         ssl_handshake_timeout: Option<f64>,
         ssl_shutdown_timeout: Option<f64>,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = ssl_shutdown_timeout;
         let locals = Self::task_locals(py, &slf)?;
         let transport: Py<PyStreamTransport> = transport.extract(py)?;
         pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
@@ -1754,6 +1843,7 @@ impl PyLoop {
                             sslcontext.bind(py),
                             server_hostname.as_ref().map(|value| value.bind(py)),
                             ssl_handshake_timeout,
+                            ssl_shutdown_timeout,
                         )?)
                     };
                     let server_tls = if server_side {
@@ -1761,6 +1851,7 @@ impl PyLoop {
                             py,
                             sslcontext.bind(py),
                             ssl_handshake_timeout,
+                            ssl_shutdown_timeout,
                         )?)
                     } else {
                         None
@@ -2513,25 +2604,86 @@ impl PyLoop {
         py: Python<'_>,
         timeout: Option<f64>,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let _ = timeout;
         let executor = {
             let core = slf.borrow(py).core.clone();
             let mut state = core.state.lock().expect("poisoned loop state");
             state.executor_shutdown_called = true;
             state.default_executor.take()
         };
+        let executor_nowait = if timeout.is_some() {
+            executor.as_ref().map(|value| value.clone_ref(py))
+        } else {
+            None
+        };
 
         let locals = Self::task_locals(py, &slf)?;
         pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
             if let Some(executor) = executor {
-                crate::blocking::run("rsloop-shutdown-default-executor", move || {
-                    Python::attach(|py| -> PyResult<()> {
-                        executor.call_method1(py, "shutdown", (true,))?;
-                        Ok(())
+                let wait_forever =
+                    timeout.is_none() || timeout.is_some_and(|value| value.is_infinite());
+                if wait_forever {
+                    crate::blocking::run("rsloop-shutdown-default-executor", move || {
+                        Python::attach(|py| -> PyResult<()> {
+                            executor.call_method1(py, "shutdown", (true,))?;
+                            Ok(())
+                        })
                     })
-                })
-                .await
-                .map_err(PyRuntimeError::new_err)??;
+                    .await
+                    .map_err(PyRuntimeError::new_err)??;
+                } else {
+                    let timeout_value = timeout.expect("timeout checked above");
+                    let (tx, rx) = futures::channel::oneshot::channel();
+                    std::thread::Builder::new()
+                        .name("rsloop-shutdown-default-executor".to_owned())
+                        .spawn(move || {
+                            let result = Python::attach(|py| -> PyResult<()> {
+                                executor.call_method1(py, "shutdown", (true,))?;
+                                Ok(())
+                            });
+                            let _ = tx.send(result);
+                        })
+                        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+
+                    let timed_out = if timeout_value.is_finite() && timeout_value > 0.0 {
+                        match async_std::future::timeout(
+                            Duration::from_secs_f64(timeout_value),
+                            async move {
+                                rx.await.map_err(|_| {
+                                    PyRuntimeError::new_err(
+                                        "default executor shutdown worker dropped",
+                                    )
+                                })?
+                            },
+                        )
+                        .await
+                        {
+                            Ok(result) => {
+                                result?;
+                                false
+                            }
+                            Err(_) => true,
+                        }
+                    } else {
+                        true
+                    };
+
+                    if timed_out {
+                        Python::attach(|py| warn_default_executor_timeout(py, timeout_value))?;
+                        if let Some(executor_nowait) = executor_nowait {
+                            crate::blocking::run(
+                                "rsloop-shutdown-default-executor-nowait",
+                                move || {
+                                    Python::attach(|py| -> PyResult<()> {
+                                        executor_nowait.call_method1(py, "shutdown", (false,))?;
+                                        Ok(())
+                                    })
+                                },
+                            )
+                            .await
+                            .map_err(PyRuntimeError::new_err)??;
+                        }
+                    }
+                }
             }
 
             Ok(Python::attach(|py| py.None()))

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -20,7 +20,7 @@ use pyo3::types::{PyDict, PyTuple};
 use crate::async_event::AsyncEvent;
 use crate::context::{ensure_running_loop, run_in_context};
 use crate::fd_ops;
-use crate::loop_core::LoopCore;
+use crate::loop_core::{LoopCommand, LoopCore};
 use crate::stream_transport::spawn_write_pipe_transport;
 
 enum ProcessCommand {
@@ -28,6 +28,13 @@ enum ProcessCommand {
     SendSignal(i32),
     Terminate,
     Kill,
+}
+
+enum PendingProcessEvent {
+    PipeDataReceived { fd: i32, data: Box<[u8]> },
+    PipeConnectionLost { fd: i32, exc: Option<String> },
+    ProcessExited { returncode: i32 },
+    ConnectionLost { exc: Option<String> },
 }
 
 struct ProcessState {
@@ -47,10 +54,11 @@ pub struct ProcessTransportCore {
     loop_core: Arc<LoopCore>,
     loop_obj: Py<PyAny>,
     state: Mutex<ProcessState>,
-    callback_lock: Mutex<()>,
     text_config: Option<ProcessTextConfig>,
     control_tx: Sender<ProcessCommand>,
     exit_notify: AsyncEvent,
+    pending_events: Mutex<VecDeque<PendingProcessEvent>>,
+    events_scheduled: AtomicBool,
 }
 
 #[pyclass(name = "ProcessTransport", module = "rsloop._loop")]
@@ -95,6 +103,79 @@ pub struct ProcessTransportParams {
 }
 
 impl ProcessTransportCore {
+    fn enqueue_pending_event(self: &Arc<Self>, event: PendingProcessEvent) {
+        self.pending_events
+            .lock()
+            .expect("poisoned process pending queue")
+            .push_back(event);
+
+        if !self.events_scheduled.swap(true, Ordering::AcqRel)
+            && self
+                .loop_core
+                .send_command(LoopCommand::ScheduleProcessTransport(Arc::clone(self)))
+                .is_err()
+        {
+            self.events_scheduled.store(false, Ordering::Release);
+        }
+    }
+
+    pub(crate) fn drain_pending_events_with_py(self: &Arc<Self>, py: Python<'_>) -> PyResult<()> {
+        loop {
+            let mut pending = {
+                let mut queue = self
+                    .pending_events
+                    .lock()
+                    .expect("poisoned process pending queue");
+                if queue.is_empty() {
+                    self.events_scheduled.store(false, Ordering::Release);
+                    return Ok(());
+                }
+
+                let mut drained = VecDeque::new();
+                std::mem::swap(&mut drained, &mut *queue);
+                drained
+            };
+
+            while let Some(event) = pending.pop_front() {
+                match event {
+                    PendingProcessEvent::PipeDataReceived { fd, data } => {
+                        if let Err(err) = self.pipe_data_received_with_py(py, fd, &data) {
+                            self.report_error(err, "subprocess pipe_data_received failed");
+                            let _ = self.connection_lost_with_py(py, None);
+                            self.events_scheduled.store(false, Ordering::Release);
+                            return Ok(());
+                        }
+                    }
+                    PendingProcessEvent::PipeConnectionLost { fd, exc } => {
+                        if let Err(err) = self.pipe_connection_lost_value_with_py(
+                            py,
+                            fd,
+                            exc.map(PyRuntimeError::new_err),
+                        ) {
+                            self.report_error(err, "subprocess pipe_connection_lost failed");
+                            let _ = self.connection_lost_with_py(py, None);
+                            self.events_scheduled.store(false, Ordering::Release);
+                            return Ok(());
+                        }
+                    }
+                    PendingProcessEvent::ProcessExited { returncode } => {
+                        if let Err(err) = self.process_exited_with_py(py, returncode) {
+                            self.report_error(err, "subprocess process_exited failed");
+                            let _ = self.connection_lost_with_py(py, None);
+                            self.events_scheduled.store(false, Ordering::Release);
+                            return Ok(());
+                        }
+                    }
+                    PendingProcessEvent::ConnectionLost { exc } => {
+                        let _ = self.connection_lost_with_py(py, exc.map(PyRuntimeError::new_err));
+                        self.events_scheduled.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
     fn call_protocol_with_tuple(
         &self,
         py: Python<'_>,
@@ -118,10 +199,6 @@ impl ProcessTransportCore {
         &self,
         f: impl for<'py> FnOnce(Python<'py>) -> PyResult<T>,
     ) -> PyResult<T> {
-        let _callback_guard = self
-            .callback_lock
-            .lock()
-            .expect("poisoned process callback lock");
         Python::attach(|py| {
             ensure_running_loop(py, &self.loop_obj)?;
             f(py)
@@ -174,34 +251,64 @@ impl ProcessTransportCore {
         })
     }
 
-    fn pipe_data_received(&self, fd: i32, data: &[u8]) -> PyResult<()> {
-        self.call_in_loop_context(|py| {
-            let payload = if let Some(text_config) = &self.text_config {
-                let decoded = pyo3::types::PyBytes::new(py, data)
-                    .call_method1("decode", (&text_config.encoding, &text_config.errors))?;
-                if text_config.translate_newlines {
-                    decoded
-                        .call_method1("replace", ("\r\n", "\n"))?
-                        .call_method1("replace", ("\r", "\n"))?
-                        .unbind()
-                        .into_any()
-                } else {
-                    decoded.unbind()
-                }
+    fn pipe_data_received_with_py(&self, py: Python<'_>, fd: i32, data: &[u8]) -> PyResult<()> {
+        let payload = if let Some(text_config) = &self.text_config {
+            let decoded = pyo3::types::PyBytes::new(py, data)
+                .call_method1("decode", (&text_config.encoding, &text_config.errors))?;
+            if text_config.translate_newlines {
+                decoded
+                    .call_method1("replace", ("\r\n", "\n"))?
+                    .call_method1("replace", ("\r", "\n"))?
+                    .unbind()
+                    .into_any()
             } else {
-                pyo3::types::PyBytes::new(py, data).unbind().into_any()
-            };
-            self.call_protocol_method2(
-                py,
-                "pipe_data_received",
-                fd.into_pyobject(py)?.unbind().into_any(),
-                payload,
-            )?;
-            Ok(())
-        })
+                decoded.unbind()
+            }
+        } else {
+            pyo3::types::PyBytes::new(py, data).unbind().into_any()
+        };
+        self.call_protocol_method2(
+            py,
+            "pipe_data_received",
+            fd.into_pyobject(py)?.unbind().into_any(),
+            payload,
+        )?;
+        Ok(())
     }
 
-    fn pipe_connection_lost_value(&self, fd: i32, exc: Option<Py<PyAny>>) -> PyResult<()> {
+    fn pipe_data_received(self: &Arc<Self>, fd: i32, data: &[u8]) -> PyResult<()> {
+        if !self.loop_core.on_runtime_thread() {
+            self.enqueue_pending_event(PendingProcessEvent::PipeDataReceived {
+                fd,
+                data: Box::<[u8]>::from(data),
+            });
+            return Ok(());
+        }
+
+        self.call_in_loop_context(|py| self.pipe_data_received_with_py(py, fd, data))
+    }
+
+    fn pipe_connection_lost_value_with_py(
+        &self,
+        py: Python<'_>,
+        fd: i32,
+        exc: Option<PyErr>,
+    ) -> PyResult<()> {
+        let exc = exc.map(|err| err.value(py).clone().unbind().into_any());
+        self.call_protocol_method2(
+            py,
+            "pipe_connection_lost",
+            fd.into_pyobject(py)?.unbind().into_any(),
+            exc.unwrap_or_else(|| py.None()),
+        )?;
+        Ok(())
+    }
+
+    fn pipe_connection_lost_message(
+        self: &Arc<Self>,
+        fd: i32,
+        exc: Option<String>,
+    ) -> PyResult<()> {
         let maybe_finish = {
             let mut state = self.state.lock().expect("poisoned process state");
             if !state.open_pipes.remove(&fd) {
@@ -212,14 +319,23 @@ impl ProcessTransportCore {
             (exc, exited && empty)
         };
 
+        if !self.loop_core.on_runtime_thread() {
+            self.enqueue_pending_event(PendingProcessEvent::PipeConnectionLost {
+                fd,
+                exc: maybe_finish.0,
+            });
+            if maybe_finish.1 {
+                self.enqueue_pending_event(PendingProcessEvent::ConnectionLost { exc: None });
+            }
+            return Ok(());
+        }
+
         if let Err(err) = self.call_in_loop_context(|py| {
-            self.call_protocol_method2(
+            self.pipe_connection_lost_value_with_py(
                 py,
-                "pipe_connection_lost",
-                fd.into_pyobject(py)?.unbind().into_any(),
-                maybe_finish.0.unwrap_or_else(|| py.None()),
-            )?;
-            Ok(())
+                fd,
+                maybe_finish.0.clone().map(PyRuntimeError::new_err),
+            )
         }) {
             self.report_error(err, "subprocess pipe_connection_lost failed");
             return Err(PyRuntimeError::new_err(
@@ -228,17 +344,23 @@ impl ProcessTransportCore {
         }
 
         if maybe_finish.1 {
-            self.connection_lost(None)?;
+            self.connection_lost_message(None)?;
         }
         Ok(())
     }
 
-    fn pipe_connection_lost(&self, fd: i32, exc: Option<PyErr>) -> PyResult<()> {
-        let exc = exc.map(|err| Python::attach(|py| err.value(py).clone().unbind().into_any()));
-        self.pipe_connection_lost_value(fd, exc)
+    fn pipe_connection_lost(self: &Arc<Self>, fd: i32, exc: Option<PyErr>) -> PyResult<()> {
+        let exc = exc.map(|err| Python::attach(|py| err.value(py).to_string()));
+        self.pipe_connection_lost_message(fd, exc)
     }
 
-    fn process_exited(&self, returncode: i32) -> PyResult<()> {
+    fn process_exited_with_py(&self, py: Python<'_>, returncode: i32) -> PyResult<()> {
+        let _ = returncode;
+        self.call_protocol_method0(py, "process_exited")?;
+        Ok(())
+    }
+
+    fn process_exited(self: &Arc<Self>, returncode: i32) -> PyResult<()> {
         let should_finish = {
             let mut state = self.state.lock().expect("poisoned process state");
             state.returncode = Some(returncode);
@@ -247,18 +369,31 @@ impl ProcessTransportCore {
         };
         self.exit_notify.notify_all();
 
-        self.call_in_loop_context(|py| {
-            self.call_protocol_method0(py, "process_exited")?;
-            Ok(())
-        })?;
+        if !self.loop_core.on_runtime_thread() {
+            self.enqueue_pending_event(PendingProcessEvent::ProcessExited { returncode });
+            if should_finish {
+                self.enqueue_pending_event(PendingProcessEvent::ConnectionLost { exc: None });
+            }
+            return Ok(());
+        }
+
+        self.call_in_loop_context(|py| self.process_exited_with_py(py, returncode))?;
 
         if should_finish {
-            self.connection_lost(None)?;
+            self.connection_lost_message(None)?;
         }
         Ok(())
     }
 
-    fn connection_lost(&self, exc: Option<PyErr>) -> PyResult<()> {
+    fn connection_lost_with_py(&self, py: Python<'_>, exc: Option<PyErr>) -> PyResult<()> {
+        let arg = exc
+            .map(|err| err.value(py).clone().unbind().into_any())
+            .unwrap_or_else(|| py.None());
+        self.call_protocol_method1(py, "connection_lost", arg)?;
+        Ok(())
+    }
+
+    fn connection_lost_message(self: &Arc<Self>, exc: Option<String>) -> PyResult<()> {
         {
             let mut state = self.state.lock().expect("poisoned process state");
             if state.connection_lost_called {
@@ -268,13 +403,19 @@ impl ProcessTransportCore {
             state.closing = true;
         }
 
+        if !self.loop_core.on_runtime_thread() {
+            self.enqueue_pending_event(PendingProcessEvent::ConnectionLost { exc });
+            return Ok(());
+        }
+
         self.call_in_loop_context(|py| {
-            let arg = exc
-                .map(|err| err.value(py).clone().unbind().into_any())
-                .unwrap_or_else(|| py.None());
-            self.call_protocol_method1(py, "connection_lost", arg)?;
-            Ok(())
+            self.connection_lost_with_py(py, exc.clone().map(PyRuntimeError::new_err))
         })
+    }
+
+    fn connection_lost(self: &Arc<Self>, exc: Option<PyErr>) -> PyResult<()> {
+        let exc = exc.map(|err| Python::attach(|py| err.value(py).to_string()));
+        self.connection_lost_message(exc)
     }
 
     #[inline]
@@ -430,12 +571,16 @@ impl PyProcessPipeTransport {
 impl PyProcessStdinProtocol {
     fn connection_made(&self, _transport: Py<PyAny>) {}
 
+    fn pause_writing(&self) {}
+
+    fn resume_writing(&self) {}
+
     #[pyo3(signature=(_exc=None))]
     fn connection_lost(&self, _exc: Option<Py<PyAny>>) -> PyResult<()> {
         if !self.core.has_open_pipe(0) {
             return Ok(());
         }
-        self.core.pipe_connection_lost_value(0, None)
+        self.core.pipe_connection_lost_message(0, None)
     }
 }
 
@@ -527,10 +672,11 @@ pub fn spawn_process_transport(
             open_pipes,
             pipe_transports,
         }),
-        callback_lock: Mutex::new(()),
         text_config,
         control_tx,
         exit_notify: AsyncEvent::new(),
+        pending_events: Mutex::new(VecDeque::new()),
+        events_scheduled: AtomicBool::new(false),
     });
 
     if let Some(stdin) = stdin {

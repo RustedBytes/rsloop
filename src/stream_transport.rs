@@ -20,7 +20,7 @@ use std::time::Duration;
 use compio::net::PollFd;
 #[cfg(target_os = "linux")]
 use compio::time::sleep as compio_sleep;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyTimeoutError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyByteArrayMethods, PyBytes, PyDict, PySlice, PyString, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
@@ -47,7 +47,12 @@ enum PendingReadEvent {
     Data(Box<[u8]>),
     Eof,
     ConnectionLost(Option<String>),
+    PauseWriting,
+    ResumeWriting,
 }
+
+const DEFAULT_WRITE_BUFFER_HIGH_WATER: usize = 64 * 1024;
+const DEFAULT_WRITE_BUFFER_LOW_WATER: usize = DEFAULT_WRITE_BUFFER_HIGH_WATER / 4;
 
 struct OwnedWriteBuffer {
     bytes: Box<[u8]>,
@@ -110,6 +115,8 @@ struct ProtocolCallbacks {
     data_received: Option<Py<PyAny>>,
     eof_received: Option<Py<PyAny>>,
     connection_lost: Py<PyAny>,
+    pause_writing: Py<PyAny>,
+    resume_writing: Py<PyAny>,
     get_buffer: Option<Py<PyAny>>,
     buffer_updated: Option<Py<PyAny>>,
     stream_reader_fast_path: Option<StreamReaderFastPath>,
@@ -362,6 +369,10 @@ struct StreamTransportState {
     close_on_write_eof: bool,
     lost_called: bool,
     writer_registered: bool,
+    write_buffer_size: usize,
+    write_buffer_high_water: usize,
+    write_buffer_low_water: usize,
+    protocol_write_paused: bool,
     detached: bool,
     server: Option<Weak<ServerCore>>,
 }
@@ -653,6 +664,7 @@ impl TlsConnectionKind {
 struct TlsIoState {
     stream: StreamKind,
     connection: TlsConnectionKind,
+    shutdown_timeout: Duration,
 }
 
 impl TlsIoState {
@@ -852,6 +864,12 @@ impl StreamTransportCore {
                         self.read_events_scheduled.store(false, Ordering::Release);
                         return Ok(());
                     }
+                    PendingReadEvent::PauseWriting => {
+                        self.pause_writing_with_py(py)?;
+                    }
+                    PendingReadEvent::ResumeWriting => {
+                        self.resume_writing_with_py(py)?;
+                    }
                 }
             }
         }
@@ -1047,6 +1065,8 @@ impl StreamTransportCore {
             }
             state.lost_called = true;
             state.closing = true;
+            state.write_buffer_size = 0;
+            state.protocol_write_paused = false;
             (
                 state.callbacks.connection_lost.clone_ref(py),
                 state
@@ -1182,6 +1202,64 @@ impl StreamTransportCore {
             .writable
     }
 
+    fn get_write_buffer_size(&self) -> usize {
+        self.state
+            .lock()
+            .expect("poisoned transport state")
+            .write_buffer_size
+    }
+
+    fn get_write_buffer_limits(&self) -> (usize, usize) {
+        let state = self.state.lock().expect("poisoned transport state");
+        (state.write_buffer_low_water, state.write_buffer_high_water)
+    }
+
+    fn set_write_buffer_limits(
+        self: &Arc<Self>,
+        high: Option<usize>,
+        low: Option<usize>,
+    ) -> PyResult<()> {
+        let (should_pause, should_resume) = {
+            let mut state = self.state.lock().expect("poisoned transport state");
+            let high = match (high, low) {
+                (Some(high), _) => high,
+                (None, Some(low)) => 4 * low,
+                (None, None) => DEFAULT_WRITE_BUFFER_HIGH_WATER,
+            };
+            let low = low.unwrap_or(high / 4);
+
+            if !(high >= low) {
+                return Err(PyValueError::new_err(format!(
+                    "high ({high:?}) must be >= low ({low:?}) must be >= 0"
+                )));
+            }
+
+            state.write_buffer_high_water = high;
+            state.write_buffer_low_water = low;
+
+            let should_pause = state.write_buffer_size > state.write_buffer_high_water
+                && !state.protocol_write_paused;
+            let should_resume = state.protocol_write_paused
+                && state.write_buffer_size <= state.write_buffer_low_water;
+
+            if should_pause {
+                state.protocol_write_paused = true;
+            } else if should_resume {
+                state.protocol_write_paused = false;
+            }
+
+            (should_pause, should_resume)
+        };
+
+        if should_pause {
+            self.notify_pause_writing();
+        } else if should_resume {
+            self.notify_resume_writing();
+        }
+
+        Ok(())
+    }
+
     fn write_backpressure_active(&self) -> bool {
         self.state
             .lock()
@@ -1222,6 +1300,7 @@ impl StreamTransportCore {
 
         self.set_closing();
         self.set_write_backpressure_active(false);
+        self.clear_write_buffer(false);
         self.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
             err.map(|err| err.to_string()),
         ));
@@ -1229,8 +1308,13 @@ impl StreamTransportCore {
     }
 
     fn queue_write(self: &Arc<Self>, data: OwnedWriteBuffer) -> io::Result<()> {
+        let should_pause = self.record_write_buffer_enqueued(data.remaining().len());
         self.ensure_writer_worker();
+        if should_pause {
+            self.notify_pause_writing();
+        }
         if self.writer_tx.send(WriterCommand::Data(data)).is_err() {
+            self.clear_write_buffer(false);
             self.fail_write(None);
         }
         Ok(())
@@ -1339,6 +1423,108 @@ impl StreamTransportCore {
             },
             stream,
         ))
+    }
+
+    fn pause_writing_with_py(&self, py: Python<'_>) -> PyResult<()> {
+        let (callback, context, context_needs_run) = {
+            let state = self.state.lock().expect("poisoned transport state");
+            (
+                state.callbacks.pause_writing.clone_ref(py),
+                state.context.clone_ref(py),
+                state.context_needs_run,
+            )
+        };
+
+        if let Err(err) = self.call_protocol_method0(py, &callback, &context, context_needs_run) {
+            self.report_error_with_py(py, err, "protocol.pause_writing() failed")?;
+        }
+        Ok(())
+    }
+
+    fn resume_writing_with_py(&self, py: Python<'_>) -> PyResult<()> {
+        let (callback, context, context_needs_run) = {
+            let state = self.state.lock().expect("poisoned transport state");
+            (
+                state.callbacks.resume_writing.clone_ref(py),
+                state.context.clone_ref(py),
+                state.context_needs_run,
+            )
+        };
+
+        if let Err(err) = self.call_protocol_method0(py, &callback, &context, context_needs_run) {
+            self.report_error_with_py(py, err, "protocol.resume_writing() failed")?;
+        }
+        Ok(())
+    }
+
+    fn notify_pause_writing(self: &Arc<Self>) {
+        if self.loop_core.on_runtime_thread() {
+            let _ = self.call_in_loop_context(|py| self.pause_writing_with_py(py));
+            return;
+        }
+
+        self.enqueue_pending_read_event(PendingReadEvent::PauseWriting);
+    }
+
+    fn notify_resume_writing(self: &Arc<Self>) {
+        if self.loop_core.on_runtime_thread() {
+            let _ = self.call_in_loop_context(|py| self.resume_writing_with_py(py));
+            return;
+        }
+
+        self.enqueue_pending_read_event(PendingReadEvent::ResumeWriting);
+    }
+
+    fn record_write_buffer_enqueued(&self, len: usize) -> bool {
+        if len == 0 {
+            return false;
+        }
+
+        let mut state = self.state.lock().expect("poisoned transport state");
+        state.write_buffer_size = state.write_buffer_size.saturating_add(len);
+        if state.write_buffer_size > state.write_buffer_high_water && !state.protocol_write_paused {
+            state.protocol_write_paused = true;
+            return true;
+        }
+
+        false
+    }
+
+    fn record_write_buffer_drained(self: &Arc<Self>, len: usize) {
+        if len == 0 {
+            return;
+        }
+
+        let should_resume = {
+            let mut state = self.state.lock().expect("poisoned transport state");
+            state.write_buffer_size = state.write_buffer_size.saturating_sub(len);
+            if state.protocol_write_paused
+                && state.write_buffer_size <= state.write_buffer_low_water
+            {
+                state.protocol_write_paused = false;
+                true
+            } else {
+                false
+            }
+        };
+
+        if should_resume {
+            self.notify_resume_writing();
+        }
+    }
+
+    fn clear_write_buffer(self: &Arc<Self>, resume_protocol: bool) {
+        let should_resume = {
+            let mut state = self.state.lock().expect("poisoned transport state");
+            let should_resume = resume_protocol && state.protocol_write_paused;
+            state.write_buffer_size = 0;
+            state.protocol_write_paused = false;
+            should_resume
+        };
+
+        if should_resume {
+            self.notify_resume_writing();
+        }
     }
 }
 
@@ -1653,14 +1839,16 @@ impl PyStreamTransport {
     }
 
     fn get_write_buffer_size(&self) -> usize {
-        0
+        self.core.get_write_buffer_size()
     }
 
     fn get_write_buffer_limits(&self) -> (usize, usize) {
-        (0, 0)
+        self.core.get_write_buffer_limits()
     }
 
-    fn set_write_buffer_limits(&self, _high: Option<usize>, _low: Option<usize>) {}
+    fn set_write_buffer_limits(&self, high: Option<usize>, low: Option<usize>) -> PyResult<()> {
+        self.core.set_write_buffer_limits(high, low)
+    }
 
     fn __repr__(&self) -> String {
         format!("<StreamTransport closing={}>", self.is_closing())
@@ -2003,6 +2191,10 @@ pub fn spawn_read_pipe_transport(
             close_on_write_eof: false,
             lost_called: false,
             writer_registered: false,
+            write_buffer_size: 0,
+            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
+            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
+            protocol_write_paused: false,
             detached: false,
             server: None,
         }),
@@ -2066,6 +2258,10 @@ pub fn spawn_read_pipe_transport(
             close_on_write_eof: false,
             lost_called: false,
             writer_registered: false,
+            write_buffer_size: 0,
+            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
+            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
+            protocol_write_paused: false,
             detached: false,
             server: None,
         }),
@@ -2135,6 +2331,10 @@ pub fn spawn_write_pipe_transport(
             close_on_write_eof: true,
             lost_called: false,
             writer_registered: false,
+            write_buffer_size: 0,
+            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
+            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
+            protocol_write_paused: false,
             detached: false,
             server: None,
         }),
@@ -2204,6 +2404,10 @@ pub fn spawn_write_pipe_transport(
             close_on_write_eof: true,
             lost_called: false,
             writer_registered: false,
+            write_buffer_size: 0,
+            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
+            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
+            protocol_write_paused: false,
             detached: false,
             server: None,
         }),
@@ -2315,6 +2519,10 @@ pub fn spawn_tcp_transport(
             close_on_write_eof: false,
             lost_called: false,
             writer_registered: false,
+            write_buffer_size: 0,
+            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
+            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
+            protocol_write_paused: false,
             detached: false,
             server,
         }),
@@ -2399,6 +2607,10 @@ pub fn spawn_unix_transport(
             close_on_write_eof: false,
             lost_called: false,
             writer_registered: false,
+            write_buffer_size: 0,
+            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
+            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
+            protocol_write_paused: false,
             detached: false,
             server,
         }),
@@ -2460,6 +2672,7 @@ fn spawn_tls_client_transport(
         TlsConnectionKind::Client(connection),
         tls_extra(py, &tls.ssl_context),
         tls.handshake_timeout,
+        tls.shutdown_timeout,
         server,
         call_connection_made,
     )
@@ -2482,6 +2695,7 @@ fn spawn_tls_server_transport(
         TlsConnectionKind::Server(connection),
         tls_extra(py, &tls.ssl_context),
         tls.handshake_timeout,
+        tls.shutdown_timeout,
         server,
         call_connection_made,
     )
@@ -2494,6 +2708,7 @@ fn spawn_tls_transport(
     connection: TlsConnectionKind,
     tls_extra: HashMap<String, Py<PyAny>>,
     handshake_timeout: Duration,
+    shutdown_timeout: Duration,
     server: Option<Weak<ServerCore>>,
     call_connection_made: bool,
 ) -> PyResult<Py<PyStreamTransport>> {
@@ -2519,7 +2734,11 @@ fn spawn_tls_transport(
     let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
     let (writer_tx, writer_rx) = mpsc::channel();
     let stream_fd = stream.fd();
-    let tls_state = Arc::new(Mutex::new(TlsIoState { stream, connection }));
+    let tls_state = Arc::new(Mutex::new(TlsIoState {
+        stream,
+        connection,
+        shutdown_timeout,
+    }));
 
     py.detach(|| complete_tls_handshake(&tls_state, handshake_timeout))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -2544,6 +2763,10 @@ fn spawn_tls_transport(
             close_on_write_eof: false,
             lost_called: false,
             writer_registered: false,
+            write_buffer_size: 0,
+            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
+            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
+            protocol_write_paused: false,
             detached: false,
             server,
         }),
@@ -2664,6 +2887,7 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                                 ServerTlsSettings {
                                     config: Arc::clone(&tls.config),
                                     handshake_timeout: tls.handshake_timeout,
+                                    shutdown_timeout: tls.shutdown_timeout,
                                     ssl_context: tls.ssl_context.clone_ref(py),
                                 },
                                 Some(Arc::downgrade(&server)),
@@ -2770,6 +2994,7 @@ async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) 
                                 ServerTlsSettings {
                                     config: Arc::clone(&tls.config),
                                     handshake_timeout: tls.handshake_timeout,
+                                    shutdown_timeout: tls.shutdown_timeout,
                                     ssl_context: tls.ssl_context.clone_ref(py),
                                 },
                                 Some(Arc::downgrade(&server)),
@@ -2850,6 +3075,7 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
                                 ServerTlsSettings {
                                     config: Arc::clone(&tls.config),
                                     handshake_timeout: tls.handshake_timeout,
+                                    shutdown_timeout: tls.shutdown_timeout,
                                     ssl_context: tls.ssl_context.clone_ref(py),
                                 },
                                 Some(Arc::downgrade(&server)),
@@ -2933,6 +3159,7 @@ async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener
                                 ServerTlsSettings {
                                     config: Arc::clone(&tls.config),
                                     handshake_timeout: tls.handshake_timeout,
+                                    shutdown_timeout: tls.shutdown_timeout,
                                     ssl_context: tls.ssl_context.clone_ref(py),
                                 },
                                 Some(Arc::downgrade(&server)),
@@ -3305,20 +3532,24 @@ fn run_stream_writer(
 
         match command {
             WriterCommand::Data(mut data) => {
+                let buffered_len = data.remaining().len();
                 if let Err(err) = write_all_owned(&mut writer, &mut data) {
                     let _ = core.connection_lost(Some(PyRuntimeError::new_err(err.to_string())));
                     return;
                 }
+                core.record_write_buffer_drained(buffered_len);
 
                 loop {
                     match writer_rx.try_recv() {
                         Ok(WriterCommand::Data(mut next)) => {
+                            let buffered_len = next.remaining().len();
                             if let Err(err) = write_all_owned(&mut writer, &mut next) {
                                 let _ = core.connection_lost(Some(PyRuntimeError::new_err(
                                     err.to_string(),
                                 )));
                                 return;
                             }
+                            core.record_write_buffer_drained(buffered_len);
                         }
                         Ok(command) => {
                             pending_command = Some(command);
@@ -3386,6 +3617,7 @@ fn run_tls_writer(
 
         match command {
             WriterCommand::Data(data) => {
+                let buffered_len = data.remaining().len();
                 let result = {
                     let mut state = tls_state.lock().expect("poisoned tls state");
                     match state.connection.writer_write_all(data.remaining()) {
@@ -3397,10 +3629,12 @@ fn run_tls_writer(
                     let _ = core.connection_lost(Some(PyRuntimeError::new_err(err.to_string())));
                     return;
                 }
+                core.record_write_buffer_drained(buffered_len);
 
                 loop {
                     match writer_rx.try_recv() {
                         Ok(WriterCommand::Data(next)) => {
+                            let buffered_len = next.remaining().len();
                             let result = {
                                 let mut state = tls_state.lock().expect("poisoned tls state");
                                 match state.connection.writer_write_all(next.remaining()) {
@@ -3414,6 +3648,7 @@ fn run_tls_writer(
                                 )));
                                 return;
                             }
+                            core.record_write_buffer_drained(buffered_len);
                         }
                         Ok(command) => {
                             pending_command = Some(command);
@@ -3436,11 +3671,34 @@ fn run_tls_writer(
                 }
             }
             WriterCommand::WriteEof => {}
-            WriterCommand::Close | WriterCommand::Abort => {
-                {
+            WriterCommand::Close => {
+                let close_result = {
                     let mut state = tls_state.lock().expect("poisoned tls state");
+                    let shutdown_timeout = state.shutdown_timeout;
                     state.connection.send_close_notify();
-                    let _ = flush_tls_io_locked(&mut state);
+                    let result = flush_tls_close_io_locked(&mut state, shutdown_timeout);
+                    let _ = state.shutdown_close();
+                    result
+                };
+                match close_result {
+                    Ok(()) => {
+                        let _ = core.connection_lost(None);
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::TimedOut => {
+                        let _ = core.connection_lost(Some(PyTimeoutError::new_err(
+                            "SSL shutdown timed out",
+                        )));
+                    }
+                    Err(err) => {
+                        let _ =
+                            core.connection_lost(Some(PyRuntimeError::new_err(err.to_string())));
+                    }
+                }
+                return;
+            }
+            WriterCommand::Abort => {
+                {
+                    let state = tls_state.lock().expect("poisoned tls state");
                     let _ = state.shutdown_close();
                 }
                 let _ = core.connection_lost(None);
@@ -3504,6 +3762,29 @@ fn flush_tls_io_locked(state: &mut TlsIoState) -> io::Result<()> {
     Ok(())
 }
 
+fn flush_tls_close_io_locked(state: &mut TlsIoState, timeout: Duration) -> io::Result<()> {
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(std::time::Instant::now);
+    while state.connection.wants_write() {
+        match state.write_tls() {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to flush TLS records",
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                wait_socket_ready_until(state.fd(), state.pollable(), false, true, deadline)?;
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
 fn wait_socket_ready(fd: fd_ops::RawFd, pollable: bool, read: bool, write: bool) -> io::Result<()> {
     if pollable {
         loop {
@@ -3519,6 +3800,49 @@ fn wait_socket_ready(fd: fd_ops::RawFd, pollable: bool, read: bool, write: bool)
         }
     }
 
+    thread::sleep(Duration::from_millis(10));
+    Ok(())
+}
+
+fn wait_socket_ready_until(
+    fd: fd_ops::RawFd,
+    pollable: bool,
+    read: bool,
+    write: bool,
+    deadline: std::time::Instant,
+) -> io::Result<()> {
+    if pollable {
+        loop {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "SSL shutdown timed out",
+                ));
+            }
+
+            let remaining_ms = deadline
+                .saturating_duration_since(now)
+                .as_millis()
+                .clamp(1, i32::MAX as u128) as i32;
+            match fd_ops::poll_fd(fd, read, write, remaining_ms) {
+                Ok((read_ready, write_ready))
+                    if (!read || read_ready) && (!write || write_ready) =>
+                {
+                    return Ok(());
+                }
+                Ok(_) => continue,
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    if std::time::Instant::now() >= deadline {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "SSL shutdown timed out",
+        ));
+    }
     thread::sleep(Duration::from_millis(10));
     Ok(())
 }
@@ -3592,6 +3916,8 @@ fn build_protocol_callbacks(py: Python<'_>, protocol: &Py<PyAny>) -> PyResult<Pr
         data_received,
         eof_received,
         connection_lost: bound.getattr("connection_lost")?.unbind(),
+        pause_writing: bound.getattr(python_names::pause_writing(py))?.unbind(),
+        resume_writing: bound.getattr(python_names::resume_writing(py))?.unbind(),
         get_buffer,
         buffer_updated,
         stream_reader_fast_path,

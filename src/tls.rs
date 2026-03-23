@@ -12,17 +12,20 @@ use rustls::server::ServerConfig;
 use rustls::{RootCertStore, SupportedProtocolVersion};
 
 const DEFAULT_HANDSHAKE_TIMEOUT_SECS: f64 = 60.0;
+const DEFAULT_SHUTDOWN_TIMEOUT_SECS: f64 = 30.0;
 
 pub struct ClientTlsSettings {
     pub config: Arc<ClientConfig>,
     pub server_name: ServerName<'static>,
     pub handshake_timeout: Duration,
+    pub shutdown_timeout: Duration,
     pub ssl_context: Py<PyAny>,
 }
 
 pub struct ServerTlsSettings {
     pub config: Arc<ServerConfig>,
     pub handshake_timeout: Duration,
+    pub shutdown_timeout: Duration,
     pub ssl_context: Py<PyAny>,
 }
 
@@ -31,17 +34,20 @@ pub fn client_tls_settings(
     ssl: &Bound<'_, PyAny>,
     server_hostname: Option<&Bound<'_, PyAny>>,
     ssl_handshake_timeout: Option<f64>,
+    ssl_shutdown_timeout: Option<f64>,
 ) -> PyResult<ClientTlsSettings> {
     let ssl_context = normalize_client_ssl_context(py, ssl)?;
     let hostname = resolve_server_hostname(py, &ssl_context, server_hostname)?;
     let config = build_client_config(py, &ssl_context)?;
     let handshake_timeout = handshake_timeout(ssl_handshake_timeout)?;
+    let shutdown_timeout = shutdown_timeout(ssl_shutdown_timeout)?;
 
     Ok(ClientTlsSettings {
         config: Arc::new(config),
         server_name: ServerName::try_from(hostname.clone())
             .map_err(|_| PyValueError::new_err(format!("invalid server_hostname: {hostname}")))?,
         handshake_timeout,
+        shutdown_timeout,
         ssl_context,
     })
 }
@@ -50,14 +56,17 @@ pub fn server_tls_settings(
     py: Python<'_>,
     ssl: &Bound<'_, PyAny>,
     ssl_handshake_timeout: Option<f64>,
+    ssl_shutdown_timeout: Option<f64>,
 ) -> PyResult<ServerTlsSettings> {
     let ssl_context = normalize_server_ssl_context(py, ssl)?;
     let config = build_server_config(py, &ssl_context)?;
     let handshake_timeout = handshake_timeout(ssl_handshake_timeout)?;
+    let shutdown_timeout = shutdown_timeout(ssl_shutdown_timeout)?;
 
     Ok(ServerTlsSettings {
         config: Arc::new(config),
         handshake_timeout,
+        shutdown_timeout,
         ssl_context,
     })
 }
@@ -67,6 +76,16 @@ fn handshake_timeout(value: Option<f64>) -> PyResult<Duration> {
     if !secs.is_finite() || secs <= 0.0 {
         return Err(PyValueError::new_err(
             "ssl_handshake_timeout must be a positive finite number",
+        ));
+    }
+    Ok(Duration::from_secs_f64(secs))
+}
+
+fn shutdown_timeout(value: Option<f64>) -> PyResult<Duration> {
+    let secs = value.unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT_SECS);
+    if !secs.is_finite() || secs <= 0.0 {
+        return Err(PyValueError::new_err(
+            "ssl_shutdown_timeout must be a positive finite number",
         ));
     }
     Ok(Duration::from_secs_f64(secs))

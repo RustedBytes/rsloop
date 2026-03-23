@@ -4,13 +4,13 @@ build-backend = "maturin"
 
 [project]
 name = "rsloop"
-version = "0.1.5"
+version = "0.1.6"
 description = "An event loop for asyncio written in Rust"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
 authors = [
-  { name = "RustedBytes" },
+  { name = "Yehor Smoliakov <egorsmkv@gmail.com>" },
 ]
 keywords = ["asyncio", "event-loop", "pyo3", "python", "rust"]
 classifiers = [

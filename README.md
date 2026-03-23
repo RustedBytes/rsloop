@@ -165,29 +165,15 @@ model, but has not finished eliminating every helper thread yet.
 
 These gaps are visible in the current implementation.
 
-- Stream transport flow control is partial:
-  `pause_reading()` and `resume_reading()` work, but
-  `get_write_buffer_size()` returns `0`,
-  `get_write_buffer_limits()` returns `(0, 0)`, and
-  `set_write_buffer_limits()` is a no-op.
-- Several compatibility parameters are currently accepted only to preserve API
-  shape, not to provide full behavior:
-  `happy_eyeballs_delay`, `interleave`, `all_errors`,
-  `ssl_shutdown_timeout`, and
-  `shutdown_default_executor(timeout=...)`.
 - TLS uses a `rustls` backend with a narrower compatibility surface than
   CPython's OpenSSL-backed `ssl` module. In particular, encrypted private keys
   are not supported yet, and the fast-stream monkeypatch still falls back to
   stdlib helpers whenever `ssl` is enabled. TLS transport internals also still
   use helper-thread paths instead of the newer runtime-thread `compio` socket
   path.
-- Subprocess support is intentionally incomplete:
-  `preexec_fn` is unsupported, and text mode is rejected for
-  `asyncio.create_subprocess_exec()` /
-  `asyncio.create_subprocess_shell()` when using the stdlib subprocess stream
-  protocol.
-- Low-level subprocess transport APIs do support text decoding when used with a
-  custom subprocess protocol.
+- Subprocess support still has one notable gap:
+  `preexec_fn` remains unsupported because running arbitrary Python between
+  `fork()` and `exec()` is unsafe in this runtime model.
 - Unix-specific APIs remain Unix-specific:
   `create_unix_server`, `create_unix_connection`,
   `add_signal_handler`, `remove_signal_handler`.
