@@ -386,7 +386,9 @@ class __RsloopDatagramTransport:
                 return
             except (BlockingIOError, InterruptedError):
                 if self._writer_task is None:
-                    self._writer_task = self._loop.create_task(self._flush_write_buffer())
+                    self._writer_task = self._loop.create_task(
+                        self._flush_write_buffer()
+                    )
             except OSError as exc:
                 self._protocol.error_received(exc)
                 return
@@ -493,7 +495,9 @@ async def __loop_sock_sendto(self, sock, data, address):
             await __wait_for_fd(self, sock, readable=False)
 
 
-async def __loop_sendfile(self, transport, file, offset=0, count=None, *, fallback=True):
+async def __loop_sendfile(
+    self, transport, file, offset=0, count=None, *, fallback=True
+):
     if transport.is_closing():
         raise RuntimeError("Transport is closing")
     if not fallback:
@@ -531,7 +535,9 @@ async def __loop_sendfile(self, transport, file, offset=0, count=None, *, fallba
             file.seek(offset + total_sent)
 
 
-async def __loop_sock_sendfile(self, sock, file, offset=0, count=None, *, fallback=True):
+async def __loop_sock_sendfile(
+    self, sock, file, offset=0, count=None, *, fallback=True
+):
     if sock.gettimeout() != 0:
         raise ValueError("the socket must be non-blocking")
     if "b" not in getattr(file, "mode", "b"):
@@ -598,7 +604,9 @@ async def __loop_create_datagram_endpoint(
 ):
     resolved_remote_addr = None
     if sock is not None and (local_addr is not None or remote_addr is not None):
-        raise ValueError("socket modifier keyword arguments can not be used when sock is specified")
+        raise ValueError(
+            "socket modifier keyword arguments can not be used when sock is specified"
+        )
     if sock is None and local_addr is None and remote_addr is None:
         raise ValueError("unexpected address family")
 
@@ -1623,7 +1631,9 @@ else:
             try:
                 __cancel_all_tasks(loop)
                 loop.run_until_complete(loop.shutdown_asyncgens())
-                shutdown_default_executor = getattr(loop, "shutdown_default_executor", None)
+                shutdown_default_executor = getattr(
+                    loop, "shutdown_default_executor", None
+                )
                 if shutdown_default_executor is not None:
                     loop.run_until_complete(shutdown_default_executor())
             finally:

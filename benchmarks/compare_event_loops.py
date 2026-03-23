@@ -428,7 +428,9 @@ def child_main(args: argparse.Namespace) -> int:
                 raise RuntimeError("profiling is only supported for rsloop")
             rsloop = importlib.import_module("rsloop")
             if args.profile_label:
-                print(f"[profile] Tracy session label: {args.profile_label}", flush=True)
+                print(
+                    f"[profile] Tracy session label: {args.profile_label}", flush=True
+                )
             with rsloop.profile():
                 result = run_with_loop(args.loop, coro)
         else:

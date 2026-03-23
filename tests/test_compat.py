@@ -204,7 +204,9 @@ class CompatibilityTests(unittest.TestCase):
                 await loop.run_in_executor(None, lambda: 1)
             except RuntimeError as exc:
                 return str(exc)
-            raise AssertionError("run_in_executor(None, ...) should fail after shutdown")
+            raise AssertionError(
+                "run_in_executor(None, ...) should fail after shutdown"
+            )
 
         self.assertEqual(
             rsloop.run(main()),
@@ -322,7 +324,9 @@ class CompatibilityTests(unittest.TestCase):
                 await loop.getaddrinfo("localhost", 80)
             except RuntimeError as exc:
                 return str(exc)
-            raise AssertionError("getaddrinfo should fail after default executor shutdown")
+            raise AssertionError(
+                "getaddrinfo should fail after default executor shutdown"
+            )
 
         self.assertEqual(
             rsloop.run(main()),
@@ -486,7 +490,9 @@ class CompatibilityTests(unittest.TestCase):
             path = pathlib.Path(tmpdir) / "payload.bin"
             payload = b"sendfile-payload"
             path.write_bytes(payload)
-            self.assertEqual(rsloop.run(main(str(path), payload)), (len(payload), payload))
+            self.assertEqual(
+                rsloop.run(main(str(path), payload)), (len(payload), payload)
+            )
 
     def test_sock_recvfrom_receives_datagram(self) -> None:
         async def main() -> tuple[bytes, tuple[str, int]]:
