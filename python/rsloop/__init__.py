@@ -14,6 +14,7 @@ import sys as __sys
 import typing as __typing
 import locale as __locale
 import warnings as __warnings
+import asyncio.base_events as __asyncio_base_events
 
 __DLL_DIR_HANDLES: list[object] = []
 
@@ -131,6 +132,9 @@ __ORIG_START_SERVER = __asyncio.start_server
 __ORIG_CREATE_SUBPROCESS_EXEC = __asyncio.create_subprocess_exec
 __ORIG_CREATE_SUBPROCESS_SHELL = __asyncio.create_subprocess_shell
 __ORIG_CREATE_CONNECTION = Loop.create_connection
+__ORIG_CREATE_DATAGRAM_ENDPOINT = getattr(Loop, "create_datagram_endpoint", None)
+__ORIG_SENDFILE = getattr(Loop, "sendfile", None)
+__ORIG_SOCK_RECVFROM = getattr(Loop, "sock_recvfrom", None)
 __ORIG_RUN_FOREVER = Loop.run_forever
 __ORIG_RUN_UNTIL_COMPLETE = Loop.run_until_complete
 __ORIG_SHUTDOWN_ASYNCGENS = Loop.shutdown_asyncgens
@@ -145,6 +149,7 @@ if __USE_FAST_STREAMS and __asyncio.start_server is __ORIG_START_SERVER:
     __asyncio.start_server = __start_server
 
 _asyncio = __asyncio
+_collections = __collections
 _locale = __locale
 _os = __os
 
@@ -239,6 +244,301 @@ def __loop_close(self):
         return __ORIG_CLOSE(self)
     finally:
         __ASYNCGEN_STATE.pop(self, None)
+
+
+class __RsloopDatagramTransport:
+    max_size = 256 * 1024
+
+    def __init__(self, loop: Loop, sock, protocol, address=None, waiter=None):
+        self._loop = loop
+        self._sock = sock
+        self._protocol = protocol
+        self._address = address
+        self._buffer = _collections.deque()
+        self._buffer_size = 0
+        self._closing = False
+        self._conn_lost = 0
+        self._writer_task = None
+        self._extra = {
+            "socket": sock,
+            "sockname": sock.getsockname(),
+            "peername": self.__peername(),
+        }
+        self._protocol_paused = False
+        self._high_water = 64 * 1024
+        self._low_water = 16 * 1024
+        self._reader_task = self._loop.create_task(self._read_loop())
+        self._loop.call_soon(self._protocol.connection_made, self)
+        if waiter is not None:
+            self._loop.call_soon(waiter.set_result, None)
+
+    def __peername(self):
+        try:
+            return self._sock.getpeername()
+        except OSError:
+            return None
+
+    def get_extra_info(self, name, default=None):
+        return self._extra.get(name, default)
+
+    def get_protocol(self):
+        return self._protocol
+
+    def set_protocol(self, protocol):
+        self._protocol = protocol
+
+    def is_closing(self):
+        return self._closing
+
+    def close(self):
+        if self._closing:
+            return
+        self._closing = True
+        self._reader_task.cancel()
+        if not self._buffer:
+            self._loop.call_soon(self._call_connection_lost, None)
+
+    def abort(self):
+        self._force_close(None)
+
+    def get_write_buffer_size(self):
+        return self._buffer_size
+
+    def _maybe_pause_protocol(self):
+        if self._buffer_size > self._high_water and not self._protocol_paused:
+            self._protocol_paused = True
+            self._protocol.pause_writing()
+
+    def _maybe_resume_protocol(self):
+        if self._protocol_paused and self._buffer_size <= self._low_water:
+            self._protocol_paused = False
+            self._protocol.resume_writing()
+
+    def sendto(self, data, addr=None):
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError(
+                f"data argument must be a bytes-like object, not {type(data).__name__!r}"
+            )
+        if self._address is not None:
+            if addr not in (None, self._address):
+                raise ValueError(f"Invalid address: must be None or {self._address}")
+            addr = self._address
+
+        if not self._buffer:
+            try:
+                if self._extra["peername"] is not None:
+                    self._sock.send(data)
+                else:
+                    self._sock.sendto(data, addr)
+                return
+            except (BlockingIOError, InterruptedError):
+                if self._writer_task is None:
+                    self._writer_task = self._loop.create_task(self._flush_write_buffer())
+            except OSError as exc:
+                self._protocol.error_received(exc)
+                return
+
+        payload = bytes(data)
+        self._buffer.append((payload, addr))
+        self._buffer_size += len(payload)
+        self._maybe_pause_protocol()
+
+    async def _read_loop(self):
+        while not self._closing:
+            try:
+                data, addr = await self._loop.sock_recvfrom(self._sock, self.max_size)
+            except _asyncio.CancelledError:
+                return
+            except OSError as exc:
+                self._protocol.error_received(exc)
+                continue
+            self._protocol.datagram_received(data, addr)
+
+    async def _flush_write_buffer(self):
+        try:
+            while self._buffer and not self._closing:
+                data, addr = self._buffer[0]
+                try:
+                    if self._extra["peername"] is not None:
+                        self._sock.send(data)
+                    else:
+                        self._sock.sendto(data, addr)
+                except (BlockingIOError, InterruptedError):
+                    await __wait_for_fd(self._loop, self._sock, readable=False)
+                    continue
+                except OSError as exc:
+                    self._protocol.error_received(exc)
+                    return
+                self._buffer.popleft()
+                self._buffer_size -= len(data)
+                self._maybe_resume_protocol()
+        finally:
+            self._writer_task = None
+            if self._closing and not self._buffer:
+                self._call_connection_lost(None)
+
+    def _force_close(self, exc):
+        if self._conn_lost:
+            return
+        self._buffer.clear()
+        self._buffer_size = 0
+        self._closing = True
+        self._reader_task.cancel()
+        if self._writer_task is not None:
+            self._writer_task.cancel()
+        self._call_connection_lost(exc)
+
+    def _call_connection_lost(self, exc):
+        if self._conn_lost:
+            return
+        self._conn_lost += 1
+        try:
+            self._protocol.connection_lost(exc)
+        finally:
+            self._sock.close()
+
+
+async def __wait_for_fd(loop: Loop, sock, *, readable: bool) -> None:
+    fut = loop.create_future()
+    callback = loop.add_reader if readable else loop.add_writer
+    remove = loop.remove_reader if readable else loop.remove_writer
+
+    def ready() -> None:
+        if not fut.done():
+            fut.set_result(None)
+
+    callback(sock, ready)
+    try:
+        await fut
+    finally:
+        remove(sock)
+
+
+async def __loop_sock_recvfrom(self, sock, bufsize):
+    while True:
+        try:
+            return sock.recvfrom(bufsize)
+        except (BlockingIOError, InterruptedError):
+            await __wait_for_fd(self, sock, readable=True)
+
+
+async def __loop_sendfile(self, transport, file, offset=0, count=None, *, fallback=True):
+    if transport.is_closing():
+        raise RuntimeError("Transport is closing")
+    if not fallback:
+        raise RuntimeError(
+            f"fallback is disabled and native sendfile is not supported for transport {transport!r}"
+        )
+
+    if offset:
+        file.seek(offset)
+    blocksize = min(count, 16384) if count else 16384
+    buf = bytearray(blocksize)
+    total_sent = 0
+
+    async def drain_transport() -> None:
+        while transport.get_write_buffer_size() > 0:
+            if transport.is_closing():
+                raise ConnectionError("Connection closed by peer")
+            await __asyncio.sleep(0)
+
+    try:
+        while True:
+            if count is not None:
+                blocksize = min(count - total_sent, blocksize)
+                if blocksize <= 0:
+                    return total_sent
+            view = memoryview(buf)[:blocksize]
+            read = await self.run_in_executor(None, file.readinto, view)
+            if not read:
+                return total_sent
+            transport.write(view[:read])
+            await drain_transport()
+            total_sent += read
+    finally:
+        if total_sent > 0 and hasattr(file, "seek"):
+            file.seek(offset + total_sent)
+
+
+async def __loop_create_datagram_endpoint(
+    self,
+    protocol_factory,
+    local_addr=None,
+    remote_addr=None,
+    *,
+    family=0,
+    proto=0,
+    flags=0,
+    reuse_port=None,
+    allow_broadcast=None,
+    sock=None,
+):
+    resolved_remote_addr = None
+    if sock is not None and (local_addr is not None or remote_addr is not None):
+        raise ValueError("socket modifier keyword arguments can not be used when sock is specified")
+    if sock is None and local_addr is None and remote_addr is None:
+        raise ValueError("unexpected address family")
+
+    if sock is None:
+        addrinfos = None
+        if remote_addr is not None:
+            addrinfos = await self.getaddrinfo(
+                *remote_addr,
+                family=family,
+                type=__socket.SOCK_DGRAM,
+                proto=proto,
+                flags=flags,
+            )
+        elif local_addr is not None:
+            addrinfos = await self.getaddrinfo(
+                *local_addr,
+                family=family,
+                type=__socket.SOCK_DGRAM,
+                proto=proto,
+                flags=flags,
+            )
+        if not addrinfos:
+            raise OSError("getaddrinfo() returned empty list")
+
+        family, socktype, proto, _, sockaddr = addrinfos[0]
+        if remote_addr is not None:
+            resolved_remote_addr = sockaddr
+        sock = __socket.socket(family=family, type=socktype, proto=proto)
+        sock.setblocking(False)
+        if reuse_port:
+            if not hasattr(__socket, "SO_REUSEPORT"):
+                raise ValueError("reuse_port not supported by socket module")
+            sock.setsockopt(__socket.SOL_SOCKET, __socket.SO_REUSEPORT, 1)
+        if allow_broadcast:
+            sock.setsockopt(__socket.SOL_SOCKET, __socket.SO_BROADCAST, 1)
+        if local_addr is not None:
+            sock.bind(local_addr)
+        elif remote_addr is not None:
+            if family == __socket.AF_INET6:
+                sock.bind(("::", 0))
+            else:
+                sock.bind(("0.0.0.0", 0))
+    else:
+        sock.setblocking(False)
+
+    waiter = self.create_future()
+    protocol = protocol_factory()
+    address = resolved_remote_addr or remote_addr
+    if address is None and sock is not None:
+        try:
+            address = sock.getpeername()
+        except OSError:
+            address = None
+
+    transport = __RsloopDatagramTransport(
+        self,
+        sock,
+        protocol,
+        address=address,
+        waiter=waiter,
+    )
+    await waiter
+    return transport, protocol
 
 
 def __subprocess_text_requested(kwds: dict[str, object]) -> bool:
@@ -981,6 +1281,15 @@ async def __loop_create_connection(
 
 if Loop.create_connection is __ORIG_CREATE_CONNECTION:
     Loop.create_connection = __loop_create_connection
+
+if __ORIG_CREATE_DATAGRAM_ENDPOINT is None:
+    Loop.create_datagram_endpoint = __loop_create_datagram_endpoint
+
+if __ORIG_SENDFILE is None:
+    Loop.sendfile = __loop_sendfile
+
+if __ORIG_SOCK_RECVFROM is None:
+    Loop.sock_recvfrom = __loop_sock_recvfrom
 
 if Loop.run_forever is __ORIG_RUN_FOREVER:
     Loop.run_forever = __loop_run_forever

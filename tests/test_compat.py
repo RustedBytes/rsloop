@@ -11,6 +11,7 @@ import threading
 import unittest
 import warnings
 import builtins
+import pathlib
 from unittest import mock
 
 import rsloop
@@ -386,9 +387,115 @@ class CompatibilityTests(unittest.TestCase):
                 return sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
             finally:
                 server.close()
-                await server.wait_closed()
+                await asyncio.sleep(0)
 
         self.assertEqual(rsloop.run(main()), 1)
+
+    def test_create_datagram_endpoint_round_trip(self) -> None:
+        async def main() -> str:
+            loop = asyncio.get_running_loop()
+            done = loop.create_future()
+
+            class ServerProtocol(asyncio.DatagramProtocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+
+                def datagram_received(self, data, addr):
+                    self.transport.sendto(b"echo:" + data, addr)
+
+            class ClientProtocol(asyncio.DatagramProtocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+                    transport.sendto(b"ping")
+
+                def datagram_received(self, data, addr):
+                    if not done.done():
+                        done.set_result(data.decode())
+                    self.transport.close()
+
+            server_transport, _ = await loop.create_datagram_endpoint(
+                ServerProtocol,
+                local_addr=("127.0.0.1", 0),
+            )
+            try:
+                port = server_transport.get_extra_info("sockname")[1]
+                client_transport, _ = await loop.create_datagram_endpoint(
+                    ClientProtocol,
+                    remote_addr=("127.0.0.1", port),
+                )
+                try:
+                    return await asyncio.wait_for(done, 1.0)
+                finally:
+                    client_transport.close()
+            finally:
+                server_transport.close()
+
+        self.assertEqual(rsloop.run(main()), "echo:ping")
+
+    def test_sendfile_fallback_writes_file_contents(self) -> None:
+        async def main(path: str, expected: bytes) -> tuple[int, bytes]:
+            loop = asyncio.get_running_loop()
+            done = loop.create_future()
+            client_done = loop.create_future()
+
+            class ServerProtocol(asyncio.Protocol):
+                def data_received(self, data):
+                    if not done.done():
+                        done.set_result(bytes(data))
+
+            class ClientProtocol(asyncio.Protocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+
+                def connection_lost(self, exc):
+                    if not client_done.done():
+                        client_done.set_result(None)
+
+            server = await loop.create_server(ServerProtocol, "127.0.0.1", 0)
+            try:
+                port = server.sockets[0].getsockname()[1]
+                transport, _ = await loop.create_connection(
+                    ClientProtocol,
+                    "127.0.0.1",
+                    port,
+                )
+                try:
+                    with open(path, "rb") as f:
+                        sent = await loop.sendfile(transport, f)
+                    transport.close()
+                    received = await asyncio.wait_for(done, 1.0)
+                    await asyncio.wait_for(client_done, 1.0)
+                    return sent, received
+                finally:
+                    transport.close()
+            finally:
+                server.close()
+                await asyncio.sleep(0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "payload.bin"
+            payload = b"sendfile-payload"
+            path.write_bytes(payload)
+            self.assertEqual(rsloop.run(main(str(path), payload)), (len(payload), payload))
+
+    def test_sock_recvfrom_receives_datagram(self) -> None:
+        async def main() -> tuple[bytes, tuple[str, int]]:
+            loop = asyncio.get_running_loop()
+            recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                recv_sock.bind(("127.0.0.1", 0))
+                recv_sock.setblocking(False)
+                addr = recv_sock.getsockname()
+                send_sock.sendto(b"udp-data", addr)
+                return await asyncio.wait_for(loop.sock_recvfrom(recv_sock, 1024), 1.0)
+            finally:
+                recv_sock.close()
+                send_sock.close()
+
+        data, addr = rsloop.run(main())
+        self.assertEqual(data, b"udp-data")
+        self.assertEqual(addr[0], "127.0.0.1")
 
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "unix sockets required")
     def test_create_unix_server_cleanup_socket_false_leaves_path(self) -> None:
