@@ -11,6 +11,7 @@ import socket as __socket
 import ssl as __ssl
 import sys as __sys
 import typing as __typing
+import locale as __locale
 
 from ._loop import PyLoop as Loop
 from ._loop import __version__
@@ -95,6 +96,8 @@ def profile(
 
 __ORIG_OPEN_CONNECTION = __asyncio.open_connection
 __ORIG_START_SERVER = __asyncio.start_server
+__ORIG_CREATE_SUBPROCESS_EXEC = __asyncio.create_subprocess_exec
+__ORIG_CREATE_SUBPROCESS_SHELL = __asyncio.create_subprocess_shell
 __ORIG_CREATE_CONNECTION = Loop.create_connection
 __USE_FAST_STREAMS = __os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
 
@@ -103,6 +106,478 @@ if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
     __asyncio.open_connection = __open_connection
 if __USE_FAST_STREAMS and __asyncio.start_server is __ORIG_START_SERVER:
     __asyncio.start_server = __start_server
+
+_asyncio = __asyncio
+_locale = __locale
+_os = __os
+
+
+def __subprocess_text_requested(kwds: dict[str, object]) -> bool:
+    return bool(
+        kwds.get("universal_newlines")
+        or kwds.get("text") is True
+        or kwds.get("encoding") is not None
+        or kwds.get("errors") is not None
+    )
+
+
+class _TextStreamReader:
+    def __init__(self, limit=_asyncio.streams._DEFAULT_LIMIT, loop=None):
+        if limit <= 0:
+            raise ValueError("Limit cannot be <= 0")
+
+        self._limit = limit
+        self._loop = _asyncio.events.get_event_loop() if loop is None else loop
+        self._buffer = ""
+        self._eof = False
+        self._waiter = None
+        self._exception = None
+        self._transport = None
+        self._paused = False
+
+    def __repr__(self):
+        return (
+            f"<{self.__class__.__name__} "
+            f"eof={self._eof} "
+            f"limit={self._limit} "
+            f"transport={self._transport!r}>"
+        )
+
+    def exception(self):
+        return self._exception
+
+    def set_exception(self, exc):
+        self._exception = exc
+        waiter = self._waiter
+        if waiter is not None:
+            self._waiter = None
+            if not waiter.cancelled():
+                waiter.set_exception(exc)
+
+    def set_transport(self, transport):
+        assert self._transport is None, "Transport already set"
+        self._transport = transport
+
+    def feed_eof(self):
+        self._eof = True
+        waiter = self._waiter
+        if waiter is not None:
+            self._waiter = None
+            if not waiter.cancelled():
+                waiter.set_result(None)
+
+    def feed_data(self, data):
+        assert not self._eof, "feed_data after feed_eof"
+
+        if not data:
+            return
+
+        self._buffer += data
+        waiter = self._waiter
+        if waiter is not None:
+            self._waiter = None
+            if not waiter.cancelled():
+                waiter.set_result(None)
+
+        if (
+            self._transport is not None
+            and not self._paused
+            and len(self._buffer) > 2 * self._limit
+        ):
+            try:
+                self._transport.pause_reading()
+            except NotImplementedError:
+                self._transport = None
+            else:
+                self._paused = True
+
+    def at_eof(self):
+        return self._eof and not self._buffer
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        value = await self.readline()
+        if value == "":
+            raise StopAsyncIteration
+        return value
+
+    def _maybe_resume_transport(self):
+        if self._paused and len(self._buffer) <= self._limit:
+            self._paused = False
+            self._transport.resume_reading()
+
+    async def _wait_for_data(self, func_name):
+        if self._waiter is not None:
+            raise RuntimeError(
+                f"{func_name}() called while another coroutine is already "
+                "waiting for incoming data"
+            )
+
+        assert not self._eof, "_wait_for_data after EOF"
+
+        if self._paused:
+            self._paused = False
+            self._transport.resume_reading()
+
+        self._waiter = self._loop.create_future()
+        try:
+            await self._waiter
+        finally:
+            self._waiter = None
+
+    async def read(self, n=-1):
+        if self._exception is not None:
+            raise self._exception
+
+        if n == 0:
+            return ""
+
+        if n < 0:
+            blocks = []
+            while True:
+                block = await self.read(self._limit)
+                if not block:
+                    break
+                blocks.append(block)
+            return "".join(blocks)
+
+        if not self._buffer and not self._eof:
+            await self._wait_for_data("read")
+
+        data = self._buffer[:n]
+        self._buffer = self._buffer[n:]
+        self._maybe_resume_transport()
+        return data
+
+    async def readline(self):
+        try:
+            return await self.readuntil("\n")
+        except _asyncio.exceptions.IncompleteReadError as exc:
+            return exc.partial
+        except _asyncio.exceptions.LimitOverrunError as exc:
+            if self._buffer.startswith("\n", exc.consumed):
+                self._buffer = self._buffer[exc.consumed + 1 :]
+            else:
+                self._buffer = ""
+            self._maybe_resume_transport()
+            raise ValueError(exc.args[0]) from exc
+
+    async def readuntil(self, separator="\n"):
+        if not isinstance(separator, str):
+            raise TypeError("separator must be str")
+        if not separator:
+            raise ValueError("Separator should be at least one-character string")
+
+        if self._exception is not None:
+            raise self._exception
+
+        offset = 0
+        separator_length = len(separator)
+
+        while True:
+            buffer_length = len(self._buffer)
+            if buffer_length - offset >= separator_length:
+                index = self._buffer.find(separator, offset)
+                if index != -1:
+                    break
+                offset = buffer_length + 1 - separator_length
+                if offset > self._limit:
+                    raise _asyncio.exceptions.LimitOverrunError(
+                        "Separator is not found, and chunk exceed the limit",
+                        offset,
+                    )
+
+            if self._eof:
+                chunk = self._buffer
+                self._buffer = ""
+                raise _asyncio.exceptions.IncompleteReadError(chunk, None)
+
+            await self._wait_for_data("readuntil")
+
+        if index > self._limit:
+            raise _asyncio.exceptions.LimitOverrunError(
+                "Separator is found, but chunk is longer than limit",
+                index,
+            )
+
+        chunk = self._buffer[: index + separator_length]
+        self._buffer = self._buffer[index + separator_length :]
+        self._maybe_resume_transport()
+        return chunk
+
+    async def readexactly(self, n):
+        if n < 0:
+            raise ValueError("readexactly size can not be less than zero")
+
+        if self._exception is not None:
+            raise self._exception
+
+        if n == 0:
+            return ""
+
+        while len(self._buffer) < n:
+            if self._eof:
+                partial = self._buffer
+                self._buffer = ""
+                raise _asyncio.exceptions.IncompleteReadError(partial, n)
+            await self._wait_for_data("readexactly")
+
+        data = self._buffer[:n]
+        self._buffer = self._buffer[n:]
+        self._maybe_resume_transport()
+        return data
+
+
+class _TextStreamWriter:
+    def __init__(self, writer, encoding, errors):
+        self._writer = writer
+        self._encoding = encoding
+        self._errors = errors
+
+    def __repr__(self):
+        return f"<{self.__class__.__name__} writer={self._writer!r}>"
+
+    @property
+    def transport(self):
+        return self._writer.transport
+
+    def write(self, data):
+        if not isinstance(data, str):
+            raise TypeError("text-mode subprocess stdin expects str input")
+        self._writer.write(
+            data.replace("\n", _os.linesep).encode(self._encoding, self._errors)
+        )
+
+    def writelines(self, data):
+        for chunk in data:
+            self.write(chunk)
+
+    def write_eof(self):
+        return self._writer.write_eof()
+
+    def can_write_eof(self):
+        return self._writer.can_write_eof()
+
+    def close(self):
+        return self._writer.close()
+
+    def is_closing(self):
+        return self._writer.is_closing()
+
+    async def wait_closed(self):
+        await self._writer.wait_closed()
+
+    def get_extra_info(self, name, default=None):
+        return self._writer.get_extra_info(name, default)
+
+    async def drain(self):
+        await self._writer.drain()
+
+
+class _TextSubprocessStreamProtocol(
+    _asyncio.streams.FlowControlMixin,
+    _asyncio.protocols.SubprocessProtocol,
+):
+    def __init__(self, limit, loop, encoding, errors):
+        super().__init__(loop=loop)
+        self._limit = limit
+        self._encoding = encoding
+        self._errors = errors
+        self.stdin = self.stdout = self.stderr = None
+        self._transport = None
+        self._process_exited = False
+        self._pipe_fds = []
+        self._stdin_closed = self._loop.create_future()
+
+    def __repr__(self):
+        info = [self.__class__.__name__]
+        if self.stdin is not None:
+            info.append(f"stdin={self.stdin!r}")
+        if self.stdout is not None:
+            info.append(f"stdout={self.stdout!r}")
+        if self.stderr is not None:
+            info.append(f"stderr={self.stderr!r}")
+        return "<{}>".format(" ".join(info))
+
+    def connection_made(self, transport):
+        self._transport = transport
+
+        stdout_transport = transport.get_pipe_transport(1)
+        if stdout_transport is not None:
+            self.stdout = _TextStreamReader(limit=self._limit, loop=self._loop)
+            self.stdout.set_transport(stdout_transport)
+            self._pipe_fds.append(1)
+
+        stderr_transport = transport.get_pipe_transport(2)
+        if stderr_transport is not None:
+            self.stderr = _TextStreamReader(limit=self._limit, loop=self._loop)
+            self.stderr.set_transport(stderr_transport)
+            self._pipe_fds.append(2)
+
+        stdin_transport = transport.get_pipe_transport(0)
+        if stdin_transport is not None:
+            writer = _asyncio.streams.StreamWriter(
+                stdin_transport,
+                protocol=self,
+                reader=None,
+                loop=self._loop,
+            )
+            self.stdin = _TextStreamWriter(
+                writer,
+                encoding=self._encoding,
+                errors=self._errors,
+            )
+
+    def pipe_data_received(self, fd, data):
+        if fd == 1:
+            reader = self.stdout
+        elif fd == 2:
+            reader = self.stderr
+        else:
+            reader = None
+        if reader is not None:
+            reader.feed_data(data)
+
+    def pipe_connection_lost(self, fd, exc):
+        if fd == 0:
+            pipe = self.stdin
+            if pipe is not None:
+                pipe.close()
+            self.connection_lost(exc)
+            if exc is None:
+                self._stdin_closed.set_result(None)
+            else:
+                self._stdin_closed.set_exception(exc)
+                self._stdin_closed._log_traceback = False
+            return
+        if fd == 1:
+            reader = self.stdout
+        elif fd == 2:
+            reader = self.stderr
+        else:
+            reader = None
+        if reader is not None:
+            if exc is None:
+                reader.feed_eof()
+            else:
+                reader.set_exception(exc)
+
+        if fd in self._pipe_fds:
+            self._pipe_fds.remove(fd)
+        self._maybe_close_transport()
+
+    def process_exited(self):
+        self._process_exited = True
+        self._maybe_close_transport()
+
+    def _maybe_close_transport(self):
+        if len(self._pipe_fds) == 0 and self._process_exited:
+            self._transport.close()
+            self._transport = None
+
+    def _get_close_waiter(self, stream):
+        if self.stdin is stream or getattr(self.stdin, "_writer", None) is stream:
+            return self._stdin_closed
+
+
+def __subprocess_text_config(kwds: dict[str, object]) -> tuple[bool, str, str]:
+    text_enabled = __subprocess_text_requested(kwds)
+    encoding = kwds.get("encoding")
+    errors = kwds.get("errors")
+    if encoding is None:
+        encoding = _locale.getpreferredencoding(False)
+    if errors is None:
+        errors = "strict"
+    return text_enabled, str(encoding), str(errors)
+
+
+async def __create_text_subprocess_exec(
+    program,
+    *args,
+    stdin=None,
+    stdout=None,
+    stderr=None,
+    limit=_asyncio.streams._DEFAULT_LIMIT,
+    **kwds,
+):
+    loop = _asyncio.events.get_running_loop()
+    text_enabled, encoding, errors = __subprocess_text_config(kwds)
+    if not text_enabled or not isinstance(loop, Loop):
+        return await __ORIG_CREATE_SUBPROCESS_EXEC(
+            program,
+            *args,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            limit=limit,
+            **kwds,
+        )
+
+    def protocol_factory():
+        return _TextSubprocessStreamProtocol(
+            limit=limit,
+            loop=loop,
+            encoding=encoding,
+            errors=errors,
+        )
+
+    transport, protocol = await loop.subprocess_exec(
+        protocol_factory,
+        program,
+        *args,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=stderr,
+        **kwds,
+    )
+    return _asyncio.subprocess.Process(transport, protocol, loop)
+
+
+async def __create_text_subprocess_shell(
+    cmd,
+    stdin=None,
+    stdout=None,
+    stderr=None,
+    limit=_asyncio.streams._DEFAULT_LIMIT,
+    **kwds,
+):
+    loop = _asyncio.events.get_running_loop()
+    text_enabled, encoding, errors = __subprocess_text_config(kwds)
+    if not text_enabled or not isinstance(loop, Loop):
+        return await __ORIG_CREATE_SUBPROCESS_SHELL(
+            cmd,
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            limit=limit,
+            **kwds,
+        )
+
+    def protocol_factory():
+        return _TextSubprocessStreamProtocol(
+            limit=limit,
+            loop=loop,
+            encoding=encoding,
+            errors=errors,
+        )
+
+    transport, protocol = await loop.subprocess_shell(
+        protocol_factory,
+        cmd,
+        stdin=stdin,
+        stdout=stdout,
+        stderr=stderr,
+        **kwds,
+    )
+    return _asyncio.subprocess.Process(transport, protocol, loop)
+
+
+if __asyncio.create_subprocess_exec is __ORIG_CREATE_SUBPROCESS_EXEC:
+    __asyncio.create_subprocess_exec = __create_text_subprocess_exec
+if __asyncio.create_subprocess_shell is __ORIG_CREATE_SUBPROCESS_SHELL:
+    __asyncio.create_subprocess_shell = __create_text_subprocess_shell
 
 
 def __interleave_addrinfos(addrinfos, first_address_family_count=1):

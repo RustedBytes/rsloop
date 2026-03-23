@@ -1,6 +1,8 @@
 import asyncio
 import os
+import shlex
 import socket
+import subprocess
 import sys
 import unittest
 
@@ -240,6 +242,95 @@ class RunTests(unittest.TestCase):
             {
                 "stdout": "shell-ok",
                 "stderr": "",
+                "returncode": 0,
+            },
+        )
+
+    def test_subprocess_exec_text_mode_round_trip(self) -> None:
+        async def main() -> dict[str, object]:
+            script = (
+                "import sys; "
+                "data = sys.stdin.read().rstrip('\\n'); "
+                "sys.stdout.write('out:' + data + '\\r\\nsecond\\n'); "
+                "sys.stderr.write('err:' + data + '\\r')"
+            )
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                script,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            assert proc.stdin is not None
+            assert proc.stdout is not None
+            assert proc.stderr is not None
+            proc.stdin.write("cafe\n")
+            await proc.stdin.drain()
+            proc.stdin.close()
+            first_line = await asyncio.wait_for(proc.stdout.readline(), 3.0)
+            rest = await asyncio.wait_for(proc.stdout.read(), 3.0)
+            stderr = await asyncio.wait_for(proc.stderr.read(), 3.0)
+            return {
+                "stdin_type": type(proc.stdin).__name__,
+                "stdout_type": type(proc.stdout).__name__,
+                "stderr_type": type(proc.stderr).__name__,
+                "first_line": first_line,
+                "rest": rest,
+                "stderr": stderr,
+                "returncode": await asyncio.wait_for(proc.wait(), 3.0),
+            }
+
+        self.assertEqual(
+            rsloop.run(main()),
+            {
+                "stdin_type": "_TextStreamWriter",
+                "stdout_type": "_TextStreamReader",
+                "stderr_type": "_TextStreamReader",
+                "first_line": "out:cafe\n",
+                "rest": "second\n",
+                "stderr": "err:cafe\n",
+                "returncode": 0,
+            },
+        )
+
+    def test_subprocess_shell_text_mode_round_trip(self) -> None:
+        async def main() -> dict[str, object]:
+            script = (
+                "import sys; "
+                "sys.stdout.write('shell-out\\r\\n'); "
+                "sys.stderr.write('shell-err\\r')"
+            )
+            if os.name == "nt":
+                cmd = subprocess.list2cmdline([sys.executable, "-c", script])
+            else:
+                cmd = shlex.join([sys.executable, "-c", script])
+
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), 3.0)
+            return {
+                "stdout": stdout,
+                "stderr": stderr,
+                "stdout_value_type": type(stdout).__name__,
+                "stderr_value_type": type(stderr).__name__,
+                "returncode": proc.returncode,
+            }
+
+        self.assertEqual(
+            rsloop.run(main()),
+            {
+                "stdout": "shell-out\n",
+                "stderr": "shell-err\n",
+                "stdout_value_type": "str",
+                "stderr_value_type": "str",
                 "returncode": 0,
             },
         )
