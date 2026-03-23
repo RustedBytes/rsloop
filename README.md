@@ -165,11 +165,6 @@ model, but has not finished eliminating every helper thread yet.
 
 These gaps are visible in the current implementation.
 
-- Stream transport flow control is partial:
-  `pause_reading()` and `resume_reading()` work, but
-  `get_write_buffer_size()` returns `0`,
-  `get_write_buffer_limits()` returns `(0, 0)`, and
-  `set_write_buffer_limits()` is a no-op.
 - TLS uses a `rustls` backend with a narrower compatibility surface than
   CPython's OpenSSL-backed `ssl` module. In particular, encrypted private keys
   are not supported yet, and the fast-stream monkeypatch still falls back to
