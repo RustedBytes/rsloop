@@ -7,11 +7,49 @@ import contextlib as __contextlib
 import itertools as __itertools
 import math as __math
 import os as __os
+import shutil as __shutil
 import socket as __socket
 import ssl as __ssl
 import sys as __sys
 import typing as __typing
 import locale as __locale
+
+__DLL_DIR_HANDLES: list[object] = []
+
+
+def __configure_windows_dll_search_path() -> None:
+    if __sys.platform != "win32" or not hasattr(__os, "add_dll_directory"):
+        return
+
+    candidate_dirs: list[str] = []
+    gcc = __shutil.which("gcc")
+    if gcc is not None:
+        candidate_dirs.append(__os.path.dirname(gcc))
+
+    msys_prefix = __os.environ.get("MSYSTEM_PREFIX")
+    if msys_prefix:
+        candidate_dirs.append(__os.path.join(msys_prefix, "bin"))
+
+    candidate_dirs.extend(
+        [
+            r"C:\msys64\ucrt64\bin",
+            r"C:\msys64\mingw64\bin",
+            r"C:\msys64\clang64\bin",
+        ]
+    )
+
+    seen: set[str] = set()
+    for directory in candidate_dirs:
+        normalized = __os.path.normcase(__os.path.abspath(directory))
+        if normalized in seen or not __os.path.isdir(directory):
+            continue
+        if not __os.path.exists(__os.path.join(directory, "libstdc++-6.dll")):
+            continue
+        __DLL_DIR_HANDLES.append(__os.add_dll_directory(directory))
+        seen.add(normalized)
+
+
+__configure_windows_dll_search_path()
 
 from ._loop import PyLoop as Loop
 from ._loop import __version__
@@ -72,21 +110,22 @@ def start_profiler(*, frequency: int = 999) -> None:
 
 
 def stop_profiler(
-    path: str | __os.PathLike[str],
+    path: str | __os.PathLike[str] | None = None,
     *,
-    format: str = "flamegraph",
-) -> str:
-    return __stop_profiler(__os.fspath(path), format=format)
+    format: str | None = None,
+) -> str | None:
+    resolved = None if path is None else __os.fspath(path)
+    return __stop_profiler(resolved, format=format)
 
 
 @__contextlib.contextmanager
 def profile(
-    path: str | __os.PathLike[str],
+    path: str | __os.PathLike[str] | None = None,
     *,
     frequency: int = 999,
-    format: str = "flamegraph",
-) -> __typing.Iterator[str]:
-    resolved_path = __os.fspath(path)
+    format: str | None = None,
+) -> __typing.Iterator[str | None]:
+    resolved_path = None if path is None else __os.fspath(path)
     start_profiler(frequency=frequency)
     try:
         yield resolved_path

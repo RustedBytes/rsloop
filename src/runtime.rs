@@ -152,6 +152,11 @@ impl Ord for TimerEntry {
 }
 
 pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>) {
+    profiling::scope!("runtime.run_thread");
+    #[cfg(feature = "profiler")]
+    if tracy_client::Client::is_running() {
+        tracy_client::set_thread_name!("rsloop-runtime");
+    }
     #[cfg(target_os = "linux")]
     let io_runtime = CompioRuntime::new().expect("failed to initialize compio runtime");
     #[cfg(target_os = "linux")]
@@ -179,6 +184,7 @@ pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>
 
 impl RuntimeDispatcher {
     fn run(&mut self) {
+        profiling::scope!("runtime.dispatcher.run");
         #[cfg(target_os = "linux")]
         {
             let runtime = self.io_runtime.clone();
@@ -191,6 +197,7 @@ impl RuntimeDispatcher {
     }
 
     fn run_inner(&mut self) {
+        profiling::scope!("runtime.dispatcher.run_inner");
         loop {
             if self.shutting_down {
                 break;
@@ -217,6 +224,7 @@ impl RuntimeDispatcher {
     }
 
     fn wait_for_work(&mut self) -> bool {
+        profiling::scope!("runtime.wait_for_work");
         #[cfg(target_os = "linux")]
         {
             self.io_runtime.run();
@@ -263,6 +271,7 @@ impl RuntimeDispatcher {
     }
 
     fn handle_received_command(&mut self, command: LoopCommand) -> bool {
+        profiling::scope!("runtime.handle_received_command");
         if self.handle_command(command) {
             return true;
         }
@@ -289,6 +298,7 @@ impl RuntimeDispatcher {
     }
 
     fn collect_expired_timers(&mut self) {
+        profiling::scope!("runtime.collect_expired_timers");
         if self.active_run.is_none() {
             return;
         }
@@ -305,27 +315,34 @@ impl RuntimeDispatcher {
     }
 
     fn handle_command(&mut self, command: LoopCommand) -> bool {
+        profiling::scope!("runtime.handle_command");
         match command {
             LoopCommand::ScheduleReady(callback) => {
+                profiling::scope!("runtime.cmd.schedule_ready");
                 self.ready_batch.push_back(ReadyItem::Callback(callback));
             }
             LoopCommand::ScheduleFutureSetResult { future, value } => {
+                profiling::scope!("runtime.cmd.future_set_result");
                 self.ready_batch
                     .push_back(ReadyItem::FutureSetResult { future, value });
             }
             LoopCommand::ScheduleFutureSetException { future, value } => {
+                profiling::scope!("runtime.cmd.future_set_exception");
                 self.ready_batch
                     .push_back(ReadyItem::FutureSetException { future, value });
             }
             LoopCommand::ScheduleStreamTransportRead(core) => {
+                profiling::scope!("runtime.cmd.stream_transport_read");
                 self.ready_batch
                     .push_back(ReadyItem::StreamTransportRead(core));
             }
             LoopCommand::ScheduleProcessTransport(core) => {
+                profiling::scope!("runtime.cmd.process_transport");
                 self.ready_batch
                     .push_back(ReadyItem::ProcessTransport(core));
             }
             LoopCommand::ScheduleTimer { callback, when } => {
+                profiling::scope!("runtime.cmd.schedule_timer");
                 let seq = self.next_timer_id;
                 self.next_timer_id += 1;
                 self.timers.push(TimerEntry {
@@ -338,6 +355,7 @@ impl RuntimeDispatcher {
                 pending_ready,
                 wake_tx,
             } => {
+                profiling::scope!("runtime.cmd.enter_run");
                 self.active_run = Some(ActiveRun {
                     pending_ready,
                     wake_tx,
@@ -345,6 +363,7 @@ impl RuntimeDispatcher {
                 self.dispatch_ready_batch();
             }
             LoopCommand::FinishRun { done_tx } => {
+                profiling::scope!("runtime.cmd.finish_run");
                 self.finish_run();
                 let _ = done_tx.send(());
             }
@@ -795,9 +814,11 @@ impl RuntimeDispatcher {
                 }
             }
             LoopCommand::RequestStop => {
+                profiling::scope!("runtime.cmd.request_stop");
                 self.ready_batch.push_back(ReadyItem::Stop);
             }
             LoopCommand::Close => {
+                profiling::scope!("runtime.cmd.close");
                 self.finish_run();
                 self.cleanup_watchers();
                 self.shutting_down = true;
@@ -809,6 +830,7 @@ impl RuntimeDispatcher {
     }
 
     fn dispatch_ready_batch(&mut self) -> bool {
+        profiling::scope!("runtime.dispatch_ready_batch");
         let Some(active_run) = self.active_run.as_ref() else {
             return false;
         };
@@ -828,6 +850,7 @@ impl RuntimeDispatcher {
     }
 
     fn finish_run(&mut self) {
+        profiling::scope!("runtime.finish_run");
         let Some(active_run) = self.active_run.take() else {
             return;
         };
@@ -844,6 +867,7 @@ impl RuntimeDispatcher {
     }
 
     fn cleanup_watchers(&mut self) {
+        profiling::scope!("runtime.cleanup_watchers");
         #[cfg(unix)]
         for (_, watcher) in self.signal_tasks.drain() {
             watcher.handle.close();

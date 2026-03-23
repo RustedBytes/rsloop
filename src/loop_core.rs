@@ -208,6 +208,7 @@ impl LoopCore {
     }
 
     pub fn send_command(&self, command: LoopCommand) -> Result<(), LoopCoreError> {
+        profiling::scope!("LoopCore::send_command");
         let command = match self.try_handle_local_command(command) {
             Ok(()) => return Ok(()),
             Err(command) => command,
@@ -270,6 +271,7 @@ impl LoopCore {
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
     ) -> PyResult<Arc<ReadyCallback>> {
+        profiling::scope!("LoopCore::schedule_callback");
         let (captured, context_needs_run) = capture_context(py, context)?;
         let ready = Arc::new(ReadyCallback::new(
             py,
@@ -293,6 +295,7 @@ impl LoopCore {
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
     ) -> PyResult<(Arc<ReadyCallback>, f64)> {
+        profiling::scope!("LoopCore::schedule_timer");
         let (captured, context_needs_run) = capture_context(py, context)?;
         let ready = Arc::new(ReadyCallback::new(
             py,
@@ -314,6 +317,7 @@ impl LoopCore {
         Ok((ready, when))
     }
 
+    #[profiling::function]
     pub fn run_forever(&self, py: Python<'_>, loop_obj: Py<PyAny>) -> PyResult<()> {
         const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -407,15 +411,18 @@ impl LoopCore {
                     .expect("ready batch was checked as non-empty");
                 match item {
                     ReadyItem::Stop => {
+                        profiling::scope!("ready.stop");
                         self.state.lock().expect("poisoned loop state").stopping = true;
                     }
                     ReadyItem::Callback(callback) => {
+                        profiling::scope!("ready.callback");
                         if let Some(err) = self.execute_ready(py, Some(&loop_obj), &callback)? {
                             ready_error = Some(err);
                             break;
                         }
                     }
                     ReadyItem::FutureSetResult { future, value } => {
+                        profiling::scope!("ready.future_set_result");
                         let future = future.bind(py);
                         if !crate::python_names::call_method0(
                             py,
@@ -434,6 +441,7 @@ impl LoopCore {
                         }
                     }
                     ReadyItem::FutureSetException { future, value } => {
+                        profiling::scope!("ready.future_set_exception");
                         let future = future.bind(py);
                         if !crate::python_names::call_method0(
                             py,
@@ -452,9 +460,11 @@ impl LoopCore {
                         }
                     }
                     ReadyItem::StreamTransportRead(core) => {
+                        profiling::scope!("ready.stream_transport_read");
                         core.drain_pending_read_events_with_py(py)?;
                     }
                     ReadyItem::ProcessTransport(core) => {
+                        profiling::scope!("ready.process_transport");
                         core.drain_pending_events_with_py(py)?;
                     }
                 }
@@ -529,10 +539,12 @@ impl LoopCore {
     }
 
     pub fn schedule_stop(&self) -> Result<(), LoopCoreError> {
+        profiling::scope!("LoopCore::schedule_stop");
         self.send_command(LoopCommand::RequestStop)
     }
 
     pub fn close(&self) -> Result<(), LoopCoreError> {
+        profiling::scope!("LoopCore::close");
         {
             let mut state = self.state.lock().expect("poisoned loop state");
             if state.running {
@@ -610,6 +622,7 @@ impl LoopCore {
         loop_obj: Option<&Py<PyAny>>,
         ready: &Arc<ReadyCallback>,
     ) -> PyResult<Option<PyErr>> {
+        profiling::scope!("LoopCore::execute_ready");
         if ready.cancelled() {
             return Ok(None);
         }

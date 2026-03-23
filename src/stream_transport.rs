@@ -806,6 +806,7 @@ impl StreamTransportCore {
     }
 
     fn enqueue_pending_read_event(self: &Arc<Self>, event: PendingReadEvent) {
+        profiling::scope!("StreamTransportCore::enqueue_pending_read_event");
         self.pending_read_events
             .lock()
             .expect("poisoned pending read queue")
@@ -822,6 +823,7 @@ impl StreamTransportCore {
     }
 
     pub(crate) fn drain_pending_read_events_with_py(&self, py: Python<'_>) -> PyResult<()> {
+        profiling::scope!("StreamTransportCore::drain_pending_read_events_with_py");
         loop {
             let mut pending = {
                 let mut queue = self
@@ -841,6 +843,7 @@ impl StreamTransportCore {
             while let Some(event) = pending.pop_front() {
                 match event {
                     PendingReadEvent::Data(data) => {
+                        profiling::scope!("stream.pending.data");
                         if self.is_closing_or_lost() {
                             continue;
                         }
@@ -855,38 +858,44 @@ impl StreamTransportCore {
                             return Ok(());
                         }
                     }
-                    PendingReadEvent::Eof => match self.eof_received_with_py(py) {
-                        Ok(true) => {
-                            self.read_events_scheduled.store(false, Ordering::Release);
-                            return Ok(());
+                    PendingReadEvent::Eof => {
+                        profiling::scope!("stream.pending.eof");
+                        match self.eof_received_with_py(py) {
+                            Ok(true) => {
+                                self.read_events_scheduled.store(false, Ordering::Release);
+                                return Ok(());
+                            }
+                            Ok(false) => {
+                                self.set_closing();
+                                let _ = self.writer_tx.send(WriterCommand::Close);
+                                self.read_events_scheduled.store(false, Ordering::Release);
+                                return Ok(());
+                            }
+                            Err(err) => {
+                                let _ = self.report_error_with_py(
+                                    py,
+                                    err,
+                                    "stream eof_received callback failed",
+                                );
+                                let _ = self.connection_lost_with_py(py, None);
+                                self.read_events_scheduled.store(false, Ordering::Release);
+                                return Ok(());
+                            }
                         }
-                        Ok(false) => {
-                            self.set_closing();
-                            let _ = self.writer_tx.send(WriterCommand::Close);
-                            self.read_events_scheduled.store(false, Ordering::Release);
-                            return Ok(());
-                        }
-                        Err(err) => {
-                            let _ = self.report_error_with_py(
-                                py,
-                                err,
-                                "stream eof_received callback failed",
-                            );
-                            let _ = self.connection_lost_with_py(py, None);
-                            self.read_events_scheduled.store(false, Ordering::Release);
-                            return Ok(());
-                        }
-                    },
+                    }
                     PendingReadEvent::ConnectionLost(message) => {
+                        profiling::scope!("stream.pending.connection_lost");
                         let err = message.map(PyRuntimeError::new_err);
                         let _ = self.connection_lost_with_py(py, err);
                         self.read_events_scheduled.store(false, Ordering::Release);
                         return Ok(());
                     }
                     PendingReadEvent::PauseWriting => {
+                        profiling::scope!("stream.pending.pause_writing");
                         self.pause_writing_with_py(py)?;
                     }
                     PendingReadEvent::ResumeWriting => {
+                        profiling::scope!("stream.pending.resume_writing");
                         self.resume_writing_with_py(py)?;
                     }
                 }
@@ -926,6 +935,7 @@ impl StreamTransportCore {
     }
 
     pub fn connection_made(&self, transport: Py<PyStreamTransport>) -> PyResult<()> {
+        profiling::scope!("StreamTransportCore::connection_made");
         self.call_in_loop_context(|py| {
             let (callback, fast_path, context, context_needs_run) = {
                 let state = self.state.lock().expect("poisoned transport state");
@@ -976,6 +986,7 @@ impl StreamTransportCore {
     }
 
     fn data_received_with_py(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
+        profiling::scope!("StreamTransportCore::data_received_with_py");
         let (data_received, get_buffer, buffer_updated, fast_path, context, context_needs_run) = {
             let state = self.state.lock().expect("poisoned transport state");
             (
@@ -1045,6 +1056,7 @@ impl StreamTransportCore {
     }
 
     fn eof_received_with_py(&self, py: Python<'_>) -> PyResult<bool> {
+        profiling::scope!("StreamTransportCore::eof_received_with_py");
         let (callback, fast_path, context, context_needs_run) = {
             let state = self.state.lock().expect("poisoned transport state");
             (
@@ -1073,6 +1085,7 @@ impl StreamTransportCore {
     }
 
     fn connection_lost_with_py(&self, py: Python<'_>, exc: Option<PyErr>) -> PyResult<()> {
+        profiling::scope!("StreamTransportCore::connection_lost_with_py");
         let (callback, fast_path, context, context_needs_run, server) = {
             let mut state = self.state.lock().expect("poisoned transport state");
             if state.detached {
@@ -2058,6 +2071,7 @@ pub fn transport_from_socket(
     context_needs_run: bool,
     socket_obj: Py<PyAny>,
 ) -> PyResult<Py<PyStreamTransport>> {
+    profiling::scope!("stream.transport_from_socket");
     let spawn_context = TransportSpawnContext {
         loop_core,
         loop_obj,
@@ -2086,6 +2100,7 @@ pub fn transport_from_socket_tls(
     socket_obj: Py<PyAny>,
     tls: ClientTlsSettings,
 ) -> PyResult<Py<PyStreamTransport>> {
+    profiling::scope!("stream.transport_from_socket_tls");
     let spawn_context = TransportSpawnContext {
         loop_core,
         loop_obj,
@@ -2128,6 +2143,7 @@ pub fn transport_from_socket_server_tls(
     socket_obj: Py<PyAny>,
     tls: ServerTlsSettings,
 ) -> PyResult<Py<PyStreamTransport>> {
+    profiling::scope!("stream.transport_from_socket_server_tls");
     let spawn_context = TransportSpawnContext {
         loop_core,
         loop_obj,
@@ -2167,6 +2183,7 @@ pub fn start_tls_transport(
     client_tls: Option<ClientTlsSettings>,
     server_tls: Option<ServerTlsSettings>,
 ) -> PyResult<Py<PyStreamTransport>> {
+    profiling::scope!("stream.start_tls_transport");
     let (mut spawn_context, stream) = transport.borrow(py).core.upgrade_stream(py)?;
     spawn_context.protocol = protocol;
     match (client_tls, server_tls) {
@@ -2821,6 +2838,7 @@ fn spawn_tls_transport(
 }
 
 pub fn create_server(py: Python<'_>, params: ServerCreateParams) -> PyResult<Py<PyServer>> {
+    profiling::scope!("stream.create_server");
     let ServerCreateParams {
         loop_core,
         loop_obj,
@@ -2869,6 +2887,7 @@ pub fn unix_server_listener(listener: StdUnixListener) -> ServerListener {
 }
 
 fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: Arc<AtomicBool>) {
+    profiling::scope!("stream.run_tcp_accept_loop");
     loop {
         if stop.load(Ordering::Acquire) || server.is_closed() {
             return;
@@ -2951,6 +2970,7 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
 
 #[cfg(target_os = "linux")]
 pub(crate) async fn run_server_accept_task(server: Arc<ServerCore>, listener: ServerListener) {
+    profiling::scope!("stream.run_server_accept_task");
     match listener {
         ServerListener::Tcp(listener) => run_tcp_accept_task(server, listener).await,
         #[cfg(unix)]
@@ -2973,6 +2993,7 @@ pub(crate) fn run_server_accept_blocking(
 
 #[cfg(target_os = "linux")]
 async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
+    profiling::scope!("stream.run_tcp_accept_task");
     let poll_fd = listener
         .try_clone()
         .and_then(|listener| PollFd::new(listener));
@@ -3322,6 +3343,7 @@ fn spawn_writer_worker(
     writer: WriterTarget,
     writer_rx: Receiver<WriterCommand>,
 ) {
+    profiling::scope!("stream.spawn_writer_worker");
     let thread_core = Arc::clone(&core);
     let worker = WorkerThread::spawn("rsloop-stream-writer".to_owned(), move |stop| {
         run_stream_writer(thread_core, writer, writer_rx, stop)
@@ -3342,6 +3364,7 @@ fn spawn_tls_writer_worker(
 }
 
 fn complete_tls_handshake(tls_state: &Arc<Mutex<TlsIoState>>, timeout: Duration) -> io::Result<()> {
+    profiling::scope!("stream.complete_tls_handshake");
     let deadline = std::time::Instant::now() + timeout;
     loop {
         if std::time::Instant::now() >= deadline {
@@ -3393,6 +3416,7 @@ fn run_stream_reader(
     mut reader: ReaderTarget,
     stop: Arc<AtomicBool>,
 ) {
+    profiling::scope!("stream.run_stream_reader");
     let mut buf = [0_u8; 65_536];
 
     loop {
@@ -3447,6 +3471,7 @@ pub(crate) async fn run_socket_reader_task(
     core: Arc<StreamTransportCore>,
     mut reader: ReaderTarget,
 ) {
+    profiling::scope!("stream.run_socket_reader_task");
     let Ok(poll_fd) = poll_fd_from_raw(reader.fd()) else {
         core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
             "failed to attach socket reader".to_owned(),
@@ -3500,6 +3525,7 @@ pub(crate) async fn run_tcp_socket_reader_task(
     core: Arc<StreamTransportCore>,
     stream: StdTcpStream,
 ) {
+    profiling::scope!("stream.run_tcp_socket_reader_task");
     let mut reader = match VibePollTcpStream::from_std(stream) {
         Ok(reader) => reader,
         Err(err) => {
@@ -3550,6 +3576,7 @@ pub(crate) fn run_socket_reader_blocking(
     reader: ReaderTarget,
     stop: Arc<AtomicBool>,
 ) {
+    profiling::scope!("stream.run_socket_reader_blocking");
     run_stream_reader(core, reader, stop)
 }
 
@@ -3558,6 +3585,7 @@ fn run_tls_reader(
     tls_state: Arc<Mutex<TlsIoState>>,
     stop: Arc<AtomicBool>,
 ) {
+    profiling::scope!("stream.run_tls_reader");
     let mut plaintext = [0_u8; 65_536];
 
     loop {
@@ -3669,6 +3697,7 @@ fn run_stream_writer(
     writer_rx: Receiver<WriterCommand>,
     stop: Arc<AtomicBool>,
 ) {
+    profiling::scope!("stream.run_stream_writer");
     let mut pending_command = None;
 
     loop {
@@ -3754,6 +3783,7 @@ fn run_tls_writer(
     writer_rx: Receiver<WriterCommand>,
     stop: Arc<AtomicBool>,
 ) {
+    profiling::scope!("stream.run_tls_writer");
     let mut pending_command = None;
 
     loop {

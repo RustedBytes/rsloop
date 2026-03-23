@@ -1119,11 +1119,13 @@ impl PyLoop {
         self.core.set_debug(enabled);
     }
 
+    #[profiling::function]
     fn run_forever(slf: Py<Self>, py: Python<'_>) -> PyResult<()> {
         let loop_obj = Self::as_py_any(py, &slf);
         slf.borrow(py).core.run_forever(py, loop_obj)
     }
 
+    #[profiling::function]
     fn run_until_complete(slf: Py<Self>, py: Python<'_>, future: Py<PyAny>) -> PyResult<Py<PyAny>> {
         let asyncio = py.import("asyncio")?;
         let new_task = !asyncio
@@ -1314,6 +1316,7 @@ impl PyLoop {
         ssl_shutdown_timeout: Option<f64>,
         start_serving: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
+        profiling::scope!("PyLoop::create_server");
         if ssl_handshake_timeout.is_some() && ssl.is_none() {
             return Err(PyValueError::new_err(
                 "ssl_handshake_timeout is only meaningful with ssl",
@@ -1416,6 +1419,7 @@ impl PyLoop {
         interleave: Option<i32>,
         all_errors: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
+        profiling::scope!("PyLoop::create_connection");
         let _ = (happy_eyeballs_delay, interleave, all_errors);
         if server_hostname.is_some() && ssl.is_none() {
             return Err(PyValueError::new_err(
@@ -1747,6 +1751,7 @@ impl PyLoop {
         ssl_handshake_timeout: Option<f64>,
         ssl_shutdown_timeout: Option<f64>,
     ) -> PyResult<Bound<'_, PyAny>> {
+        profiling::scope!("PyLoop::connect_accepted_socket");
         if ssl_handshake_timeout.is_some() && ssl.is_none() {
             return Err(PyValueError::new_err(
                 "ssl_handshake_timeout is only meaningful with ssl",
@@ -1826,6 +1831,7 @@ impl PyLoop {
         ssl_handshake_timeout: Option<f64>,
         ssl_shutdown_timeout: Option<f64>,
     ) -> PyResult<Bound<'_, PyAny>> {
+        profiling::scope!("PyLoop::start_tls");
         let locals = Self::task_locals(py, &slf)?;
         let transport: Py<PyStreamTransport> = transport.extract(py)?;
         pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {

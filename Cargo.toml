@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-profiler = ["dep:pprof"]
+profiler = ["dep:tracy-client", "profiling/profile-with-tracy"]
 
 [dependencies]
 async-std = "1"
@@ -23,7 +23,7 @@ compio = { version = "0.18", default-features = false, features = ["runtime", "n
 crossbeam-channel = "0.5"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 libc = "0.2"
-pprof = { version = "0.15.0", default-features = false, features = ["flamegraph"], optional = true }
+profiling = "1"
 pyo3 = { version = "0.28", features = ["extension-module"] }
 pyo3-async-runtimes = { version = "0.28", features = ["async-std-runtime"] }
 rustls = "0.23"
@@ -31,6 +31,7 @@ rustls-native-certs = "0.8"
 rustls-pemfile = "2"
 signal-hook = "0.4"
 socket2 = "0.6"
+tracy-client = { version = "0.18", default-features = false, features = ["enable", "only-localhost", "sampling", "flush-on-exit"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 tokio = { version = "1", default-features = false, features = ["io-util"] }

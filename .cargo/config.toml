@@ -1,0 +1,5 @@
+[env]
+TRACY_CLIENT_SYS_CXXFLAGS = "-static-libstdc++ -static-libgcc"
+
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-arg=-static-libstdc++", "-C", "link-arg=-static-libgcc"]
