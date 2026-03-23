@@ -37,7 +37,9 @@ class ChildResult:
     workload: str
     seconds: float
     operations: int
+    baseline_rss_bytes: int
     peak_rss_bytes: int
+    peak_rss_delta_bytes: int
 
     @property
     def ops_per_sec(self) -> float:
@@ -208,6 +210,7 @@ def is_loop_available(loop_name: str) -> tuple[bool, str | None]:
 
 def get_peak_rss_bytes() -> int:
     if sys.platform == "win32":
+
         class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
             _fields_ = [
                 ("cb", wintypes.DWORD),
@@ -251,6 +254,25 @@ def get_peak_rss_bytes() -> int:
     if sys.platform == "darwin":
         return int(peak_rss)
     return int(peak_rss * 1024)
+
+
+def get_current_rss_bytes() -> int:
+    if sys.platform != "linux":
+        return 0
+
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.startswith("VmRSS:"):
+                    continue
+                parts = line.split()
+                if len(parts) < 2:
+                    break
+                return int(parts[1]) * 1024
+    except OSError:
+        return 0
+
+    return 0
 
 
 def format_bytes(num_bytes: int) -> str:
@@ -300,7 +322,9 @@ async def bench_callbacks(loop_name: str, iterations: int) -> ChildResult:
         "callbacks",
         time.perf_counter() - start,
         iterations,
+        baseline_rss_bytes=0,
         peak_rss_bytes=0,
+        peak_rss_delta_bytes=0,
     )
 
 
@@ -319,7 +343,9 @@ async def bench_tasks(loop_name: str, iterations: int, batch_size: int) -> Child
         "tasks",
         time.perf_counter() - start,
         iterations,
+        baseline_rss_bytes=0,
         peak_rss_bytes=0,
+        peak_rss_delta_bytes=0,
     )
 
 
@@ -372,7 +398,9 @@ async def bench_tcp_streams(
             "tcp_streams",
             duration,
             roundtrips,
+            baseline_rss_bytes=0,
             peak_rss_bytes=0,
+            peak_rss_delta_bytes=0,
         )
     finally:
         server.close()
@@ -382,6 +410,7 @@ async def bench_tcp_streams(
 def child_main(args: argparse.Namespace) -> int:
     gc.collect()
     gc.disable()
+    baseline_rss_bytes = 0
     try:
         if args.workload == "callbacks":
             coro = bench_callbacks(args.loop, args.callbacks)
@@ -395,6 +424,8 @@ def child_main(args: argparse.Namespace) -> int:
         profile_requested = args.profile_output is not None or (
             args.loop == "rsloop" and env_flag(RSLOOP_PROFILE_ENV)
         )
+        loop_factory_for(args.loop)
+        baseline_rss_bytes = get_current_rss_bytes()
         if profile_requested and not args.profile_output:
             print(
                 f"[profile] Tracy enabled via {RSLOOP_PROFILE_ENV}=1 for {args.loop}/{args.workload}",
@@ -416,7 +447,18 @@ def child_main(args: argparse.Namespace) -> int:
         workload=result.workload,
         seconds=result.seconds,
         operations=result.operations,
+        baseline_rss_bytes=baseline_rss_bytes,
         peak_rss_bytes=get_peak_rss_bytes(),
+        peak_rss_delta_bytes=0,
+    )
+    result = ChildResult(
+        loop=result.loop,
+        workload=result.workload,
+        seconds=result.seconds,
+        operations=result.operations,
+        baseline_rss_bytes=result.baseline_rss_bytes,
+        peak_rss_bytes=result.peak_rss_bytes,
+        peak_rss_delta_bytes=max(0, result.peak_rss_bytes - result.baseline_rss_bytes),
     )
 
     print(
@@ -427,7 +469,9 @@ def child_main(args: argparse.Namespace) -> int:
                 "seconds": result.seconds,
                 "operations": result.operations,
                 "ops_per_sec": result.ops_per_sec,
+                "baseline_rss_bytes": result.baseline_rss_bytes,
                 "peak_rss_bytes": result.peak_rss_bytes,
+                "peak_rss_delta_bytes": result.peak_rss_delta_bytes,
             }
         )
     )
@@ -492,17 +536,23 @@ def run_child(
         workload=payload["workload"],
         seconds=payload["seconds"],
         operations=payload["operations"],
+        baseline_rss_bytes=payload.get("baseline_rss_bytes", 0),
         peak_rss_bytes=payload["peak_rss_bytes"],
+        peak_rss_delta_bytes=payload.get("peak_rss_delta_bytes", 0),
     )
 
 
 def print_workload_table(workload: str, runs: dict[str, list[ChildResult]]) -> None:
-    rows: list[tuple[str, float, float, float, int, int]] = []
+    rows: list[tuple[str, float, float, float, int, int, int, int]] = []
     for loop_name, loop_runs in runs.items():
         seconds = [item.seconds for item in loop_runs]
+        baseline_rss_values = [item.baseline_rss_bytes for item in loop_runs]
         peak_rss_values = [item.peak_rss_bytes for item in loop_runs]
+        peak_rss_delta_values = [item.peak_rss_delta_bytes for item in loop_runs]
         median_seconds = statistics.median(seconds)
+        median_baseline_rss = int(statistics.median(baseline_rss_values))
         median_peak_rss = int(statistics.median(peak_rss_values))
+        median_peak_rss_delta = int(statistics.median(peak_rss_delta_values))
         operations = loop_runs[0].operations
         ops_per_sec = (
             operations / median_seconds if median_seconds > 0 else float("inf")
@@ -514,7 +564,9 @@ def print_workload_table(workload: str, runs: dict[str, list[ChildResult]]) -> N
                 ops_per_sec,
                 min(seconds),
                 operations,
+                median_baseline_rss,
                 median_peak_rss,
+                median_peak_rss_delta,
             )
         )
 
@@ -523,19 +575,45 @@ def print_workload_table(workload: str, runs: dict[str, list[ChildResult]]) -> N
 
     print()
     print(f"{workload} ({rows[0][4]:,} ops)")
-    print(
-        f"{'loop':<10} {'median_s':>12} {'best_s':>12} {'ops_per_s':>14} {'peak_rss':>12} {'vs_fastest':>12}"
-    )
-    for loop_name, median_seconds, ops_per_sec, best_seconds, _, median_peak_rss in rows:
-        relative = median_seconds / fastest if fastest > 0 else 1.0
+    if sys.platform == "linux":
         print(
-            f"{loop_name:<10} "
-            f"{median_seconds:>12.6f} "
-            f"{best_seconds:>12.6f} "
-            f"{ops_per_sec:>14,.0f} "
-            f"{format_bytes(median_peak_rss):>12} "
-            f"{relative:>11.2f}x"
+            f"{'loop':<10} {'median_s':>12} {'best_s':>12} {'ops_per_s':>14} {'baseline_rss':>14} {'peak_rss':>12} {'peak_delta':>12} {'vs_fastest':>12}"
         )
+    else:
+        print(
+            f"{'loop':<10} {'median_s':>12} {'best_s':>12} {'ops_per_s':>14} {'peak_rss':>12} {'vs_fastest':>12}"
+        )
+    for (
+        loop_name,
+        median_seconds,
+        ops_per_sec,
+        best_seconds,
+        _,
+        median_baseline_rss,
+        median_peak_rss,
+        median_peak_rss_delta,
+    ) in rows:
+        relative = median_seconds / fastest if fastest > 0 else 1.0
+        if sys.platform == "linux":
+            print(
+                f"{loop_name:<10} "
+                f"{median_seconds:>12.6f} "
+                f"{best_seconds:>12.6f} "
+                f"{ops_per_sec:>14,.0f} "
+                f"{format_bytes(median_baseline_rss):>14} "
+                f"{format_bytes(median_peak_rss):>12} "
+                f"{format_bytes(median_peak_rss_delta):>12} "
+                f"{relative:>11.2f}x"
+            )
+        else:
+            print(
+                f"{loop_name:<10} "
+                f"{median_seconds:>12.6f} "
+                f"{best_seconds:>12.6f} "
+                f"{ops_per_sec:>14,.0f} "
+                f"{format_bytes(median_peak_rss):>12} "
+                f"{relative:>11.2f}x"
+            )
 
 
 def parent_main(args: argparse.Namespace) -> int:
@@ -611,7 +689,9 @@ def parent_main(args: argparse.Namespace) -> int:
                             "seconds": item.seconds,
                             "operations": item.operations,
                             "ops_per_sec": item.ops_per_sec,
+                            "baseline_rss_bytes": item.baseline_rss_bytes,
                             "peak_rss_bytes": item.peak_rss_bytes,
+                            "peak_rss_delta_bytes": item.peak_rss_delta_bytes,
                         }
                         for item in measured
                     ],
