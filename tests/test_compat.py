@@ -1,17 +1,19 @@
 import asyncio
 import errno
 import socket
-import sys
 import time
 import unittest
 import warnings
+import builtins
 from unittest import mock
 
 import rsloop
 
+EXCEPTION_GROUP = getattr(builtins, "ExceptionGroup", None)
+
 
 class CompatibilityTests(unittest.TestCase):
-    @unittest.skipUnless(sys.version_info >= (3, 11), "requires ExceptionGroup")
+    @unittest.skipUnless(EXCEPTION_GROUP is not None, "requires ExceptionGroup")
     def test_create_connection_all_errors_returns_exception_group(self) -> None:
         async def main() -> int:
             loop = asyncio.get_running_loop()
@@ -29,7 +31,7 @@ class CompatibilityTests(unittest.TestCase):
                 with mock.patch.object(
                     rsloop.Loop, "sock_connect", new=fake_sock_connect
                 ):
-                    with self.assertRaises(ExceptionGroup) as ctx:
+                    with self.assertRaises(EXCEPTION_GROUP) as ctx:
                         await loop.create_connection(
                             asyncio.Protocol,
                             "compat.test",
