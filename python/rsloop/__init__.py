@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio as __asyncio
 import builtins as __builtins
+import codecs as __codecs
 import collections as __collections
 import contextlib as __contextlib
+import ctypes as __ctypes
 import itertools as __itertools
 import math as __math
 import os as __os
@@ -15,6 +17,7 @@ import typing as __typing
 import locale as __locale
 import warnings as __warnings
 import asyncio.base_events as __asyncio_base_events
+import io as __io
 
 __DLL_DIR_HANDLES: list[object] = []
 
@@ -154,6 +157,9 @@ if __USE_FAST_STREAMS and __asyncio.start_server is __ORIG_START_SERVER:
 
 _asyncio = __asyncio
 _collections = __collections
+_codecs = __codecs
+_ctypes = __ctypes
+_io = __io
 _locale = __locale
 _os = __os
 
@@ -860,9 +866,7 @@ class _TextStreamWriter:
     def write(self, data):
         if not isinstance(data, str):
             raise TypeError("text-mode subprocess stdin expects str input")
-        self._writer.write(
-            data.replace("\n", _os.linesep).encode(self._encoding, self._errors)
-        )
+        self._writer.write(data.encode(self._encoding, self._errors))
 
     def writelines(self, data):
         for chunk in data:
@@ -890,6 +894,34 @@ class _TextStreamWriter:
         await self._writer.drain()
 
 
+class _TextNewlineDecoder:
+    def __init__(self, encoding, errors):
+        self._decoder = _codecs.getincrementaldecoder(encoding)(errors)
+        self._pending = ""
+
+    def decode(self, data, final=False):
+        text = self._pending + self._decoder.decode(data, final)
+        if final:
+            self._pending = ""
+            return self._translate(text)
+
+        pending_len = 0
+        for char in reversed(text[-2:]):
+            if char != "\r":
+                break
+            pending_len += 1
+        if pending_len:
+            self._pending = text[-pending_len:]
+            text = text[:-pending_len]
+        else:
+            self._pending = ""
+        return self._translate(text)
+
+    @staticmethod
+    def _translate(text):
+        return text.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+
+
 class _TextSubprocessStreamProtocol(
     _asyncio.streams.FlowControlMixin,
     _asyncio.protocols.SubprocessProtocol,
@@ -899,6 +931,8 @@ class _TextSubprocessStreamProtocol(
         self._limit = limit
         self._encoding = encoding
         self._errors = errors
+        self._stdout_decoder = None
+        self._stderr_decoder = None
         self.stdin = self.stdout = self.stderr = None
         self._transport = None
         self._process_exited = False
@@ -922,12 +956,14 @@ class _TextSubprocessStreamProtocol(
         if stdout_transport is not None:
             self.stdout = _TextStreamReader(limit=self._limit, loop=self._loop)
             self.stdout.set_transport(stdout_transport)
+            self._stdout_decoder = _TextNewlineDecoder(self._encoding, self._errors)
             self._pipe_fds.append(1)
 
         stderr_transport = transport.get_pipe_transport(2)
         if stderr_transport is not None:
             self.stderr = _TextStreamReader(limit=self._limit, loop=self._loop)
             self.stderr.set_transport(stderr_transport)
+            self._stderr_decoder = _TextNewlineDecoder(self._encoding, self._errors)
             self._pipe_fds.append(2)
 
         stdin_transport = transport.get_pipe_transport(0)
@@ -947,12 +983,15 @@ class _TextSubprocessStreamProtocol(
     def pipe_data_received(self, fd, data):
         if fd == 1:
             reader = self.stdout
+            decoder = self._stdout_decoder
         elif fd == 2:
             reader = self.stderr
+            decoder = self._stderr_decoder
         else:
             reader = None
-        if reader is not None:
-            reader.feed_data(data)
+            decoder = None
+        if reader is not None and decoder is not None:
+            reader.feed_data(decoder.decode(data))
 
     def pipe_connection_lost(self, fd, exc):
         if fd == 0:
@@ -974,6 +1013,11 @@ class _TextSubprocessStreamProtocol(
             reader = None
         if reader is not None:
             if exc is None:
+                decoder = self._stdout_decoder if fd == 1 else self._stderr_decoder
+                if decoder is not None:
+                    tail = decoder.decode(b"", final=True)
+                    if tail:
+                        reader.feed_data(tail)
                 reader.feed_eof()
             else:
                 reader.set_exception(exc)
@@ -1007,6 +1051,29 @@ def __subprocess_text_config(kwds: dict[str, object]) -> tuple[bool, str, str]:
     return text_enabled, str(encoding), str(errors)
 
 
+def __without_text_kwds(kwds: dict[str, object]) -> dict[str, object]:
+    filtered = dict(kwds)
+    filtered.pop("text", None)
+    filtered.pop("encoding", None)
+    filtered.pop("errors", None)
+    filtered.pop("universal_newlines", None)
+    return filtered
+
+
+def __windows_command_line_to_argv(cmd: str) -> list[str]:
+    argc = _ctypes.c_int()
+    command_line_to_argv = _ctypes.windll.shell32.CommandLineToArgvW
+    command_line_to_argv.argtypes = [_ctypes.c_wchar_p, _ctypes.POINTER(_ctypes.c_int)]
+    command_line_to_argv.restype = _ctypes.POINTER(_ctypes.c_wchar_p)
+    argv = command_line_to_argv(cmd, _ctypes.byref(argc))
+    if not argv:
+        raise OSError("CommandLineToArgvW failed")
+    try:
+        return [argv[index] for index in range(argc.value)]
+    finally:
+        _ctypes.windll.kernel32.LocalFree(argv)
+
+
 async def __create_text_subprocess_exec(
     program,
     *args,
@@ -1037,6 +1104,7 @@ async def __create_text_subprocess_exec(
             errors=errors,
         )
 
+    raw_kwds = __without_text_kwds(kwds)
     transport, protocol = await loop.subprocess_exec(
         protocol_factory,
         program,
@@ -1044,7 +1112,7 @@ async def __create_text_subprocess_exec(
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,
-        **kwds,
+        **raw_kwds,
     )
     return _asyncio.subprocess.Process(transport, protocol, loop)
 
@@ -1077,13 +1145,30 @@ async def __create_text_subprocess_shell(
             errors=errors,
         )
 
+    raw_kwds = __without_text_kwds(kwds)
+    if _os.name == "nt":
+        try:
+            argv = __windows_command_line_to_argv(cmd)
+        except OSError:
+            argv = None
+        if argv:
+            transport, protocol = await loop.subprocess_exec(
+                protocol_factory,
+                argv[0],
+                *argv[1:],
+                stdin=stdin,
+                stdout=stdout,
+                stderr=stderr,
+                **raw_kwds,
+            )
+            return _asyncio.subprocess.Process(transport, protocol, loop)
     transport, protocol = await loop.subprocess_shell(
         protocol_factory,
         cmd,
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,
-        **kwds,
+        **raw_kwds,
     )
     return _asyncio.subprocess.Process(transport, protocol, loop)
 

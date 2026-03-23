@@ -5,6 +5,8 @@ use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::io::FromRawHandle;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -2343,10 +2345,12 @@ impl PyLoop {
             }
 
             let child = Python::attach(|py| -> PyResult<_> {
+                let shell_cmd = cmd.bind(py).extract::<String>()?;
                 #[cfg(unix)]
                 let mut command = {
                     let mut command = Command::new("/bin/sh");
                     command.arg("-c");
+                    command.arg(&shell_cmd);
                     command
                 };
                 #[cfg(windows)]
@@ -2354,10 +2358,9 @@ impl PyLoop {
                     let mut command = Command::new(
                         std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()),
                     );
-                    command.arg("/d").arg("/s").arg("/c");
+                    command.raw_arg(format!(" /c \"{shell_cmd}\""));
                     command
                 };
-                command.arg(cmd.bind(py).extract::<String>()?);
                 let (stdout_override, stderr_override) =
                     apply_stdio(&mut command, stdin_spec, stdout_spec, stderr_spec)?;
                 let spawn_config = apply_common_process_kwargs(
