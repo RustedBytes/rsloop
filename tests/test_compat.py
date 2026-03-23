@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import inspect
 import os
 import signal
 import socket
@@ -337,6 +338,11 @@ class CompatibilityTests(unittest.TestCase):
         async def main() -> tuple[dict[str, object], str]:
             loop = asyncio.get_running_loop()
             captured = {}
+            task_kwargs = {
+                name
+                for name, parameter in inspect.signature(asyncio.Task).parameters.items()
+                if parameter.kind is inspect.Parameter.KEYWORD_ONLY
+            }
 
             async def coro():
                 return "ok"
@@ -346,6 +352,9 @@ class CompatibilityTests(unittest.TestCase):
                     captured.update(kwargs)
                 forwarded = dict(kwargs)
                 forwarded.pop("custom_flag", None)
+                for key in tuple(forwarded):
+                    if key not in task_kwargs:
+                        forwarded.pop(key)
                 return asyncio.Task(coro, loop=loop, **forwarded)
 
             loop.set_task_factory(factory)
