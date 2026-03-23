@@ -34,7 +34,9 @@ use tokio::io::AsyncReadExt;
 use vibeio::net::{PollTcpStream as VibePollTcpStream, TcpListener as VibeTcpListener};
 
 use crate::async_event::AsyncEvent;
-use crate::context::{ensure_running_loop, run_in_context};
+use crate::context::{
+    ensure_running_loop, run_in_context, run_in_context_noargs, run_in_context_onearg,
+};
 use crate::fast_streams::{PyFastStreamProtocol, PyFastStreamReader};
 use crate::fd_ops;
 use crate::loop_core::{LoopCommand, LoopCore};
@@ -59,6 +61,7 @@ enum PendingReadEvent {
 
 const DEFAULT_WRITE_BUFFER_HIGH_WATER: usize = 64 * 1024;
 const DEFAULT_WRITE_BUFFER_LOW_WATER: usize = DEFAULT_WRITE_BUFFER_HIGH_WATER / 4;
+const MAX_PENDING_READ_COALESCE_BYTES: usize = 256 * 1024;
 
 struct OwnedWriteBuffer {
     bytes: Box<[u8]>,
@@ -772,18 +775,6 @@ impl StreamTransportCore {
         spawn_writer_worker(Arc::clone(self), target, writer_rx);
     }
 
-    fn call_protocol_with_tuple(
-        &self,
-        py: Python<'_>,
-        callback: &Py<PyAny>,
-        context: &Py<PyAny>,
-        context_needs_run: bool,
-        args: &Bound<'_, PyTuple>,
-    ) -> PyResult<Py<PyAny>> {
-        let tuple = args.clone().unbind();
-        run_in_context(py, context, context_needs_run, callback, &tuple)
-    }
-
     fn server_ref(&self) -> Option<Weak<ServerCore>> {
         self.state
             .lock()
@@ -840,14 +831,39 @@ impl StreamTransportCore {
                 drained
             };
 
+            let mut pending_data: Option<Vec<u8>> = None;
+
             while let Some(event) = pending.pop_front() {
                 match event {
                     PendingReadEvent::Data(data) => {
                         profiling::scope!("stream.pending.data");
-                        if self.is_closing_or_lost() {
-                            continue;
+                        match pending_data.as_mut() {
+                            Some(buffer)
+                                if buffer.len() + data.len() <= MAX_PENDING_READ_COALESCE_BYTES =>
+                            {
+                                buffer.extend_from_slice(&data);
+                            }
+                            Some(_) => {
+                                if let Err(err) =
+                                    self.flush_pending_data_with_py(py, &mut pending_data)
+                                {
+                                    let _ = self.report_error_with_py(
+                                        py,
+                                        err,
+                                        "stream data_received callback failed",
+                                    );
+                                    let _ = self.connection_lost_with_py(py, None);
+                                    self.read_events_scheduled.store(false, Ordering::Release);
+                                    return Ok(());
+                                }
+                                pending_data = Some(data.into_vec());
+                            }
+                            None => pending_data = Some(data.into_vec()),
                         }
-                        if let Err(err) = self.data_received_with_py(py, &data) {
+                    }
+                    PendingReadEvent::Eof => {
+                        profiling::scope!("stream.pending.eof");
+                        if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data) {
                             let _ = self.report_error_with_py(
                                 py,
                                 err,
@@ -857,9 +873,6 @@ impl StreamTransportCore {
                             self.read_events_scheduled.store(false, Ordering::Release);
                             return Ok(());
                         }
-                    }
-                    PendingReadEvent::Eof => {
-                        profiling::scope!("stream.pending.eof");
                         match self.eof_received_with_py(py) {
                             Ok(true) => {
                                 self.read_events_scheduled.store(false, Ordering::Release);
@@ -885,6 +898,16 @@ impl StreamTransportCore {
                     }
                     PendingReadEvent::ConnectionLost(message) => {
                         profiling::scope!("stream.pending.connection_lost");
+                        if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data) {
+                            let _ = self.report_error_with_py(
+                                py,
+                                err,
+                                "stream data_received callback failed",
+                            );
+                            let _ = self.connection_lost_with_py(py, None);
+                            self.read_events_scheduled.store(false, Ordering::Release);
+                            return Ok(());
+                        }
                         let err = message.map(PyRuntimeError::new_err);
                         let _ = self.connection_lost_with_py(py, err);
                         self.read_events_scheduled.store(false, Ordering::Release);
@@ -892,13 +915,40 @@ impl StreamTransportCore {
                     }
                     PendingReadEvent::PauseWriting => {
                         profiling::scope!("stream.pending.pause_writing");
+                        if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data) {
+                            let _ = self.report_error_with_py(
+                                py,
+                                err,
+                                "stream data_received callback failed",
+                            );
+                            let _ = self.connection_lost_with_py(py, None);
+                            self.read_events_scheduled.store(false, Ordering::Release);
+                            return Ok(());
+                        }
                         self.pause_writing_with_py(py)?;
                     }
                     PendingReadEvent::ResumeWriting => {
                         profiling::scope!("stream.pending.resume_writing");
+                        if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data) {
+                            let _ = self.report_error_with_py(
+                                py,
+                                err,
+                                "stream data_received callback failed",
+                            );
+                            let _ = self.connection_lost_with_py(py, None);
+                            self.read_events_scheduled.store(false, Ordering::Release);
+                            return Ok(());
+                        }
                         self.resume_writing_with_py(py)?;
                     }
                 }
+            }
+
+            if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data) {
+                let _ = self.report_error_with_py(py, err, "stream data_received callback failed");
+                let _ = self.connection_lost_with_py(py, None);
+                self.read_events_scheduled.store(false, Ordering::Release);
+                return Ok(());
             }
         }
     }
@@ -910,8 +960,7 @@ impl StreamTransportCore {
         context: &Py<PyAny>,
         context_needs_run: bool,
     ) -> PyResult<Py<PyAny>> {
-        let args = PyTuple::empty(py);
-        self.call_protocol_with_tuple(py, callback, context, context_needs_run, &args)
+        run_in_context_noargs(py, context, context_needs_run, callback)
     }
 
     fn call_protocol_method1(
@@ -922,8 +971,23 @@ impl StreamTransportCore {
         context_needs_run: bool,
         arg: Py<PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let args = PyTuple::new(py, [arg])?;
-        self.call_protocol_with_tuple(py, callback, context, context_needs_run, &args)
+        run_in_context_onearg(py, context, context_needs_run, callback, arg.bind(py))
+    }
+
+    fn flush_pending_data_with_py(
+        &self,
+        py: Python<'_>,
+        pending_data: &mut Option<Vec<u8>>,
+    ) -> PyResult<()> {
+        let Some(data) = pending_data.take() else {
+            return Ok(());
+        };
+
+        if self.is_closing_or_lost() {
+            return Ok(());
+        }
+
+        self.data_received_with_py(py, &data)
     }
 
     fn report_error_with_py(&self, py: Python<'_>, err: PyErr, message: &str) -> PyResult<()> {
@@ -1024,10 +1088,12 @@ impl StreamTransportCore {
         {
             let args = PyTuple::new(py, [data.len()])?.unbind();
             let buffer_obj = run_in_context(py, &context, context_needs_run, get_buffer, &args)?;
-            let memoryview = py
-                .import("builtins")?
-                .getattr("memoryview")?
-                .call1((buffer_obj.bind(py),))?;
+            let memoryview = unsafe {
+                Bound::from_owned_ptr_or_err(
+                    py,
+                    pyo3::ffi::PyMemoryView_FromObject(buffer_obj.bind(py).as_ptr()),
+                )
+            }?;
             memoryview.set_item(
                 PySlice::new(py, 0, data.len() as isize, 1),
                 PyBytes::new(py, data),

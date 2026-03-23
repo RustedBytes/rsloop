@@ -89,6 +89,107 @@ pub fn run_in_context(
 }
 
 #[inline]
+pub fn run_in_context_noargs(
+    py: Python<'_>,
+    context: &Py<PyAny>,
+    needs_run: bool,
+    callback: &Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
+    if !needs_run {
+        return unsafe {
+            Bound::from_owned_ptr_or_err(py, ffi::compat::PyObject_CallNoArgs(callback.as_ptr()))
+        }
+        .map(Bound::unbind);
+    }
+
+    if let Err(err) = enter_context(py, context) {
+        return if is_nested_context_error(py, &err) {
+            unsafe {
+                Bound::from_owned_ptr_or_err(
+                    py,
+                    ffi::compat::PyObject_CallNoArgs(callback.as_ptr()),
+                )
+            }
+            .map(Bound::unbind)
+        } else {
+            Err(err)
+        };
+    }
+
+    let callback_result = unsafe {
+        Bound::from_owned_ptr_or_err(py, ffi::compat::PyObject_CallNoArgs(callback.as_ptr()))
+    }
+    .map(Bound::unbind);
+    let exit_result = exit_context(py, context);
+
+    match (callback_result, exit_result) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Err(err), _) => Err(err),
+        (Ok(_), Err(err)) => Err(err),
+    }
+}
+
+#[inline]
+pub fn run_in_context_onearg(
+    py: Python<'_>,
+    context: &Py<PyAny>,
+    needs_run: bool,
+    callback: &Py<PyAny>,
+    arg: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    if !needs_run {
+        return unsafe {
+            Bound::from_owned_ptr_or_err(
+                py,
+                ffi::PyObject_CallFunctionObjArgs(
+                    callback.as_ptr(),
+                    arg.as_ptr(),
+                    std::ptr::null_mut::<ffi::PyObject>(),
+                ),
+            )
+        }
+        .map(Bound::unbind);
+    }
+
+    if let Err(err) = enter_context(py, context) {
+        return if is_nested_context_error(py, &err) {
+            unsafe {
+                Bound::from_owned_ptr_or_err(
+                    py,
+                    ffi::PyObject_CallFunctionObjArgs(
+                        callback.as_ptr(),
+                        arg.as_ptr(),
+                        std::ptr::null_mut::<ffi::PyObject>(),
+                    ),
+                )
+            }
+            .map(Bound::unbind)
+        } else {
+            Err(err)
+        };
+    }
+
+    let callback_result = unsafe {
+        Bound::from_owned_ptr_or_err(
+            py,
+            ffi::PyObject_CallFunctionObjArgs(
+                callback.as_ptr(),
+                arg.as_ptr(),
+                std::ptr::null_mut::<ffi::PyObject>(),
+            ),
+        )
+    }
+    .map(Bound::unbind);
+    let exit_result = exit_context(py, context);
+
+    match (callback_result, exit_result) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Err(err), _) => Err(err),
+        (Ok(_), Err(err)) => Err(err),
+    }
+}
+
+#[inline]
 pub fn ensure_running_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<()> {
     set_running_loop_fn(py)?.call1(py, (loop_obj.clone_ref(py),))?;
     Ok(())
