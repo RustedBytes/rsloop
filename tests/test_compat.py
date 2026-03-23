@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import os
+import signal
 import socket
+import tempfile
 import time
+import threading
 import unittest
 import warnings
 import builtins
+import pathlib
 from unittest import mock
 
 import rsloop
@@ -180,6 +185,465 @@ class CompatibilityTests(unittest.TestCase):
             any("within 0.01 seconds" in message for message in messages),
             messages,
         )
+
+    def test_shutdown_default_executor_blocks_later_default_submissions(self) -> None:
+        async def main() -> str:
+            loop = asyncio.get_running_loop()
+
+            class DummyExecutor:
+                def submit(self, func, *args):
+                    raise AssertionError("submit should not be called after shutdown")
+
+                def shutdown(self, wait):
+                    return None
+
+            loop.set_default_executor(DummyExecutor())
+            await loop.shutdown_default_executor()
+
+            try:
+                await loop.run_in_executor(None, lambda: 1)
+            except RuntimeError as exc:
+                return str(exc)
+            raise AssertionError("run_in_executor(None, ...) should fail after shutdown")
+
+        self.assertEqual(
+            rsloop.run(main()),
+            "Executor shutdown has been called",
+        )
+
+    def test_close_shuts_down_default_executor_without_waiting(self) -> None:
+        calls = []
+
+        class DummyExecutor:
+            def shutdown(self, wait):
+                calls.append(wait)
+
+        loop = rsloop.new_event_loop()
+        loop.set_default_executor(DummyExecutor())
+        loop.close()
+        loop.close()
+
+        self.assertEqual(calls, [False])
+
+    def test_shutdown_asyncgens_closes_active_generators(self) -> None:
+        async def main() -> list[str]:
+            loop = asyncio.get_running_loop()
+            events = []
+
+            async def gen():
+                try:
+                    yield "value"
+                    await asyncio.sleep(10)
+                finally:
+                    events.append("closed")
+
+            agen = gen()
+            self.assertEqual(await agen.__anext__(), "value")
+            await loop.shutdown_asyncgens()
+            return events
+
+        self.assertEqual(rsloop.run(main()), ["closed"])
+
+    def test_shutdown_asyncgens_warns_on_new_iteration_after_shutdown(self) -> None:
+        async def main() -> tuple[list[str], list[object]]:
+            loop = asyncio.get_running_loop()
+            messages = []
+            sources = []
+
+            async def gen():
+                try:
+                    yield "value"
+                finally:
+                    pass
+
+            def capture_warning(message, category=None, stacklevel=1, source=None):
+                messages.append(str(message))
+                sources.append(source)
+                return None
+
+            with mock.patch.object(warnings, "warn", side_effect=capture_warning):
+                await loop.shutdown_asyncgens()
+                agen = gen()
+                self.assertEqual(await agen.__anext__(), "value")
+                await agen.aclose()
+
+            return messages, sources
+
+        messages, sources = rsloop.run(main())
+        self.assertTrue(
+            any("shutdown_asyncgens() call" in message for message in messages),
+            messages,
+        )
+        self.assertEqual(len(sources), 1)
+        self.assertIsInstance(sources[0], rsloop.Loop)
+
+    def test_getaddrinfo_and_getnameinfo_use_default_executor(self) -> None:
+        async def main() -> tuple[list[str], tuple[str, str]]:
+            loop = asyncio.get_running_loop()
+            calls = []
+
+            class DummyExecutor:
+                def submit(self, func, *args):
+                    calls.append(func.__name__)
+                    future = __import__("concurrent.futures").futures.Future()
+                    try:
+                        future.set_result(func(*args))
+                    except BaseException as exc:
+                        future.set_exception(exc)
+                    return future
+
+                def shutdown(self, wait):
+                    return None
+
+            loop.set_default_executor(DummyExecutor())
+            addrinfos = await loop.getaddrinfo("localhost", 80, type=socket.SOCK_STREAM)
+            host, service = await loop.getnameinfo(("127.0.0.1", 80))
+            self.assertTrue(addrinfos)
+            return calls, (host, service)
+
+        calls, nameinfo = rsloop.run(main())
+        self.assertEqual(calls, ["getaddrinfo", "getnameinfo"])
+        self.assertEqual(nameinfo[1], "http")
+
+    def test_getaddrinfo_honors_default_executor_shutdown(self) -> None:
+        async def main() -> str:
+            loop = asyncio.get_running_loop()
+
+            class DummyExecutor:
+                def submit(self, func, *args):
+                    raise AssertionError("submit should not be called after shutdown")
+
+                def shutdown(self, wait):
+                    return None
+
+            loop.set_default_executor(DummyExecutor())
+            await loop.shutdown_default_executor()
+            try:
+                await loop.getaddrinfo("localhost", 80)
+            except RuntimeError as exc:
+                return str(exc)
+            raise AssertionError("getaddrinfo should fail after default executor shutdown")
+
+        self.assertEqual(
+            rsloop.run(main()),
+            "Executor shutdown has been called",
+        )
+
+    def test_create_task_passes_kwargs_to_task_factory(self) -> None:
+        async def main() -> tuple[dict[str, object], str]:
+            loop = asyncio.get_running_loop()
+            captured = {}
+
+            async def coro():
+                return "ok"
+
+            def factory(loop, coro, **kwargs):
+                if "custom_flag" in kwargs:
+                    captured.update(kwargs)
+                forwarded = dict(kwargs)
+                forwarded.pop("custom_flag", None)
+                return asyncio.Task(coro, loop=loop, **forwarded)
+
+            loop.set_task_factory(factory)
+            task = loop.create_task(
+                coro(),
+                name="demo",
+                eager_start=False,
+                custom_flag="seen",
+            )
+            return captured, await task
+
+        captured, result = rsloop.run(main())
+        self.assertEqual(result, "ok")
+        self.assertEqual(captured["name"], "demo")
+        self.assertEqual(captured["eager_start"], False)
+        self.assertEqual(captured["custom_flag"], "seen")
+
+    def test_create_task_accepts_eager_start_without_task_factory(self) -> None:
+        async def main() -> tuple[bool, str]:
+            loop = asyncio.get_running_loop()
+
+            async def coro():
+                await asyncio.sleep(0)
+                return "done"
+
+            task = loop.create_task(coro(), eager_start=False)
+            pending_before = not task.done()
+            return pending_before, await task
+
+        self.assertEqual(rsloop.run(main()), (True, "done"))
+
+    def test_create_server_accepts_keep_alive(self) -> None:
+        async def main() -> int:
+            loop = asyncio.get_running_loop()
+            server = await loop.create_server(
+                asyncio.Protocol,
+                "127.0.0.1",
+                0,
+                keep_alive=True,
+            )
+            try:
+                sock = server.sockets[0]
+                return sock.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)
+            finally:
+                server.close()
+                await asyncio.sleep(0)
+
+        self.assertEqual(rsloop.run(main()), 1)
+
+    def test_create_datagram_endpoint_round_trip(self) -> None:
+        async def main() -> str:
+            loop = asyncio.get_running_loop()
+            done = loop.create_future()
+
+            class ServerProtocol(asyncio.DatagramProtocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+
+                def datagram_received(self, data, addr):
+                    self.transport.sendto(b"echo:" + data, addr)
+
+            class ClientProtocol(asyncio.DatagramProtocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+                    transport.sendto(b"ping")
+
+                def datagram_received(self, data, addr):
+                    if not done.done():
+                        done.set_result(data.decode())
+                    self.transport.close()
+
+            server_transport, _ = await loop.create_datagram_endpoint(
+                ServerProtocol,
+                local_addr=("127.0.0.1", 0),
+            )
+            try:
+                port = server_transport.get_extra_info("sockname")[1]
+                client_transport, _ = await loop.create_datagram_endpoint(
+                    ClientProtocol,
+                    remote_addr=("127.0.0.1", port),
+                )
+                try:
+                    return await asyncio.wait_for(done, 1.0)
+                finally:
+                    client_transport.close()
+            finally:
+                server_transport.close()
+
+        self.assertEqual(rsloop.run(main()), "echo:ping")
+
+    def test_sendfile_fallback_writes_file_contents(self) -> None:
+        async def main(path: str, expected: bytes) -> tuple[int, bytes]:
+            loop = asyncio.get_running_loop()
+            done = loop.create_future()
+            client_done = loop.create_future()
+            server_done = loop.create_future()
+
+            class ServerProtocol(asyncio.Protocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+
+                def data_received(self, data):
+                    if not done.done():
+                        done.set_result(bytes(data))
+                    self.transport.close()
+
+                def connection_lost(self, exc):
+                    if not server_done.done():
+                        server_done.set_result(None)
+
+            class ClientProtocol(asyncio.Protocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+
+                def connection_lost(self, exc):
+                    if not client_done.done():
+                        client_done.set_result(None)
+
+            server = await loop.create_server(ServerProtocol, "127.0.0.1", 0)
+            try:
+                port = server.sockets[0].getsockname()[1]
+                transport, _ = await loop.create_connection(
+                    ClientProtocol,
+                    "127.0.0.1",
+                    port,
+                )
+                try:
+                    with open(path, "rb") as f:
+                        sent = await loop.sendfile(transport, f)
+                    transport.close()
+                    received = await asyncio.wait_for(done, 1.0)
+                    await asyncio.wait_for(client_done, 1.0)
+                    await asyncio.wait_for(server_done, 1.0)
+                    return sent, received
+                finally:
+                    transport.close()
+            finally:
+                server.close()
+                await asyncio.sleep(0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "payload.bin"
+            payload = b"sendfile-payload"
+            path.write_bytes(payload)
+            self.assertEqual(rsloop.run(main(str(path), payload)), (len(payload), payload))
+
+    def test_sock_recvfrom_receives_datagram(self) -> None:
+        async def main() -> tuple[bytes, tuple[str, int]]:
+            loop = asyncio.get_running_loop()
+            recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                recv_sock.bind(("127.0.0.1", 0))
+                recv_sock.setblocking(False)
+                addr = recv_sock.getsockname()
+                send_sock.sendto(b"udp-data", addr)
+                return await asyncio.wait_for(loop.sock_recvfrom(recv_sock, 1024), 1.0)
+            finally:
+                recv_sock.close()
+                send_sock.close()
+
+        data, addr = rsloop.run(main())
+        self.assertEqual(data, b"udp-data")
+        self.assertEqual(addr[0], "127.0.0.1")
+
+    def test_sock_recvfrom_into_receives_datagram(self) -> None:
+        async def main() -> tuple[int, bytes, tuple[str, int]]:
+            loop = asyncio.get_running_loop()
+            recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                recv_sock.bind(("127.0.0.1", 0))
+                recv_sock.setblocking(False)
+                addr = recv_sock.getsockname()
+                send_sock.sendto(b"udp-into", addr)
+                buf = bytearray(32)
+                nbytes, peer = await asyncio.wait_for(
+                    loop.sock_recvfrom_into(recv_sock, buf), 1.0
+                )
+                return nbytes, bytes(buf[:nbytes]), peer
+            finally:
+                recv_sock.close()
+                send_sock.close()
+
+        nbytes, data, addr = rsloop.run(main())
+        self.assertEqual(nbytes, len(b"udp-into"))
+        self.assertEqual(data, b"udp-into")
+        self.assertEqual(addr[0], "127.0.0.1")
+
+    def test_sock_sendto_sends_datagram(self) -> None:
+        async def main() -> tuple[int, bytes]:
+            loop = asyncio.get_running_loop()
+            recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                recv_sock.bind(("127.0.0.1", 0))
+                send_sock.setblocking(False)
+                sent = await asyncio.wait_for(
+                    loop.sock_sendto(send_sock, b"udp-sendto", recv_sock.getsockname()),
+                    1.0,
+                )
+                data, _ = recv_sock.recvfrom(1024)
+                return sent, data
+            finally:
+                recv_sock.close()
+                send_sock.close()
+
+        self.assertEqual(rsloop.run(main()), (len(b"udp-sendto"), b"udp-sendto"))
+
+    def test_sock_sendfile_fallback_writes_file_contents(self) -> None:
+        async def main(path: str) -> tuple[int, bytes]:
+            loop = asyncio.get_running_loop()
+            recv_done = loop.create_future()
+            server_done = loop.create_future()
+
+            class ServerProtocol(asyncio.Protocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+
+                def data_received(self, data):
+                    if not recv_done.done():
+                        recv_done.set_result(bytes(data))
+                    self.transport.close()
+
+                def connection_lost(self, exc):
+                    if not server_done.done():
+                        server_done.set_result(None)
+
+            server = await loop.create_server(ServerProtocol, "127.0.0.1", 0)
+            try:
+                port = server.sockets[0].getsockname()[1]
+                recv_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                recv_sock.bind(("127.0.0.1", 0))
+                recv_sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setblocking(False)
+                await loop.sock_connect(sock, ("127.0.0.1", port))
+                try:
+                    with open(path, "rb") as f:
+                        sent = await loop.sock_sendfile(sock, f)
+                    received = await asyncio.wait_for(recv_done, 1.0)
+                    await asyncio.wait_for(server_done, 1.0)
+                    return sent, received
+                finally:
+                    sock.close()
+            finally:
+                server.close()
+                await asyncio.sleep(0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "payload.bin"
+            payload = b"sock-sendfile"
+            path.write_bytes(payload)
+            self.assertEqual(rsloop.run(main(str(path))), (len(payload), payload))
+
+    def test_slow_callback_duration_property(self) -> None:
+        loop = rsloop.new_event_loop()
+        try:
+            self.assertEqual(loop.slow_callback_duration, 0.1)
+            loop.slow_callback_duration = 0.25
+            self.assertEqual(loop.slow_callback_duration, 0.25)
+        finally:
+            loop.close()
+
+    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "unix sockets required")
+    def test_create_unix_server_cleanup_socket_false_leaves_path(self) -> None:
+        async def main(path: str) -> bool:
+            loop = asyncio.get_running_loop()
+            server = await loop.create_unix_server(
+                asyncio.Protocol,
+                path,
+                cleanup_socket=False,
+            )
+            server.close()
+            await server.wait_closed()
+            return os.path.exists(path)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "sock")
+            self.assertTrue(rsloop.run(main(path)))
+
+    @unittest.skipUnless(hasattr(signal, "SIGUSR1"), "unix only")
+    def test_add_signal_handler_rejects_non_main_thread(self) -> None:
+        loop = rsloop.new_event_loop()
+        try:
+            errors = []
+
+            def worker():
+                try:
+                    loop.add_signal_handler(signal.SIGUSR1, lambda: None)
+                except BaseException as exc:
+                    errors.append(exc)
+
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join()
+
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], ValueError)
+            self.assertIn("main thread", str(errors[0]))
+        finally:
+            loop.close()
 
     def test_ssl_shutdown_timeout_requires_ssl(self) -> None:
         async def main() -> tuple[str, str]:

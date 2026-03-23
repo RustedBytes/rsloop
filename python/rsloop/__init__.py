@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio as __asyncio
 import builtins as __builtins
+import codecs as __codecs
 import collections as __collections
 import contextlib as __contextlib
+import ctypes as __ctypes
 import itertools as __itertools
 import math as __math
 import os as __os
@@ -13,6 +15,9 @@ import ssl as __ssl
 import sys as __sys
 import typing as __typing
 import locale as __locale
+import warnings as __warnings
+import asyncio.base_events as __asyncio_base_events
+import io as __io
 
 __DLL_DIR_HANDLES: list[object] = []
 
@@ -73,6 +78,13 @@ _T = __typing.TypeVar("_T")
 __ORIG_SET_EVENT_LOOP = __asyncio.set_event_loop
 
 
+def __get_event_loop_policy():
+    getter = getattr(__asyncio.events, "_get_event_loop_policy", None)
+    if getter is not None:
+        return getter()
+    return __asyncio.get_event_loop_policy()
+
+
 def __set_event_loop(loop: Loop | None) -> None:
     try:
         __ORIG_SET_EVENT_LOOP(loop)
@@ -84,7 +96,7 @@ def __set_event_loop(loop: Loop | None) -> None:
     # Python 3.8 rejects non-stdlib loop objects in set_event_loop() with a
     # hard isinstance() assertion. Mirror the stdlib policy bookkeeping so
     # get_event_loop() still returns the current rsloop instance.
-    policy = __asyncio.get_event_loop_policy()
+    policy = __get_event_loop_policy()
     local = getattr(policy, "_local", None)
     if local is None:
         raise
@@ -130,7 +142,19 @@ __ORIG_START_SERVER = __asyncio.start_server
 __ORIG_CREATE_SUBPROCESS_EXEC = __asyncio.create_subprocess_exec
 __ORIG_CREATE_SUBPROCESS_SHELL = __asyncio.create_subprocess_shell
 __ORIG_CREATE_CONNECTION = Loop.create_connection
+__ORIG_CREATE_DATAGRAM_ENDPOINT = getattr(Loop, "create_datagram_endpoint", None)
+__ORIG_SENDFILE = getattr(Loop, "sendfile", None)
+__ORIG_SOCK_RECVFROM = getattr(Loop, "sock_recvfrom", None)
+__ORIG_SOCK_RECVFROM_INTO = getattr(Loop, "sock_recvfrom_into", None)
+__ORIG_SOCK_SENDTO = getattr(Loop, "sock_sendto", None)
+__ORIG_SOCK_SENDFILE = getattr(Loop, "sock_sendfile", None)
+__ORIG_RUN_FOREVER = Loop.run_forever
+__ORIG_RUN_UNTIL_COMPLETE = Loop.run_until_complete
+__ORIG_SHUTDOWN_ASYNCGENS = Loop.shutdown_asyncgens
+__ORIG_CLOSE = Loop.close
 __USE_FAST_STREAMS = __os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
+__ASYNCGEN_STATE: dict[Loop, dict[str, object]] = {}
+__LOOP_CONFIG: dict[Loop, dict[str, object]] = {}
 
 
 if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
@@ -139,8 +163,505 @@ if __USE_FAST_STREAMS and __asyncio.start_server is __ORIG_START_SERVER:
     __asyncio.start_server = __start_server
 
 _asyncio = __asyncio
+_collections = __collections
+_codecs = __codecs
+_ctypes = __ctypes
+_io = __io
 _locale = __locale
 _os = __os
+
+
+def __get_asyncgen_state(loop: Loop) -> dict[str, object]:
+    state = __ASYNCGEN_STATE.get(loop)
+    if state is None:
+        state = {
+            "active": set(),
+            "shutdown_called": False,
+            "old_hooks": None,
+        }
+        __ASYNCGEN_STATE[loop] = state
+    return state
+
+
+def __get_loop_config(loop: Loop) -> dict[str, object]:
+    config = __LOOP_CONFIG.get(loop)
+    if config is None:
+        config = {
+            "slow_callback_duration": 0.1,
+        }
+        __LOOP_CONFIG[loop] = config
+    return config
+
+
+@__contextlib.contextmanager
+def __asyncgen_hooks_installed(loop: Loop) -> __typing.Iterator[None]:
+    state = __get_asyncgen_state(loop)
+    old_hooks = __sys.get_asyncgen_hooks()
+    state["old_hooks"] = old_hooks
+    __sys.set_asyncgen_hooks(
+        firstiter=lambda agen: __asyncgen_firstiter_hook(loop, agen),
+        finalizer=lambda agen: __asyncgen_finalizer_hook(loop, agen),
+    )
+    try:
+        yield None
+    finally:
+        saved_hooks = state.get("old_hooks")
+        if saved_hooks is not None:
+            __sys.set_asyncgen_hooks(*saved_hooks)
+            state["old_hooks"] = None
+
+
+def __asyncgen_firstiter_hook(loop: Loop, agen) -> None:
+    state = __get_asyncgen_state(loop)
+    if state["shutdown_called"]:
+        __warnings.warn(
+            f"asynchronous generator {agen!r} was scheduled after "
+            f"loop.shutdown_asyncgens() call",
+            ResourceWarning,
+            source=loop,
+        )
+    state["active"].add(agen)
+
+
+def __asyncgen_finalizer_hook(loop: Loop, agen) -> None:
+    state = __get_asyncgen_state(loop)
+    state["active"].discard(agen)
+    if not loop.is_closed():
+        loop.call_soon_threadsafe(loop.create_task, agen.aclose())
+
+
+async def __loop_shutdown_asyncgens(self):
+    state = __get_asyncgen_state(self)
+    state["shutdown_called"] = True
+
+    if not state["active"]:
+        return
+
+    closing_agens = list(state["active"])
+    state["active"].clear()
+
+    results = await __asyncio.gather(
+        *(agen.aclose() for agen in closing_agens),
+        return_exceptions=True,
+    )
+
+    for result, agen in zip(results, closing_agens):
+        if isinstance(result, Exception):
+            self.call_exception_handler(
+                {
+                    "message": f"an error occurred during closing of asynchronous generator {agen!r}",
+                    "exception": result,
+                    "asyncgen": agen,
+                }
+            )
+
+
+def __loop_run_forever(self):
+    with __asyncgen_hooks_installed(self):
+        return __ORIG_RUN_FOREVER(self)
+
+
+def __loop_run_until_complete(self, future):
+    with __asyncgen_hooks_installed(self):
+        return __ORIG_RUN_UNTIL_COMPLETE(self, future)
+
+
+def __loop_close(self):
+    try:
+        return __ORIG_CLOSE(self)
+    finally:
+        __ASYNCGEN_STATE.pop(self, None)
+        __LOOP_CONFIG.pop(self, None)
+
+
+def __cancel_all_tasks(loop: Loop) -> None:
+    to_cancel = __asyncio.all_tasks(loop)
+    if not to_cancel:
+        return
+
+    for task in to_cancel:
+        task.cancel()
+
+    loop.run_until_complete(__asyncio.gather(*to_cancel, return_exceptions=True))
+
+    for task in to_cancel:
+        if task.cancelled():
+            continue
+        exception = task.exception()
+        if exception is None:
+            continue
+        loop.call_exception_handler(
+            {
+                "message": "unhandled exception during rsloop.run() shutdown",
+                "exception": exception,
+                "task": task,
+            }
+        )
+
+
+class __RsloopDatagramTransport:
+    max_size = 256 * 1024
+
+    def __init__(self, loop: Loop, sock, protocol, address=None, waiter=None):
+        self._loop = loop
+        self._sock = sock
+        self._protocol = protocol
+        self._address = address
+        self._buffer = _collections.deque()
+        self._buffer_size = 0
+        self._closing = False
+        self._conn_lost = 0
+        self._writer_task = None
+        self._extra = {
+            "socket": sock,
+            "sockname": sock.getsockname(),
+            "peername": self.__peername(),
+        }
+        self._protocol_paused = False
+        self._high_water = 64 * 1024
+        self._low_water = 16 * 1024
+        self._reader_task = self._loop.create_task(self._read_loop())
+        self._loop.call_soon(self._protocol.connection_made, self)
+        if waiter is not None:
+            self._loop.call_soon(waiter.set_result, None)
+
+    def __peername(self):
+        try:
+            return self._sock.getpeername()
+        except OSError:
+            return None
+
+    def get_extra_info(self, name, default=None):
+        return self._extra.get(name, default)
+
+    def get_protocol(self):
+        return self._protocol
+
+    def set_protocol(self, protocol):
+        self._protocol = protocol
+
+    def is_closing(self):
+        return self._closing
+
+    def close(self):
+        if self._closing:
+            return
+        self._closing = True
+        self._reader_task.cancel()
+        if not self._buffer:
+            self._loop.call_soon(self._call_connection_lost, None)
+
+    def abort(self):
+        self._force_close(None)
+
+    def get_write_buffer_size(self):
+        return self._buffer_size
+
+    def _maybe_pause_protocol(self):
+        if self._buffer_size > self._high_water and not self._protocol_paused:
+            self._protocol_paused = True
+            self._protocol.pause_writing()
+
+    def _maybe_resume_protocol(self):
+        if self._protocol_paused and self._buffer_size <= self._low_water:
+            self._protocol_paused = False
+            self._protocol.resume_writing()
+
+    def sendto(self, data, addr=None):
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError(
+                f"data argument must be a bytes-like object, not {type(data).__name__!r}"
+            )
+        if self._address is not None:
+            if addr not in (None, self._address):
+                raise ValueError(f"Invalid address: must be None or {self._address}")
+            addr = self._address
+
+        if not self._buffer:
+            try:
+                if self._extra["peername"] is not None:
+                    self._sock.send(data)
+                else:
+                    self._sock.sendto(data, addr)
+                return
+            except (BlockingIOError, InterruptedError):
+                if self._writer_task is None:
+                    self._writer_task = self._loop.create_task(self._flush_write_buffer())
+            except OSError as exc:
+                self._protocol.error_received(exc)
+                return
+
+        payload = bytes(data)
+        self._buffer.append((payload, addr))
+        self._buffer_size += len(payload)
+        self._maybe_pause_protocol()
+
+    async def _read_loop(self):
+        while not self._closing:
+            try:
+                data, addr = await self._loop.sock_recvfrom(self._sock, self.max_size)
+            except _asyncio.CancelledError:
+                return
+            except OSError as exc:
+                self._protocol.error_received(exc)
+                continue
+            self._protocol.datagram_received(data, addr)
+
+    async def _flush_write_buffer(self):
+        try:
+            while self._buffer and not self._closing:
+                data, addr = self._buffer[0]
+                try:
+                    if self._extra["peername"] is not None:
+                        self._sock.send(data)
+                    else:
+                        self._sock.sendto(data, addr)
+                except (BlockingIOError, InterruptedError):
+                    await __wait_for_fd(self._loop, self._sock, readable=False)
+                    continue
+                except OSError as exc:
+                    self._protocol.error_received(exc)
+                    return
+                self._buffer.popleft()
+                self._buffer_size -= len(data)
+                self._maybe_resume_protocol()
+        finally:
+            self._writer_task = None
+            if self._closing and not self._buffer:
+                self._call_connection_lost(None)
+
+    def _force_close(self, exc):
+        if self._conn_lost:
+            return
+        self._buffer.clear()
+        self._buffer_size = 0
+        self._closing = True
+        self._reader_task.cancel()
+        if self._writer_task is not None:
+            self._writer_task.cancel()
+        self._call_connection_lost(exc)
+
+    def _call_connection_lost(self, exc):
+        if self._conn_lost:
+            return
+        self._conn_lost += 1
+        try:
+            self._protocol.connection_lost(exc)
+        finally:
+            self._sock.close()
+
+
+async def __wait_for_fd(loop: Loop, sock, *, readable: bool) -> None:
+    fut = loop.create_future()
+    callback = loop.add_reader if readable else loop.add_writer
+    remove = loop.remove_reader if readable else loop.remove_writer
+
+    def ready() -> None:
+        if not fut.done():
+            fut.set_result(None)
+
+    callback(sock, ready)
+    try:
+        await fut
+    finally:
+        remove(sock)
+
+
+async def __loop_sock_recvfrom(self, sock, bufsize):
+    while True:
+        try:
+            return sock.recvfrom(bufsize)
+        except (BlockingIOError, InterruptedError):
+            await __wait_for_fd(self, sock, readable=True)
+
+
+async def __loop_sock_recvfrom_into(self, sock, buf, nbytes=0):
+    while True:
+        try:
+            if nbytes:
+                return sock.recvfrom_into(buf, nbytes)
+            return sock.recvfrom_into(buf)
+        except (BlockingIOError, InterruptedError):
+            await __wait_for_fd(self, sock, readable=True)
+
+
+async def __loop_sock_sendto(self, sock, data, address):
+    while True:
+        try:
+            return sock.sendto(data, address)
+        except (BlockingIOError, InterruptedError):
+            await __wait_for_fd(self, sock, readable=False)
+
+
+async def __loop_sendfile(self, transport, file, offset=0, count=None, *, fallback=True):
+    if transport.is_closing():
+        raise RuntimeError("Transport is closing")
+    if not fallback:
+        raise RuntimeError(
+            f"fallback is disabled and native sendfile is not supported for transport {transport!r}"
+        )
+
+    if offset:
+        file.seek(offset)
+    blocksize = min(count, 16384) if count else 16384
+    buf = bytearray(blocksize)
+    total_sent = 0
+
+    async def drain_transport() -> None:
+        while transport.get_write_buffer_size() > 0:
+            if transport.is_closing():
+                raise ConnectionError("Connection closed by peer")
+            await __asyncio.sleep(0)
+
+    try:
+        while True:
+            if count is not None:
+                blocksize = min(count - total_sent, blocksize)
+                if blocksize <= 0:
+                    return total_sent
+            view = memoryview(buf)[:blocksize]
+            read = await self.run_in_executor(None, file.readinto, view)
+            if not read:
+                return total_sent
+            transport.write(view[:read])
+            await drain_transport()
+            total_sent += read
+    finally:
+        if total_sent > 0 and hasattr(file, "seek"):
+            file.seek(offset + total_sent)
+
+
+async def __loop_sock_sendfile(self, sock, file, offset=0, count=None, *, fallback=True):
+    if sock.gettimeout() != 0:
+        raise ValueError("the socket must be non-blocking")
+    if "b" not in getattr(file, "mode", "b"):
+        raise ValueError("file should be opened in binary mode")
+    if sock.type != __socket.SOCK_STREAM:
+        raise ValueError("only SOCK_STREAM type sockets are supported")
+    if count is not None:
+        if not isinstance(count, int):
+            raise TypeError(f"count must be a positive integer (got {count!r})")
+        if count <= 0:
+            raise ValueError(f"count must be a positive integer (got {count!r})")
+    if not isinstance(offset, int):
+        raise TypeError(f"offset must be a non-negative integer (got {offset!r})")
+    if offset < 0:
+        raise ValueError(f"offset must be a non-negative integer (got {offset!r})")
+    if not fallback:
+        raise RuntimeError(
+            f"fallback is disabled and native sendfile is not supported for socket {sock!r}"
+        )
+
+    if offset:
+        file.seek(offset)
+    blocksize = min(count, 16384) if count else 16384
+    buf = bytearray(blocksize)
+    total_sent = 0
+    try:
+        while True:
+            if count:
+                blocksize = min(count - total_sent, blocksize)
+                if blocksize <= 0:
+                    break
+            view = memoryview(buf)[:blocksize]
+            read = await self.run_in_executor(None, file.readinto, view)
+            if not read:
+                break
+            await self.sock_sendall(sock, view[:read])
+            total_sent += read
+        return total_sent
+    finally:
+        if total_sent > 0 and hasattr(file, "seek"):
+            file.seek(offset + total_sent)
+
+
+def __get_slow_callback_duration(self):
+    return __get_loop_config(self)["slow_callback_duration"]
+
+
+def __set_slow_callback_duration(self, value):
+    __get_loop_config(self)["slow_callback_duration"] = float(value)
+
+
+async def __loop_create_datagram_endpoint(
+    self,
+    protocol_factory,
+    local_addr=None,
+    remote_addr=None,
+    *,
+    family=0,
+    proto=0,
+    flags=0,
+    reuse_port=None,
+    allow_broadcast=None,
+    sock=None,
+):
+    resolved_remote_addr = None
+    if sock is not None and (local_addr is not None or remote_addr is not None):
+        raise ValueError("socket modifier keyword arguments can not be used when sock is specified")
+    if sock is None and local_addr is None and remote_addr is None:
+        raise ValueError("unexpected address family")
+
+    if sock is None:
+        addrinfos = None
+        if remote_addr is not None:
+            addrinfos = await self.getaddrinfo(
+                *remote_addr,
+                family=family,
+                type=__socket.SOCK_DGRAM,
+                proto=proto,
+                flags=flags,
+            )
+        elif local_addr is not None:
+            addrinfos = await self.getaddrinfo(
+                *local_addr,
+                family=family,
+                type=__socket.SOCK_DGRAM,
+                proto=proto,
+                flags=flags,
+            )
+        if not addrinfos:
+            raise OSError("getaddrinfo() returned empty list")
+
+        family, socktype, proto, _, sockaddr = addrinfos[0]
+        if remote_addr is not None:
+            resolved_remote_addr = sockaddr
+        sock = __socket.socket(family=family, type=socktype, proto=proto)
+        sock.setblocking(False)
+        if reuse_port:
+            if not hasattr(__socket, "SO_REUSEPORT"):
+                raise ValueError("reuse_port not supported by socket module")
+            sock.setsockopt(__socket.SOL_SOCKET, __socket.SO_REUSEPORT, 1)
+        if allow_broadcast:
+            sock.setsockopt(__socket.SOL_SOCKET, __socket.SO_BROADCAST, 1)
+        if local_addr is not None:
+            sock.bind(local_addr)
+        elif remote_addr is not None:
+            if family == __socket.AF_INET6:
+                sock.bind(("::", 0))
+            else:
+                sock.bind(("0.0.0.0", 0))
+    else:
+        sock.setblocking(False)
+
+    waiter = self.create_future()
+    protocol = protocol_factory()
+    address = resolved_remote_addr or remote_addr
+    if address is None and sock is not None:
+        try:
+            address = sock.getpeername()
+        except OSError:
+            address = None
+
+    transport = __RsloopDatagramTransport(
+        self,
+        sock,
+        protocol,
+        address=address,
+        waiter=waiter,
+    )
+    await waiter
+    return transport, protocol
 
 
 def __subprocess_text_requested(kwds: dict[str, object]) -> bool:
@@ -377,9 +898,7 @@ class _TextStreamWriter:
     def write(self, data):
         if not isinstance(data, str):
             raise TypeError("text-mode subprocess stdin expects str input")
-        self._writer.write(
-            data.replace("\n", _os.linesep).encode(self._encoding, self._errors)
-        )
+        self._writer.write(data.encode(self._encoding, self._errors))
 
     def writelines(self, data):
         for chunk in data:
@@ -407,6 +926,34 @@ class _TextStreamWriter:
         await self._writer.drain()
 
 
+class _TextNewlineDecoder:
+    def __init__(self, encoding, errors):
+        self._decoder = _codecs.getincrementaldecoder(encoding)(errors)
+        self._pending = ""
+
+    def decode(self, data, final=False):
+        text = self._pending + self._decoder.decode(data, final)
+        if final:
+            self._pending = ""
+            return self._translate(text)
+
+        pending_len = 0
+        for char in reversed(text[-2:]):
+            if char != "\r":
+                break
+            pending_len += 1
+        if pending_len:
+            self._pending = text[-pending_len:]
+            text = text[:-pending_len]
+        else:
+            self._pending = ""
+        return self._translate(text)
+
+    @staticmethod
+    def _translate(text):
+        return text.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+
+
 class _TextSubprocessStreamProtocol(
     _asyncio.streams.FlowControlMixin,
     _asyncio.protocols.SubprocessProtocol,
@@ -416,6 +963,8 @@ class _TextSubprocessStreamProtocol(
         self._limit = limit
         self._encoding = encoding
         self._errors = errors
+        self._stdout_decoder = None
+        self._stderr_decoder = None
         self.stdin = self.stdout = self.stderr = None
         self._transport = None
         self._process_exited = False
@@ -439,12 +988,14 @@ class _TextSubprocessStreamProtocol(
         if stdout_transport is not None:
             self.stdout = _TextStreamReader(limit=self._limit, loop=self._loop)
             self.stdout.set_transport(stdout_transport)
+            self._stdout_decoder = _TextNewlineDecoder(self._encoding, self._errors)
             self._pipe_fds.append(1)
 
         stderr_transport = transport.get_pipe_transport(2)
         if stderr_transport is not None:
             self.stderr = _TextStreamReader(limit=self._limit, loop=self._loop)
             self.stderr.set_transport(stderr_transport)
+            self._stderr_decoder = _TextNewlineDecoder(self._encoding, self._errors)
             self._pipe_fds.append(2)
 
         stdin_transport = transport.get_pipe_transport(0)
@@ -464,12 +1015,15 @@ class _TextSubprocessStreamProtocol(
     def pipe_data_received(self, fd, data):
         if fd == 1:
             reader = self.stdout
+            decoder = self._stdout_decoder
         elif fd == 2:
             reader = self.stderr
+            decoder = self._stderr_decoder
         else:
             reader = None
-        if reader is not None:
-            reader.feed_data(data)
+            decoder = None
+        if reader is not None and decoder is not None:
+            reader.feed_data(decoder.decode(data))
 
     def pipe_connection_lost(self, fd, exc):
         if fd == 0:
@@ -491,6 +1045,11 @@ class _TextSubprocessStreamProtocol(
             reader = None
         if reader is not None:
             if exc is None:
+                decoder = self._stdout_decoder if fd == 1 else self._stderr_decoder
+                if decoder is not None:
+                    tail = decoder.decode(b"", final=True)
+                    if tail:
+                        reader.feed_data(tail)
                 reader.feed_eof()
             else:
                 reader.set_exception(exc)
@@ -524,6 +1083,29 @@ def __subprocess_text_config(kwds: dict[str, object]) -> tuple[bool, str, str]:
     return text_enabled, str(encoding), str(errors)
 
 
+def __without_text_kwds(kwds: dict[str, object]) -> dict[str, object]:
+    filtered = dict(kwds)
+    filtered.pop("text", None)
+    filtered.pop("encoding", None)
+    filtered.pop("errors", None)
+    filtered.pop("universal_newlines", None)
+    return filtered
+
+
+def __windows_command_line_to_argv(cmd: str) -> list[str]:
+    argc = _ctypes.c_int()
+    command_line_to_argv = _ctypes.windll.shell32.CommandLineToArgvW
+    command_line_to_argv.argtypes = [_ctypes.c_wchar_p, _ctypes.POINTER(_ctypes.c_int)]
+    command_line_to_argv.restype = _ctypes.POINTER(_ctypes.c_wchar_p)
+    argv = command_line_to_argv(cmd, _ctypes.byref(argc))
+    if not argv:
+        raise OSError("CommandLineToArgvW failed")
+    try:
+        return [argv[index] for index in range(argc.value)]
+    finally:
+        _ctypes.windll.kernel32.LocalFree(argv)
+
+
 async def __create_text_subprocess_exec(
     program,
     *args,
@@ -554,6 +1136,7 @@ async def __create_text_subprocess_exec(
             errors=errors,
         )
 
+    raw_kwds = __without_text_kwds(kwds)
     transport, protocol = await loop.subprocess_exec(
         protocol_factory,
         program,
@@ -561,7 +1144,7 @@ async def __create_text_subprocess_exec(
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,
-        **kwds,
+        **raw_kwds,
     )
     return _asyncio.subprocess.Process(transport, protocol, loop)
 
@@ -594,13 +1177,30 @@ async def __create_text_subprocess_shell(
             errors=errors,
         )
 
+    raw_kwds = __without_text_kwds(kwds)
+    if _os.name == "nt":
+        try:
+            argv = __windows_command_line_to_argv(cmd)
+        except OSError:
+            argv = None
+        if argv:
+            transport, protocol = await loop.subprocess_exec(
+                protocol_factory,
+                argv[0],
+                *argv[1:],
+                stdin=stdin,
+                stdout=stdout,
+                stderr=stderr,
+                **raw_kwds,
+            )
+            return _asyncio.subprocess.Process(transport, protocol, loop)
     transport, protocol = await loop.subprocess_shell(
         protocol_factory,
         cmd,
         stdin=stdin,
         stdout=stdout,
         stderr=stderr,
-        **kwds,
+        **raw_kwds,
     )
     return _asyncio.subprocess.Process(transport, protocol, loop)
 
@@ -884,6 +1484,42 @@ async def __loop_create_connection(
 if Loop.create_connection is __ORIG_CREATE_CONNECTION:
     Loop.create_connection = __loop_create_connection
 
+if __ORIG_CREATE_DATAGRAM_ENDPOINT is None:
+    Loop.create_datagram_endpoint = __loop_create_datagram_endpoint
+
+if __ORIG_SENDFILE is None:
+    Loop.sendfile = __loop_sendfile
+
+if __ORIG_SOCK_RECVFROM is None:
+    Loop.sock_recvfrom = __loop_sock_recvfrom
+
+if __ORIG_SOCK_RECVFROM_INTO is None:
+    Loop.sock_recvfrom_into = __loop_sock_recvfrom_into
+
+if __ORIG_SOCK_SENDTO is None:
+    Loop.sock_sendto = __loop_sock_sendto
+
+if __ORIG_SOCK_SENDFILE is None:
+    Loop.sock_sendfile = __loop_sock_sendfile
+
+if not hasattr(Loop, "slow_callback_duration"):
+    Loop.slow_callback_duration = property(
+        __get_slow_callback_duration,
+        __set_slow_callback_duration,
+    )
+
+if Loop.run_forever is __ORIG_RUN_FOREVER:
+    Loop.run_forever = __loop_run_forever
+
+if Loop.run_until_complete is __ORIG_RUN_UNTIL_COMPLETE:
+    Loop.run_until_complete = __loop_run_until_complete
+
+if Loop.shutdown_asyncgens is __ORIG_SHUTDOWN_ASYNCGENS:
+    Loop.shutdown_asyncgens = __loop_shutdown_asyncgens
+
+if Loop.close is __ORIG_CLOSE:
+    Loop.close = __loop_close
+
 
 def __install_ssl_tracking() -> None:
     context_cls = __ssl.SSLContext
@@ -984,5 +1620,12 @@ else:
                 loop.set_debug(debug)
             return loop.run_until_complete(wrapper())
         finally:
-            __asyncio.set_event_loop(None)
-            loop.close()
+            try:
+                __cancel_all_tasks(loop)
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                shutdown_default_executor = getattr(loop, "shutdown_default_executor", None)
+                if shutdown_default_executor is not None:
+                    loop.run_until_complete(shutdown_default_executor())
+            finally:
+                __asyncio.set_event_loop(None)
+                loop.close()

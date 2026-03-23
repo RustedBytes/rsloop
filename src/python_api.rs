@@ -5,6 +5,8 @@ use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::io::FromRawHandle;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -54,6 +56,7 @@ struct TcpServerSocketOptions {
     backlog: i32,
     reuse_address: Option<bool>,
     reuse_port: Option<bool>,
+    keep_alive: Option<bool>,
 }
 
 #[pyclass(subclass, module = "rsloop._loop")]
@@ -306,6 +309,19 @@ fn create_asyncio_task_for_running_loop(py: Python<'_>, coro: Py<PyAny>) -> PyRe
     call_callable_onearg(py, asyncio_task_cls(py)?, coro.bind(py))
 }
 
+fn create_asyncio_task_with_kwargs(
+    py: Python<'_>,
+    loop_obj: Option<&Py<PyAny>>,
+    coro: Py<PyAny>,
+    kwargs: &Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    let task_kwargs = kwargs.copy()?;
+    if let Some(loop_obj) = loop_obj {
+        task_kwargs.set_item("loop", loop_obj.clone_ref(py))?;
+    }
+    asyncio_task_cls(py)?.call(py, (coro,), Some(&task_kwargs))
+}
+
 fn call_protocol_factory(
     py: Python<'_>,
     loop_obj: &Py<PyAny>,
@@ -494,11 +510,13 @@ fn build_tcp_server_sockets(
         backlog,
         reuse_address,
         reuse_port,
+        keep_alive,
     } = options;
     let socket_mod = py.import("socket")?;
     let sol_socket = socket_mod.getattr("SOL_SOCKET")?;
     let so_reuseaddr = socket_mod.getattr("SO_REUSEADDR")?;
     let so_reuseport = socket_mod.getattr("SO_REUSEPORT").ok();
+    let so_keepalive = socket_mod.getattr("SO_KEEPALIVE")?;
     let addrinfos = resolve_stream_addrinfos(py, host, port, family, 0, flags)?;
     let mut sockets = Vec::with_capacity(addrinfos.len());
 
@@ -519,6 +537,17 @@ fn build_tcp_server_sockets(
                     (sol_socket.clone(), so_reuseport.clone(), 1),
                 )?;
             }
+        }
+        if let Some(keep_alive) = keep_alive {
+            sock.call_method1(
+                py,
+                "setsockopt",
+                (
+                    sol_socket.clone(),
+                    so_keepalive.clone(),
+                    i32::from(keep_alive),
+                ),
+            )?;
         }
         sock.call_method1(py, "bind", (sockaddr,))?;
         sock.call_method1(py, "listen", (backlog,))?;
@@ -1099,8 +1128,26 @@ impl PyLoop {
         self.core.schedule_stop().map_err(Self::map_loop_error)
     }
 
-    fn close(&self) -> PyResult<()> {
-        self.core.close().map_err(Self::map_loop_error)
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        let executor = {
+            let mut state = self.core.state.lock().expect("poisoned loop state");
+            if state.running {
+                return Err(Self::map_loop_error(LoopCoreError::Running));
+            }
+            if state.closed {
+                return Ok(());
+            }
+            state.executor_shutdown_called = true;
+            state.default_executor.take()
+        };
+
+        self.core.close().map_err(Self::map_loop_error)?;
+
+        if let Some(executor) = executor {
+            executor.call_method1(py, "shutdown", (false,))?;
+        }
+
+        Ok(())
     }
 
     fn is_running(&self) -> bool {
@@ -1185,21 +1232,36 @@ impl PyLoop {
         create_asyncio_future_for_loop(py, &loop_obj)
     }
 
-    #[pyo3(signature=(coro, *, name=None, context=None))]
+    #[pyo3(signature=(coro, *, name=None, context=None, eager_start=None, **kwargs))]
     fn create_task(
         slf: Py<Self>,
         py: Python<'_>,
         coro: Py<PyAny>,
         name: Option<Py<PyAny>>,
         context: Option<Py<PyAny>>,
+        eager_start: Option<bool>,
+        kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Py<PyAny>> {
         let core = Arc::clone(&slf.borrow(py).core);
         let loop_obj = Self::as_py_any(py, &slf);
-        if !core.has_task_factory()
-            && name.is_none()
-            && context.is_none()
-            && core.on_runtime_thread()
-        {
+        let task_kwargs = PyDict::new(py);
+        if let Some(kwargs_in) = kwargs.as_ref() {
+            for (key, value) in kwargs_in.bind(py).iter() {
+                task_kwargs.set_item(key, value)?;
+            }
+        }
+        if let Some(name) = name.as_ref() {
+            task_kwargs.set_item("name", name)?;
+        }
+        if let Some(context) = context.as_ref() {
+            task_kwargs.set_item("context", context)?;
+        }
+        if let Some(eager_start) = eager_start {
+            task_kwargs.set_item("eager_start", eager_start)?;
+        }
+        let has_kwargs = !task_kwargs.is_empty();
+
+        if !core.has_task_factory() && !has_kwargs && core.on_runtime_thread() {
             return create_asyncio_task_for_running_loop(py, coro);
         }
 
@@ -1214,15 +1276,22 @@ impl PyLoop {
             None
         };
         if let Some(factory) = task_factory {
-            let created = factory.call1(py, (loop_obj.clone_ref(py), coro))?;
+            let created = factory.call(py, (loop_obj.clone_ref(py), coro), Some(&task_kwargs))?;
             return Ok(created);
         }
 
-        if name.is_none() && context.is_none() && is_current_running_loop(py, &loop_obj)? {
-            return create_asyncio_task_for_running_loop(py, coro);
+        if is_current_running_loop(py, &loop_obj)? {
+            if !has_kwargs {
+                return create_asyncio_task_for_running_loop(py, coro);
+            }
+            return create_asyncio_task_with_kwargs(py, None, coro, &task_kwargs);
         }
 
-        create_asyncio_task_for_loop(py, &loop_obj, coro, name, context)
+        if !has_kwargs {
+            return create_asyncio_task_for_loop(py, &loop_obj, coro, name, context);
+        }
+
+        create_asyncio_task_with_kwargs(py, Some(&loop_obj), coro, &task_kwargs)
     }
 
     fn set_task_factory(&self, factory: Option<Py<PyAny>>) {
@@ -1294,7 +1363,7 @@ impl PyLoop {
         )
     }
 
-    #[pyo3(signature=(protocol_factory, host=None, port=None, *, family=0, flags=1, sock=None, backlog=100, ssl=None, reuse_address=None, reuse_port=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None, start_serving=true))]
+    #[pyo3(signature=(protocol_factory, host=None, port=None, *, family=0, flags=1, sock=None, backlog=100, ssl=None, reuse_address=None, reuse_port=None, keep_alive=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None, start_serving=true))]
     #[expect(
         clippy::too_many_arguments,
         reason = "Mirrors asyncio loop.create_server()"
@@ -1312,6 +1381,7 @@ impl PyLoop {
         ssl: Option<Py<PyAny>>,
         reuse_address: Option<bool>,
         reuse_port: Option<bool>,
+        keep_alive: Option<bool>,
         ssl_handshake_timeout: Option<f64>,
         ssl_shutdown_timeout: Option<f64>,
         start_serving: bool,
@@ -1361,6 +1431,7 @@ impl PyLoop {
                         backlog,
                         reuse_address,
                         reuse_port,
+                        keep_alive,
                     },
                 )
             })?;
@@ -1532,7 +1603,7 @@ impl PyLoop {
         })
     }
 
-    #[pyo3(signature=(protocol_factory, path=None, *, sock=None, backlog=100, ssl=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None, start_serving=true))]
+    #[pyo3(signature=(protocol_factory, path=None, *, sock=None, backlog=100, ssl=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None, start_serving=true, cleanup_socket=true))]
     #[expect(
         clippy::too_many_arguments,
         reason = "Mirrors asyncio loop.create_unix_server()"
@@ -1548,6 +1619,7 @@ impl PyLoop {
         ssl_handshake_timeout: Option<f64>,
         ssl_shutdown_timeout: Option<f64>,
         start_serving: bool,
+        cleanup_socket: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
         if ssl_handshake_timeout.is_some() && ssl.is_none() {
             return Err(PyValueError::new_err(
@@ -1561,7 +1633,15 @@ impl PyLoop {
         }
         #[cfg(not(unix))]
         {
-            let _ = (slf, protocol_factory, path, sock, backlog, start_serving);
+            let _ = (
+                slf,
+                protocol_factory,
+                path,
+                sock,
+                backlog,
+                start_serving,
+                cleanup_socket,
+            );
             return Err(Self::not_implemented("create_unix_server"));
         }
         let tls = ssl
@@ -1598,10 +1678,13 @@ impl PyLoop {
             let server = Python::attach(|py| -> PyResult<Py<PyServer>> {
                 let sockets = vec![socket_obj.clone_ref(py)];
                 let listeners = listener_sources_from_sockets(py, &sockets)?;
-                let cleanup_path = path
-                    .as_ref()
-                    .and_then(|value| value.bind(py).extract::<String>().ok())
-                    .map(std::path::PathBuf::from);
+                let cleanup_path = if cleanup_socket {
+                    path.as_ref()
+                        .and_then(|value| value.bind(py).extract::<String>().ok())
+                        .map(std::path::PathBuf::from)
+                } else {
+                    None
+                };
                 let server = create_py_server(
                     py,
                     ServerCreateParams {
@@ -2106,35 +2189,24 @@ impl PyLoop {
         proto: i32,
         flags: i32,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let locals = Self::task_locals(py, &slf)?;
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
-            crate::blocking::run("rsloop-getaddrinfo", move || {
-                Python::attach(|py| -> PyResult<Py<PyAny>> {
-                    let socket = py.import("socket")?;
-                    let kwargs = PyDict::new(py);
-                    kwargs.set_item("family", family)?;
-                    kwargs.set_item("type", r#type)?;
-                    kwargs.set_item("proto", proto)?;
-                    kwargs.set_item("flags", flags)?;
-
-                    let host = host
-                        .as_ref()
-                        .map(|value| value.clone_ref(py))
-                        .unwrap_or_else(|| py.None());
-                    let port = port
-                        .as_ref()
-                        .map(|value| value.clone_ref(py))
-                        .unwrap_or_else(|| py.None());
-
-                    Ok(socket
-                        .getattr("getaddrinfo")?
-                        .call((host, port), Some(&kwargs))?
-                        .unbind())
-                })
-            })
-            .await
-            .map_err(PyRuntimeError::new_err)?
-        })
+        let socket = py.import("socket")?;
+        let host = host.unwrap_or_else(|| py.None());
+        let port = port.unwrap_or_else(|| py.None());
+        let run_args = PyTuple::new(
+            py,
+            [
+                py.None(),
+                socket.getattr("getaddrinfo")?.unbind(),
+                host,
+                port,
+                family.into_pyobject(py)?.unbind().into(),
+                r#type.into_pyobject(py)?.unbind().into(),
+                proto.into_pyobject(py)?.unbind().into(),
+                flags.into_pyobject(py)?.unbind().into(),
+            ],
+        )?;
+        slf.call_method1(py, "run_in_executor", run_args)
+            .map(|awaitable| awaitable.into_bound(py))
     }
 
     #[pyo3(signature=(sockaddr, flags=0))]
@@ -2144,20 +2216,18 @@ impl PyLoop {
         sockaddr: Py<PyAny>,
         flags: i32,
     ) -> PyResult<Bound<'_, PyAny>> {
-        let locals = Self::task_locals(py, &slf)?;
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
-            crate::blocking::run("rsloop-getnameinfo", move || {
-                Python::attach(|py| -> PyResult<Py<PyAny>> {
-                    let socket = py.import("socket")?;
-                    Ok(socket
-                        .getattr("getnameinfo")?
-                        .call1((sockaddr.clone_ref(py), flags))?
-                        .unbind())
-                })
-            })
-            .await
-            .map_err(PyRuntimeError::new_err)?
-        })
+        let socket = py.import("socket")?;
+        let run_args = PyTuple::new(
+            py,
+            [
+                py.None(),
+                socket.getattr("getnameinfo")?.unbind(),
+                sockaddr,
+                flags.into_pyobject(py)?.unbind().into(),
+            ],
+        )?;
+        slf.call_method1(py, "run_in_executor", run_args)
+            .map(|awaitable| awaitable.into_bound(py))
     }
 
     #[pyo3(signature=(executor, func, *args))]
@@ -2168,16 +2238,19 @@ impl PyLoop {
         func: Py<PyAny>,
         args: &Bound<'py, PyTuple>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let selected_executor = executor.or_else(|| {
-            slf.borrow(py)
-                .core
-                .state
-                .lock()
-                .expect("poisoned loop state")
+        let selected_executor = if let Some(executor) = executor {
+            Some(executor)
+        } else {
+            let core = slf.borrow(py).core.clone();
+            let state = core.state.lock().expect("poisoned loop state");
+            if state.executor_shutdown_called {
+                return Err(PyRuntimeError::new_err("Executor shutdown has been called"));
+            }
+            state
                 .default_executor
                 .as_ref()
                 .map(|value| value.clone_ref(py))
-        });
+        };
 
         if let Some(executor) = selected_executor {
             let mut submit_items = Vec::with_capacity(args.len() + 1);
@@ -2272,10 +2345,12 @@ impl PyLoop {
             }
 
             let child = Python::attach(|py| -> PyResult<_> {
+                let shell_cmd = cmd.bind(py).extract::<String>()?;
                 #[cfg(unix)]
                 let mut command = {
                     let mut command = Command::new("/bin/sh");
                     command.arg("-c");
+                    command.arg(&shell_cmd);
                     command
                 };
                 #[cfg(windows)]
@@ -2283,10 +2358,9 @@ impl PyLoop {
                     let mut command = Command::new(
                         std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into()),
                     );
-                    command.arg("/d").arg("/s").arg("/c");
+                    command.raw_arg(format!(" /c \"{shell_cmd}\""));
                     command
                 };
-                command.arg(cmd.bind(py).extract::<String>()?);
                 let (stdout_override, stderr_override) =
                     apply_stdio(&mut command, stdin_spec, stdout_spec, stderr_spec)?;
                 let spawn_config = apply_common_process_kwargs(
@@ -2535,6 +2609,15 @@ impl PyLoop {
         }
         #[cfg(unix)]
         {
+            let threading = py.import("threading")?;
+            let current_thread = threading.getattr("current_thread")?.call0()?;
+            let main_thread = threading.getattr("main_thread")?.call0()?;
+            if !current_thread.is(&main_thread) {
+                return Err(PyValueError::new_err(
+                    "set_wakeup_fd only works in main thread of the main interpreter",
+                ));
+            }
+
             let loop_ref = slf.borrow(py);
             let core = loop_ref.core.clone();
             drop(loop_ref);
