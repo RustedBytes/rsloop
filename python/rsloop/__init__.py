@@ -135,12 +135,16 @@ __ORIG_CREATE_CONNECTION = Loop.create_connection
 __ORIG_CREATE_DATAGRAM_ENDPOINT = getattr(Loop, "create_datagram_endpoint", None)
 __ORIG_SENDFILE = getattr(Loop, "sendfile", None)
 __ORIG_SOCK_RECVFROM = getattr(Loop, "sock_recvfrom", None)
+__ORIG_SOCK_RECVFROM_INTO = getattr(Loop, "sock_recvfrom_into", None)
+__ORIG_SOCK_SENDTO = getattr(Loop, "sock_sendto", None)
+__ORIG_SOCK_SENDFILE = getattr(Loop, "sock_sendfile", None)
 __ORIG_RUN_FOREVER = Loop.run_forever
 __ORIG_RUN_UNTIL_COMPLETE = Loop.run_until_complete
 __ORIG_SHUTDOWN_ASYNCGENS = Loop.shutdown_asyncgens
 __ORIG_CLOSE = Loop.close
 __USE_FAST_STREAMS = __os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
 __ASYNCGEN_STATE: dict[Loop, dict[str, object]] = {}
+__LOOP_CONFIG: dict[Loop, dict[str, object]] = {}
 
 
 if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
@@ -164,6 +168,16 @@ def __get_asyncgen_state(loop: Loop) -> dict[str, object]:
         }
         __ASYNCGEN_STATE[loop] = state
     return state
+
+
+def __get_loop_config(loop: Loop) -> dict[str, object]:
+    config = __LOOP_CONFIG.get(loop)
+    if config is None:
+        config = {
+            "slow_callback_duration": 0.1,
+        }
+        __LOOP_CONFIG[loop] = config
+    return config
 
 
 @__contextlib.contextmanager
@@ -244,6 +258,7 @@ def __loop_close(self):
         return __ORIG_CLOSE(self)
     finally:
         __ASYNCGEN_STATE.pop(self, None)
+        __LOOP_CONFIG.pop(self, None)
 
 
 class __RsloopDatagramTransport:
@@ -422,6 +437,24 @@ async def __loop_sock_recvfrom(self, sock, bufsize):
             await __wait_for_fd(self, sock, readable=True)
 
 
+async def __loop_sock_recvfrom_into(self, sock, buf, nbytes=0):
+    while True:
+        try:
+            if nbytes:
+                return sock.recvfrom_into(buf, nbytes)
+            return sock.recvfrom_into(buf)
+        except (BlockingIOError, InterruptedError):
+            await __wait_for_fd(self, sock, readable=True)
+
+
+async def __loop_sock_sendto(self, sock, data, address):
+    while True:
+        try:
+            return sock.sendto(data, address)
+        except (BlockingIOError, InterruptedError):
+            await __wait_for_fd(self, sock, readable=False)
+
+
 async def __loop_sendfile(self, transport, file, offset=0, count=None, *, fallback=True):
     if transport.is_closing():
         raise RuntimeError("Transport is closing")
@@ -458,6 +491,58 @@ async def __loop_sendfile(self, transport, file, offset=0, count=None, *, fallba
     finally:
         if total_sent > 0 and hasattr(file, "seek"):
             file.seek(offset + total_sent)
+
+
+async def __loop_sock_sendfile(self, sock, file, offset=0, count=None, *, fallback=True):
+    if sock.gettimeout() != 0:
+        raise ValueError("the socket must be non-blocking")
+    if "b" not in getattr(file, "mode", "b"):
+        raise ValueError("file should be opened in binary mode")
+    if sock.type != __socket.SOCK_STREAM:
+        raise ValueError("only SOCK_STREAM type sockets are supported")
+    if count is not None:
+        if not isinstance(count, int):
+            raise TypeError(f"count must be a positive integer (got {count!r})")
+        if count <= 0:
+            raise ValueError(f"count must be a positive integer (got {count!r})")
+    if not isinstance(offset, int):
+        raise TypeError(f"offset must be a non-negative integer (got {offset!r})")
+    if offset < 0:
+        raise ValueError(f"offset must be a non-negative integer (got {offset!r})")
+    if not fallback:
+        raise RuntimeError(
+            f"fallback is disabled and native sendfile is not supported for socket {sock!r}"
+        )
+
+    if offset:
+        file.seek(offset)
+    blocksize = min(count, 16384) if count else 16384
+    buf = bytearray(blocksize)
+    total_sent = 0
+    try:
+        while True:
+            if count:
+                blocksize = min(count - total_sent, blocksize)
+                if blocksize <= 0:
+                    break
+            view = memoryview(buf)[:blocksize]
+            read = await self.run_in_executor(None, file.readinto, view)
+            if not read:
+                break
+            await self.sock_sendall(sock, view[:read])
+            total_sent += read
+        return total_sent
+    finally:
+        if total_sent > 0 and hasattr(file, "seek"):
+            file.seek(offset + total_sent)
+
+
+def __get_slow_callback_duration(self):
+    return __get_loop_config(self)["slow_callback_duration"]
+
+
+def __set_slow_callback_duration(self, value):
+    __get_loop_config(self)["slow_callback_duration"] = float(value)
 
 
 async def __loop_create_datagram_endpoint(
@@ -1290,6 +1375,21 @@ if __ORIG_SENDFILE is None:
 
 if __ORIG_SOCK_RECVFROM is None:
     Loop.sock_recvfrom = __loop_sock_recvfrom
+
+if __ORIG_SOCK_RECVFROM_INTO is None:
+    Loop.sock_recvfrom_into = __loop_sock_recvfrom_into
+
+if __ORIG_SOCK_SENDTO is None:
+    Loop.sock_sendto = __loop_sock_sendto
+
+if __ORIG_SOCK_SENDFILE is None:
+    Loop.sock_sendfile = __loop_sock_sendfile
+
+if not hasattr(Loop, "slow_callback_duration"):
+    Loop.slow_callback_duration = property(
+        __get_slow_callback_duration,
+        __set_slow_callback_duration,
+    )
 
 if Loop.run_forever is __ORIG_RUN_FOREVER:
     Loop.run_forever = __loop_run_forever

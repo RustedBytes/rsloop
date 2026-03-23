@@ -497,6 +497,95 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(data, b"udp-data")
         self.assertEqual(addr[0], "127.0.0.1")
 
+    def test_sock_recvfrom_into_receives_datagram(self) -> None:
+        async def main() -> tuple[int, bytes, tuple[str, int]]:
+            loop = asyncio.get_running_loop()
+            recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                recv_sock.bind(("127.0.0.1", 0))
+                recv_sock.setblocking(False)
+                addr = recv_sock.getsockname()
+                send_sock.sendto(b"udp-into", addr)
+                buf = bytearray(32)
+                nbytes, peer = await asyncio.wait_for(
+                    loop.sock_recvfrom_into(recv_sock, buf), 1.0
+                )
+                return nbytes, bytes(buf[:nbytes]), peer
+            finally:
+                recv_sock.close()
+                send_sock.close()
+
+        nbytes, data, addr = rsloop.run(main())
+        self.assertEqual(nbytes, len(b"udp-into"))
+        self.assertEqual(data, b"udp-into")
+        self.assertEqual(addr[0], "127.0.0.1")
+
+    def test_sock_sendto_sends_datagram(self) -> None:
+        async def main() -> tuple[int, bytes]:
+            loop = asyncio.get_running_loop()
+            recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                recv_sock.bind(("127.0.0.1", 0))
+                send_sock.setblocking(False)
+                sent = await asyncio.wait_for(
+                    loop.sock_sendto(send_sock, b"udp-sendto", recv_sock.getsockname()),
+                    1.0,
+                )
+                data, _ = recv_sock.recvfrom(1024)
+                return sent, data
+            finally:
+                recv_sock.close()
+                send_sock.close()
+
+        self.assertEqual(rsloop.run(main()), (len(b"udp-sendto"), b"udp-sendto"))
+
+    def test_sock_sendfile_fallback_writes_file_contents(self) -> None:
+        async def main(path: str) -> tuple[int, bytes]:
+            loop = asyncio.get_running_loop()
+            recv_done = loop.create_future()
+
+            class ServerProtocol(asyncio.Protocol):
+                def data_received(self, data):
+                    if not recv_done.done():
+                        recv_done.set_result(bytes(data))
+
+            server = await loop.create_server(ServerProtocol, "127.0.0.1", 0)
+            try:
+                port = server.sockets[0].getsockname()[1]
+                recv_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                recv_sock.bind(("127.0.0.1", 0))
+                recv_sock.close()
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setblocking(False)
+                await loop.sock_connect(sock, ("127.0.0.1", port))
+                try:
+                    with open(path, "rb") as f:
+                        sent = await loop.sock_sendfile(sock, f)
+                    received = await asyncio.wait_for(recv_done, 1.0)
+                    return sent, received
+                finally:
+                    sock.close()
+            finally:
+                server.close()
+                await asyncio.sleep(0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = pathlib.Path(tmpdir) / "payload.bin"
+            payload = b"sock-sendfile"
+            path.write_bytes(payload)
+            self.assertEqual(rsloop.run(main(str(path))), (len(payload), payload))
+
+    def test_slow_callback_duration_property(self) -> None:
+        loop = rsloop.new_event_loop()
+        try:
+            self.assertEqual(loop.slow_callback_duration, 0.1)
+            loop.slow_callback_duration = 0.25
+            self.assertEqual(loop.slow_callback_duration, 0.25)
+        finally:
+            loop.close()
+
     @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "unix sockets required")
     def test_create_unix_server_cleanup_socket_false_leaves_path(self) -> None:
         async def main(path: str) -> bool:
