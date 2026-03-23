@@ -1,13 +1,19 @@
 use std::io;
 #[cfg(not(windows))]
 use std::thread;
+#[cfg(windows)]
+use std::time::Duration;
 
 #[cfg(windows)]
 use compio::net::PollFd;
 #[cfg(windows)]
 use compio::runtime::Runtime as CompioRuntime;
+#[cfg(windows)]
+use compio::time::timeout as compio_timeout;
 #[cfg(not(windows))]
 use futures::channel::oneshot;
+#[cfg(windows)]
+use futures::future::{select, Either};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 #[cfg(windows)]
@@ -21,7 +27,9 @@ use windows_sys::Win32::Foundation::{
     DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
 };
 #[cfg(windows)]
-use windows_sys::Win32::Networking::WinSock::{select, FD_SET, SOCKET, SOCKET_ERROR, TIMEVAL};
+use windows_sys::Win32::Networking::WinSock::{
+    getsockopt, SOCKET, SOCKET_ERROR, SOL_SOCKET, SO_ACCEPTCONN,
+};
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -169,35 +177,20 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     }
 
     let socket = raw_fd_to_socket(fd)?;
-    let mut timeout = TIMEVAL {
-        tv_sec: (timeout_ms / 1000),
-        tv_usec: ((timeout_ms % 1000) * 1000),
-    };
-    let mut readfds = new_fd_set(socket, read);
-    let mut writefds = new_fd_set(socket, write);
+    let is_listener = socket_is_listener(socket)?;
+    let timeout = timeout_duration(timeout_ms);
 
-    let ready = unsafe {
-        select(
-            0,
-            if read {
-                &mut readfds
-            } else {
-                std::ptr::null_mut()
-            },
-            if write {
-                &mut writefds
-            } else {
-                std::ptr::null_mut()
-            },
-            std::ptr::null_mut(),
-            &mut timeout,
-        )
-    };
-    if ready == SOCKET_ERROR {
-        return Err(io::Error::last_os_error());
-    }
-
-    Ok((read && readfds.fd_count > 0, write && writefds.fd_count > 0))
+    CompioRuntime::new()?.block_on(async move {
+        match (read, write) {
+            (true, false) => await_read_interest_with_timeout(fd, is_listener, timeout).await,
+            (false, true) => {
+                let ready = wait_for_write_ready(fd);
+                await_interest_with_timeout(timeout, ready, (false, true)).await
+            }
+            (true, true) => await_dual_interest_with_timeout(fd, is_listener, timeout).await,
+            (false, false) => Ok((false, false)),
+        }
+    })
 }
 
 pub async fn wait_readable(fd: RawFd) -> PyResult<()> {
@@ -211,20 +204,13 @@ pub async fn wait_writable(fd: RawFd) -> PyResult<()> {
 async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
     #[cfg(windows)]
     {
-        return crate::blocking::run(format!("rsloop-fd-wait-{fd}"), move || {
-            let runtime = CompioRuntime::new()?;
-            runtime.block_on(async move {
-                let poll_fd = poll_fd_from_raw(fd)?;
-                match (read, write) {
-                    (true, false) => poll_fd.read_ready().await,
-                    (false, true) => poll_fd.write_ready().await,
-                    (true, true) => Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "combined socket interest waits are not supported",
-                    )),
-                    (false, false) => Ok(()),
+        return crate::blocking::run(format!("rsloop-fd-wait-{fd}"), move || loop {
+            match poll_fd(fd, read, write, 50)? {
+                (read_ready, write_ready) if (!read || read_ready) && (!write || write_ready) => {
+                    return Ok::<(), io::Error>(());
                 }
-            })
+                _ => {}
+            }
         })
         .await
         .map_err(PyRuntimeError::new_err)?
@@ -283,11 +269,127 @@ fn poll_fd_from_raw(fd: RawFd) -> io::Result<PollFd<Socket>> {
 }
 
 #[cfg(windows)]
-fn new_fd_set(socket: SOCKET, enabled: bool) -> FD_SET {
-    let mut set = unsafe { std::mem::zeroed::<FD_SET>() };
-    if enabled {
-        set.fd_count = 1;
-        set.fd_array[0] = socket;
+fn socket_is_listener(socket: SOCKET) -> io::Result<bool> {
+    let mut accept_conn = 0i32;
+    let mut len = std::mem::size_of::<i32>() as i32;
+    let result = unsafe {
+        getsockopt(
+            socket,
+            SOL_SOCKET as i32,
+            SO_ACCEPTCONN as i32,
+            (&mut accept_conn as *mut i32).cast(),
+            &mut len,
+        )
+    };
+    if result == SOCKET_ERROR {
+        return Err(io::Error::last_os_error());
     }
-    set
+    Ok(accept_conn != 0)
+}
+
+#[cfg(windows)]
+fn timeout_duration(timeout_ms: i32) -> Option<Duration> {
+    if timeout_ms < 0 {
+        None
+    } else {
+        Some(Duration::from_millis(timeout_ms as u64))
+    }
+}
+
+#[cfg(windows)]
+async fn wait_for_read_ready(fd: RawFd, is_listener: bool) -> io::Result<()> {
+    let poll_fd = poll_fd_from_raw(fd)?;
+    if is_listener {
+        poll_fd.accept_ready().await
+    } else {
+        poll_fd.read_ready().await
+    }
+}
+
+#[cfg(windows)]
+async fn wait_for_write_ready(fd: RawFd) -> io::Result<()> {
+    let poll_fd = poll_fd_from_raw(fd)?;
+    poll_fd.write_ready().await
+}
+
+#[cfg(windows)]
+async fn await_read_interest_with_timeout(
+    fd: RawFd,
+    is_listener: bool,
+    timeout: Option<Duration>,
+) -> io::Result<(bool, bool)> {
+    let future = wait_for_read_ready(fd, is_listener);
+    match timeout {
+        Some(timeout) => match compio_timeout(timeout, future).await {
+            Ok(result) => result.map(|_| (true, false)),
+            Err(_) => Ok((probe_read_ready(fd, is_listener)?, false)),
+        },
+        None => future.await.map(|_| (true, false)),
+    }
+}
+
+#[cfg(windows)]
+async fn await_interest_with_timeout<F>(
+    timeout: Option<Duration>,
+    future: F,
+    ready: (bool, bool),
+) -> io::Result<(bool, bool)>
+where
+    F: std::future::Future<Output = io::Result<()>>,
+{
+    match timeout {
+        Some(timeout) => match compio_timeout(timeout, future).await {
+            Ok(result) => result.map(|_| ready),
+            Err(_) => Ok((false, false)),
+        },
+        None => future.await.map(|_| ready),
+    }
+}
+
+#[cfg(windows)]
+async fn await_dual_interest_with_timeout(
+    fd: RawFd,
+    is_listener: bool,
+    timeout: Option<Duration>,
+) -> io::Result<(bool, bool)> {
+    let read_future = Box::pin(wait_for_read_ready(fd, is_listener));
+    let write_future = Box::pin(wait_for_write_ready(fd));
+    let future = async move {
+        match select(read_future, write_future).await {
+            Either::Left((result, _)) => result.map(|_| (true, false)),
+            Either::Right((result, _)) => result.map(|_| (false, true)),
+        }
+    };
+
+    match timeout {
+        Some(timeout) => match compio_timeout(timeout, future).await {
+            Ok(result) => result,
+            Err(_) => Ok((probe_read_ready(fd, is_listener)?, false)),
+        },
+        None => future.await,
+    }
+}
+
+#[cfg(windows)]
+fn probe_read_ready(fd: RawFd, is_listener: bool) -> io::Result<bool> {
+    if is_listener {
+        return Ok(false);
+    }
+
+    let dup = duplicate_socket(fd)?;
+    let dup: RawSocket = dup
+        .try_into()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "socket handle out of range"))?;
+    let socket = unsafe { Socket::from_raw_socket(dup) };
+    let mut buf = [std::mem::MaybeUninit::<u8>::uninit(); 1];
+    match socket.peek(&mut buf) {
+        Ok(_) => Ok(true),
+        Err(err)
+            if err.kind() == io::ErrorKind::WouldBlock
+                || err.kind() == io::ErrorKind::Interrupted =>
+        {
+            Ok(false)
+        }
+        Err(_) => Ok(true),
+    }
 }

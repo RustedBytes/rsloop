@@ -2,35 +2,29 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 use std::os::fd::{FromRawFd, OwnedFd};
-#[cfg(windows)]
-use std::os::windows::io::FromRawSocket;
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(target_os = "linux"))]
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
-#[cfg(any(unix, not(any(target_os = "linux", windows))))]
 use std::thread;
 use std::time::{Duration, Instant};
 
-#[cfg(any(target_os = "linux", windows))]
+use crate::fd_ops;
+use crate::loop_core::{LoopCommand, LoopCore, ReadyItem};
+#[cfg(target_os = "linux")]
 use compio::net::PollFd;
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 use compio::runtime::{JoinHandle as CompioJoinHandle, Runtime as CompioRuntime};
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(target_os = "linux"))]
 use crossbeam_channel::RecvTimeoutError;
 use crossbeam_channel::{Receiver, TryRecvError};
 use pyo3::prelude::*;
 #[cfg(unix)]
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
-#[cfg(windows)]
-use socket2::Socket;
-
-use crate::fd_ops;
-use crate::loop_core::{LoopCommand, LoopCore, ReadyItem};
 
 struct RuntimeDispatcher {
     core: Arc<LoopCore>,
     command_rx: Receiver<LoopCommand>,
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(target_os = "linux")]
     io_runtime: CompioRuntime,
     ready_batch: VecDeque<ReadyItem>,
     timers: BinaryHeap<TimerEntry>,
@@ -57,16 +51,16 @@ struct SignalWatcher {
 #[cfg(not(unix))]
 struct SignalWatcher;
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 type WatchTask = CompioJoinHandle<()>;
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(target_os = "linux"))]
 struct WatchTask {
     stop: Arc<AtomicBool>,
     join: thread::JoinHandle<()>,
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(target_os = "linux"))]
 impl WatchTask {
     fn spawn(name: String, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
@@ -84,12 +78,12 @@ impl WatchTask {
     }
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 fn abort_watch_task(task: WatchTask) {
     drop(task);
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(target_os = "linux"))]
 fn abort_watch_task(task: WatchTask) {
     task.abort();
 }
@@ -124,15 +118,15 @@ impl Ord for TimerEntry {
 }
 
 pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>) {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(target_os = "linux")]
     let io_runtime = CompioRuntime::new().expect("failed to initialize compio runtime");
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(target_os = "linux")]
     core.set_runtime_waker(Some(io_runtime.waker()));
 
     let mut dispatcher = RuntimeDispatcher {
         core: Arc::clone(&core),
         command_rx,
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(target_os = "linux")]
         io_runtime,
         ready_batch: VecDeque::new(),
         timers: BinaryHeap::new(),
@@ -145,20 +139,20 @@ pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>
         shutting_down: false,
     };
     dispatcher.run();
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(target_os = "linux")]
     core.set_runtime_waker(None);
 }
 
 impl RuntimeDispatcher {
     fn run(&mut self) {
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(target_os = "linux")]
         {
             let runtime = self.io_runtime.clone();
             runtime.enter(|| self.run_inner());
             return;
         }
 
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(not(target_os = "linux"))]
         self.run_inner();
     }
 
@@ -189,7 +183,7 @@ impl RuntimeDispatcher {
     }
 
     fn wait_for_work(&mut self) -> bool {
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(target_os = "linux")]
         {
             self.io_runtime.run();
 
@@ -210,7 +204,7 @@ impl RuntimeDispatcher {
             return false;
         }
 
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(not(target_os = "linux"))]
         {
             if self.active_run.is_none() {
                 return match self.command_rx.recv() {
@@ -399,7 +393,7 @@ impl RuntimeDispatcher {
                     abort_watch_task(task);
                 }
 
-                #[cfg(any(target_os = "linux", windows))]
+                #[cfg(target_os = "linux")]
                 let task = {
                     let sender = Arc::clone(&self.core);
                     self.io_runtime.spawn(async move {
@@ -426,7 +420,7 @@ impl RuntimeDispatcher {
                     })
                 };
 
-                #[cfg(not(any(target_os = "linux", windows)))]
+                #[cfg(not(target_os = "linux"))]
                 let task = {
                     let sender = Arc::clone(&self.core);
                     WatchTask::spawn(format!("rsloop-reader-{fd}"), move |stop| {
@@ -476,7 +470,7 @@ impl RuntimeDispatcher {
                     abort_watch_task(task);
                 }
 
-                #[cfg(any(target_os = "linux", windows))]
+                #[cfg(target_os = "linux")]
                 let task = {
                     let sender = Arc::clone(&self.core);
                     self.io_runtime.spawn(async move {
@@ -503,7 +497,7 @@ impl RuntimeDispatcher {
                     })
                 };
 
-                #[cfg(not(any(target_os = "linux", windows)))]
+                #[cfg(not(target_os = "linux"))]
                 let task = {
                     let sender = Arc::clone(&self.core);
                     WatchTask::spawn(format!("rsloop-writer-{fd}"), move |stop| {
@@ -547,14 +541,14 @@ impl RuntimeDispatcher {
                     abort_watch_task(task);
                 }
 
-                #[cfg(any(target_os = "linux", windows))]
+                #[cfg(target_os = "linux")]
                 let task = self
                     .io_runtime
                     .spawn(crate::stream_transport::run_socket_reader_task(
                         core, reader,
                     ));
 
-                #[cfg(not(any(target_os = "linux", windows)))]
+                #[cfg(not(target_os = "linux"))]
                 let task = WatchTask::spawn(format!("rsloop-socket-reader-{fd}"), move |stop| {
                     crate::stream_transport::run_socket_reader_blocking(core, reader, stop)
                 });
@@ -575,14 +569,14 @@ impl RuntimeDispatcher {
                     abort_watch_task(task);
                 }
 
-                #[cfg(any(target_os = "linux", windows))]
+                #[cfg(target_os = "linux")]
                 let task = self
                     .io_runtime
                     .spawn(crate::stream_transport::run_server_accept_task(
                         server, listener,
                     ));
 
-                #[cfg(not(any(target_os = "linux", windows)))]
+                #[cfg(not(target_os = "linux"))]
                 let task = WatchTask::spawn(format!("rsloop-accept-{fd}"), move |stop| {
                     crate::stream_transport::run_server_accept_blocking(server, listener, stop)
                 });
@@ -670,16 +664,4 @@ fn poll_fd_from_raw(fd: fd_ops::RawFd) -> std::io::Result<PollFd<OwnedFd>> {
         .try_into()
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "fd out of range"))?;
     PollFd::new(unsafe { OwnedFd::from_raw_fd(dup) })
-}
-
-#[cfg(windows)]
-fn poll_fd_from_raw(fd: fd_ops::RawFd) -> std::io::Result<PollFd<Socket>> {
-    let dup = fd_ops::dup_raw_fd(fd)?;
-    let dup = dup.try_into().map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "socket handle out of range",
-        )
-    })?;
-    PollFd::new(unsafe { Socket::from_raw_socket(dup) })
 }

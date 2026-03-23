@@ -16,9 +16,9 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 use compio::net::PollFd;
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 use compio::time::sleep as compio_sleep;
 use pyo3::exceptions::{PyRuntimeError, PyTimeoutError, PyValueError};
 use pyo3::prelude::*;
@@ -1645,7 +1645,7 @@ impl ServerCore {
             std::mem::take(&mut state.listeners)
         };
 
-        #[cfg(any(target_os = "linux", windows))]
+        #[cfg(target_os = "linux")]
         {
             if self.tls.is_some() {
                 let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
@@ -1686,9 +1686,9 @@ impl ServerCore {
             return;
         }
 
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(not(target_os = "linux"))]
         let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
-        #[cfg(not(any(target_os = "linux", windows)))]
+        #[cfg(not(target_os = "linux"))]
         for listener in listeners {
             let server = Arc::clone(self);
             let task = match listener {
@@ -2566,13 +2566,13 @@ pub fn spawn_tcp_transport(
         server.connection_opened();
     }
 
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(target_os = "linux")]
     let _ = core.loop_core.send_command(LoopCommand::StartSocketReader {
         fd: raw_fd,
         core: Arc::clone(&core),
         reader: ReaderTarget::Tcp(stream),
     });
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(target_os = "linux"))]
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::Tcp(stream));
     Ok(transport)
 }
@@ -2654,13 +2654,13 @@ pub fn spawn_unix_transport(
         server.connection_opened();
     }
 
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(target_os = "linux")]
     let _ = core.loop_core.send_command(LoopCommand::StartSocketReader {
         fd: raw_fd,
         core: Arc::clone(&core),
         reader: ReaderTarget::Unix(stream),
     });
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(target_os = "linux"))]
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::Unix(stream));
     Ok(transport)
 }
@@ -2943,7 +2943,7 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
     }
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 pub(crate) async fn run_server_accept_task(server: Arc<ServerCore>, listener: ServerListener) {
     match listener {
         ServerListener::Tcp(listener) => run_tcp_accept_task(server, listener).await,
@@ -2952,7 +2952,7 @@ pub(crate) async fn run_server_accept_task(server: Arc<ServerCore>, listener: Se
     }
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn run_server_accept_blocking(
     server: Arc<ServerCore>,
     listener: ServerListener,
@@ -2965,16 +2965,10 @@ pub(crate) fn run_server_accept_blocking(
     }
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
-    #[cfg(target_os = "linux")]
     let poll_fd = listener
         .try_clone()
-        .and_then(|listener| PollFd::new(listener));
-    #[cfg(windows)]
-    let poll_fd = listener
-        .try_clone()
-        .map(Socket::from)
         .and_then(|listener| PollFd::new(listener));
 
     let Ok(poll_fd) = poll_fd else {
@@ -2997,7 +2991,8 @@ async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) 
         }
 
         loop {
-            match listener.accept() {
+            let accept_result = listener.accept();
+            match accept_result {
                 Ok((stream, _addr)) => {
                     let _ = stream.set_nonblocking(true);
                     let _ = stream.set_nodelay(true);
@@ -3138,7 +3133,7 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
     }
 }
 
-#[cfg(all(any(target_os = "linux", windows), unix))]
+#[cfg(target_os = "linux")]
 async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener) {
     let Ok(poll_fd) = listener
         .try_clone()
@@ -3363,7 +3358,7 @@ fn run_stream_reader(
     }
 }
 
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(target_os = "linux")]
 pub(crate) async fn run_socket_reader_task(
     core: Arc<StreamTransportCore>,
     mut reader: ReaderTarget,
@@ -3416,7 +3411,7 @@ pub(crate) async fn run_socket_reader_task(
     }
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(target_os = "linux"))]
 pub(crate) fn run_socket_reader_blocking(
     core: Arc<StreamTransportCore>,
     reader: ReaderTarget,
@@ -3879,15 +3874,6 @@ fn poll_fd_from_raw(fd: fd_ops::RawFd) -> io::Result<PollFd<OwnedFd>> {
         .try_into()
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "fd out of range"))?;
     PollFd::new(unsafe { OwnedFd::from_raw_fd(dup) })
-}
-
-#[cfg(windows)]
-fn poll_fd_from_raw(fd: fd_ops::RawFd) -> io::Result<PollFd<Socket>> {
-    let dup = fd_ops::dup_raw_fd(fd)?;
-    let dup: RawSocket = dup
-        .try_into()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "socket handle out of range"))?;
-    PollFd::new(unsafe { Socket::from_raw_socket(dup) })
 }
 
 fn tls_io_error(err: rustls::Error) -> io::Error {
