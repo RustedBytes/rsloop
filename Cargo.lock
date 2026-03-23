@@ -1760,15 +1760,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tm-wheel"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77555380a341278942ff24ae5a39cb4f0afe93971755ce91f4370b9d209c1520"
-dependencies = [
- "slab",
-]
-
-[[package]]
 name = "tokio"
 version = "1.50.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1886,7 +1877,6 @@ dependencies = [
  "mio",
  "oneshot",
  "slab",
- "tm-wheel",
  "tokio",
  "windows-sys 0.61.2",
 ]

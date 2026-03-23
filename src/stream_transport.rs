@@ -3518,7 +3518,7 @@ pub(crate) async fn run_tcp_socket_reader_task(
         }
 
         while !core.is_closing() && !core.is_reading() {
-            vibeio::time::sleep(Duration::from_millis(1)).await;
+            thread::sleep(Duration::from_millis(1));
         }
         if core.is_closing() {
             core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));

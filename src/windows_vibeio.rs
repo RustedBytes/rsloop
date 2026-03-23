@@ -85,7 +85,7 @@ fn start_service() -> Result<Service, String> {
     thread::Builder::new()
         .name("rsloop-vibeio".to_owned())
         .spawn(move || {
-            let runtime = match vibeio::RuntimeBuilder::new().enable_timer(true).build() {
+            let runtime = match vibeio::RuntimeBuilder::new().build() {
                 Ok(runtime) => runtime,
                 Err(err) => {
                     let _ = ready_tx.send(Err(err.to_string()));
