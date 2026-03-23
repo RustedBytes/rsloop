@@ -815,6 +815,7 @@ impl StreamTransportCore {
 
     pub(crate) fn drain_pending_read_events_with_py(&self, py: Python<'_>) -> PyResult<()> {
         profiling::scope!("StreamTransportCore::drain_pending_read_events_with_py");
+        let mut pending_data: Option<Vec<u8>> = None;
         loop {
             let mut pending = {
                 let mut queue = self
@@ -830,8 +831,6 @@ impl StreamTransportCore {
                 std::mem::swap(&mut drained, &mut *queue);
                 drained
             };
-
-            let mut pending_data: Option<Vec<u8>> = None;
 
             while let Some(event) = pending.pop_front() {
                 match event {
@@ -1051,7 +1050,20 @@ impl StreamTransportCore {
 
     fn data_received_with_py(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
         profiling::scope!("StreamTransportCore::data_received_with_py");
-        let (data_received, get_buffer, buffer_updated, fast_path, context, context_needs_run) = {
+        let fast_path = {
+            let state = self.state.lock().expect("poisoned transport state");
+            state
+                .callbacks
+                .stream_reader_fast_path
+                .as_ref()
+                .map(|value| value.clone_ref(py))
+        };
+
+        if let Some(fast_path) = fast_path.as_ref() {
+            return fast_path.feed_data(py, data);
+        }
+
+        let (data_received, get_buffer, buffer_updated, context, context_needs_run) = {
             let state = self.state.lock().expect("poisoned transport state");
             (
                 state
@@ -1069,19 +1081,10 @@ impl StreamTransportCore {
                     .buffer_updated
                     .as_ref()
                     .map(|value| value.clone_ref(py)),
-                state
-                    .callbacks
-                    .stream_reader_fast_path
-                    .as_ref()
-                    .map(|value| value.clone_ref(py)),
                 state.context.clone_ref(py),
                 state.context_needs_run,
             )
         };
-
-        if let Some(fast_path) = fast_path.as_ref() {
-            return fast_path.feed_data(py, data);
-        }
 
         if let (Some(get_buffer), Some(buffer_updated)) =
             (get_buffer.as_ref(), buffer_updated.as_ref())
