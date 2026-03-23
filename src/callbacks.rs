@@ -90,6 +90,7 @@ impl ReadyCallback {
     }
 
     pub fn invoke(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        profiling::scope!("ReadyCallback::invoke");
         if !self.context_needs_run {
             return self.invoke_direct(py);
         }
@@ -113,6 +114,7 @@ impl ReadyCallback {
     }
 
     fn invoke_direct(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        profiling::scope!("ReadyCallback::invoke_direct");
         match &self.args {
             CallbackArgs::None => unsafe {
                 Bound::from_owned_ptr_or_err(

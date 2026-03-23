@@ -32,8 +32,8 @@ uv run --with uvloop python benchmarks/compare_event_loops.py \
   --payload-size 512
 ```
 
-To generate `rsloop` flamegraphs from the same workloads without contaminating
-the measured runs, add a profile directory:
+To launch an unmeasured Tracy session for each `rsloop` workload before the
+measured runs, add a profile directory placeholder:
 
 ```bash
 uv run --with maturin maturin develop --release --features profiler
@@ -43,9 +43,9 @@ uv run --with uvloop python benchmarks/compare_event_loops.py \
   --profile-rsloop-dir benchmarks/profiles
 ```
 
-This writes one SVG per workload, such as
-[`benchmarks/profiles/rsloop-callbacks.svg`](./profiles/rsloop-callbacks.svg), before the warmup and measured
-passes.
+No files are written by Tracy. The directory argument is only used to label the
+unmeasured profiling pass before the warmup and measured runs. Open the Tracy
+desktop profiler and connect while that pass is running.
 
 The runner executes each loop/workload in a fresh subprocess and reports:
 

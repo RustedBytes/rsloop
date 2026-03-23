@@ -227,7 +227,7 @@ Then wrap the code you want to inspect:
 ```python
 import rsloop
 
-with rsloop.profile("rsloop-flamegraph.svg", frequency=999):
+with rsloop.profile():
     rsloop.run(main())
 ```
 
@@ -240,12 +240,23 @@ rsloop.start_profiler(frequency=999)
 try:
     rsloop.run(main())
 finally:
-    rsloop.stop_profiler("rsloop-flamegraph.svg")
+    rsloop.stop_profiler()
 ```
 
-Only `format="flamegraph"` is currently implemented. If the extension was built
-without `--features profiler`, `profile()` and `start_profiler()` raise a
-runtime error.
+This starts a Tracy client inside the process. Build a release binary, open
+`tracy-profiler.exe`, then connect to the running process while the profiled
+code is executing.
+
+The `frequency` argument is accepted for compatibility with the old `pprof`
+integration but is ignored by Tracy. `path` / `format` are also retained as
+compatibility arguments on `stop_profiler()` / `profile()` and are ignored.
+
+The current Tracy feature set is aimed at local Windows profiling:
+`enable`, `only-localhost`, `sampling`, and `flush-on-exit`. The last one helps
+short-lived runs flush data before exit.
+
+If the extension was built without `--features profiler`, `profile()` and
+`start_profiler()` raise a runtime error.
 
 ## Examples
 

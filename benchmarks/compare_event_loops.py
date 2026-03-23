@@ -19,6 +19,7 @@ from typing import Callable
 
 LOOP_CHOICES = ("asyncio", "uvloop", "winloop", "rsloop")
 WORKLOAD_CHOICES = ("callbacks", "tasks", "tcp_streams")
+RSLOOP_PROFILE_ENV = "RSLOOP_TRACY"
 
 
 def default_loops_csv() -> str:
@@ -117,13 +118,13 @@ def parse_args() -> argparse.Namespace:
         "--profile-rsloop-dir",
         type=str,
         default=None,
-        help="Optional directory to write one rsloop flamegraph per workload before measured runs",
+        help="Optional directory placeholder used to label one rsloop Tracy run per workload before measured runs",
     )
     parser.add_argument(
         "--profile-frequency",
         type=int,
         default=999,
-        help="Sampling frequency to use when rsloop profiling is enabled",
+        help="Compatibility option retained from the old pprof profiler; ignored by Tracy",
     )
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--loop", choices=LOOP_CHOICES, help=argparse.SUPPRESS)
@@ -159,6 +160,13 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--payload-size must be > 0")
     if args.profile_frequency <= 0:
         raise SystemExit("--profile-frequency must be > 0")
+
+
+def env_flag(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
 
 
 def loop_factory_for(loop_name: str) -> Callable[[], asyncio.AbstractEventLoop]:
@@ -384,7 +392,15 @@ def child_main(args: argparse.Namespace) -> int:
         else:  # pragma: no cover - parser guards this
             raise AssertionError(f"unsupported workload: {args.workload}")
 
-        if args.profile_output:
+        profile_requested = args.profile_output is not None or (
+            args.loop == "rsloop" and env_flag(RSLOOP_PROFILE_ENV)
+        )
+        if profile_requested and not args.profile_output:
+            print(
+                f"[profile] Tracy enabled via {RSLOOP_PROFILE_ENV}=1 for {args.loop}/{args.workload}",
+                flush=True,
+            )
+        if profile_requested:
             if args.loop != "rsloop":
                 raise RuntimeError("profiling is only supported for rsloop")
             rsloop = importlib.import_module("rsloop")
@@ -530,6 +546,7 @@ def parent_main(args: argparse.Namespace) -> int:
     profile_rsloop_dir = (
         os.path.abspath(args.profile_rsloop_dir) if args.profile_rsloop_dir else None
     )
+    env_profile_enabled = env_flag(RSLOOP_PROFILE_ENV)
 
     available_loops: list[str] = []
     skipped_loops: dict[str, str] = {}
@@ -551,6 +568,9 @@ def parent_main(args: argparse.Namespace) -> int:
     script_path = os.path.abspath(__file__)
     all_results: list[dict[str, object]] = []
 
+    if env_profile_enabled:
+        print(f"Tracy profiling enabled via {RSLOOP_PROFILE_ENV}=1")
+
     for workload in selected_workloads:
         workload_runs: dict[str, list[ChildResult]] = {}
         if workload == "tcp_streams":
@@ -567,7 +587,7 @@ def parent_main(args: argparse.Namespace) -> int:
                 profile_output = os.path.join(
                     profile_rsloop_dir, f"rsloop-{workload}.svg"
                 )
-                print(f"  profiling to {profile_output}")
+                print(f"  starting Tracy session labeled {profile_output}")
                 run_child(
                     script_path,
                     loop_name,
