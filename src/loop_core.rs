@@ -12,6 +12,7 @@ use crate::callbacks::{CallbackId, CallbackKind, ReadyCallback};
 use crate::context::{capture_context, clear_running_loop, ensure_running_loop};
 use crate::errors::handle_callback_error;
 use crate::fd_ops::RawFd;
+use crate::process_transport::ProcessTransportCore;
 use crate::runtime::run_runtime_thread;
 use crate::stream_transport::{ReaderTarget, ServerCore, ServerListener, StreamTransportCore};
 use crossbeam_channel::Sender;
@@ -54,6 +55,7 @@ pub enum ReadyItem {
     FutureSetResult { future: Py<PyAny>, value: Py<PyAny> },
     FutureSetException { future: Py<PyAny>, value: Py<PyAny> },
     StreamTransportRead(Arc<StreamTransportCore>),
+    ProcessTransport(Arc<ProcessTransportCore>),
     Stop,
 }
 
@@ -98,6 +100,7 @@ pub enum LoopCommand {
         value: Py<PyAny>,
     },
     ScheduleStreamTransportRead(Arc<StreamTransportCore>),
+    ScheduleProcessTransport(Arc<ProcessTransportCore>),
     StartSocketReader {
         fd: RawFd,
         core: Arc<StreamTransportCore>,
@@ -447,6 +450,9 @@ impl LoopCore {
                     ReadyItem::StreamTransportRead(core) => {
                         core.drain_pending_read_events_with_py(py)?;
                     }
+                    ReadyItem::ProcessTransport(core) => {
+                        core.drain_pending_events_with_py(py)?;
+                    }
                 }
 
                 processed_since_refill += 1;
@@ -716,6 +722,9 @@ impl LoopCore {
                     ReadyItem::StreamTransportRead(core) => {
                         LoopCommand::ScheduleStreamTransportRead(core)
                     }
+                    ReadyItem::ProcessTransport(core) => {
+                        LoopCommand::ScheduleProcessTransport(core)
+                    }
                 }),
             LoopCommand::ScheduleFutureSetResult { future, value } => self
                 .try_enqueue_local_ready(ReadyItem::FutureSetResult { future, value })
@@ -727,6 +736,7 @@ impl LoopCore {
                     ReadyItem::Callback(_)
                     | ReadyItem::FutureSetException { .. }
                     | ReadyItem::StreamTransportRead(_)
+                    | ReadyItem::ProcessTransport(_)
                     | ReadyItem::Stop => {
                         unreachable!("local future result enqueue preserves item kind")
                     }
@@ -741,6 +751,7 @@ impl LoopCore {
                     ReadyItem::Callback(_)
                     | ReadyItem::FutureSetResult { .. }
                     | ReadyItem::StreamTransportRead(_)
+                    | ReadyItem::ProcessTransport(_)
                     | ReadyItem::Stop => {
                         unreachable!("local future exception enqueue preserves item kind")
                     }
@@ -755,8 +766,24 @@ impl LoopCore {
                     ReadyItem::Callback(_)
                     | ReadyItem::FutureSetResult { .. }
                     | ReadyItem::FutureSetException { .. }
+                    | ReadyItem::ProcessTransport(_)
                     | ReadyItem::Stop => {
                         unreachable!("local stream read enqueue preserves item kind")
+                    }
+                }),
+            LoopCommand::ScheduleProcessTransport(core) => self
+                .try_enqueue_local_ready(ReadyItem::ProcessTransport(core))
+                .or_else(|item| self.try_enqueue_active_ready(item))
+                .map_err(|item| match item {
+                    ReadyItem::ProcessTransport(core) => {
+                        LoopCommand::ScheduleProcessTransport(core)
+                    }
+                    ReadyItem::Callback(_)
+                    | ReadyItem::FutureSetResult { .. }
+                    | ReadyItem::FutureSetException { .. }
+                    | ReadyItem::StreamTransportRead(_)
+                    | ReadyItem::Stop => {
+                        unreachable!("local process enqueue preserves item kind")
                     }
                 }),
             LoopCommand::RequestStop => self

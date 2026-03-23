@@ -48,9 +48,19 @@ pub(crate) fn pause_reading<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     interned(py, &NAME, "pause_reading")
 }
 
+pub(crate) fn pause_writing<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
+    static NAME: OnceLock<Py<PyString>> = OnceLock::new();
+    interned(py, &NAME, "pause_writing")
+}
+
 pub(crate) fn resume_reading<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     static NAME: OnceLock<Py<PyString>> = OnceLock::new();
     interned(py, &NAME, "resume_reading")
+}
+
+pub(crate) fn resume_writing<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
+    static NAME: OnceLock<Py<PyString>> = OnceLock::new();
+    interned(py, &NAME, "resume_writing")
 }
 
 pub(crate) fn set_exception<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {

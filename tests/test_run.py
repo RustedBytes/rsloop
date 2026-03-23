@@ -75,6 +75,85 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(rsloop.run(main()), ("pipe-read-demo", "pipe-write-demo"))
 
+    def test_write_pipe_transport_reports_write_buffer_flow_control(self) -> None:
+        async def main() -> dict[str, object]:
+            loop = asyncio.get_running_loop()
+            done: asyncio.Future[dict[str, object]] = loop.create_future()
+            payload = b"x" * (256 * 1024)
+
+            def drain_pipe(fd: int, expected: int) -> int:
+                total = 0
+                while total < expected:
+                    chunk = os.read(fd, min(65536, expected - total))
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                return total
+
+            class WriteProtocol(asyncio.Protocol):
+                def __init__(self) -> None:
+                    self.events: list[str] = []
+
+                def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    self.transport = transport
+                    self.default_limits = transport.get_write_buffer_limits()
+                    transport.set_write_buffer_limits(high=1, low=0)
+                    self.updated_limits = transport.get_write_buffer_limits()
+                    self.invalid_limits_raised = False
+                    try:
+                        transport.set_write_buffer_limits(high=1, low=2)
+                    except ValueError:
+                        self.invalid_limits_raised = True
+                    transport.write(payload)
+                    self.size_after_write = transport.get_write_buffer_size()
+
+                def pause_writing(self) -> None:
+                    self.events.append("pause")
+
+                def resume_writing(self) -> None:
+                    self.events.append("resume")
+                    if not done.done():
+                        done.set_result(
+                            {
+                                "default_limits": self.default_limits,
+                                "updated_limits": self.updated_limits,
+                                "invalid_limits_raised": self.invalid_limits_raised,
+                                "size_after_write": self.size_after_write,
+                                "size_after_resume": self.transport.get_write_buffer_size(),
+                                "events": list(self.events),
+                            }
+                        )
+                    self.transport.close()
+
+            r_fd, w_fd = os.pipe()
+            with os.fdopen(r_fd, "rb", buffering=0) as rfile, os.fdopen(
+                w_fd, "wb", buffering=0
+            ) as wfile:
+                read_task = asyncio.create_task(
+                    asyncio.to_thread(drain_pipe, rfile.fileno(), len(payload))
+                )
+                transport, _ = await loop.connect_write_pipe(WriteProtocol, wfile)
+                try:
+                    result = await asyncio.wait_for(done, 3.0)
+                    self.assertEqual(
+                        await asyncio.wait_for(read_task, 3.0), len(payload)
+                    )
+                    return result
+                finally:
+                    transport.close()
+
+        self.assertEqual(
+            rsloop.run(main()),
+            {
+                "default_limits": (16384, 65536),
+                "updated_limits": (0, 1),
+                "invalid_limits_raised": True,
+                "size_after_write": 256 * 1024,
+                "size_after_resume": 0,
+                "events": ["pause", "resume"],
+            },
+        )
+
     def test_subprocess_exec_round_trip(self) -> None:
         async def main() -> dict[str, object]:
             loop = asyncio.get_running_loop()
@@ -140,17 +219,21 @@ class RunTests(unittest.TestCase):
 
     def test_subprocess_shell_round_trip(self) -> None:
         async def main() -> dict[str, object]:
-            proc = await asyncio.create_subprocess_shell(
-                "echo shell-ok",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            return {
-                "stdout": stdout.decode().strip(),
-                "stderr": stderr.decode().strip(),
-                "returncode": proc.returncode,
-            }
+            result: dict[str, object] | None = None
+            for _ in range(10):
+                proc = await asyncio.create_subprocess_shell(
+                    "echo shell-ok",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), 3.0)
+                result = {
+                    "stdout": stdout.decode().strip(),
+                    "stderr": stderr.decode().strip(),
+                    "returncode": proc.returncode,
+                }
+            assert result is not None
+            return result
 
         self.assertEqual(
             rsloop.run(main()),

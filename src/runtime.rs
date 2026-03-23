@@ -288,6 +288,10 @@ impl RuntimeDispatcher {
                 self.ready_batch
                     .push_back(ReadyItem::StreamTransportRead(core));
             }
+            LoopCommand::ScheduleProcessTransport(core) => {
+                self.ready_batch
+                    .push_back(ReadyItem::ProcessTransport(core));
+            }
             LoopCommand::ScheduleTimer { callback, when } => {
                 let seq = self.next_timer_id;
                 self.next_timer_id += 1;
