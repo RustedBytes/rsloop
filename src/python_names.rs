@@ -18,6 +18,7 @@ pub(crate) fn cancelled<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     interned(py, &NAME, "cancelled")
 }
 
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 pub(crate) fn context_kw<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     static NAME: OnceLock<Py<PyString>> = OnceLock::new();
     interned(py, &NAME, "context")
@@ -33,11 +34,13 @@ pub(crate) fn done<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     interned(py, &NAME, "done")
 }
 
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 pub(crate) fn loop_kw<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     static NAME: OnceLock<Py<PyString>> = OnceLock::new();
     interned(py, &NAME, "loop")
 }
 
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 pub(crate) fn name_kw<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {
     static NAME: OnceLock<Py<PyString>> = OnceLock::new();
     interned(py, &NAME, "name")

@@ -27,6 +27,7 @@ use crate::loop_core::{LoopCommand, LoopCore, LoopCoreError};
 use crate::process_transport::{
     spawn_process_transport, BoxedProcessReader, ProcessTextConfig, ProcessTransportParams,
 };
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 use crate::python_names;
 use crate::stream_transport::{
     create_server as create_py_server, remove_unix_socket_if_present, spawn_read_pipe_transport,
@@ -42,10 +43,15 @@ use crate::tls::{client_tls_settings, server_tls_settings};
 static ASYNCIO_TASK_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
 static ASYNCIO_FUTURE_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
 static ASYNCIO_GET_RUNNING_LOOP_FN: OnceLock<Py<PyAny>> = OnceLock::new();
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 static ASYNCIO_FUTURE_LOOP_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 static ASYNCIO_TASK_LOOP_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 static ASYNCIO_TASK_LOOP_NAME_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 static ASYNCIO_TASK_LOOP_CONTEXT_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 static ASYNCIO_TASK_LOOP_NAME_CONTEXT_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
 
 type ResolvedStreamAddrinfo = (i32, i32, i32, Py<PyAny>);
@@ -170,6 +176,7 @@ fn call_callable_onearg(
     .map(Bound::unbind)
 }
 
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 fn asyncio_future_loop_kwnames(py: Python<'_>) -> &Py<PyTuple> {
     ASYNCIO_FUTURE_LOOP_KWNAMES.get_or_init(|| {
         PyTuple::new(py, [python_names::loop_kw(py)])
@@ -178,6 +185,7 @@ fn asyncio_future_loop_kwnames(py: Python<'_>) -> &Py<PyTuple> {
     })
 }
 
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 fn asyncio_task_kwnames_for_options(
     py: Python<'_>,
     include_name: bool,
