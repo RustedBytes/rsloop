@@ -272,5 +272,28 @@ uv run --with maturin maturin develop --release
 uv run --with uvloop python benchmarks/compare_event_loops.py
 ```
 
+An example output from that script on Linux with CPython 3.14.0:
+
+```
+callbacks (200,000 ops)
+loop           median_s       best_s      ops_per_s   vs_fastest
+rsloop         0.041608     0.040585      4,806,807        1.00x
+uvloop         0.087539     0.086690      2,284,707        2.10x
+asyncio        0.229563     0.221348        871,222        5.52x
+
+tasks (50,000 ops)
+loop           median_s       best_s      ops_per_s   vs_fastest
+uvloop         0.084425     0.083497        592,239        1.00x
+rsloop         0.091845     0.090982        544,397        1.09x
+asyncio        0.138782     0.137716        360,276        1.64x
+tcp_streams mode: rsloop native fast streams
+
+tcp_streams (5,000 ops)
+loop           median_s       best_s      ops_per_s   vs_fastest
+rsloop         0.119483     0.118451         41,847        1.00x
+uvloop         0.119582     0.116446         41,812        1.00x
+asyncio        0.138408     0.134438         36,125        1.16x
+```
+
 See `benchmarks/README.md` for workload details and extra flags, and
 `demo/README.md` for the FastAPI loop comparison demo.
