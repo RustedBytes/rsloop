@@ -105,32 +105,24 @@ def profiler_running() -> bool:
     return __profiler_running()
 
 
-def start_profiler(*, frequency: int = 999) -> None:
-    __start_profiler(frequency=frequency)
+def start_profiler() -> None:
+    """Start a Tracy profiling session."""
+    __start_profiler()
 
 
-def stop_profiler(
-    path: str | __os.PathLike[str] | None = None,
-    *,
-    format: str | None = None,
-) -> str | None:
-    resolved = None if path is None else __os.fspath(path)
-    return __stop_profiler(resolved, format=format)
+def stop_profiler() -> None:
+    """Stop the active Tracy profiling session."""
+    __stop_profiler()
 
 
 @__contextlib.contextmanager
-def profile(
-    path: str | __os.PathLike[str] | None = None,
-    *,
-    frequency: int = 999,
-    format: str | None = None,
-) -> __typing.Iterator[str | None]:
-    resolved_path = None if path is None else __os.fspath(path)
-    start_profiler(frequency=frequency)
+def profile() -> __typing.Iterator[None]:
+    """Context manager wrapper around ``start_profiler()`` / ``stop_profiler()``."""
+    start_profiler()
     try:
-        yield resolved_path
+        yield None
     finally:
-        stop_profiler(resolved_path, format=format)
+        stop_profiler()
 
 
 __ORIG_OPEN_CONNECTION = __asyncio.open_connection

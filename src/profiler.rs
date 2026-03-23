@@ -21,23 +21,8 @@ mod imp {
         ACTIVE_PROFILER.get_or_init(|| Mutex::new(None))
     }
 
-    fn ensure_ignored_format(format: Option<&str>) -> PyResult<()> {
-        if let Some(format) = format {
-            return Err(PyValueError::new_err(format!(
-                "Tracy does not support file output formats; got format={format:?}"
-            )));
-        }
-        Ok(())
-    }
-
-    #[pyfunction(signature = (*, frequency = 999))]
-    pub fn start_profiler(frequency: i32) -> PyResult<()> {
-        if frequency <= 0 {
-            return Err(PyValueError::new_err(
-                "profiler frequency must be greater than zero",
-            ));
-        }
-
+    #[pyfunction]
+    pub fn start_profiler() -> PyResult<()> {
         let mut active = active_profiler()
             .lock()
             .map_err(|_| PyRuntimeError::new_err("profiler state mutex is poisoned"))?;
@@ -45,7 +30,6 @@ mod imp {
             return Err(PyRuntimeError::new_err("profiler is already running"));
         }
 
-        let _ = frequency;
         let client = Client::start();
         client.set_thread_name("python-main");
         let session_span = client.clone().span_alloc(
@@ -70,10 +54,8 @@ mod imp {
             .unwrap_or(false)
     }
 
-    #[pyfunction(signature = (path = None, *, format = None))]
-    pub fn stop_profiler(path: Option<String>, format: Option<&str>) -> PyResult<Option<String>> {
-        ensure_ignored_format(format)?;
-
+    #[pyfunction]
+    pub fn stop_profiler() -> PyResult<()> {
         let active = active_profiler()
             .lock()
             .map_err(|_| PyRuntimeError::new_err("profiler state mutex is poisoned"))?
@@ -83,7 +65,7 @@ mod imp {
             slot.borrow_mut().take();
         });
         drop(active.client);
-        Ok(path)
+        Ok(())
     }
 }
 
@@ -100,15 +82,13 @@ mod imp {
         false
     }
 
-    #[pyfunction(signature = (*, frequency = 999))]
-    pub fn start_profiler(frequency: i32) -> PyResult<()> {
-        let _ = frequency;
+    #[pyfunction]
+    pub fn start_profiler() -> PyResult<()> {
         Err(PyRuntimeError::new_err(PROFILER_DISABLED_MESSAGE))
     }
 
-    #[pyfunction(signature = (path = None, *, format = None))]
-    pub fn stop_profiler(path: Option<String>, format: Option<&str>) -> PyResult<Option<String>> {
-        let _ = (path, format);
+    #[pyfunction]
+    pub fn stop_profiler() -> PyResult<()> {
         Err(PyRuntimeError::new_err(PROFILER_DISABLED_MESSAGE))
     }
 }
