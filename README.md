@@ -322,7 +322,9 @@ comparison demo.
 `rsloop` builds on the Python `asyncio` model and is implemented with
 [PyO3](https://pyo3.rs/) on the Rust side. The runtime and I/O work in the
 current implementation rely in part on
-[compio](https://github.com/compio-rs/compio).
+[compio](https://github.com/compio-rs/compio). On Windows, parts of the
+runtime also rely on
+[vibeio](https://crates.io/crates/vibeio).
 
 ## License
 
