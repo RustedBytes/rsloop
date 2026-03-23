@@ -1,6 +1,12 @@
 use std::io;
+#[cfg(windows)]
+use std::collections::HashMap;
+#[cfg(not(windows))]
 use std::thread;
+#[cfg(windows)]
+use std::sync::{Arc, Mutex, OnceLock};
 
+#[cfg(not(windows))]
 use futures::channel::oneshot;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -9,15 +15,25 @@ use socket2::Socket;
 #[cfg(windows)]
 use std::mem;
 #[cfg(windows)]
-use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{
-    DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, ERROR_IO_PENDING, ERROR_NOT_FOUND, HANDLE,
+    INVALID_HANDLE_VALUE, WAIT_TIMEOUT,
 };
 #[cfg(windows)]
-use windows_sys::Win32::Networking::WinSock::{select, FD_SET, SOCKET, SOCKET_ERROR, TIMEVAL};
+use windows_sys::Win32::Networking::WinSock::{
+    getsockopt, WSACloseEvent, WSACreateEvent, WSAEnumNetworkEvents, WSAEventSelect,
+    WSAGetLastError, WSARecv, WSASend, WSAWaitForMultipleEvents, FD_ACCEPT, FD_CLOSE, FD_CONNECT,
+    FD_READ, FD_WRITE, SOCKET, SOCKET_ERROR, SOL_SOCKET, SO_ACCEPTCONN, WSABUF, WSAEVENT,
+    WSANETWORKEVENTS, WSA_INVALID_EVENT, WSA_WAIT_EVENT_0, WSA_WAIT_FAILED, WSA_WAIT_TIMEOUT,
+};
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
+#[cfg(windows)]
+use windows_sys::Win32::System::IO::{
+    CancelIoEx, CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED,
+};
 
 pub type RawFd = i64;
 
@@ -162,36 +178,29 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
         return Ok((false, false));
     }
 
-    let socket = raw_fd_to_socket(fd)?;
-    let mut timeout = TIMEVAL {
-        tv_sec: (timeout_ms / 1000),
-        tv_usec: ((timeout_ms % 1000) * 1000),
-    };
-    let mut readfds = new_fd_set(socket, read);
-    let mut writefds = new_fd_set(socket, write);
+    let socket_key = raw_fd_to_socket(fd)?;
+    let duped = duplicate_socket(fd)?;
+    let socket = unsafe { Socket::from_raw_socket(raw_fd_to_socket(duped)? as _) };
+    let raw_socket = socket.as_raw_socket() as SOCKET;
+    let is_listener = socket_is_listener(raw_socket)?;
+    let is_connected = socket.peer_addr().is_ok();
 
-    let ready = unsafe {
-        select(
-            0,
-            if read {
-                &mut readfds
-            } else {
-                std::ptr::null_mut()
-            },
-            if write {
-                &mut writefds
-            } else {
-                std::ptr::null_mut()
-            },
-            std::ptr::null_mut(),
-            &mut timeout,
-        )
-    };
-    if ready == SOCKET_ERROR {
-        return Err(io::Error::last_os_error());
+    if read && !write && !is_listener && is_connected {
+        return Ok((
+            iocp_wait_socket(socket_key, raw_socket, IocpInterest::Read, timeout_ms)?,
+            false,
+        ));
     }
 
-    Ok((read && readfds.fd_count > 0, write && writefds.fd_count > 0))
+    if write && !read && is_connected {
+        return Ok((
+            false,
+            iocp_wait_socket(socket_key, raw_socket, IocpInterest::Write, timeout_ms)?,
+        ));
+    }
+
+    let event_mask = requested_network_events(read, write, is_listener);
+    wait_socket_event(raw_socket, event_mask, read, write, is_listener, timeout_ms)
 }
 
 pub async fn wait_readable(fd: RawFd) -> PyResult<()> {
@@ -203,25 +212,45 @@ pub async fn wait_writable(fd: RawFd) -> PyResult<()> {
 }
 
 async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
-    let (tx, rx) = oneshot::channel();
-    thread::Builder::new()
-        .name(format!("rsloop-fd-wait-{fd}"))
-        .spawn(move || {
-            let result = loop {
-                match poll_fd(fd, read, write, 50) {
-                    Ok((true, _)) if read => break Ok(()),
-                    Ok((_, true)) if write => break Ok(()),
-                    Ok(_) => continue,
-                    Err(err) => break Err(err),
-                }
-            };
-            let _ = tx.send(result);
+    #[cfg(windows)]
+    {
+        return crate::blocking::run(format!("rsloop-fd-wait-{fd}"), move || {
+            let (read_ready, write_ready) = poll_fd(fd, read, write, -1)?;
+            if (read && read_ready) || (write && write_ready) {
+                return Ok(());
+            }
+            Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "socket interest wait completed without readiness",
+            ))
         })
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+        .await
+        .map_err(PyRuntimeError::new_err)?
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()));
+    }
 
-    rx.await
-        .map_err(|_| PyRuntimeError::new_err("fd wait worker dropped"))?
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    #[cfg(not(windows))]
+    {
+        let (tx, rx) = oneshot::channel();
+        thread::Builder::new()
+            .name(format!("rsloop-fd-wait-{fd}"))
+            .spawn(move || {
+                let result = loop {
+                    match poll_fd(fd, read, write, 50) {
+                        Ok((true, _)) if read => break Ok(()),
+                        Ok((_, true)) if write => break Ok(()),
+                        Ok(_) => continue,
+                        Err(err) => break Err(err),
+                    }
+                };
+                let _ = tx.send(result);
+            })
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+
+        rx.await
+            .map_err(|_| PyRuntimeError::new_err("fd wait worker dropped"))?
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+    }
 }
 
 pub fn is_retryable_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bool> {
@@ -243,11 +272,317 @@ fn raw_fd_to_socket(fd: RawFd) -> io::Result<SOCKET> {
 }
 
 #[cfg(windows)]
-fn new_fd_set(socket: SOCKET, enabled: bool) -> FD_SET {
-    let mut set = unsafe { std::mem::zeroed::<FD_SET>() };
-    if enabled {
-        set.fd_count = 1;
-        set.fd_array[0] = socket;
+fn socket_is_listener(socket: SOCKET) -> io::Result<bool> {
+    let mut accept_conn = 0i32;
+    let mut len = std::mem::size_of::<i32>() as i32;
+    let result = unsafe {
+        getsockopt(
+            socket,
+            SOL_SOCKET as i32,
+            SO_ACCEPTCONN as i32,
+            (&mut accept_conn as *mut i32).cast(),
+            &mut len,
+        )
+    };
+    if result == SOCKET_ERROR {
+        return Err(last_socket_error());
     }
-    set
+    Ok(accept_conn != 0)
+}
+
+#[cfg(windows)]
+fn requested_network_events(read: bool, write: bool, is_listener: bool) -> i32 {
+    let mut events = 0;
+    if read {
+        events |= if is_listener {
+            FD_ACCEPT as i32
+        } else {
+            (FD_READ | FD_CLOSE) as i32
+        };
+    }
+    if write {
+        events |= (FD_WRITE | FD_CONNECT | FD_CLOSE) as i32;
+    }
+    events
+}
+
+#[cfg(windows)]
+fn wait_socket_event(
+    socket: SOCKET,
+    event_mask: i32,
+    read: bool,
+    write: bool,
+    is_listener: bool,
+    timeout_ms: i32,
+) -> io::Result<(bool, bool)> {
+    let event = OwnedWsaEvent::new()?;
+    let selector = unsafe { WSAEventSelect(socket, event.raw(), event_mask) };
+    if selector == SOCKET_ERROR {
+        return Err(last_socket_error());
+    }
+
+    let handles = [event.raw() as HANDLE];
+    let wait_result = unsafe {
+        WSAWaitForMultipleEvents(
+            handles.len() as u32,
+            handles.as_ptr(),
+            0,
+            timeout_to_wait_ms(timeout_ms),
+            0,
+        )
+    };
+    if wait_result == WSA_WAIT_TIMEOUT {
+        return Ok((false, false));
+    }
+    if wait_result == WSA_WAIT_FAILED {
+        return Err(last_socket_error());
+    }
+    if wait_result != WSA_WAIT_EVENT_0 as u32 {
+        return Err(io::Error::other(format!(
+            "unexpected WSA wait result: {wait_result}"
+        )));
+    }
+
+    let mut network_events = unsafe { std::mem::zeroed::<WSANETWORKEVENTS>() };
+    let enum_result = unsafe { WSAEnumNetworkEvents(socket, event.raw(), &mut network_events) };
+    if enum_result == SOCKET_ERROR {
+        return Err(last_socket_error());
+    }
+
+    for event in [FD_ACCEPT, FD_CONNECT, FD_READ, FD_WRITE, FD_CLOSE] {
+        let event_mask = event as i32;
+        if (network_events.lNetworkEvents & event_mask) == 0 {
+            continue;
+        }
+
+        let error = network_events.iErrorCode[event.ilog2() as usize];
+        if error != 0 {
+            return Err(io::Error::from_raw_os_error(error));
+        }
+    }
+
+    let close_ready = (network_events.lNetworkEvents & FD_CLOSE as i32) != 0;
+    let read_ready = read
+        && ((network_events.lNetworkEvents
+            & if is_listener {
+                FD_ACCEPT as i32
+            } else {
+                FD_READ as i32
+            })
+            != 0
+            || close_ready);
+    let write_ready = write
+        && ((network_events.lNetworkEvents & (FD_WRITE | FD_CONNECT) as i32) != 0 || close_ready);
+    Ok((read_ready, write_ready))
+}
+
+#[cfg(windows)]
+fn iocp_wait_socket(
+    socket_key: SOCKET,
+    socket: SOCKET,
+    interest: IocpInterest,
+    timeout_ms: i32,
+) -> io::Result<bool> {
+    let state = socket_wait_state(socket_key)?;
+    let _gate = state.gate.lock().expect("poisoned socket wait gate");
+    let associated = unsafe { CreateIoCompletionPort(socket as HANDLE, state.port.raw(), 1, 0) };
+    if associated.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut overlapped = unsafe { std::mem::zeroed::<OVERLAPPED>() };
+    let mut buffer = WSABUF {
+        len: 0,
+        buf: std::ptr::null_mut(),
+    };
+    let mut transferred = 0u32;
+    let submitted = match interest {
+        IocpInterest::Read => {
+            let mut flags = 0u32;
+            unsafe {
+                WSARecv(
+                    socket,
+                    &mut buffer,
+                    1,
+                    &mut transferred,
+                    &mut flags,
+                    &mut overlapped,
+                    None,
+                )
+            }
+        }
+        IocpInterest::Write => unsafe {
+            WSASend(
+                socket,
+                &mut buffer,
+                1,
+                &mut transferred,
+                0,
+                &mut overlapped,
+                None,
+            )
+        },
+    };
+
+    if submitted == 0 {
+        return Ok(true);
+    }
+
+    let submit_error = unsafe { WSAGetLastError() };
+    if submit_error != ERROR_IO_PENDING as i32 {
+        return Err(io::Error::from_raw_os_error(submit_error));
+    }
+
+    let mut completion_key = 0usize;
+    let mut completed = std::ptr::null_mut();
+    let completed_ok = unsafe {
+        GetQueuedCompletionStatus(
+            state.port.raw(),
+            &mut transferred,
+            &mut completion_key,
+            &mut completed,
+            timeout_to_wait_ms(timeout_ms),
+        )
+    };
+    if completed_ok != 0 {
+        return Ok(true);
+    }
+
+    let wait_error = io::Error::last_os_error();
+    if wait_error.raw_os_error() == Some(WAIT_TIMEOUT as i32) && completed.is_null() {
+        cancel_pending_socket_io(socket, state.port.raw(), &mut overlapped)?;
+        return Ok(false);
+    }
+
+    Err(wait_error)
+}
+
+#[cfg(windows)]
+fn cancel_pending_socket_io(
+    socket: SOCKET,
+    port: HANDLE,
+    overlapped: &mut OVERLAPPED,
+) -> io::Result<()> {
+    let cancelled = unsafe { CancelIoEx(socket as HANDLE, overlapped) };
+    if cancelled == 0 {
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() != Some(ERROR_NOT_FOUND as i32) {
+            return Err(err);
+        }
+    }
+
+    let mut transferred = 0u32;
+    let mut completion_key = 0usize;
+    let mut completed = std::ptr::null_mut();
+    let _ = unsafe {
+        GetQueuedCompletionStatus(
+            port,
+            &mut transferred,
+            &mut completion_key,
+            &mut completed,
+            u32::MAX,
+        )
+    };
+    Ok(())
+}
+
+#[cfg(windows)]
+fn timeout_to_wait_ms(timeout_ms: i32) -> u32 {
+    if timeout_ms < 0 {
+        u32::MAX
+    } else {
+        timeout_ms as u32
+    }
+}
+
+#[cfg(windows)]
+fn last_socket_error() -> io::Error {
+    io::Error::from_raw_os_error(unsafe { WSAGetLastError() })
+}
+
+#[cfg(windows)]
+enum IocpInterest {
+    Read,
+    Write,
+}
+
+#[cfg(windows)]
+struct SocketWaitState {
+    port: OwnedHandle,
+    gate: Mutex<()>,
+}
+
+#[cfg(windows)]
+fn socket_wait_state(socket: SOCKET) -> io::Result<Arc<SocketWaitState>> {
+    static STATES: OnceLock<Mutex<HashMap<SOCKET, Arc<SocketWaitState>>>> = OnceLock::new();
+
+    let states = STATES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut states = states.lock().expect("poisoned socket wait state map");
+    if let Some(state) = states.get(&socket) {
+        return Ok(Arc::clone(state));
+    }
+
+    let state = Arc::new(SocketWaitState {
+        port: OwnedHandle::new_completion_port()?,
+        gate: Mutex::new(()),
+    });
+    states.insert(socket, Arc::clone(&state));
+    Ok(state)
+}
+
+#[cfg(windows)]
+struct OwnedHandle(HANDLE);
+
+#[cfg(windows)]
+unsafe impl Send for OwnedHandle {}
+
+#[cfg(windows)]
+unsafe impl Sync for OwnedHandle {}
+
+#[cfg(windows)]
+impl OwnedHandle {
+    fn new_completion_port() -> io::Result<Self> {
+        let handle =
+            unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self(handle))
+    }
+
+    fn raw(&self) -> HANDLE {
+        self.0
+    }
+}
+
+#[cfg(windows)]
+impl Drop for OwnedHandle {
+    fn drop(&mut self) {
+        let _ = unsafe { CloseHandle(self.0) };
+    }
+}
+
+#[cfg(windows)]
+struct OwnedWsaEvent(WSAEVENT);
+
+#[cfg(windows)]
+impl OwnedWsaEvent {
+    fn new() -> io::Result<Self> {
+        let event = unsafe { WSACreateEvent() };
+        if event == WSA_INVALID_EVENT {
+            return Err(last_socket_error());
+        }
+        Ok(Self(event))
+    }
+
+    fn raw(&self) -> WSAEVENT {
+        self.0
+    }
+}
+
+#[cfg(windows)]
+impl Drop for OwnedWsaEvent {
+    fn drop(&mut self) {
+        let _ = unsafe { WSACloseEvent(self.0) };
+    }
 }

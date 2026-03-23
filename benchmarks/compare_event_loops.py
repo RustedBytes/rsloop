@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ctypes
+from ctypes import wintypes
 import gc
 import importlib
 import json
@@ -34,6 +36,7 @@ class ChildResult:
     workload: str
     seconds: float
     operations: int
+    peak_rss_bytes: int
 
     @property
     def ops_per_sec(self) -> float:
@@ -195,6 +198,65 @@ def is_loop_available(loop_name: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def get_peak_rss_bytes() -> int:
+    if sys.platform == "win32":
+        class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        get_current_process = kernel32.GetCurrentProcess
+        get_current_process.restype = wintypes.HANDLE
+
+        get_process_memory_info = psapi.GetProcessMemoryInfo
+        get_process_memory_info.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(PROCESS_MEMORY_COUNTERS),
+            wintypes.DWORD,
+        ]
+        get_process_memory_info.restype = wintypes.BOOL
+
+        counters = PROCESS_MEMORY_COUNTERS()
+        counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+        if not get_process_memory_info(
+            get_current_process(),
+            ctypes.byref(counters),
+            counters.cb,
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return int(counters.PeakWorkingSetSize)
+
+    import resource
+
+    peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        return int(peak_rss)
+    return int(peak_rss * 1024)
+
+
+def format_bytes(num_bytes: int) -> str:
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    value = float(num_bytes)
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024.0
+    raise AssertionError("unreachable")
+
+
 def run_with_loop(loop_name: str, coro: asyncio.coroutines) -> ChildResult:
     loop_factory = loop_factory_for(loop_name)
     if sys.version_info[:2] >= (3, 12):
@@ -225,7 +287,13 @@ async def bench_callbacks(loop_name: str, iterations: int) -> ChildResult:
     start = time.perf_counter()
     loop.call_soon(callback)
     await done
-    return ChildResult(loop_name, "callbacks", time.perf_counter() - start, iterations)
+    return ChildResult(
+        loop_name,
+        "callbacks",
+        time.perf_counter() - start,
+        iterations,
+        peak_rss_bytes=0,
+    )
 
 
 async def bench_tasks(loop_name: str, iterations: int, batch_size: int) -> ChildResult:
@@ -238,7 +306,13 @@ async def bench_tasks(loop_name: str, iterations: int, batch_size: int) -> Child
         current_batch = min(batch_size, remaining)
         await asyncio.gather(*(tiny_task() for _ in range(current_batch)))
         remaining -= current_batch
-    return ChildResult(loop_name, "tasks", time.perf_counter() - start, iterations)
+    return ChildResult(
+        loop_name,
+        "tasks",
+        time.perf_counter() - start,
+        iterations,
+        peak_rss_bytes=0,
+    )
 
 
 async def maybe_wait_closed(writer: asyncio.StreamWriter) -> None:
@@ -285,7 +359,13 @@ async def bench_tcp_streams(
         duration = time.perf_counter() - start
         writer.close()
         await maybe_wait_closed(writer)
-        return ChildResult(loop_name, "tcp_streams", duration, roundtrips)
+        return ChildResult(
+            loop_name,
+            "tcp_streams",
+            duration,
+            roundtrips,
+            peak_rss_bytes=0,
+        )
     finally:
         server.close()
         await server.wait_closed()
@@ -315,6 +395,14 @@ def child_main(args: argparse.Namespace) -> int:
     finally:
         gc.enable()
 
+    result = ChildResult(
+        loop=result.loop,
+        workload=result.workload,
+        seconds=result.seconds,
+        operations=result.operations,
+        peak_rss_bytes=get_peak_rss_bytes(),
+    )
+
     print(
         json.dumps(
             {
@@ -323,6 +411,7 @@ def child_main(args: argparse.Namespace) -> int:
                 "seconds": result.seconds,
                 "operations": result.operations,
                 "ops_per_sec": result.ops_per_sec,
+                "peak_rss_bytes": result.peak_rss_bytes,
             }
         )
     )
@@ -387,19 +476,31 @@ def run_child(
         workload=payload["workload"],
         seconds=payload["seconds"],
         operations=payload["operations"],
+        peak_rss_bytes=payload["peak_rss_bytes"],
     )
 
 
 def print_workload_table(workload: str, runs: dict[str, list[ChildResult]]) -> None:
-    rows: list[tuple[str, float, float, float, int]] = []
+    rows: list[tuple[str, float, float, float, int, int]] = []
     for loop_name, loop_runs in runs.items():
         seconds = [item.seconds for item in loop_runs]
+        peak_rss_values = [item.peak_rss_bytes for item in loop_runs]
         median_seconds = statistics.median(seconds)
+        median_peak_rss = int(statistics.median(peak_rss_values))
         operations = loop_runs[0].operations
         ops_per_sec = (
             operations / median_seconds if median_seconds > 0 else float("inf")
         )
-        rows.append((loop_name, median_seconds, ops_per_sec, min(seconds), operations))
+        rows.append(
+            (
+                loop_name,
+                median_seconds,
+                ops_per_sec,
+                min(seconds),
+                operations,
+                median_peak_rss,
+            )
+        )
 
     rows.sort(key=lambda item: item[1])
     fastest = rows[0][1]
@@ -407,15 +508,16 @@ def print_workload_table(workload: str, runs: dict[str, list[ChildResult]]) -> N
     print()
     print(f"{workload} ({rows[0][4]:,} ops)")
     print(
-        f"{'loop':<10} {'median_s':>12} {'best_s':>12} {'ops_per_s':>14} {'vs_fastest':>12}"
+        f"{'loop':<10} {'median_s':>12} {'best_s':>12} {'ops_per_s':>14} {'peak_rss':>12} {'vs_fastest':>12}"
     )
-    for loop_name, median_seconds, ops_per_sec, best_seconds, _ in rows:
+    for loop_name, median_seconds, ops_per_sec, best_seconds, _, median_peak_rss in rows:
         relative = median_seconds / fastest if fastest > 0 else 1.0
         print(
             f"{loop_name:<10} "
             f"{median_seconds:>12.6f} "
             f"{best_seconds:>12.6f} "
             f"{ops_per_sec:>14,.0f} "
+            f"{format_bytes(median_peak_rss):>12} "
             f"{relative:>11.2f}x"
         )
 
@@ -489,6 +591,7 @@ def parent_main(args: argparse.Namespace) -> int:
                             "seconds": item.seconds,
                             "operations": item.operations,
                             "ops_per_sec": item.ops_per_sec,
+                            "peak_rss_bytes": item.peak_rss_bytes,
                         }
                         for item in measured
                     ],
