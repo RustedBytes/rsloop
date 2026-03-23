@@ -13,7 +13,7 @@ import statistics
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 
@@ -122,16 +122,10 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional directory placeholder used to label one rsloop Tracy run per workload before measured runs",
     )
-    parser.add_argument(
-        "--profile-frequency",
-        type=int,
-        default=999,
-        help="Compatibility option retained from the old pprof profiler; ignored by Tracy",
-    )
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--loop", choices=LOOP_CHOICES, help=argparse.SUPPRESS)
     parser.add_argument("--workload", choices=WORKLOAD_CHOICES, help=argparse.SUPPRESS)
-    parser.add_argument("--profile-output", help=argparse.SUPPRESS)
+    parser.add_argument("--profile-label", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -160,8 +154,6 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--tcp-roundtrips must be > 0")
     if args.payload_size <= 0:
         raise SystemExit("--payload-size must be > 0")
-    if args.profile_frequency <= 0:
-        raise SystemExit("--profile-frequency must be > 0")
 
 
 def env_flag(name: str) -> bool:
@@ -421,12 +413,12 @@ def child_main(args: argparse.Namespace) -> int:
         else:  # pragma: no cover - parser guards this
             raise AssertionError(f"unsupported workload: {args.workload}")
 
-        profile_requested = args.profile_output is not None or (
+        profile_requested = args.profile_label is not None or (
             args.loop == "rsloop" and env_flag(RSLOOP_PROFILE_ENV)
         )
         loop_factory_for(args.loop)
         baseline_rss_bytes = get_current_rss_bytes()
-        if profile_requested and not args.profile_output:
+        if profile_requested and not args.profile_label:
             print(
                 f"[profile] Tracy enabled via {RSLOOP_PROFILE_ENV}=1 for {args.loop}/{args.workload}",
                 flush=True,
@@ -435,29 +427,23 @@ def child_main(args: argparse.Namespace) -> int:
             if args.loop != "rsloop":
                 raise RuntimeError("profiling is only supported for rsloop")
             rsloop = importlib.import_module("rsloop")
-            with rsloop.profile(args.profile_output, frequency=args.profile_frequency):
+            if args.profile_label:
+                print(f"[profile] Tracy session label: {args.profile_label}", flush=True)
+            with rsloop.profile():
                 result = run_with_loop(args.loop, coro)
         else:
             result = run_with_loop(args.loop, coro)
     finally:
         gc.enable()
 
-    result = ChildResult(
-        loop=result.loop,
-        workload=result.workload,
-        seconds=result.seconds,
-        operations=result.operations,
+    result = replace(
+        result,
         baseline_rss_bytes=baseline_rss_bytes,
         peak_rss_bytes=get_peak_rss_bytes(),
         peak_rss_delta_bytes=0,
     )
-    result = ChildResult(
-        loop=result.loop,
-        workload=result.workload,
-        seconds=result.seconds,
-        operations=result.operations,
-        baseline_rss_bytes=result.baseline_rss_bytes,
-        peak_rss_bytes=result.peak_rss_bytes,
+    result = replace(
+        result,
         peak_rss_delta_bytes=max(0, result.peak_rss_bytes - result.baseline_rss_bytes),
     )
 
@@ -484,7 +470,7 @@ def run_child(
     workload: str,
     args: argparse.Namespace,
     *,
-    profile_output: str | None = None,
+    profile_label: str | None = None,
 ) -> ChildResult:
     cmd = [
         sys.executable,
@@ -504,11 +490,9 @@ def run_child(
         str(args.tcp_roundtrips),
         "--payload-size",
         str(args.payload_size),
-        "--profile-frequency",
-        str(args.profile_frequency),
     ]
-    if profile_output is not None:
-        cmd.extend(["--profile-output", profile_output])
+    if profile_label is not None:
+        cmd.extend(["--profile-label", profile_label])
     env = os.environ.copy()
     if loop_name == "rsloop":
         env["RSLOOP_USE_FAST_STREAMS"] = "1" if args.rsloop_fast_streams else "0"
@@ -662,16 +646,14 @@ def parent_main(args: argparse.Namespace) -> int:
             print(f"Running {workload} on {loop_name}...")
             if profile_rsloop_dir and loop_name == "rsloop":
                 os.makedirs(profile_rsloop_dir, exist_ok=True)
-                profile_output = os.path.join(
-                    profile_rsloop_dir, f"rsloop-{workload}.svg"
-                )
-                print(f"  starting Tracy session labeled {profile_output}")
+                profile_label = os.path.join(profile_rsloop_dir, f"rsloop-{workload}")
+                print(f"  starting Tracy session labeled {profile_label}")
                 run_child(
                     script_path,
                     loop_name,
                     workload,
                     args,
-                    profile_output=profile_output,
+                    profile_label=profile_label,
                 )
             for _ in range(args.warmups):
                 run_child(script_path, loop_name, workload, args)

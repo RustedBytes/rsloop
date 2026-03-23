@@ -33,7 +33,7 @@ uv run --with uvloop python benchmarks/compare_event_loops.py \
 ```
 
 To launch an unmeasured Tracy session for each `rsloop` workload before the
-measured runs, add a profile directory placeholder:
+measured runs, add a label directory:
 
 ```bash
 uv run --with maturin maturin develop --release --features profiler
@@ -43,9 +43,10 @@ uv run --with uvloop python benchmarks/compare_event_loops.py \
   --profile-rsloop-dir benchmarks/profiles
 ```
 
-No files are written by Tracy. The directory argument is only used to label the
-unmeasured profiling pass before the warmup and measured runs. Open the Tracy
-desktop profiler and connect while that pass is running.
+No files are written by Tracy. The directory argument is only used to derive a
+human-readable label for the unmeasured profiling pass before the warmup and
+measured runs. Open the Tracy desktop profiler and connect while that pass is
+running.
 
 The runner executes each loop/workload in a fresh subprocess and reports:
 

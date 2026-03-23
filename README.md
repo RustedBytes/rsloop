@@ -236,7 +236,7 @@ Or manage the session manually:
 ```python
 import rsloop
 
-rsloop.start_profiler(frequency=999)
+rsloop.start_profiler()
 try:
     rsloop.run(main())
 finally:
@@ -246,10 +246,6 @@ finally:
 This starts a Tracy client inside the process. Build a release binary, open
 `tracy-profiler.exe`, then connect to the running process while the profiled
 code is executing.
-
-The `frequency` argument is accepted for compatibility with the old `pprof`
-integration but is ignored by Tracy. `path` / `format` are also retained as
-compatibility arguments on `stop_profiler()` / `profile()` and are ignored.
 
 The current Tracy feature set is aimed at local Windows profiling:
 `enable`, `only-localhost`, `sampling`, and `flush-on-exit`. The last one helps
