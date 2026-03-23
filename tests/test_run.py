@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import os
 import shlex
@@ -7,6 +9,15 @@ import sys
 import unittest
 
 import rsloop
+
+
+async def run_in_thread(func, /, *args):
+    to_thread = getattr(asyncio, "to_thread", None)
+    if to_thread is not None:
+        return await to_thread(func, *args)
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, func, *args)
 
 
 class RunTests(unittest.TestCase):
@@ -132,7 +143,7 @@ class RunTests(unittest.TestCase):
                 w_fd, "wb", buffering=0
             ) as wfile:
                 read_task = asyncio.create_task(
-                    asyncio.to_thread(drain_pipe, rfile.fileno(), len(payload))
+                    run_in_thread(drain_pipe, rfile.fileno(), len(payload))
                 )
                 transport, _ = await loop.connect_write_pipe(WriteProtocol, wfile)
                 try:
