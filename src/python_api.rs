@@ -397,6 +397,38 @@ fn build_stream_socket(
     Ok(sock.unbind())
 }
 
+#[cfg(unix)]
+fn set_socket_bool_option_unix(
+    py: Python<'_>,
+    sock: &Py<PyAny>,
+    level: libc::c_int,
+    option: libc::c_int,
+    enabled: bool,
+) -> PyResult<()> {
+    let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
+    let fd: libc::c_int = fd
+        .try_into()
+        .map_err(|_| PyRuntimeError::new_err("socket file descriptor out of range"))?;
+    let value: libc::c_int = enabled.into();
+    let value_len: libc::socklen_t = std::mem::size_of_val(&value)
+        .try_into()
+        .expect("socklen_t can represent c_int size");
+    let result = unsafe {
+        libc::setsockopt(
+            fd,
+            level,
+            option,
+            (&value as *const libc::c_int).cast(),
+            value_len,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(PyErr::from(std::io::Error::last_os_error()))
+    }
+}
+
 async fn connect_socket_to_address(sock: Py<PyAny>, address: Py<PyAny>) -> PyResult<()> {
     let fd = Python::attach(|py| fd_ops::fileobj_to_fd(py, sock.bind(py)))?;
     match Python::attach(|py| -> PyResult<()> {
@@ -524,6 +556,7 @@ fn build_tcp_server_sockets(
     let sol_socket = socket_mod.getattr("SOL_SOCKET")?;
     let so_reuseaddr = socket_mod.getattr("SO_REUSEADDR")?;
     let so_reuseport = socket_mod.getattr("SO_REUSEPORT").ok();
+    #[cfg(not(unix))]
     let so_keepalive = socket_mod.getattr("SO_KEEPALIVE")?;
     let addrinfos = resolve_stream_addrinfos(py, host, port, family, 0, flags)?;
     let mut sockets = Vec::with_capacity(addrinfos.len());
@@ -547,15 +580,28 @@ fn build_tcp_server_sockets(
             }
         }
         if let Some(keep_alive) = keep_alive {
-            sock.call_method1(
-                py,
-                "setsockopt",
-                (
-                    sol_socket.clone(),
-                    so_keepalive.clone(),
-                    i32::from(keep_alive),
-                ),
-            )?;
+            #[cfg(unix)]
+            {
+                set_socket_bool_option_unix(
+                    py,
+                    &sock,
+                    libc::SOL_SOCKET,
+                    libc::SO_KEEPALIVE,
+                    keep_alive,
+                )?;
+            }
+            #[cfg(not(unix))]
+            {
+                sock.call_method1(
+                    py,
+                    "setsockopt",
+                    (
+                        sol_socket.clone(),
+                        so_keepalive.clone(),
+                        i32::from(keep_alive),
+                    ),
+                )?;
+            }
         }
         sock.call_method1(py, "bind", (sockaddr,))?;
         sock.call_method1(py, "listen", (backlog,))?;
