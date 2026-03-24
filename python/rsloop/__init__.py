@@ -1157,17 +1157,17 @@ def __without_text_kwds(kwds: dict[str, object]) -> dict[str, object]:
 def __windows_command_line_to_argv(cmd: str) -> list[str]:
     import ctypes as __ctypes
 
-    argc = _ctypes.c_int()
-    command_line_to_argv = _ctypes.windll.shell32.CommandLineToArgvW
-    command_line_to_argv.argtypes = [_ctypes.c_wchar_p, _ctypes.POINTER(_ctypes.c_int)]
-    command_line_to_argv.restype = _ctypes.POINTER(_ctypes.c_wchar_p)
-    argv = command_line_to_argv(cmd, _ctypes.byref(argc))
+    argc = __ctypes.c_int()
+    command_line_to_argv = __ctypes.windll.shell32.CommandLineToArgvW
+    command_line_to_argv.argtypes = [__ctypes.c_wchar_p, __ctypes.POINTER(__ctypes.c_int)]
+    command_line_to_argv.restype = __ctypes.POINTER(__ctypes.c_wchar_p)
+    argv = command_line_to_argv(cmd, __ctypes.byref(argc))
     if not argv:
         raise OSError("CommandLineToArgvW failed")
     try:
         return [argv[index] for index in range(argc.value)]
     finally:
-        _ctypes.windll.kernel32.LocalFree(argv)
+        __ctypes.windll.kernel32.LocalFree(argv)
 
 
 async def __create_text_subprocess_exec(
