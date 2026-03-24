@@ -377,10 +377,8 @@ impl LoopCore {
                         if ready_batch.is_empty() {
                             std::mem::swap(&mut ready_batch, &mut *pending);
                         } else {
-                            let mut refreshed = VecDeque::new();
-                            std::mem::swap(&mut refreshed, &mut *pending);
-                            refreshed.extend(ready_batch.drain(..));
-                            ready_batch = refreshed;
+                            pending.append(&mut ready_batch);
+                            std::mem::swap(&mut ready_batch, &mut *pending);
                         }
                     }
                     if pending.is_empty() {

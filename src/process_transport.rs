@@ -122,8 +122,9 @@ impl ProcessTransportCore {
 
     pub(crate) fn drain_pending_events_with_py(self: &Arc<Self>, py: Python<'_>) -> PyResult<()> {
         profiling::scope!("ProcessTransportCore::drain_pending_events_with_py");
+        let mut drained = VecDeque::new();
         loop {
-            let mut pending = {
+            {
                 let mut queue = self
                     .pending_events
                     .lock()
@@ -133,12 +134,10 @@ impl ProcessTransportCore {
                     return Ok(());
                 }
 
-                let mut drained = VecDeque::new();
                 std::mem::swap(&mut drained, &mut *queue);
-                drained
-            };
+            }
 
-            while let Some(event) = pending.pop_front() {
+            while let Some(event) = drained.pop_front() {
                 match event {
                     PendingProcessEvent::PipeDataReceived { fd, data } => {
                         profiling::scope!("process.pending.pipe_data_received");

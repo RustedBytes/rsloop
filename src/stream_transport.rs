@@ -68,6 +68,41 @@ struct OwnedWriteBuffer {
     offset: usize,
 }
 
+enum PendingReadBuffer {
+    Boxed(Box<[u8]>),
+    Vec(Vec<u8>),
+}
+
+impl PendingReadBuffer {
+    #[inline]
+    fn len(&self) -> usize {
+        match self {
+            Self::Boxed(data) => data.len(),
+            Self::Vec(data) => data.len(),
+        }
+    }
+
+    #[inline]
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Boxed(data) => data,
+            Self::Vec(data) => data,
+        }
+    }
+
+    fn extend(&mut self, data: Box<[u8]>) {
+        match self {
+            Self::Boxed(existing) => {
+                let mut combined = Vec::with_capacity(existing.len() + data.len());
+                combined.extend_from_slice(existing);
+                combined.extend_from_slice(&data);
+                *self = Self::Vec(combined);
+            }
+            Self::Vec(existing) => existing.extend_from_slice(&data),
+        }
+    }
+}
+
 impl OwnedWriteBuffer {
     #[inline]
     fn from_slice(data: &[u8]) -> Self {
@@ -815,9 +850,10 @@ impl StreamTransportCore {
 
     pub(crate) fn drain_pending_read_events_with_py(&self, py: Python<'_>) -> PyResult<()> {
         profiling::scope!("StreamTransportCore::drain_pending_read_events_with_py");
-        let mut pending_data: Option<Vec<u8>> = None;
+        let mut pending_data: Option<PendingReadBuffer> = None;
+        let mut drained = VecDeque::new();
         loop {
-            let mut pending = {
+            {
                 let mut queue = self
                     .pending_read_events
                     .lock()
@@ -827,12 +863,10 @@ impl StreamTransportCore {
                     return Ok(());
                 }
 
-                let mut drained = VecDeque::new();
                 std::mem::swap(&mut drained, &mut *queue);
-                drained
-            };
+            }
 
-            while let Some(event) = pending.pop_front() {
+            while let Some(event) = drained.pop_front() {
                 match event {
                     PendingReadEvent::Data(data) => {
                         profiling::scope!("stream.pending.data");
@@ -840,7 +874,7 @@ impl StreamTransportCore {
                             Some(buffer)
                                 if buffer.len() + data.len() <= MAX_PENDING_READ_COALESCE_BYTES =>
                             {
-                                buffer.extend_from_slice(&data);
+                                buffer.extend(data);
                             }
                             Some(_) => {
                                 if let Err(err) =
@@ -855,9 +889,9 @@ impl StreamTransportCore {
                                     self.read_events_scheduled.store(false, Ordering::Release);
                                     return Ok(());
                                 }
-                                pending_data = Some(data.into_vec());
+                                pending_data = Some(PendingReadBuffer::Boxed(data));
                             }
-                            None => pending_data = Some(data.into_vec()),
+                            None => pending_data = Some(PendingReadBuffer::Boxed(data)),
                         }
                     }
                     PendingReadEvent::Eof => {
@@ -976,7 +1010,7 @@ impl StreamTransportCore {
     fn flush_pending_data_with_py(
         &self,
         py: Python<'_>,
-        pending_data: &mut Option<Vec<u8>>,
+        pending_data: &mut Option<PendingReadBuffer>,
     ) -> PyResult<()> {
         let Some(data) = pending_data.take() else {
             return Ok(());
@@ -986,7 +1020,7 @@ impl StreamTransportCore {
             return Ok(());
         }
 
-        self.data_received_with_py(py, &data)
+        self.data_received_with_py(py, data.as_slice())
     }
 
     fn report_error_with_py(&self, py: Python<'_>, err: PyErr, message: &str) -> PyResult<()> {
