@@ -11,7 +11,6 @@ import asyncio.base_events as __asyncio_base_events
 import io as __io
 
 __DLL_DIR_HANDLES: list[object] = []
-__TASK_KWARGS: set[str] | None = None
 
 
 def __configure_windows_dll_search_path() -> None:
@@ -161,26 +160,6 @@ _io = __io
 _os = __os
 
 
-def __task_kwargs() -> set[str]:
-    global __TASK_KWARGS
-    if __TASK_KWARGS is not None:
-        return __TASK_KWARGS
-
-    import inspect as __inspect
-
-    try:
-        signature = __inspect.signature(__asyncio.Task)
-        __TASK_KWARGS = {
-            name
-            for name, parameter in signature.parameters.items()
-            if parameter.kind is __inspect.Parameter.KEYWORD_ONLY
-        }
-    except (TypeError, ValueError):
-        __TASK_KWARGS = {"loop", "name"}
-
-    return __TASK_KWARGS
-
-
 def __get_asyncgen_state(loop: Loop) -> dict[str, object]:
     state = __ASYNCGEN_STATE.get(loop)
     if state is None:
@@ -284,42 +263,6 @@ def __loop_close(self):
     finally:
         __ASYNCGEN_STATE.pop(self, None)
         __LOOP_CONFIG.pop(self, None)
-
-
-def __loop_create_task(self, coro, *, name=None, context=None, **kwargs):
-    task_kwargs_supported = __task_kwargs()
-    factory = self.get_task_factory()
-    if factory is not None:
-        factory_kwargs = dict(kwargs)
-        factory_kwargs["name"] = name
-        if context is not None:
-            factory_kwargs["context"] = context
-        task = factory(self, coro, **factory_kwargs)
-        return task
-
-    task_kwargs = {}
-    extra_kwargs = dict(kwargs)
-
-    if "name" in task_kwargs_supported:
-        task_kwargs["name"] = name
-    if context is not None and "context" in task_kwargs_supported:
-        task_kwargs["context"] = context
-    if "eager_start" in extra_kwargs:
-        eager_start = extra_kwargs.pop("eager_start")
-        if "eager_start" in task_kwargs_supported:
-            task_kwargs["eager_start"] = eager_start
-
-    if extra_kwargs:
-        unexpected = next(iter(extra_kwargs))
-        raise TypeError(
-            f"create_task() got an unexpected keyword argument {unexpected!r}"
-        )
-
-    task = __asyncio.Task(coro, loop=self, **task_kwargs)
-    source_traceback = getattr(task, "_source_traceback", None)
-    if source_traceback:
-        del source_traceback[-1]
-    return task
 
 
 def __cancel_all_tasks(loop: Loop) -> None:
@@ -1597,8 +1540,9 @@ if Loop.shutdown_asyncgens is __ORIG_SHUTDOWN_ASYNCGENS:
 if Loop.close is __ORIG_CLOSE:
     Loop.close = __loop_close
 
-if Loop.create_task is __ORIG_CREATE_TASK:
-    Loop.create_task = __loop_create_task
+# Keep the Rust implementation on the hot path. It already handles task
+# factories and keyword forwarding, while the Python wrapper adds measurable
+# overhead in task-heavy workloads.
 
 
 def __install_ssl_tracking() -> None:

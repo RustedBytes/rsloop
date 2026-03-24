@@ -43,6 +43,7 @@ use crate::tls::{client_tls_settings, server_tls_settings};
 static ASYNCIO_TASK_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
 static ASYNCIO_FUTURE_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
 static ASYNCIO_GET_RUNNING_LOOP_FN: OnceLock<Py<PyAny>> = OnceLock::new();
+static ASYNCIO_TASK_KWARG_SUPPORT: OnceLock<TaskKwargSupport> = OnceLock::new();
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 static ASYNCIO_FUTURE_LOOP_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
@@ -55,6 +56,12 @@ static ASYNCIO_TASK_LOOP_CONTEXT_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new(
 static ASYNCIO_TASK_LOOP_NAME_CONTEXT_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
 
 type ResolvedStreamAddrinfo = (i32, i32, i32, Py<PyAny>);
+
+struct TaskKwargSupport {
+    name: bool,
+    context: bool,
+    eager_start: bool,
+}
 
 struct TcpServerSocketOptions {
     family: i32,
@@ -149,6 +156,52 @@ fn asyncio_get_running_loop_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
         .getattr("_get_running_loop")?
         .unbind();
     Ok(ASYNCIO_GET_RUNNING_LOOP_FN.get_or_init(|| loaded))
+}
+
+fn asyncio_task_kwarg_support(py: Python<'_>) -> PyResult<&'static TaskKwargSupport> {
+    if let Some(cached) = ASYNCIO_TASK_KWARG_SUPPORT.get() {
+        return Ok(cached);
+    }
+
+    let inspect = py.import("inspect")?;
+    let signature = match inspect
+        .getattr("signature")?
+        .call1((asyncio_task_cls(py)?.clone_ref(py),))
+    {
+        Ok(signature) => signature,
+        Err(_) => {
+            return Ok(ASYNCIO_TASK_KWARG_SUPPORT.get_or_init(|| TaskKwargSupport {
+                name: true,
+                context: false,
+                eager_start: false,
+            }));
+        }
+    };
+    let parameters = signature.getattr("parameters")?;
+    let keyword_only = inspect.getattr("Parameter")?.getattr("KEYWORD_ONLY")?;
+    let mut support = TaskKwargSupport {
+        name: false,
+        context: false,
+        eager_start: false,
+    };
+
+    for kwarg_name in ["name", "context", "eager_start"] {
+        let parameter = match parameters.get_item(kwarg_name) {
+            Ok(parameter) => parameter,
+            Err(_) => continue,
+        };
+        if !parameter.getattr("kind")?.eq(&keyword_only)? {
+            continue;
+        }
+        match kwarg_name {
+            "name" => support.name = true,
+            "context" => support.context = true,
+            "eager_start" => support.eager_start = true,
+            _ => {}
+        }
+    }
+
+    Ok(ASYNCIO_TASK_KWARG_SUPPORT.get_or_init(|| support))
 }
 
 #[inline]
@@ -328,6 +381,22 @@ fn create_asyncio_task_with_kwargs(
         task_kwargs.set_item("loop", loop_obj.clone_ref(py))?;
     }
     asyncio_task_cls(py)?.call(py, (coro,), Some(&task_kwargs))
+}
+
+fn trim_task_source_traceback(py: Python<'_>, task: &Py<PyAny>) -> PyResult<()> {
+    let Ok(source_traceback) = task.getattr(py, "_source_traceback") else {
+        return Ok(());
+    };
+    if source_traceback.is_none(py) {
+        return Ok(());
+    }
+
+    let source_traceback = source_traceback.bind(py);
+    if source_traceback.len()? == 0 {
+        return Ok(());
+    }
+
+    source_traceback.del_item(source_traceback.len()? - 1)
 }
 
 fn call_protocol_factory(
@@ -1298,22 +1367,14 @@ impl PyLoop {
     ) -> PyResult<Py<PyAny>> {
         let core = Arc::clone(&slf.borrow(py).core);
         let loop_obj = Self::as_py_any(py, &slf);
-        let task_kwargs = PyDict::new(py);
-        if let Some(kwargs_in) = kwargs.as_ref() {
-            for (key, value) in kwargs_in.bind(py).iter() {
-                task_kwargs.set_item(key, value)?;
-            }
-        }
-        if let Some(name) = name.as_ref() {
-            task_kwargs.set_item("name", name)?;
-        }
-        if let Some(context) = context.as_ref() {
-            task_kwargs.set_item("context", context)?;
-        }
-        if let Some(eager_start) = eager_start {
-            task_kwargs.set_item("eager_start", eager_start)?;
-        }
-        let has_kwargs = !task_kwargs.is_empty();
+        let task_kwarg_support = asyncio_task_kwarg_support(py)?;
+        let extra_kwargs = kwargs
+            .as_ref()
+            .is_some_and(|kwargs| !kwargs.bind(py).is_empty());
+        let has_kwargs = extra_kwargs
+            || name.is_some()
+            || (context.is_some() && task_kwarg_support.context)
+            || (eager_start.is_some() && task_kwarg_support.eager_start);
 
         if !core.has_task_factory() && !has_kwargs && core.on_runtime_thread() {
             return create_asyncio_task_for_running_loop(py, coro);
@@ -1329,23 +1390,88 @@ impl PyLoop {
         } else {
             None
         };
+
+        if task_factory.is_none() && extra_kwargs {
+            let unexpected = kwargs
+                .as_ref()
+                .and_then(|kwargs| kwargs.bind(py).iter().next().map(|(key, _)| key))
+                .expect("non-empty kwargs when extra_kwargs is true");
+            let unexpected = unexpected.repr()?.extract::<String>()?;
+            return Err(PyTypeError::new_err(format!(
+                "create_task() got an unexpected keyword argument {unexpected}"
+            )));
+        }
+
+        let task_kwargs = if has_kwargs || task_factory.is_some() {
+            let task_kwargs = PyDict::new(py);
+            if let Some(kwargs_in) = kwargs.as_ref() {
+                for (key, value) in kwargs_in.bind(py).iter() {
+                    task_kwargs.set_item(key, value)?;
+                }
+            }
+            if task_factory.is_some() {
+                let factory_name = name
+                    .as_ref()
+                    .map(|name| name.clone_ref(py))
+                    .unwrap_or_else(|| py.None());
+                task_kwargs.set_item("name", factory_name)?;
+            } else if task_kwarg_support.name {
+                if let Some(name) = name.as_ref() {
+                    task_kwargs.set_item("name", name)?;
+                }
+            }
+            if let Some(context) = context.as_ref() {
+                if task_factory.is_some() || task_kwarg_support.context {
+                    task_kwargs.set_item("context", context)?;
+                }
+            }
+            if let Some(eager_start) = eager_start {
+                if task_factory.is_some() || task_kwarg_support.eager_start {
+                    task_kwargs.set_item("eager_start", eager_start)?;
+                }
+            }
+            Some(task_kwargs)
+        } else {
+            None
+        };
+
         if let Some(factory) = task_factory {
-            let created = factory.call(py, (loop_obj.clone_ref(py), coro), Some(&task_kwargs))?;
+            let created = factory.call(py, (loop_obj.clone_ref(py), coro), task_kwargs.as_ref())?;
             return Ok(created);
         }
 
+        let trim_source_traceback = core.get_debug();
         if is_current_running_loop(py, &loop_obj)? {
-            if !has_kwargs {
-                return create_asyncio_task_for_running_loop(py, coro);
+            let created = if !has_kwargs {
+                create_asyncio_task_for_running_loop(py, coro)?
+            } else {
+                create_asyncio_task_with_kwargs(
+                    py,
+                    None,
+                    coro,
+                    task_kwargs.as_ref().expect("task kwargs"),
+                )?
+            };
+            if trim_source_traceback {
+                trim_task_source_traceback(py, &created)?;
             }
-            return create_asyncio_task_with_kwargs(py, None, coro, &task_kwargs);
+            return Ok(created);
         }
 
-        if !has_kwargs {
-            return create_asyncio_task_for_loop(py, &loop_obj, coro, name, context);
+        let created = if !has_kwargs {
+            create_asyncio_task_for_loop(py, &loop_obj, coro, name, context)?
+        } else {
+            create_asyncio_task_with_kwargs(
+                py,
+                Some(&loop_obj),
+                coro,
+                task_kwargs.as_ref().expect("task kwargs"),
+            )?
+        };
+        if trim_source_traceback {
+            trim_task_source_traceback(py, &created)?;
         }
-
-        create_asyncio_task_with_kwargs(py, Some(&loop_obj), coro, &task_kwargs)
+        Ok(created)
     }
 
     fn set_task_factory(&self, factory: Option<Py<PyAny>>) {

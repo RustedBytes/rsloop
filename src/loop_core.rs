@@ -282,8 +282,40 @@ impl LoopCore {
             captured,
             context_needs_run,
         ));
-        self.send_command(LoopCommand::ScheduleReady(Arc::clone(&ready)))
-            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+
+        match self.try_enqueue_local_ready(ReadyItem::Callback(Arc::clone(&ready))) {
+            Ok(()) => return Ok(ready),
+            Err(ReadyItem::Callback(callback)) => {
+                if self
+                    .try_enqueue_active_ready(ReadyItem::Callback(callback))
+                    .is_ok()
+                {
+                    return Ok(ready);
+                }
+            }
+            Err(
+                ReadyItem::Stop
+                | ReadyItem::FutureSetResult { .. }
+                | ReadyItem::FutureSetException { .. }
+                | ReadyItem::StreamTransportRead(_)
+                | ReadyItem::ProcessTransport(_),
+            ) => unreachable!("schedule_callback only enqueues callback ready items"),
+        }
+
+        self.command_tx
+            .send(LoopCommand::ScheduleReady(Arc::clone(&ready)))
+            .map_err(|_| {
+                pyo3::exceptions::PyRuntimeError::new_err(LoopCoreError::ChannelClosed.to_string())
+            })?;
+        #[cfg(target_os = "linux")]
+        if let Some(waker) = self
+            .runtime_waker
+            .lock()
+            .expect("poisoned runtime waker")
+            .as_ref()
+        {
+            waker.wake_by_ref();
+        }
         Ok(ready)
     }
 
@@ -372,19 +404,23 @@ impl LoopCore {
             let mut processed_since_refill = 0_usize;
             loop {
                 if ready_batch.is_empty() || processed_since_refill >= READY_DRAIN_SLICE {
-                    let mut pending = pending_ready.lock().expect("poisoned pending ready queue");
-                    if !pending.is_empty() {
-                        if ready_batch.is_empty() {
-                            std::mem::swap(&mut ready_batch, &mut *pending);
-                        } else {
-                            pending.append(&mut ready_batch);
-                            std::mem::swap(&mut ready_batch, &mut *pending);
+                    let should_check_pending =
+                        ready_batch.is_empty() || wake_pending.load(Ordering::Acquire);
+                    if should_check_pending {
+                        let mut pending =
+                            pending_ready.lock().expect("poisoned pending ready queue");
+                        if !pending.is_empty() {
+                            if ready_batch.is_empty() {
+                                std::mem::swap(&mut ready_batch, &mut *pending);
+                            } else {
+                                pending.append(&mut ready_batch);
+                                std::mem::swap(&mut ready_batch, &mut *pending);
+                            }
+                        }
+                        if pending.is_empty() {
+                            wake_pending.store(false, Ordering::Release);
                         }
                     }
-                    if pending.is_empty() {
-                        wake_pending.store(false, Ordering::Release);
-                    }
-                    drop(pending);
 
                     // Prioritize cross-thread wakeups such as signals and transport
                     // connection_lost notifications so they cannot be starved by a
