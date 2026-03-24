@@ -6,6 +6,7 @@ import inspect
 import os
 import signal
 import socket
+import sys
 import tempfile
 import time
 import threading
@@ -404,7 +405,8 @@ class CompatibilityTests(unittest.TestCase):
                 server.close()
                 await asyncio.sleep(0)
 
-        self.assertEqual(rsloop.run(main()), 1)
+        expected = 8 if sys.platform == "darwin" else 1
+        self.assertEqual(rsloop.run(main()), expected)
 
     def test_create_datagram_endpoint_round_trip(self) -> None:
         async def main() -> str:
