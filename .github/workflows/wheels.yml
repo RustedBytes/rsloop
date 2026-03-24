@@ -20,6 +20,9 @@ jobs:
           - os_name: linux
             runner: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
+          - os_name: linux-arm64
+            runner: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
           - os_name: windows-amd64
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
