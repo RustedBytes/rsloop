@@ -8,7 +8,6 @@ import ssl as __ssl
 import sys as __sys
 import typing as __typing
 import asyncio.base_events as __asyncio_base_events
-import io as __io
 
 __DLL_DIR_HANDLES: list[object] = []
 
@@ -51,11 +50,12 @@ __configure_windows_dll_search_path()
 
 from ._loop import PyLoop as Loop
 from ._loop import __version__
+from ._loop import new_event_loop
 from ._loop import open_connection as __open_connection
-from ._loop import profiler_running as __profiler_running
-from ._loop import start_profiler as __start_profiler
+from ._loop import profiler_running
+from ._loop import start_profiler
 from ._loop import start_server as __start_server
-from ._loop import stop_profiler as __stop_profiler
+from ._loop import stop_profiler
 
 __all__: tuple[str, ...] = (
     "Loop",
@@ -102,24 +102,6 @@ if __asyncio.set_event_loop is __ORIG_SET_EVENT_LOOP:
     __asyncio.events.set_event_loop = __set_event_loop
 
 
-def new_event_loop() -> Loop:
-    return Loop()
-
-
-def profiler_running() -> bool:
-    return __profiler_running()
-
-
-def start_profiler() -> None:
-    """Start a Tracy profiling session."""
-    __start_profiler()
-
-
-def stop_profiler() -> None:
-    """Stop the active Tracy profiling session."""
-    __stop_profiler()
-
-
 @__contextlib.contextmanager
 def profile() -> __typing.Iterator[None]:
     """Context manager wrapper around ``start_profiler()`` / ``stop_profiler()``."""
@@ -141,14 +123,7 @@ __ORIG_SOCK_RECVFROM = getattr(Loop, "sock_recvfrom", None)
 __ORIG_SOCK_RECVFROM_INTO = getattr(Loop, "sock_recvfrom_into", None)
 __ORIG_SOCK_SENDTO = getattr(Loop, "sock_sendto", None)
 __ORIG_SOCK_SENDFILE = getattr(Loop, "sock_sendfile", None)
-__ORIG_RUN_FOREVER = Loop.run_forever
-__ORIG_RUN_UNTIL_COMPLETE = Loop.run_until_complete
-__ORIG_SHUTDOWN_ASYNCGENS = Loop.shutdown_asyncgens
-__ORIG_CLOSE = Loop.close
-__ORIG_CREATE_TASK = Loop.create_task
 __USE_FAST_STREAMS = __os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
-__ASYNCGEN_STATE: dict[Loop, dict[str, object]] = {}
-__LOOP_CONFIG: dict[Loop, dict[str, object]] = {}
 
 if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
     __asyncio.open_connection = __open_connection
@@ -156,113 +131,7 @@ if __USE_FAST_STREAMS and __asyncio.start_server is __ORIG_START_SERVER:
     __asyncio.start_server = __start_server
 
 _asyncio = __asyncio
-_io = __io
 _os = __os
-
-
-def __get_asyncgen_state(loop: Loop) -> dict[str, object]:
-    state = __ASYNCGEN_STATE.get(loop)
-    if state is None:
-        state = {
-            "active": set(),
-            "shutdown_called": False,
-            "old_hooks": None,
-        }
-        __ASYNCGEN_STATE[loop] = state
-    return state
-
-
-def __get_loop_config(loop: Loop) -> dict[str, object]:
-    config = __LOOP_CONFIG.get(loop)
-    if config is None:
-        config = {
-            "slow_callback_duration": 0.1,
-        }
-        __LOOP_CONFIG[loop] = config
-    return config
-
-
-@__contextlib.contextmanager
-def __asyncgen_hooks_installed(loop: Loop) -> __typing.Iterator[None]:
-    state = __get_asyncgen_state(loop)
-    old_hooks = __sys.get_asyncgen_hooks()
-    state["old_hooks"] = old_hooks
-    __sys.set_asyncgen_hooks(
-        firstiter=lambda agen: __asyncgen_firstiter_hook(loop, agen),
-        finalizer=lambda agen: __asyncgen_finalizer_hook(loop, agen),
-    )
-    try:
-        yield None
-    finally:
-        saved_hooks = state.get("old_hooks")
-        if saved_hooks is not None:
-            __sys.set_asyncgen_hooks(*saved_hooks)
-            state["old_hooks"] = None
-
-
-def __asyncgen_firstiter_hook(loop: Loop, agen) -> None:
-    state = __get_asyncgen_state(loop)
-    if state["shutdown_called"]:
-        import warnings as __warnings
-
-        __warnings.warn(
-            f"asynchronous generator {agen!r} was scheduled after "
-            f"loop.shutdown_asyncgens() call",
-            ResourceWarning,
-            source=loop,
-        )
-    state["active"].add(agen)
-
-
-def __asyncgen_finalizer_hook(loop: Loop, agen) -> None:
-    state = __get_asyncgen_state(loop)
-    state["active"].discard(agen)
-    if not loop.is_closed():
-        loop.call_soon_threadsafe(loop.create_task, agen.aclose())
-
-
-async def __loop_shutdown_asyncgens(self):
-    state = __get_asyncgen_state(self)
-    state["shutdown_called"] = True
-
-    if not state["active"]:
-        return
-
-    closing_agens = list(state["active"])
-    state["active"].clear()
-
-    results = await __asyncio.gather(
-        *(agen.aclose() for agen in closing_agens),
-        return_exceptions=True,
-    )
-
-    for result, agen in zip(results, closing_agens):
-        if isinstance(result, Exception):
-            self.call_exception_handler(
-                {
-                    "message": f"an error occurred during closing of asynchronous generator {agen!r}",
-                    "exception": result,
-                    "asyncgen": agen,
-                }
-            )
-
-
-def __loop_run_forever(self):
-    with __asyncgen_hooks_installed(self):
-        return __ORIG_RUN_FOREVER(self)
-
-
-def __loop_run_until_complete(self, future):
-    with __asyncgen_hooks_installed(self):
-        return __ORIG_RUN_UNTIL_COMPLETE(self, future)
-
-
-def __loop_close(self):
-    try:
-        return __ORIG_CLOSE(self)
-    finally:
-        __ASYNCGEN_STATE.pop(self, None)
-        __LOOP_CONFIG.pop(self, None)
 
 
 def __cancel_all_tasks(loop: Loop) -> None:
@@ -572,14 +441,6 @@ async def __loop_sock_sendfile(
     finally:
         if total_sent > 0 and hasattr(file, "seek"):
             file.seek(offset + total_sent)
-
-
-def __get_slow_callback_duration(self):
-    return __get_loop_config(self)["slow_callback_duration"]
-
-
-def __set_slow_callback_duration(self, value):
-    __get_loop_config(self)["slow_callback_duration"] = float(value)
 
 
 async def __loop_create_datagram_endpoint(
@@ -1521,24 +1382,6 @@ if __ORIG_SOCK_SENDTO is None:
 
 if __ORIG_SOCK_SENDFILE is None:
     Loop.sock_sendfile = __loop_sock_sendfile
-
-if not hasattr(Loop, "slow_callback_duration"):
-    Loop.slow_callback_duration = property(
-        __get_slow_callback_duration,
-        __set_slow_callback_duration,
-    )
-
-if Loop.run_forever is __ORIG_RUN_FOREVER:
-    Loop.run_forever = __loop_run_forever
-
-if Loop.run_until_complete is __ORIG_RUN_UNTIL_COMPLETE:
-    Loop.run_until_complete = __loop_run_until_complete
-
-if Loop.shutdown_asyncgens is __ORIG_SHUTDOWN_ASYNCGENS:
-    Loop.shutdown_asyncgens = __loop_shutdown_asyncgens
-
-if Loop.close is __ORIG_CLOSE:
-    Loop.close = __loop_close
 
 # Keep the Rust implementation on the hot path. It already handles task
 # factories and keyword forwarding, while the Python wrapper adds measurable
