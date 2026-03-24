@@ -78,6 +78,10 @@ impl WatchTask {
         self.stop.store(true, AtomicOrdering::Release);
         let _ = self.join.join();
     }
+
+    fn cancel(self) {
+        self.stop.store(true, AtomicOrdering::Release);
+    }
 }
 
 #[cfg(windows)]
@@ -110,6 +114,15 @@ impl WatchTask {
             Self::Vibeio(task) => windows_vibeio::cancel(task),
         }
     }
+
+    fn cancel(self) {
+        match self {
+            Self::Thread { stop, .. } => {
+                stop.store(true, AtomicOrdering::Release);
+            }
+            Self::Vibeio(task) => windows_vibeio::cancel(task),
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -120,6 +133,16 @@ fn abort_watch_task(task: WatchTask) {
 #[cfg(not(target_os = "linux"))]
 fn abort_watch_task(task: WatchTask) {
     task.abort();
+}
+
+#[cfg(target_os = "linux")]
+fn cancel_watch_task(task: WatchTask) {
+    drop(task);
+}
+
+#[cfg(not(target_os = "linux"))]
+fn cancel_watch_task(task: WatchTask) {
+    task.cancel();
 }
 
 struct TimerEntry {
@@ -443,7 +466,7 @@ impl RuntimeDispatcher {
                 context_needs_run,
             } => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
-                    abort_watch_task(task);
+                    cancel_watch_task(task);
                 }
 
                 #[cfg(target_os = "linux")]
@@ -532,6 +555,10 @@ impl RuntimeDispatcher {
                                     }
                                 }
 
+                                if stop.load(AtomicOrdering::Acquire) {
+                                    return;
+                                }
+
                                 let ready = Python::attach(|py| {
                                     Arc::new(crate::callbacks::ReadyCallback::new(
                                         py,
@@ -566,6 +593,10 @@ impl RuntimeDispatcher {
                             }
                         }
 
+                        if stop.load(AtomicOrdering::Acquire) {
+                            return;
+                        }
+
                         let ready = Python::attach(|py| {
                             Arc::new(crate::callbacks::ReadyCallback::new(
                                 py,
@@ -586,7 +617,7 @@ impl RuntimeDispatcher {
             }
             LoopCommand::StopReader(fd) => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
-                    abort_watch_task(task);
+                    cancel_watch_task(task);
                 }
             }
             LoopCommand::StartWriter {
@@ -597,7 +628,7 @@ impl RuntimeDispatcher {
                 context_needs_run,
             } => {
                 if let Some(task) = self.writer_tasks.remove(&fd) {
-                    abort_watch_task(task);
+                    cancel_watch_task(task);
                 }
 
                 #[cfg(target_os = "linux")]
@@ -643,6 +674,10 @@ impl RuntimeDispatcher {
                             }
                         }
 
+                        if stop.load(AtomicOrdering::Acquire) {
+                            return;
+                        }
+
                         let ready = Python::attach(|py| {
                             Arc::new(crate::callbacks::ReadyCallback::new(
                                 py,
@@ -675,6 +710,10 @@ impl RuntimeDispatcher {
                             }
                         }
 
+                        if stop.load(AtomicOrdering::Acquire) {
+                            return;
+                        }
+
                         let ready = Python::attach(|py| {
                             Arc::new(crate::callbacks::ReadyCallback::new(
                                 py,
@@ -695,12 +734,12 @@ impl RuntimeDispatcher {
             }
             LoopCommand::StopWriter(fd) => {
                 if let Some(task) = self.writer_tasks.remove(&fd) {
-                    abort_watch_task(task);
+                    cancel_watch_task(task);
                 }
             }
             LoopCommand::StartSocketReader { fd, core, reader } => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
-                    abort_watch_task(task);
+                    cancel_watch_task(task);
                 }
 
                 #[cfg(target_os = "linux")]
@@ -751,7 +790,7 @@ impl RuntimeDispatcher {
             }
             LoopCommand::StopSocketReader(fd) => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
-                    abort_watch_task(task);
+                    cancel_watch_task(task);
                 }
             }
             LoopCommand::StartServerAccept {
@@ -760,7 +799,7 @@ impl RuntimeDispatcher {
                 listener,
             } => {
                 if let Some(task) = self.accept_tasks.remove(&fd) {
-                    abort_watch_task(task);
+                    cancel_watch_task(task);
                 }
 
                 #[cfg(target_os = "linux")]
@@ -810,7 +849,7 @@ impl RuntimeDispatcher {
             }
             LoopCommand::StopServerAccept(fd) => {
                 if let Some(task) = self.accept_tasks.remove(&fd) {
-                    abort_watch_task(task);
+                    cancel_watch_task(task);
                 }
             }
             LoopCommand::RequestStop => {
