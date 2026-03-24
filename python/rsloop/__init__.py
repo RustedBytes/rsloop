@@ -357,7 +357,7 @@ class __RsloopDatagramTransport:
         self._sock = sock
         self._protocol = protocol
         self._address = address
-        self._buffer = _collections.deque()
+        self._buffer = __collections.deque()
         self._buffer_size = 0
         self._closing = False
         self._conn_lost = 0
@@ -988,7 +988,7 @@ class _TextNewlineDecoder:
     def __init__(self, encoding, errors):
         import codecs as __codecs
 
-        self._decoder = _codecs.getincrementaldecoder(encoding)(errors)
+        self._decoder = __codecs.getincrementaldecoder(encoding)(errors)
         self._pending = ""
 
     def decode(self, data, final=False):
@@ -1139,7 +1139,7 @@ def __subprocess_text_config(kwds: dict[str, object]) -> tuple[bool, str, str]:
     encoding = kwds.get("encoding")
     errors = kwds.get("errors")
     if encoding is None:
-        encoding = _locale.getpreferredencoding(False)
+        encoding = __locale.getpreferredencoding(False)
     if errors is None:
         errors = "strict"
     return text_enabled, str(encoding), str(errors)
