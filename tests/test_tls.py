@@ -13,8 +13,11 @@ import rsloop
 
 
 TLS_FIXTURES_DIR = pathlib.Path(__file__).with_name("fixtures").joinpath("tls")
-TLS_GENERATOR = pathlib.Path(__file__).resolve().parents[1].joinpath(
-    "scripts", "generate-test-tls-certs.sh"
+TLS_GENERATOR = (
+    pathlib.Path(__file__)
+    .resolve()
+    .parents[1]
+    .joinpath("scripts", "generate-test-tls-certs.sh")
 )
 
 
