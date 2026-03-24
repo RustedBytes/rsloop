@@ -1,31 +1,24 @@
 from __future__ import annotations
 
 import asyncio as __asyncio
-import builtins as __builtins
-import codecs as __codecs
-import collections as __collections
 import contextlib as __contextlib
-import ctypes as __ctypes
-import itertools as __itertools
-import math as __math
 import os as __os
-import shutil as __shutil
 import socket as __socket
 import ssl as __ssl
 import sys as __sys
 import typing as __typing
-import locale as __locale
-import warnings as __warnings
 import asyncio.base_events as __asyncio_base_events
 import io as __io
-import inspect as __inspect
 
 __DLL_DIR_HANDLES: list[object] = []
+__TASK_KWARGS: set[str] | None = None
 
 
 def __configure_windows_dll_search_path() -> None:
     if __sys.platform != "win32" or not hasattr(__os, "add_dll_directory"):
         return
+
+    import shutil as __shutil
 
     candidate_dirs: list[str] = []
     gcc = __shutil.which("gcc")
@@ -158,29 +151,34 @@ __USE_FAST_STREAMS = __os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
 __ASYNCGEN_STATE: dict[Loop, dict[str, object]] = {}
 __LOOP_CONFIG: dict[Loop, dict[str, object]] = {}
 
-try:
-    __TASK_SIGNATURE = __inspect.signature(__asyncio.Task)
-    __TASK_KWARGS = {
-        name
-        for name, parameter in __TASK_SIGNATURE.parameters.items()
-        if parameter.kind is __inspect.Parameter.KEYWORD_ONLY
-    }
-except (TypeError, ValueError):
-    __TASK_KWARGS = {"loop", "name"}
-
-
 if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
     __asyncio.open_connection = __open_connection
 if __USE_FAST_STREAMS and __asyncio.start_server is __ORIG_START_SERVER:
     __asyncio.start_server = __start_server
 
 _asyncio = __asyncio
-_collections = __collections
-_codecs = __codecs
-_ctypes = __ctypes
 _io = __io
-_locale = __locale
 _os = __os
+
+
+def __task_kwargs() -> set[str]:
+    global __TASK_KWARGS
+    if __TASK_KWARGS is not None:
+        return __TASK_KWARGS
+
+    import inspect as __inspect
+
+    try:
+        signature = __inspect.signature(__asyncio.Task)
+        __TASK_KWARGS = {
+            name
+            for name, parameter in signature.parameters.items()
+            if parameter.kind is __inspect.Parameter.KEYWORD_ONLY
+        }
+    except (TypeError, ValueError):
+        __TASK_KWARGS = {"loop", "name"}
+
+    return __TASK_KWARGS
 
 
 def __get_asyncgen_state(loop: Loop) -> dict[str, object]:
@@ -226,6 +224,8 @@ def __asyncgen_hooks_installed(loop: Loop) -> __typing.Iterator[None]:
 def __asyncgen_firstiter_hook(loop: Loop, agen) -> None:
     state = __get_asyncgen_state(loop)
     if state["shutdown_called"]:
+        import warnings as __warnings
+
         __warnings.warn(
             f"asynchronous generator {agen!r} was scheduled after "
             f"loop.shutdown_asyncgens() call",
@@ -287,6 +287,7 @@ def __loop_close(self):
 
 
 def __loop_create_task(self, coro, *, name=None, context=None, **kwargs):
+    task_kwargs_supported = __task_kwargs()
     factory = self.get_task_factory()
     if factory is not None:
         factory_kwargs = dict(kwargs)
@@ -299,13 +300,13 @@ def __loop_create_task(self, coro, *, name=None, context=None, **kwargs):
     task_kwargs = {}
     extra_kwargs = dict(kwargs)
 
-    if "name" in __TASK_KWARGS:
+    if "name" in task_kwargs_supported:
         task_kwargs["name"] = name
-    if context is not None and "context" in __TASK_KWARGS:
+    if context is not None and "context" in task_kwargs_supported:
         task_kwargs["context"] = context
     if "eager_start" in extra_kwargs:
         eager_start = extra_kwargs.pop("eager_start")
-        if "eager_start" in __TASK_KWARGS:
+        if "eager_start" in task_kwargs_supported:
             task_kwargs["eager_start"] = eager_start
 
     if extra_kwargs:
@@ -350,6 +351,8 @@ class __RsloopDatagramTransport:
     max_size = 256 * 1024
 
     def __init__(self, loop: Loop, sock, protocol, address=None, waiter=None):
+        import collections as __collections
+
         self._loop = loop
         self._sock = sock
         self._protocol = protocol
@@ -983,6 +986,8 @@ class _TextStreamWriter:
 
 class _TextNewlineDecoder:
     def __init__(self, encoding, errors):
+        import codecs as __codecs
+
         self._decoder = _codecs.getincrementaldecoder(encoding)(errors)
         self._pending = ""
 
@@ -1128,6 +1133,8 @@ class _TextSubprocessStreamProtocol(
 
 
 def __subprocess_text_config(kwds: dict[str, object]) -> tuple[bool, str, str]:
+    import locale as __locale
+
     text_enabled = __subprocess_text_requested(kwds)
     encoding = kwds.get("encoding")
     errors = kwds.get("errors")
@@ -1148,6 +1155,8 @@ def __without_text_kwds(kwds: dict[str, object]) -> dict[str, object]:
 
 
 def __windows_command_line_to_argv(cmd: str) -> list[str]:
+    import ctypes as __ctypes
+
     argc = _ctypes.c_int()
     command_line_to_argv = _ctypes.windll.shell32.CommandLineToArgvW
     command_line_to_argv.argtypes = [_ctypes.c_wchar_p, _ctypes.POINTER(_ctypes.c_int)]
@@ -1267,6 +1276,9 @@ if __asyncio.create_subprocess_shell is __ORIG_CREATE_SUBPROCESS_SHELL:
 
 
 def __interleave_addrinfos(addrinfos, first_address_family_count=1):
+    import collections as __collections
+    import itertools as __itertools
+
     grouped = __collections.OrderedDict()
     for addrinfo in addrinfos:
         grouped.setdefault(addrinfo[0], []).append(addrinfo)
@@ -1287,8 +1299,13 @@ def __flatten_connection_exceptions(exceptions):
 
 
 def __raise_connection_error(exceptions, *, all_errors):
-    if all_errors and hasattr(__builtins, "ExceptionGroup"):
-        raise __builtins.ExceptionGroup("create_connection failed", exceptions)
+    if all_errors:
+        try:
+            exc_group = ExceptionGroup
+        except NameError:
+            exc_group = None
+        if exc_group is not None:
+            raise exc_group("create_connection failed", exceptions)
     if len(exceptions) == 1:
         raise exceptions[0]
 
@@ -1357,6 +1374,8 @@ async def __connect_with_happy_eyeballs(
     local_addrinfos,
     delay,
 ):
+    import math as __math
+
     exceptions = []
     pending = {}
     if not __math.isfinite(delay) or delay <= 0:

@@ -340,7 +340,9 @@ class CompatibilityTests(unittest.TestCase):
             captured = {}
             task_kwargs = {
                 name
-                for name, parameter in inspect.signature(asyncio.Task).parameters.items()
+                for name, parameter in inspect.signature(
+                    asyncio.Task
+                ).parameters.items()
                 if parameter.kind is inspect.Parameter.KEYWORD_ONLY
             }
 
