@@ -3716,15 +3716,15 @@ fn run_tls_reader(
                     Ok(0) => break,
                     Ok(n) => {
                         drained_buffered_plaintext = true;
-                        core.enqueue_pending_read_event(PendingReadEvent::Data(
-                            Box::<[u8]>::from(&plaintext[..n]),
-                        ));
+                        core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
+                            &plaintext[..n],
+                        )));
                     }
                     Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                     Err(err) => {
-                        core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
-                            Some(err.to_string()),
-                        ));
+                        core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                            err.to_string(),
+                        )));
                         return;
                     }
                 }

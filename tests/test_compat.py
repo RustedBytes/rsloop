@@ -389,6 +389,23 @@ class CompatibilityTests(unittest.TestCase):
 
         self.assertEqual(rsloop.run(main()), (True, "done"))
 
+    def test_create_task_rejects_unexpected_kwarg_without_task_factory(self) -> None:
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+
+            async def coro():
+                return "done"
+
+            pending = coro()
+            with self.assertRaisesRegex(
+                TypeError,
+                r"create_task\(\) got an unexpected keyword argument 'custom_flag'",
+            ):
+                loop.create_task(pending, custom_flag=True)
+            pending.close()
+
+        rsloop.run(main())
+
     def test_create_server_accepts_keep_alive(self) -> None:
         async def main() -> int:
             loop = asyncio.get_running_loop()
