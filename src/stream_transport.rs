@@ -3708,6 +3708,32 @@ fn run_tls_reader(
             return;
         }
 
+        {
+            let mut state = tls_state.lock().expect("poisoned tls state");
+            let mut drained_buffered_plaintext = false;
+            loop {
+                match state.connection.reader_read(&mut plaintext) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        drained_buffered_plaintext = true;
+                        core.enqueue_pending_read_event(PendingReadEvent::Data(
+                            Box::<[u8]>::from(&plaintext[..n]),
+                        ));
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(err) => {
+                        core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+                            Some(err.to_string()),
+                        ));
+                        return;
+                    }
+                }
+            }
+            if drained_buffered_plaintext {
+                continue;
+            }
+        }
+
         let (fd, pollable) = {
             let state = tls_state.lock().expect("poisoned tls state");
             (state.fd(), state.pollable())
