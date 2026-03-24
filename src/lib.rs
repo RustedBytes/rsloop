@@ -21,7 +21,10 @@ pub use fast_streams::{open_connection, start_server, PyFastStreamReader, PyFast
 pub use loop_core::{LoopCommand, LoopCore};
 pub use process_transport::{PyProcessPipeTransport, PyProcessTransport};
 pub use profiler::{profiler_running, start_profiler, stop_profiler};
-pub use python_api::{future_done_stop, new_event_loop, signal_bridge, PyLoop};
+pub use python_api::{
+    asyncgen_finalizer_hook, asyncgen_firstiter_hook, future_done_stop, new_event_loop,
+    signal_bridge, PyLoop,
+};
 pub use stream_transport::{PyServer, PyStreamTransport};
 
 use pyo3::prelude::*;
@@ -39,6 +42,8 @@ fn _loop(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyFastStreamReader>()?;
     m.add_class::<PyFastStreamWriter>()?;
     m.add_function(wrap_pyfunction!(new_event_loop, m)?)?;
+    m.add_function(wrap_pyfunction!(asyncgen_firstiter_hook, m)?)?;
+    m.add_function(wrap_pyfunction!(asyncgen_finalizer_hook, m)?)?;
     m.add_function(wrap_pyfunction!(future_done_stop, m)?)?;
     m.add_function(wrap_pyfunction!(open_connection, m)?)?;
     m.add_function(wrap_pyfunction!(profiler_running, m)?)?;
@@ -47,5 +52,13 @@ fn _loop(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(start_server, m)?)?;
     m.add_function(wrap_pyfunction!(stop_profiler, m)?)?;
     m.add("_future_done_stop", m.getattr("future_done_stop")?)?;
+    m.add(
+        "_asyncgen_firstiter_hook",
+        m.getattr("asyncgen_firstiter_hook")?,
+    )?;
+    m.add(
+        "_asyncgen_finalizer_hook",
+        m.getattr("asyncgen_finalizer_hook")?,
+    )?;
     Ok(())
 }

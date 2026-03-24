@@ -18,7 +18,7 @@ use crate::runtime::run_runtime_thread;
 use crate::stream_transport::{ReaderTarget, ServerCore, ServerListener, StreamTransportCore};
 use crossbeam_channel::Sender;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyDict, PySet, PyTuple};
 
 const READY_DRAIN_SLICE: usize = 64;
 
@@ -135,7 +135,9 @@ pub struct LoopState {
     pub closed: bool,
     pub running: bool,
     pub stopping: bool,
+    pub slow_callback_duration: f64,
     pub asyncgens_shutdown_called: bool,
+    pub active_asyncgens: Option<Py<PySet>>,
     pub executor_shutdown_called: bool,
     pub signal_handlers: HashMap<i32, SignalHandlerTemplate>,
     pub previous_signal_handlers: HashMap<i32, Py<PyAny>>,
@@ -152,7 +154,9 @@ impl LoopState {
             closed: false,
             running: false,
             stopping: false,
+            slow_callback_duration: 0.1,
             asyncgens_shutdown_called: false,
+            active_asyncgens: None,
             executor_shutdown_called: false,
             signal_handlers: HashMap::new(),
             previous_signal_handlers: HashMap::new(),
