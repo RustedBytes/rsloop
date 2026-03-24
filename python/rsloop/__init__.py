@@ -7,7 +7,15 @@ import socket as __socket
 import ssl as __ssl
 import sys as __sys
 import typing as __typing
-import asyncio.base_events as __asyncio_base_events
+
+from ._loop import PyLoop as Loop
+from ._loop import __version__
+from ._loop import new_event_loop
+from ._loop import start_server as __start_server
+from ._loop import open_connection as __open_connection
+from ._loop import profiler_running
+from ._loop import start_profiler
+from ._loop import stop_profiler
 
 __DLL_DIR_HANDLES: list[object] = []
 
@@ -47,15 +55,6 @@ def __configure_windows_dll_search_path() -> None:
 
 
 __configure_windows_dll_search_path()
-
-from ._loop import PyLoop as Loop
-from ._loop import __version__
-from ._loop import new_event_loop
-from ._loop import open_connection as __open_connection
-from ._loop import profiler_running
-from ._loop import start_profiler
-from ._loop import start_server as __start_server
-from ._loop import stop_profiler
 
 __all__: tuple[str, ...] = (
     "Loop",
