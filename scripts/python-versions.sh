@@ -15,6 +15,11 @@ rsloop_target_python_request() {
       os="linux"
       libc="gnu"
       ;;
+    aarch64-unknown-linux-gnu)
+      arch="aarch64"
+      os="linux"
+      libc="gnu"
+      ;;
     aarch64-apple-darwin)
       arch="aarch64"
       os="macos"
