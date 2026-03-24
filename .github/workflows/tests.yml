@@ -10,19 +10,29 @@ on:
       build_mode:
         description: "Build profile to use with maturin develop"
         required: true
-        default: release
+        default: debug
         type: choice
         options:
-          - release
           - debug
+          - release
 
 permissions:
   contents: read
 
 jobs:
   test-supported-pythons:
-    name: supported-pythons
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os_name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_name: linux
+            runner: ubuntu-latest
+          - os_name: windows
+            runner: windows-latest
+          - os_name: macos
+            runner: macos-latest
 
     steps:
       - name: Check out repository
@@ -49,10 +59,11 @@ jobs:
       - name: Run tests across supported Python versions
         shell: bash
         env:
-          RSLOOP_PYTHON_VERSIONS: ${{ inputs.python_versions }}
+          RSLOOP_PYTHON_VERSIONS: ${{ github.event.inputs.python_versions || '' }}
+          RSLOOP_BUILD_MODE: ${{ github.event.inputs.build_mode || 'debug' }}
         run: |
           args=()
-          if [[ "${{ inputs.build_mode }}" == "debug" ]]; then
+          if [[ "$RSLOOP_BUILD_MODE" == "debug" ]]; then
             args+=(--debug)
           fi
           scripts/test-supported-pythons.sh "${args[@]}"
