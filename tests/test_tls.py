@@ -258,9 +258,11 @@ class TlsTests(unittest.TestCase):
             class ServerProtocol(asyncio.Protocol):
                 def __init__(self) -> None:
                     self.upgraded: asyncio.Future[None] = loop.create_future()
+                    self.connected = asyncio.Event()
 
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
                     self.transport = transport
+                    self.connected.set()
                     if not isinstance(
                         transport.get_extra_info("sslcontext"), type(None)
                     ):
@@ -321,6 +323,7 @@ class TlsTests(unittest.TestCase):
                     )
                     while not server_protocols:
                         await asyncio.sleep(0.01)
+                    await asyncio.wait_for(server_protocols[0].connected.wait(), 5.0)
                     await asyncio.gather(
                         server_protocols[0].upgrade(server_ctx),
                         client_protocol.upgrade(client_ctx),
