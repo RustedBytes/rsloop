@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import os
 import shlex
 import socket
@@ -35,6 +36,51 @@ class RunTests(unittest.TestCase):
             return "ok"
 
         self.assertEqual(rsloop.run(main()), "ok")
+
+    @unittest.skipUnless(
+        os.name == "posix" and os.path.isdir("/proc/self/fd"),
+        "requires /proc/self/fd",
+    )
+    def test_create_connection_does_not_leak_file_descriptors(self) -> None:
+        def fd_count() -> int:
+            return len(os.listdir("/proc/self/fd"))
+
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+
+            class ServerProtocol(asyncio.Protocol):
+                def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    transport.close()
+
+            server = await loop.create_server(ServerProtocol, "127.0.0.1", 0)
+            try:
+                port = server.sockets[0].getsockname()[1]
+
+                for _ in range(64):
+                    closed = loop.create_future()
+
+                    class ClientProtocol(asyncio.Protocol):
+                        def connection_made(
+                            self, transport: asyncio.BaseTransport
+                        ) -> None:
+                            transport.close()
+
+                        def connection_lost(self, exc: Exception | None) -> None:
+                            if not closed.done():
+                                closed.set_result(None)
+
+                    await loop.create_connection(ClientProtocol, "127.0.0.1", port)
+                    await asyncio.wait_for(closed, 1.0)
+                    await asyncio.sleep(0)
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        before = fd_count()
+        rsloop.run(main())
+        gc.collect()
+        after = fd_count()
+        self.assertLessEqual(after, before + 4)
 
     def test_connect_pipe_round_trip(self) -> None:
         async def main() -> tuple[str, str]:
