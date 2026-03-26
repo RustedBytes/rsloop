@@ -31,13 +31,14 @@ use crate::process_transport::{
 use crate::python_names;
 use crate::stream_transport::{
     create_server as create_py_server, remove_unix_socket_if_present, spawn_read_pipe_transport,
-    spawn_write_pipe_transport, start_tls_transport, tcp_listener_from_socket_fd,
-    tcp_server_listener, transport_from_socket, transport_from_socket_server_tls,
-    transport_from_socket_tls, PyServer, PyStreamTransport, ServerCreateParams,
-    TransportSpawnContext,
+    spawn_write_pipe_transport, start_tls_transport, tcp_server_listener, transport_from_socket,
+    transport_from_socket_server_tls, transport_from_socket_tls, PyServer, PyStreamTransport,
+    ServerCreateParams, TransportSpawnContext,
 };
 #[cfg(unix)]
-use crate::stream_transport::{unix_listener_from_socket_fd, unix_server_listener};
+use crate::stream_transport::{
+    tcp_listener_from_owned_socket_fd, unix_listener_from_owned_socket_fd, unix_server_listener,
+};
 use crate::tls::{client_tls_settings, server_tls_settings};
 
 static ASYNCIO_TASK_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
@@ -658,15 +659,15 @@ fn listener_sources_from_sockets(
         #[cfg(unix)]
         {
             listeners.push(if family == libc::AF_UNIX {
-                unix_server_listener(unix_listener_from_socket_fd(fd)?)
+                unix_server_listener(unix_listener_from_owned_socket_fd(fd)?)
             } else {
-                tcp_server_listener(tcp_listener_from_socket_fd(fd)?)
+                tcp_server_listener(tcp_listener_from_owned_socket_fd(fd)?)
             });
         }
         #[cfg(not(unix))]
         {
             let _ = family;
-            listeners.push(tcp_server_listener(tcp_listener_from_socket_fd(fd)?));
+            listeners.push(tcp_server_listener(tcp_listener_from_owned_socket_fd(fd)?));
         }
     }
     Ok(listeners)

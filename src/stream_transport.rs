@@ -1546,12 +1546,12 @@ impl StreamTransportCore {
         let family = socket.bind(py).getattr("family")?.extract::<i32>()?;
         #[cfg(unix)]
         let stream = if family == libc::AF_UNIX {
-            StreamKind::Unix(unix_stream_from_socket_fd(fd)?)
+            StreamKind::Unix(unix_stream_from_owned_socket_fd(fd)?)
         } else {
-            StreamKind::Tcp(tcp_stream_from_socket_fd(fd)?)
+            StreamKind::Tcp(tcp_stream_from_owned_socket_fd(fd)?)
         };
         #[cfg(not(unix))]
-        let stream = StreamKind::Tcp(tcp_stream_from_socket_fd(fd)?);
+        let stream = StreamKind::Tcp(tcp_stream_from_owned_socket_fd(fd)?);
 
         Ok((
             TransportSpawnContext {
@@ -2188,11 +2188,21 @@ pub fn transport_from_socket(
     #[cfg(unix)]
     if family == libc::AF_UNIX {
         let fd = detached_socket_handle(py, &socket_obj)?;
-        return spawn_unix_transport(py, spawn_context, unix_stream_from_socket_fd(fd)?, None);
+        return spawn_unix_transport(
+            py,
+            spawn_context,
+            unix_stream_from_owned_socket_fd(fd)?,
+            None,
+        );
     }
 
     let fd = detached_socket_handle(py, &socket_obj)?;
-    spawn_tcp_transport(py, spawn_context, tcp_stream_from_socket_fd(fd)?, None)
+    spawn_tcp_transport(
+        py,
+        spawn_context,
+        tcp_stream_from_owned_socket_fd(fd)?,
+        None,
+    )
 }
 
 pub fn transport_from_socket_tls(
@@ -2220,7 +2230,7 @@ pub fn transport_from_socket_tls(
         return spawn_tls_client_transport(
             py,
             spawn_context,
-            StreamKind::Unix(unix_stream_from_socket_fd(fd)?),
+            StreamKind::Unix(unix_stream_from_owned_socket_fd(fd)?),
             tls,
             None,
             true,
@@ -2231,7 +2241,7 @@ pub fn transport_from_socket_tls(
     spawn_tls_client_transport(
         py,
         spawn_context,
-        StreamKind::Tcp(tcp_stream_from_socket_fd(fd)?),
+        StreamKind::Tcp(tcp_stream_from_owned_socket_fd(fd)?),
         tls,
         None,
         true,
@@ -2263,7 +2273,7 @@ pub fn transport_from_socket_server_tls(
         return spawn_tls_server_transport(
             py,
             spawn_context,
-            StreamKind::Unix(unix_stream_from_socket_fd(fd)?),
+            StreamKind::Unix(unix_stream_from_owned_socket_fd(fd)?),
             tls,
             None,
             true,
@@ -2274,7 +2284,7 @@ pub fn transport_from_socket_server_tls(
     spawn_tls_server_transport(
         py,
         spawn_context,
-        StreamKind::Tcp(tcp_stream_from_socket_fd(fd)?),
+        StreamKind::Tcp(tcp_stream_from_owned_socket_fd(fd)?),
         tls,
         None,
         true,
@@ -2576,28 +2586,26 @@ pub fn spawn_write_pipe_transport(
     Ok(transport)
 }
 
-pub fn tcp_stream_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
-    duplicate_configured_tcp_stream(fd)
+pub fn tcp_stream_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
+    configured_tcp_stream_from_owned_fd(fd)
 }
 
 #[cfg(unix)]
-pub fn unix_stream_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixStream> {
-    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let stream = unsafe { StdUnixStream::from_raw_fd(raw_fd_for_std(dup)?) };
+pub fn unix_stream_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixStream> {
+    let stream = unsafe { StdUnixStream::from_raw_fd(raw_fd_for_std(fd)?) };
     stream
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     Ok(stream)
 }
 
-pub fn tcp_listener_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpListener> {
-    duplicate_configured_tcp_listener(fd)
+pub fn tcp_listener_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpListener> {
+    configured_tcp_listener_from_owned_fd(fd)
 }
 
 #[cfg(unix)]
-pub fn unix_listener_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixListener> {
-    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let listener = unsafe { StdUnixListener::from_raw_fd(raw_fd_for_std(dup)?) };
+pub fn unix_listener_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixListener> {
+    let listener = unsafe { StdUnixListener::from_raw_fd(raw_fd_for_std(fd)?) };
     listener
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -2606,7 +2614,11 @@ pub fn unix_listener_from_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixListen
 
 fn duplicate_configured_tcp_stream(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let socket = socket_from_owned_raw(dup)?;
+    configured_tcp_stream_from_owned_fd(dup)
+}
+
+fn configured_tcp_stream_from_owned_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
+    let socket = socket_from_owned_raw(fd)?;
     socket
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -2614,9 +2626,8 @@ fn duplicate_configured_tcp_stream(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> 
     Ok(socket.into())
 }
 
-fn duplicate_configured_tcp_listener(fd: fd_ops::RawFd) -> PyResult<StdTcpListener> {
-    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let socket = socket_from_owned_raw(dup)?;
+fn configured_tcp_listener_from_owned_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpListener> {
+    let socket = socket_from_owned_raw(fd)?;
     socket
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
