@@ -25,9 +25,9 @@ added to the project package metadata.
 From the repository root:
 
 ```bash
-uv run --with fastapi --with uvicorn --with uvloop python demo/fastapi_service.py --event-loop asyncio
-uv run --with fastapi --with uvicorn --with uvloop python demo/fastapi_service.py --event-loop uvloop
-uv run --with fastapi --with uvicorn --with uvloop python demo/fastapi_service.py --event-loop rsloop
+uv run --with fastapi --with uvicorn python demo/fastapi_service.py --event-loop asyncio --no-access-log
+uv run --with fastapi --with uvicorn --with uvloop python demo/fastapi_service.py --event-loop uvloop --no-access-log
+uv run --with fastapi --with uvicorn python demo/fastapi_service.py --event-loop rsloop --no-access-log
 ```
 
 Service entrypoint: [`demo/fastapi_service.py`](./fastapi_service.py)
