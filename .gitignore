@@ -2,6 +2,7 @@ target/
 .venv/
 __pycache__/
 dist/
+site/
 tmp/
 
 *.so

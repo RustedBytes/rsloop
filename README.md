@@ -25,6 +25,23 @@ Repository metadata currently targets Python `>=3.8`. The packaged project now
 supports the core event-loop surface on Linux, macOS, and Windows, including
 Windows pipe transports and subprocess workflows.
 
+## Documentation
+
+Project documentation now lives in [`docs/`](./docs/).
+
+If you are new to the repository, start with:
+
+- [`docs/index.md`](./docs/index.md)
+- [`docs/getting-started.md`](./docs/getting-started.md)
+- [`docs/how-it-works.md`](./docs/how-it-works.md)
+- [`docs/project-structure.md`](./docs/project-structure.md)
+
+To browse the docs locally with MkDocs:
+
+```bash
+uvx --from mkdocs mkdocs serve
+```
+
 ## Install
 
 From PyPI:

@@ -1,0 +1,11 @@
+site_name: rsloop
+site_description: An event loop for asyncio written in Rust
+repo_url: https://github.com/RustedBytes/rsloop
+theme:
+  name: readthedocs
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - How It Works: how-it-works.md
+  - Project Structure: project-structure.md
+  - Development: development.md
