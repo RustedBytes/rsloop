@@ -105,3 +105,5 @@ The `examples/` directory is the best hands-on tour of the project:
 - `examples/05_pipes_signals_subprocesses.py`: pipes, signals, and subprocesses
 
 If you are new to lower-level `asyncio` features, start with `01_basics.py` and `03_streams.py`.
+
+There is also a shorter docs page with copy-paste snippets in [Examples](examples.md).
