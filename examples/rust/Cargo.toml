@@ -12,3 +12,10 @@ crate-type = ["cdylib"]
 async-std = "1"
 pyo3 = { version = "0.28", features = ["extension-module"] }
 rsloop = { path = "../.." }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+incremental = false
+# strip = true
