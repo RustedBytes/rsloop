@@ -103,7 +103,7 @@ Your extension crate should depend on:
 [dependencies]
 async-std = "1"
 pyo3 = { version = "0.28", features = ["extension-module"] }
-rsloop = { path = "/path/to/rsloop" }
+rsloop = { version = "0.1.14" }
 ```
 
 For a real package, replace the path dependency with the form that matches your
