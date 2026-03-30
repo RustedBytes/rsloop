@@ -88,6 +88,24 @@ Importing `rsloop` also patches `asyncio.set_event_loop()` so Python 3.8 can
 accept an `rsloop.Loop` instance, matching the behavior exercised by
 [`tests/test_run.py`](./tests/test_run.py).
 
+## Custom Async Rust Extensions
+
+`rsloop` now exposes a small Rust interop API for downstream PyO3 extensions.
+That lets you write your own async Rust code, return it to Python as an
+awaitable, and run it under the active `rsloop` event loop.
+
+The public entry point is `rsloop::rust_async`:
+
+- `get_current_locals(...)`
+- `future_into_py(...)`
+- `future_into_py_with_locals(...)`
+- `local_future_into_py(...)`
+- `local_future_into_py_with_locals(...)`
+- re-exports of `TaskLocals` and `into_future_with_locals(...)`
+
+See [`examples/rust/README.md`](./examples/rust/README.md) for a complete
+extension example built with `maturin`.
+
 ## Verified Surface Area
 
 The current codebase implements these user-facing areas.

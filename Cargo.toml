@@ -10,7 +10,7 @@ homepage = "https://github.com/RustedBytes/rsloop"
 documentation = "https://github.com/RustedBytes/rsloop#readme"
 
 [lib]
-name = "_loop"
+name = "rsloop"
 crate-type = ["cdylib", "rlib"]
 
 [features]

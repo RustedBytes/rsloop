@@ -6,6 +6,7 @@ theme:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - Rust Extensions: rust-extensions.md
   - Examples: examples.md
   - How It Works: how-it-works.md
   - Project Structure: project-structure.md

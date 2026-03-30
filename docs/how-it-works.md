@@ -54,6 +54,7 @@ Important files:
 - `context.rs`: running-loop and context management helpers
 - `errors.rs`: shared error types
 - `profiler.rs`: Tracy profiler support
+- `rust_async.rs`: public Rust/Python async interop helpers for downstream extensions
 - `async_event.rs`, `blocking.rs`, `python_names.rs`: support code used by the public pieces
 - `windows_vibeio.rs`: Windows-specific support
 

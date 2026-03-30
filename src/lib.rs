@@ -11,6 +11,7 @@ mod profiler;
 mod python_api;
 mod python_names;
 mod runtime;
+pub mod rust_async;
 mod stream_transport;
 mod tls;
 #[cfg(windows)]

@@ -107,3 +107,11 @@ The `examples/` directory is the best hands-on tour of the project:
 If you are new to lower-level `asyncio` features, start with `01_basics.py` and `03_streams.py`.
 
 There is also a shorter docs page with copy-paste snippets in [Examples](examples.md).
+
+## Adding your own async Rust code
+
+If you want to keep using `rsloop` in Python while exposing your own async Rust
+functions from a separate PyO3 extension, read [Rust Extensions](rust-extensions.md).
+
+That page explains how to turn a Rust future into a Python awaitable with
+`rsloop::rust_async::future_into_py(...)`.

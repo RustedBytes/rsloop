@@ -37,9 +37,7 @@ use crate::stream_transport::{
     TransportSpawnContext,
 };
 #[cfg(unix)]
-use crate::stream_transport::{
-    unix_listener_from_owned_socket_fd, unix_server_listener,
-};
+use crate::stream_transport::{unix_listener_from_owned_socket_fd, unix_server_listener};
 use crate::tls::{client_tls_settings, server_tls_settings};
 
 static ASYNCIO_TASK_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
