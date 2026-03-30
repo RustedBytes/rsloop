@@ -1082,6 +1082,8 @@ dependencies = [
 [[package]]
 name = "rsloop"
 version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdadb2c0c2fe489ecff080f12e513774af7900e304fa94cc3fff9fd2c0d26846"
 dependencies = [
  "async-std",
  "compio",

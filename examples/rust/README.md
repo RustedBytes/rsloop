@@ -14,10 +14,11 @@ future into a Python awaitable attached to the current running loop.
 
 ## Run
 
-From the repository root, the simplest end-to-end run is:
+From the folder, the simplest end-to-end run is:
 
 ```bash
-uv run --with . --with ./examples/rust python examples/rust/demo.py
+uv run --with maturin maturin develop --release
+uv run --with rsloop python demo.py
 ```
 
 If you only want to check the Rust builds, use:
