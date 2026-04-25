@@ -56,6 +56,7 @@ static ASYNCIO_TASK_LOOP_CONTEXT_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new(
 static ASYNCIO_TASK_LOOP_NAME_CONTEXT_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
 
 type ResolvedStreamAddrinfo = (i32, i32, i32, Py<PyAny>);
+const PROCESS_UMASK_MAX: i64 = 0o777;
 
 struct TaskKwargSupport {
     name: bool,
@@ -1123,6 +1124,98 @@ fn apply_unix_pre_exec(command: &mut Command, config: UnixPreExecConfig) {
 #[cfg(not(unix))]
 fn apply_unix_pre_exec(_command: &mut Command, _config: UnixPreExecConfig) {}
 
+fn apply_process_basic_kw(
+    py: Python<'_>,
+    command: &mut Command,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "cwd" => {
+            let os = py.import("os")?;
+            let path = os
+                .getattr("fspath")?
+                .call1((value.clone(),))?
+                .extract::<String>()?;
+            command.current_dir(path);
+            Ok(true)
+        }
+        "env" => {
+            let env_dict = value.cast::<PyDict>()?;
+            for (env_key, env_value) in env_dict.iter() {
+                command.env(env_key.extract::<String>()?, env_value.extract::<String>()?);
+            }
+            Ok(true)
+        }
+        "executable" => {
+            let os = py.import("os")?;
+            let executable = os
+                .getattr("fspath")?
+                .call1((value.clone(),))?
+                .extract::<String>()?;
+            #[cfg(unix)]
+            command.arg0(executable);
+            #[cfg(windows)]
+            {
+                drop(executable);
+                return Err(PyNotImplementedError::new_err(
+                    "subprocess executable override is not implemented on Windows",
+                ));
+            }
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn apply_unix_process_kw(
+    py: Python<'_>,
+    unix: &mut UnixPreExecConfig,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "restore_signals" => unix.restore_signals = value.is_truthy()?,
+        "start_new_session" => unix.start_new_session = value.is_truthy()?,
+        "process_group" if !value.is_none() => unix.process_group = Some(value.extract::<i32>()?),
+        "pass_fds" if !value.is_none() => {
+            unix.pass_fds = value
+                .try_iter()?
+                .map(|item| item.and_then(|value| value.extract::<i32>()))
+                .collect::<PyResult<Vec<_>>>()?;
+        }
+        "group" if !value.is_none() => {
+            unix.gid = Some(resolve_numeric_id(
+                py, value, "grp", "getgrnam", "gr_gid", "group",
+            )?);
+        }
+        "extra_groups" if !value.is_none() => {
+            unix.extra_groups = Some(resolve_extra_groups(py, value)?);
+        }
+        "user" if !value.is_none() => {
+            unix.uid = Some(resolve_numeric_id(
+                py, value, "pwd", "getpwnam", "pw_uid", "user",
+            )?);
+        }
+        "umask" if !value.is_none() => {
+            let mask = value.extract::<i64>()?;
+            if !(0..=PROCESS_UMASK_MAX).contains(&mask) {
+                return Err(PyValueError::new_err("umask must be between 0 and 0o777"));
+            }
+            unix.umask = Some(mask as u32);
+        }
+        "preexec_fn" if !value.is_none() => {
+            return Err(PyNotImplementedError::new_err(
+                "preexec_fn remains unsupported in rust-impl because it is unsafe in this runtime model",
+            ));
+        }
+        "process_group" | "pass_fds" | "group" | "extra_groups" | "user" | "umask"
+        | "preexec_fn" => {}
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
 fn apply_common_process_kwargs(
     py: Python<'_>,
     command: &mut Command,
@@ -1138,93 +1231,10 @@ fn apply_common_process_kwargs(
 
     for (key, value) in kwargs.iter() {
         let key = key.extract::<String>()?;
-        match key.as_str() {
-            "cwd" => {
-                let os = py.import("os")?;
-                let path = os
-                    .getattr("fspath")?
-                    .call1((value.clone(),))?
-                    .extract::<String>()?;
-                command.current_dir(path);
-            }
-            "env" => {
-                let env_dict = value.cast::<PyDict>()?;
-                for (env_key, env_value) in env_dict.iter() {
-                    command.env(env_key.extract::<String>()?, env_value.extract::<String>()?);
-                }
-            }
-            "executable" => {
-                let os = py.import("os")?;
-                let executable = os
-                    .getattr("fspath")?
-                    .call1((value.clone(),))?
-                    .extract::<String>()?;
-                #[cfg(unix)]
-                command.arg0(executable);
-                #[cfg(windows)]
-                {
-                    let _ = executable;
-                    return Err(PyNotImplementedError::new_err(
-                        "subprocess executable override is not implemented on Windows",
-                    ));
-                }
-            }
-            "restore_signals" => {
-                spawn_config.unix.restore_signals = value.is_truthy()?;
-            }
-            "start_new_session" => {
-                spawn_config.unix.start_new_session = value.is_truthy()?;
-            }
-            "process_group" => {
-                if !value.is_none() {
-                    spawn_config.unix.process_group = Some(value.extract::<i32>()?);
-                }
-            }
-            "pass_fds" => {
-                if !value.is_none() {
-                    spawn_config.unix.pass_fds = value
-                        .try_iter()?
-                        .map(|item| item.and_then(|value| value.extract::<i32>()))
-                        .collect::<PyResult<Vec<_>>>()?;
-                }
-            }
-            "group" => {
-                if !value.is_none() {
-                    spawn_config.unix.gid = Some(resolve_numeric_id(
-                        py, &value, "grp", "getgrnam", "gr_gid", "group",
-                    )?);
-                }
-            }
-            "extra_groups" => {
-                if !value.is_none() {
-                    spawn_config.unix.extra_groups = Some(resolve_extra_groups(py, &value)?);
-                }
-            }
-            "user" => {
-                if !value.is_none() {
-                    spawn_config.unix.uid = Some(resolve_numeric_id(
-                        py, &value, "pwd", "getpwnam", "pw_uid", "user",
-                    )?);
-                }
-            }
-            "umask" => {
-                if !value.is_none() {
-                    let mask = value.extract::<i64>()?;
-                    if !(0..=0o777).contains(&mask) {
-                        return Err(PyValueError::new_err("umask must be between 0 and 0o777"));
-                    }
-                    spawn_config.unix.umask = Some(mask as u32);
-                }
-            }
-            "preexec_fn" => {
-                if !value.is_none() {
-                    return Err(PyNotImplementedError::new_err(
-                        "preexec_fn remains unsupported in rust-impl because it is unsafe in this runtime model",
-                    ));
-                }
-            }
-            _ => {}
+        if apply_process_basic_kw(py, command, &key, &value)? {
+            continue;
         }
+        apply_unix_process_kw(py, &mut spawn_config.unix, &key, &value)?;
     }
 
     apply_unix_pre_exec(command, spawn_config.unix.clone());

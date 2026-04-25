@@ -30,9 +30,7 @@ pub use stream_transport::{PyServer, PyStreamTransport};
 
 use pyo3::prelude::*;
 
-#[pymodule(gil_used = false)]
-fn _loop(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+fn add_module_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLoop>()?;
     m.add_class::<PyHandle>()?;
     m.add_class::<PyTimerHandle>()?;
@@ -42,6 +40,10 @@ fn _loop(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStreamTransport>()?;
     m.add_class::<PyFastStreamReader>()?;
     m.add_class::<PyFastStreamWriter>()?;
+    Ok(())
+}
+
+fn add_module_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(new_event_loop, m)?)?;
     m.add_function(wrap_pyfunction!(asyncgen_firstiter_hook, m)?)?;
     m.add_function(wrap_pyfunction!(asyncgen_finalizer_hook, m)?)?;
@@ -52,6 +54,10 @@ fn _loop(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(start_profiler, m)?)?;
     m.add_function(wrap_pyfunction!(start_server, m)?)?;
     m.add_function(wrap_pyfunction!(stop_profiler, m)?)?;
+    Ok(())
+}
+
+fn add_module_compat_aliases(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("_future_done_stop", m.getattr("future_done_stop")?)?;
     m.add(
         "_asyncgen_firstiter_hook",
@@ -61,5 +67,14 @@ fn _loop(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "_asyncgen_finalizer_hook",
         m.getattr("asyncgen_finalizer_hook")?,
     )?;
+    Ok(())
+}
+
+#[pymodule(gil_used = false)]
+fn _loop(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    add_module_classes(m)?;
+    add_module_functions(m)?;
+    add_module_compat_aliases(m)?;
     Ok(())
 }

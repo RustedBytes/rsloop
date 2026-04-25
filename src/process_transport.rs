@@ -6,7 +6,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
-use std::process::Child;
+use std::process::{Child, ChildStdin};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -36,6 +36,9 @@ enum PendingProcessEvent {
     ProcessExited { returncode: i32 },
     ConnectionLost { exc: Option<String> },
 }
+
+const PROCESS_READER_BUFFER_SIZE: usize = 65_536;
+const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 struct ProcessState {
     protocol: Py<PyAny>,
@@ -100,6 +103,50 @@ pub struct ProcessTransportParams {
     pub child: Child,
     pub stdout_override: Option<BoxedProcessReader>,
     pub stderr_override: Option<BoxedProcessReader>,
+}
+
+struct ProcessPipes {
+    stdin: Option<ChildStdin>,
+    stdout: Option<BoxedProcessReader>,
+    stderr: Option<BoxedProcessReader>,
+}
+
+impl ProcessPipes {
+    fn take_from(
+        child: &mut Child,
+        stdout_override: Option<BoxedProcessReader>,
+        stderr_override: Option<BoxedProcessReader>,
+    ) -> Self {
+        Self {
+            stdin: child.stdin.take(),
+            stdout: stdout_override.or_else(|| {
+                child
+                    .stdout
+                    .take()
+                    .map(|value| Box::new(value) as BoxedProcessReader)
+            }),
+            stderr: stderr_override.or_else(|| {
+                child
+                    .stderr
+                    .take()
+                    .map(|value| Box::new(value) as BoxedProcessReader)
+            }),
+        }
+    }
+
+    fn open_pipes(&self) -> HashSet<i32> {
+        let mut open_pipes = HashSet::with_capacity(3);
+        if self.stdin.is_some() {
+            open_pipes.insert(0);
+        }
+        if self.stdout.is_some() {
+            open_pipes.insert(1);
+        }
+        if self.stderr.is_some() {
+            open_pipes.insert(2);
+        }
+        open_pipes
+    }
 }
 
 impl ProcessTransportCore {
@@ -611,6 +658,126 @@ fn new_process_pipe_transport(py: Python<'_>, fd: i32) -> PyResult<Py<PyAny>> {
     .into_any())
 }
 
+fn process_text_extra_entries(
+    py: Python<'_>,
+    text_config: Option<&ProcessTextConfig>,
+) -> Option<HashMap<String, Py<PyAny>>> {
+    text_config.map(|text_config| {
+        let mut extra = HashMap::with_capacity(2);
+        extra.insert(
+            "text_encoding".to_owned(),
+            pyo3::types::PyString::new(py, &text_config.encoding)
+                .unbind()
+                .into_any(),
+        );
+        extra.insert(
+            "text_errors".to_owned(),
+            pyo3::types::PyString::new(py, &text_config.errors)
+                .unbind()
+                .into_any(),
+        );
+        extra
+    })
+}
+
+fn spawn_stdin_pipe_transport(
+    py: Python<'_>,
+    core: &Arc<ProcessTransportCore>,
+    stdin: ChildStdin,
+    extra_entries: Option<HashMap<String, Py<PyAny>>>,
+) -> PyResult<Py<PyAny>> {
+    #[cfg(unix)]
+    let file_obj: Py<PyAny> = make_python_pipe_file(py, stdin.as_raw_fd() as i64, "wb")?;
+    #[cfg(windows)]
+    let file_obj: Py<PyAny> = make_python_pipe_file_from_handle(py, stdin.as_raw_handle(), "wb")?;
+    let stdin_protocol = Py::new(py, PyProcessStdinProtocol { core: core.clone() })?.into_any();
+    let stdin_context = py
+        .import("contextvars")?
+        .getattr("Context")?
+        .call0()?
+        .unbind();
+    let transport = spawn_write_pipe_transport(
+        py,
+        crate::stream_transport::TransportSpawnContext {
+            loop_core: core.loop_core.clone(),
+            loop_obj: core.loop_obj.clone_ref(py),
+            protocol: stdin_protocol,
+            context: stdin_context,
+            context_needs_run: false,
+        },
+        file_obj.clone_ref(py),
+        extra_entries,
+    )?;
+    if let Err(err) = file_obj.call_method0(py, "close") {
+        core.report_error(err, "subprocess stdin pipe close failed");
+    }
+    Ok(transport.into_any())
+}
+
+fn register_initial_pipe_transports(
+    py: Python<'_>,
+    core: &Arc<ProcessTransportCore>,
+    stdin: Option<ChildStdin>,
+    has_stdout: bool,
+    has_stderr: bool,
+) -> PyResult<()> {
+    let mut pipe_transport_entries = Vec::with_capacity(3);
+    if let Some(stdin) = stdin {
+        let extra_entries = process_text_extra_entries(py, core.text_config.as_ref());
+        let transport = spawn_stdin_pipe_transport(py, core, stdin, extra_entries)?;
+        pipe_transport_entries.push((0, transport));
+    }
+    if has_stdout {
+        pipe_transport_entries.push((1, new_process_pipe_transport(py, 1)?));
+    }
+    if has_stderr {
+        pipe_transport_entries.push((2, new_process_pipe_transport(py, 2)?));
+    }
+    core.register_pipe_transports(pipe_transport_entries);
+    Ok(())
+}
+
+fn spawn_process_reader_thread(
+    name: &str,
+    core: Arc<ProcessTransportCore>,
+    fd: i32,
+    reader: BoxedProcessReader,
+) -> PyResult<()> {
+    thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || run_process_reader(core, fd, reader))
+        .map(|_| ())
+        .map_err(|err| PyRuntimeError::new_err(format!("failed to spawn {name}: {err}")))
+}
+
+fn spawn_process_waiter_thread(
+    core: Arc<ProcessTransportCore>,
+    child: Child,
+    control_rx: Receiver<ProcessCommand>,
+) -> PyResult<()> {
+    thread::Builder::new()
+        .name("rsloop-process-waiter".to_owned())
+        .spawn(move || run_process_waiter(core, child, control_rx))
+        .map(|_| ())
+        .map_err(|err| PyRuntimeError::new_err(format!("failed to spawn process waiter: {err}")))
+}
+
+fn spawn_process_workers(
+    core: Arc<ProcessTransportCore>,
+    stdout: Option<BoxedProcessReader>,
+    stderr: Option<BoxedProcessReader>,
+    child: Child,
+    control_rx: Receiver<ProcessCommand>,
+) -> PyResult<()> {
+    if let Some(stdout) = stdout {
+        spawn_process_reader_thread("rsloop-process-stdout", core.clone(), 1, stdout)?;
+    }
+    if let Some(stderr) = stderr {
+        spawn_process_reader_thread("rsloop-process-stderr", core.clone(), 2, stderr)?;
+    }
+    spawn_process_waiter_thread(core, child, control_rx)
+}
+
 pub fn spawn_process_transport(
     py: Python<'_>,
     params: ProcessTransportParams,
@@ -627,49 +794,8 @@ pub fn spawn_process_transport(
         stderr_override,
     } = params;
     let pid = child.id();
-    let stdin = child.stdin.take();
-    let stdout = stdout_override.or_else(|| {
-        child
-            .stdout
-            .take()
-            .map(|value| Box::new(value) as BoxedProcessReader)
-    });
-    let stderr = stderr_override.or_else(|| {
-        child
-            .stderr
-            .take()
-            .map(|value| Box::new(value) as BoxedProcessReader)
-    });
+    let mut pipes = ProcessPipes::take_from(&mut child, stdout_override, stderr_override);
     let (control_tx, control_rx) = mpsc::channel();
-
-    let mut open_pipes = HashSet::with_capacity(3);
-    let pipe_transports = HashMap::with_capacity(3);
-    if stdin.is_some() {
-        open_pipes.insert(0);
-    }
-    if stdout.is_some() {
-        open_pipes.insert(1);
-    }
-    if stderr.is_some() {
-        open_pipes.insert(2);
-    }
-
-    let extra_entries = text_config.as_ref().map(|text_config| {
-        let mut extra = HashMap::with_capacity(2);
-        extra.insert(
-            "text_encoding".to_owned(),
-            pyo3::types::PyString::new(py, &text_config.encoding)
-                .unbind()
-                .into_any(),
-        );
-        extra.insert(
-            "text_errors".to_owned(),
-            pyo3::types::PyString::new(py, &text_config.errors)
-                .unbind()
-                .into_any(),
-        );
-        extra
-    });
 
     let core = Arc::new(ProcessTransportCore {
         loop_core,
@@ -683,8 +809,8 @@ pub fn spawn_process_transport(
             closing: false,
             exited: false,
             connection_lost_called: false,
-            open_pipes,
-            pipe_transports,
+            open_pipes: pipes.open_pipes(),
+            pipe_transports: HashMap::with_capacity(3),
         }),
         text_config,
         control_tx,
@@ -693,66 +819,14 @@ pub fn spawn_process_transport(
         events_scheduled: AtomicBool::new(false),
     });
 
-    let mut pipe_transport_entries = Vec::with_capacity(3);
-    if let Some(stdin) = stdin {
-        #[cfg(unix)]
-        let file_obj: Py<PyAny> = make_python_pipe_file(py, stdin.as_raw_fd() as i64, "wb")?;
-        #[cfg(windows)]
-        let file_obj: Py<PyAny> =
-            make_python_pipe_file_from_handle(py, stdin.as_raw_handle(), "wb")?;
-        let stdin_protocol = Py::new(py, PyProcessStdinProtocol { core: core.clone() })?.into_any();
-        let stdin_context = py
-            .import("contextvars")?
-            .getattr("Context")?
-            .call0()?
-            .unbind();
-        let transport = spawn_write_pipe_transport(
-            py,
-            crate::stream_transport::TransportSpawnContext {
-                loop_core: core.loop_core.clone(),
-                loop_obj: core.loop_obj.clone_ref(py),
-                protocol: stdin_protocol,
-                context: stdin_context,
-                context_needs_run: false,
-            },
-            file_obj.clone_ref(py),
-            extra_entries,
-        )?;
-        if let Err(err) = file_obj.call_method0(py, "close") {
-            core.report_error(err, "subprocess stdin pipe close failed");
-        }
-        pipe_transport_entries.push((0, transport.into_any()));
-    }
-    if stdout.is_some() {
-        pipe_transport_entries.push((1, new_process_pipe_transport(py, 1)?));
-    }
-    if stderr.is_some() {
-        pipe_transport_entries.push((2, new_process_pipe_transport(py, 2)?));
-    }
-    core.register_pipe_transports(pipe_transport_entries);
+    let stdout_open = pipes.stdout.is_some();
+    let stderr_open = pipes.stderr.is_some();
+    register_initial_pipe_transports(py, &core, pipes.stdin.take(), stdout_open, stderr_open)?;
 
     let transport = Py::new(py, PyProcessTransport { core: core.clone() })?;
     core.connection_made(transport.clone_ref(py))?;
 
-    if let Some(stdout) = stdout {
-        let reader_core = core.clone();
-        thread::Builder::new()
-            .name("rsloop-process-stdout".to_owned())
-            .spawn(move || run_process_reader(reader_core, 1, stdout))
-            .expect("failed to spawn process stdout reader");
-    }
-    if let Some(stderr) = stderr {
-        let reader_core = core.clone();
-        thread::Builder::new()
-            .name("rsloop-process-stderr".to_owned())
-            .spawn(move || run_process_reader(reader_core, 2, stderr))
-            .expect("failed to spawn process stderr reader");
-    }
-    let waiter_core = core.clone();
-    thread::Builder::new()
-        .name("rsloop-process-waiter".to_owned())
-        .spawn(move || run_process_waiter(waiter_core, child, control_rx))
-        .expect("failed to spawn process waiter");
+    spawn_process_workers(core.clone(), pipes.stdout, pipes.stderr, child, control_rx)?;
 
     Ok(transport)
 }
@@ -785,25 +859,127 @@ fn make_python_pipe_file_from_handle(
     Ok(os.getattr("fdopen")?.call1((fd, mode, 0))?.unbind())
 }
 
+fn report_process_result(core: &Arc<ProcessTransportCore>, result: PyResult<()>, message: &str) {
+    if let Err(err) = result {
+        core.report_error(err, message);
+    }
+}
+
+fn report_process_io_error(core: &Arc<ProcessTransportCore>, err: std::io::Error, message: &str) {
+    core.report_error(PyRuntimeError::new_err(err.to_string()), message);
+}
+
+#[cfg(unix)]
+fn send_process_signal(child: &Child, signal: i32) -> std::io::Result<()> {
+    // SAFETY: `libc::kill` is called with the child PID returned by `std::process::Child`
+    // and a signal value supplied by the caller/Python API. It does not retain pointers.
+    let result = unsafe { libc::kill(child.id() as i32, signal) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn process_exit_code(status: std::process::ExitStatus) -> i32 {
+    #[cfg(unix)]
+    {
+        status
+            .code()
+            .or_else(|| status.signal().map(|signal| -signal))
+            .unwrap_or(-1)
+    }
+    #[cfg(windows)]
+    {
+        status.code().unwrap_or(-1)
+    }
+}
+
+fn handle_process_exit(core: &Arc<ProcessTransportCore>, code: i32) {
+    if core
+        .state
+        .lock()
+        .expect("poisoned process state")
+        .open_pipes
+        .contains(&0)
+    {
+        report_process_result(
+            core,
+            core.pipe_connection_lost(0, None),
+            "subprocess pipe_connection_lost failed",
+        );
+    }
+    report_process_result(
+        core,
+        core.process_exited(code),
+        "subprocess process_exited failed",
+    );
+}
+
+fn kill_process_child(core: &Arc<ProcessTransportCore>, child: &mut Child, message: &str) {
+    if let Err(err) = child.kill() {
+        report_process_io_error(core, err, message);
+    }
+}
+
+fn handle_process_command(
+    core: &Arc<ProcessTransportCore>,
+    child: &mut Child,
+    command: ProcessCommand,
+) {
+    match command {
+        ProcessCommand::Close | ProcessCommand::Kill => {
+            kill_process_child(core, child, "subprocess kill failed");
+        }
+        #[cfg(unix)]
+        ProcessCommand::Terminate => {
+            if let Err(err) = send_process_signal(child, libc::SIGTERM) {
+                report_process_io_error(core, err, "subprocess terminate failed");
+            }
+        }
+        #[cfg(unix)]
+        ProcessCommand::SendSignal(sig) => {
+            if let Err(err) = send_process_signal(child, sig) {
+                report_process_io_error(core, err, "subprocess send_signal failed");
+            }
+        }
+        #[cfg(windows)]
+        ProcessCommand::Terminate | ProcessCommand::SendSignal(_) => {
+            kill_process_child(core, child, "subprocess kill failed");
+        }
+    }
+}
+
 fn run_process_reader(core: Arc<ProcessTransportCore>, fd: i32, mut reader: BoxedProcessReader) {
     profiling::scope!("process.run_reader");
-    let mut buf = [0_u8; 65_536];
+    let mut buf = [0_u8; PROCESS_READER_BUFFER_SIZE];
     loop {
         match reader.read(&mut buf) {
             Ok(0) => {
-                let _ = core.pipe_connection_lost(fd, None);
+                report_process_result(
+                    &core,
+                    core.pipe_connection_lost(fd, None),
+                    "subprocess pipe_connection_lost failed",
+                );
                 return;
             }
             Ok(n) => {
                 if let Err(err) = core.pipe_data_received(fd, &buf[..n]) {
                     core.report_error(err, "subprocess pipe_data_received failed");
-                    let _ = core.pipe_connection_lost(fd, None);
+                    report_process_result(
+                        &core,
+                        core.pipe_connection_lost(fd, None),
+                        "subprocess pipe_connection_lost failed",
+                    );
                     return;
                 }
             }
             Err(err) => {
-                let _ =
-                    core.pipe_connection_lost(fd, Some(PyRuntimeError::new_err(err.to_string())));
+                report_process_result(
+                    &core,
+                    core.pipe_connection_lost(fd, Some(PyRuntimeError::new_err(err.to_string()))),
+                    "subprocess pipe_connection_lost failed",
+                );
                 return;
             }
         }
@@ -819,54 +995,23 @@ fn run_process_waiter(
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                #[cfg(unix)]
-                let code = status
-                    .code()
-                    .or_else(|| status.signal().map(|signal| -signal))
-                    .unwrap_or(-1);
-                #[cfg(windows)]
-                let code = status.code().unwrap_or(-1);
-                if core
-                    .state
-                    .lock()
-                    .expect("poisoned process state")
-                    .open_pipes
-                    .contains(&0)
-                {
-                    let _ = core.pipe_connection_lost(0, None);
-                }
-                let _ = core.process_exited(code);
+                handle_process_exit(&core, process_exit_code(status));
                 return;
             }
             Ok(None) => {}
             Err(err) => {
-                core.report_error(
-                    PyRuntimeError::new_err(err.to_string()),
-                    "subprocess wait failed",
+                report_process_io_error(&core, err, "subprocess wait failed");
+                report_process_result(
+                    &core,
+                    core.connection_lost(None),
+                    "subprocess connection_lost failed",
                 );
-                let _ = core.connection_lost(None);
                 return;
             }
         }
 
-        match control_rx.recv_timeout(Duration::from_millis(20)) {
-            Ok(command) => match command {
-                ProcessCommand::Close | ProcessCommand::Kill => {
-                    let _ = child.kill();
-                }
-                #[cfg(unix)]
-                ProcessCommand::Terminate => unsafe {
-                    libc::kill(child.id() as i32, libc::SIGTERM);
-                },
-                #[cfg(unix)]
-                ProcessCommand::SendSignal(sig) => unsafe {
-                    libc::kill(child.id() as i32, sig);
-                },
-                #[cfg(windows)]
-                ProcessCommand::Terminate | ProcessCommand::SendSignal(_) => {
-                    let _ = child.kill();
-                }
-            },
+        match control_rx.recv_timeout(PROCESS_WAIT_POLL_INTERVAL) {
+            Ok(command) => handle_process_command(&core, &mut child, command),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
