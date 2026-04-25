@@ -14,8 +14,7 @@ class ClientListener(WSListener):
 
 
 async def main():
-    # transport, _ = await ws_connect(ClientListener, "ws://127.0.0.1:9001")
-    transport, _ = await ws_connect(ClientListener, "wss://echo.websocket.org:443")
+    transport, _ = await ws_connect(ClientListener, "ws://127.0.0.1:9001")
     await transport.wait_disconnected()
 
 
