@@ -39,7 +39,7 @@ pub fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
         if duped < 0 {
             return Err(io::Error::last_os_error());
         }
-        return Ok(duped as RawFd);
+        Ok(duped as RawFd)
     }
 
     #[cfg(windows)]

@@ -32,7 +32,7 @@ pub(super) fn root_store_from_context(
         .unwrap_or(false);
     if use_default_verify_paths {
         let native = rustls_native_certs::load_native_certs();
-        for error in native.errors {
+        if let Some(error) = native.errors.into_iter().next() {
             return Err(PyRuntimeError::new_err(format!(
                 "failed to load native CA certificates: {error}"
             )));

@@ -195,7 +195,6 @@ impl RuntimeDispatcher {
         {
             let runtime = self.io_runtime.clone();
             runtime.enter(|| self.run_inner());
-            return;
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -249,7 +248,7 @@ impl RuntimeDispatcher {
 
             self.io_runtime.poll_with(self.next_wait_timeout());
             self.io_runtime.run();
-            return false;
+            false
         }
 
         #[cfg(not(target_os = "linux"))]

@@ -413,7 +413,7 @@ fn create_asyncio_future_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyRes
         let args = [loop_obj.as_ptr()];
         let cls = asyncio_future_cls(py)?.as_ptr();
         let kwnames = asyncio_future_loop_kwnames(py)?.as_ptr();
-        return ffi_helpers::vectorcall(py, cls, args.as_ptr(), 0, kwnames);
+        ffi_helpers::vectorcall(py, cls, args.as_ptr(), 0, kwnames)
     }
 
     #[cfg(not(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API)))))]
@@ -451,7 +451,7 @@ fn create_asyncio_task_for_loop(
 
         let cls = asyncio_task_cls(py)?.as_ptr();
         let kwnames = asyncio_task_kwnames_for_options(py, name.is_some(), context.is_some())?;
-        return ffi_helpers::vectorcall(py, cls, args.as_ptr(), 1, kwnames.as_ptr());
+        ffi_helpers::vectorcall(py, cls, args.as_ptr(), 1, kwnames.as_ptr())
     }
 
     #[cfg(not(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API)))))]
