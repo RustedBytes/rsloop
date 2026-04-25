@@ -805,6 +805,11 @@ impl LoopCore {
             return Err(item);
         }
 
+        let ready_drain_active = ACTIVE_READY_DRAIN.with(Cell::get);
+        if !ready_drain_active {
+            return Err(item);
+        }
+
         ACTIVE_READY_QUEUE.with(|current| {
             let ready = current.get();
             if ready.is_null() {

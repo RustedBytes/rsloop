@@ -157,6 +157,89 @@ class CompatibilityTests(unittest.TestCase):
         self.assertLess(elapsed, 0.15)
         self.assertEqual(socket_fileno, -1)
 
+    def test_eof_after_data_reports_connection_lost(self) -> None:
+        async def main() -> tuple[bytes, list[str]]:
+            loop = asyncio.get_running_loop()
+            done = loop.create_future()
+            events = []
+            received = bytearray()
+
+            class ServerProtocol(asyncio.Protocol):
+                def connection_made(self, transport):
+                    transport.write(b"response-before-eof")
+                    transport.close()
+
+            class ClientProtocol(asyncio.Protocol):
+                def data_received(self, data):
+                    events.append("data")
+                    received.extend(data)
+
+                def eof_received(self):
+                    events.append("eof")
+                    return False
+
+                def connection_lost(self, exc):
+                    events.append("lost")
+                    if not done.done():
+                        done.set_result(None)
+
+            server = await loop.create_server(ServerProtocol, "127.0.0.1", 0)
+            try:
+                port = server.sockets[0].getsockname()[1]
+                await loop.create_connection(ClientProtocol, "127.0.0.1", port)
+                await asyncio.wait_for(done, 1.0)
+                return bytes(received), events
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        received, events = rsloop.run(main())
+        self.assertEqual(received, b"response-before-eof")
+        self.assertEqual(events, ["data", "eof", "lost"])
+
+    def test_external_socket_read_wakes_without_waiting_for_timer(self) -> None:
+        ready = threading.Event()
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def serve_once() -> None:
+            ready.set()
+            conn, _ = server.accept()
+            with conn:
+                conn.sendall(b"external-socket-data")
+            server.close()
+
+        thread = threading.Thread(target=serve_once)
+        thread.start()
+        ready.wait(1.0)
+
+        async def main() -> tuple[bytes, float]:
+            loop = asyncio.get_running_loop()
+            done = loop.create_future()
+            received = bytearray()
+
+            class ClientProtocol(asyncio.Protocol):
+                def data_received(self, data):
+                    received.extend(data)
+                    if not done.done():
+                        done.set_result(None)
+
+            started = time.monotonic()
+            await loop.create_connection(ClientProtocol, "127.0.0.1", port)
+            await asyncio.wait_for(done, 2.0)
+            return bytes(received), time.monotonic() - started
+
+        try:
+            received, elapsed = rsloop.run(main())
+        finally:
+            thread.join(1.0)
+            server.close()
+
+        self.assertEqual(received, b"external-socket-data")
+        self.assertLess(elapsed, 0.5)
+
     def test_shutdown_default_executor_timeout_warns_and_falls_back_to_nowait(
         self,
     ) -> None:

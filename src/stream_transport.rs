@@ -1009,6 +1009,7 @@ impl StreamTransportCore {
                             Ok(false) => {
                                 self.set_closing();
                                 let _ = self.writer_tx.send(WriterCommand::Close);
+                                let _ = self.connection_lost_with_py(py, None);
                                 self.read_events_scheduled.store(false, Ordering::Release);
                                 return Ok(());
                             }

@@ -28,6 +28,9 @@ use signal_hook::iterator::{Handle as SignalHandle, Signals};
 mod timer_entry;
 use timer_entry::TimerEntry;
 
+#[cfg(target_os = "linux")]
+const IO_POLL_MAX_SLEEP: Duration = Duration::from_millis(10);
+
 struct RuntimeDispatcher {
     core: Arc<LoopCore>,
     command_rx: Receiver<LoopCommand>,
@@ -294,10 +297,18 @@ impl RuntimeDispatcher {
 
     #[inline]
     fn next_wait_timeout(&self) -> Option<Duration> {
-        self.timers.peek().map(|entry| {
+        let timeout = self.timers.peek().map(|entry| {
             let now = Instant::now();
             entry.when.saturating_duration_since(now)
-        })
+        });
+        #[cfg(target_os = "linux")]
+        {
+            Some(timeout.map_or(IO_POLL_MAX_SLEEP, |value| value.min(IO_POLL_MAX_SLEEP)))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            timeout
+        }
     }
 
     fn collect_expired_timers(&mut self) {
