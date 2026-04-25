@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 mod windows;
 #[cfg(windows)]
 pub use self::windows::{
-    duplicate_handle, duplicate_handle_from_fd, duplicate_tcp_stream, poll_fd, raw_fd_to_handle,
+    duplicate_handle, duplicate_handle_from_fd, duplicate_tcp_stream, poll_fd,
 };
 
 pub type RawFd = i64;

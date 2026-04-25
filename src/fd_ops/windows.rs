@@ -85,12 +85,10 @@ pub fn duplicate_handle(handle: HANDLE) -> io::Result<HANDLE> {
     }
 
     let mut duplicated = 0 as HANDLE;
-    let ok = duplicate_handle_raw(
-        GetCurrentProcess(),
-        handle,
-        &mut duplicated,
-        DUPLICATE_SAME_ACCESS,
-    );
+    // SAFETY: `GetCurrentProcess` returns the always-valid pseudo-handle for the current
+    // process and does not require any cleanup by the caller.
+    let process = unsafe { GetCurrentProcess() };
+    let ok = duplicate_handle_raw(process, handle, &mut duplicated, DUPLICATE_SAME_ACCESS);
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
