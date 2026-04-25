@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import pathlib
 import socket
@@ -336,6 +337,49 @@ class TlsTests(unittest.TestCase):
                     server.close()
 
         self.assertEqual(rsloop.run(main()), "upgraded:starttls")
+
+    @unittest.skipIf(
+        importlib.util.find_spec("websockets") is None,
+        "websockets package is required",
+    )
+    def test_wsbench_websockets_respects_cert_none_context(self) -> None:
+        from demo import wsbench_websockets
+        from websockets import serve
+
+        async def main() -> list[tuple[str, str]]:
+            async def echo(websocket) -> None:
+                async for message in websocket:
+                    await websocket.send(message.upper())
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                _, cert_path, key_path = make_cert_files(tmpdir)
+                server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                server_ctx.load_cert_chain(cert_path, key_path)
+
+                client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+                client_ctx.check_hostname = False
+                client_ctx.hostname_checks_common_name = False
+                client_ctx.verify_mode = ssl.CERT_NONE
+
+                async with serve(
+                    echo,
+                    "127.0.0.1",
+                    0,
+                    ssl=server_ctx,
+                    compression=None,
+                    ping_interval=None,
+                ) as server:
+                    port = server.sockets[0].getsockname()[1]
+                    return await wsbench_websockets.run_messages(
+                        f"wss://127.0.0.1:{port}/",
+                        ssl_context=client_ctx,
+                        count=2,
+                    )
+
+        self.assertEqual(
+            rsloop.run(main()),
+            [("hello 0", "HELLO 0"), ("hello 1", "HELLO 1")],
+        )
 
 
 if __name__ == "__main__":

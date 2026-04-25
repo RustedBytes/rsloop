@@ -3,10 +3,11 @@ use std::time::Duration;
 
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::ClientConfig;
-use rustls::pki_types::ServerName;
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::server::ServerConfig;
-use rustls::SupportedProtocolVersion;
+use rustls::{DigitallySignedStruct, Error as TlsError, SignatureScheme, SupportedProtocolVersion};
 
 mod material;
 use material::{
@@ -176,17 +177,79 @@ fn resolve_server_hostname(
 fn build_client_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<ClientConfig> {
     let roots = root_store_from_context(py, ssl_context)?;
     let maybe_identity = load_cert_chain_metadata(py, ssl_context)?;
+    let verify_mode = verify_mode_value(py, ssl_context)?;
+    let cert_none = ssl_verify_constant(py, "CERT_NONE")?;
 
     let builder = ClientConfig::builder_with_protocol_versions(default_protocol_versions());
-    let mut config = match maybe_identity {
-        Some((certs, key)) => builder
+    let mut config = match (verify_mode == cert_none, maybe_identity) {
+        (true, Some((certs, key))) => builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoServerCertVerifier))
+            .with_client_auth_cert(certs, key)
+            .map_err(to_py_tls_err)?,
+        (true, None) => builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoServerCertVerifier))
+            .with_no_client_auth(),
+        (false, Some((certs, key))) => builder
             .with_root_certificates(roots)
             .with_client_auth_cert(certs, key)
             .map_err(to_py_tls_err)?,
-        None => builder.with_root_certificates(roots).with_no_client_auth(),
+        (false, None) => builder.with_root_certificates(roots).with_no_client_auth(),
     };
     config.enable_sni = true;
     Ok(config)
+}
+
+#[derive(Debug)]
+struct NoServerCertVerifier;
+
+impl ServerCertVerifier for NoServerCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, TlsError> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::RSA_PKCS1_SHA1,
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA512,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::ECDSA_NISTP521_SHA512,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PSS_SHA384,
+            SignatureScheme::RSA_PSS_SHA512,
+            SignatureScheme::ED25519,
+            SignatureScheme::ED448,
+        ]
+    }
 }
 
 fn build_server_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<ServerConfig> {
