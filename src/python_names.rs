@@ -82,20 +82,16 @@ pub(crate) fn call_method0(
     obj: &Bound<'_, PyAny>,
     method: &Bound<'_, PyString>,
 ) -> PyResult<Py<PyAny>> {
-    // SAFETY: `obj` and `method` are live Python objects under the active GIL, and the argument
-    // list is correctly null-terminated for `PyObject_CallMethodObjArgs`. PyO3 takes ownership of
-    // non-null returns and converts null returns into `PyErr`.
-    unsafe {
-        Bound::from_owned_ptr_or_err(
-            py,
-            ffi::PyObject_CallMethodObjArgs(
-                obj.as_ptr(),
-                method.as_ptr(),
-                std::ptr::null_mut::<ffi::PyObject>(),
-            ),
+    // SAFETY: `obj` and `method` are live under the GIL and the varargs list is null-terminated.
+    let ptr = unsafe {
+        ffi::PyObject_CallMethodObjArgs(
+            obj.as_ptr(),
+            method.as_ptr(),
+            std::ptr::null_mut::<ffi::PyObject>(),
         )
-        .map(Bound::unbind)
-    }
+    };
+    // SAFETY: `ptr` is the owned result returned by CPython for the call above.
+    unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind)
 }
 
 #[inline]
@@ -107,16 +103,14 @@ pub(crate) fn call_method1(
 ) -> PyResult<Py<PyAny>> {
     // SAFETY: `obj`, `method`, and `arg` are live Python objects under the active GIL, and the
     // varargs list is null-terminated as required by CPython. PyO3 wraps the owned return pointer.
-    unsafe {
-        Bound::from_owned_ptr_or_err(
-            py,
-            ffi::PyObject_CallMethodObjArgs(
-                obj.as_ptr(),
-                method.as_ptr(),
-                arg.as_ptr(),
-                std::ptr::null_mut::<ffi::PyObject>(),
-            ),
+    let ptr = unsafe {
+        ffi::PyObject_CallMethodObjArgs(
+            obj.as_ptr(),
+            method.as_ptr(),
+            arg.as_ptr(),
+            std::ptr::null_mut::<ffi::PyObject>(),
         )
-        .map(Bound::unbind)
-    }
+    };
+    // SAFETY: `ptr` is the owned result returned by CPython for the call above.
+    unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind)
 }

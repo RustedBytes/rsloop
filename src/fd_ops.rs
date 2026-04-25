@@ -43,6 +43,8 @@ pub fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
     #[cfg(unix)]
     {
         let fd = raw_fd_to_c_int(fd)?;
+        // SAFETY: `fd` was range-checked as a C file descriptor. `dup` returns a new descriptor
+        // or `-1` with errno set and does not retain Rust references.
         let duped = unsafe { libc::dup(fd) };
         if duped < 0 {
             return Err(io::Error::last_os_error());
@@ -56,6 +58,8 @@ pub fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
             Ok(duped) => return Ok(duped),
             Err(socket_err) => {
                 if let Ok(fd) = raw_fd_to_c_int(fd) {
+                    // SAFETY: `fd` was range-checked as a C runtime descriptor. Errors are
+                    // reported via a negative return and errno.
                     let duped = unsafe { libc::dup(fd) };
                     if duped >= 0 {
                         return Ok(duped as RawFd);
@@ -70,6 +74,8 @@ pub fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
 #[cfg(windows)]
 fn duplicate_socket(fd: RawFd) -> io::Result<RawFd> {
     let socket = raw_fd_to_socket(fd)?;
+    // SAFETY: `socket` is an owned raw socket value supplied by the caller. We immediately clone
+    // it and `forget` this temporary wrapper so the original socket is not closed.
     let socket = unsafe { Socket::from_raw_socket(socket as _) };
     let duplicate = socket.try_clone()?;
     let raw = duplicate.into_raw_socket();
@@ -78,8 +84,30 @@ fn duplicate_socket(fd: RawFd) -> io::Result<RawFd> {
 }
 
 #[cfg(windows)]
+/// SAFETY: `handle` must be valid for `current_process`, and `duplicated` must be a valid
+/// out-parameter. The wrapper forwards directly to Windows `DuplicateHandle`.
+unsafe fn duplicate_handle_raw(
+    current_process: HANDLE,
+    handle: HANDLE,
+    duplicated: &mut HANDLE,
+    options: u32,
+) -> i32 {
+    DuplicateHandle(
+        current_process,
+        handle,
+        current_process,
+        duplicated,
+        0,
+        0,
+        options,
+    )
+}
+
+#[cfg(windows)]
 pub fn raw_fd_to_handle(fd: RawFd) -> io::Result<HANDLE> {
     let fd = raw_fd_to_c_int(fd)?;
+    // SAFETY: `_get_osfhandle` only reads the C runtime fd table for this validated fd and returns
+    // `-1` on failure.
     let handle = unsafe { libc::get_osfhandle(fd) };
     if handle == -1 {
         return Err(io::Error::last_os_error());
@@ -96,19 +124,13 @@ pub fn duplicate_handle(handle: HANDLE) -> io::Result<HANDLE> {
         ));
     }
 
+    // SAFETY: `GetCurrentProcess` returns the documented pseudo-handle for this process and has no
+    // preconditions.
     let current_process = unsafe { GetCurrentProcess() };
     let mut duplicated = 0 as HANDLE;
-    let ok = unsafe {
-        DuplicateHandle(
-            current_process,
-            handle,
-            current_process,
-            &mut duplicated,
-            0,
-            0,
-            DUPLICATE_SAME_ACCESS,
-        )
-    };
+    let options = DUPLICATE_SAME_ACCESS;
+    // SAFETY: `handle` was validated above and `duplicated` is a valid out-parameter.
+    let ok = unsafe { duplicate_handle_raw(current_process, handle, &mut duplicated, options) };
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
@@ -142,6 +164,8 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     };
 
     loop {
+        // SAFETY: `pollfd` points to one initialized `libc::pollfd` and the count is `1`; `poll`
+        // only mutates the `revents` field and reports errors through errno.
         let ready = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
         if ready >= 0 {
             break;
@@ -176,23 +200,20 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     let mut readfds = new_fd_set(socket, read);
     let mut writefds = new_fd_set(socket, write);
 
-    let ready = unsafe {
-        winsock_select(
-            0,
-            if read {
-                &mut readfds
-            } else {
-                std::ptr::null_mut()
-            },
-            if write {
-                &mut writefds
-            } else {
-                std::ptr::null_mut()
-            },
-            std::ptr::null_mut(),
-            &mut timeout,
-        )
+    let readfds_ptr = if read {
+        &mut readfds
+    } else {
+        std::ptr::null_mut()
     };
+    let writefds_ptr = if write {
+        &mut writefds
+    } else {
+        std::ptr::null_mut()
+    };
+    let exceptfds = std::ptr::null_mut();
+    // SAFETY: The fd sets and timeout live for the duration of the call. Null pointers are passed
+    // for disabled interests as required by winsock `select`.
+    let ready = unsafe { winsock_select(0, readfds_ptr, writefds_ptr, exceptfds, &mut timeout) };
     if ready == SOCKET_ERROR {
         return Err(io::Error::last_os_error());
     }
@@ -295,6 +316,7 @@ fn raw_fd_to_socket(fd: RawFd) -> io::Result<SOCKET> {
 
 #[cfg(windows)]
 fn new_fd_set(socket: SOCKET, enabled: bool) -> FD_SET {
+    // SAFETY: `FD_SET` is a plain C aggregate; zero initialization yields an empty fd set.
     let mut set = unsafe { std::mem::zeroed::<FD_SET>() };
     if enabled {
         set.fd_count = 1;
@@ -307,6 +329,8 @@ fn new_fd_set(socket: SOCKET, enabled: bool) -> FD_SET {
 pub fn duplicate_tcp_stream(fd: RawFd) -> io::Result<StdTcpStream> {
     let dup = duplicate_socket(fd)?;
     let socket = raw_fd_to_socket(dup)?;
+    // SAFETY: `dup` is a newly duplicated socket handle owned by this function. Wrapping transfers
+    // ownership to `Socket`.
     let socket = unsafe { Socket::from_raw_socket(socket as _) };
     socket.set_nonblocking(true)?;
     Ok(socket.into())

@@ -12,6 +12,33 @@ use crate::fd_ops::RawFd;
 
 pub type CallbackId = u64;
 
+#[inline]
+fn call_callback_noargs(py: Python<'_>, callback: &Py<PyAny>) -> PyResult<Py<PyAny>> {
+    // SAFETY: `callback` is a live Python callable owned by `Py<PyAny>`, and the GIL token proves
+    // this thread may call into CPython. PyO3 owns non-null returns and maps null to `PyErr`.
+    unsafe { Bound::from_owned_ptr_or_err(py, ffi::compat::PyObject_CallNoArgs(callback.as_ptr())) }
+        .map(Bound::unbind)
+}
+
+#[inline]
+fn call_callback_onearg(
+    py: Python<'_>,
+    callback: &Py<PyAny>,
+    arg: &Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
+    // SAFETY: `callback` and `arg` are live Python objects under the GIL, and the CPython varargs
+    // list is null-terminated. PyO3 takes ownership of successful returns.
+    let ptr = unsafe {
+        ffi::PyObject_CallFunctionObjArgs(
+            callback.as_ptr(),
+            arg.as_ptr(),
+            std::ptr::null_mut::<ffi::PyObject>(),
+        )
+    };
+    // SAFETY: `ptr` is the owned result returned by CPython for the call above.
+    unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind)
+}
+
 enum CallbackArgs {
     None,
     One(Py<PyAny>),
@@ -126,30 +153,8 @@ impl ReadyCallback {
     fn invoke_direct(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         profiling::scope!("ReadyCallback::invoke_direct");
         match &self.args {
-            // SAFETY: `self.callback` is a live Python callable owned by `Py<PyAny>`, and the GIL
-            // token proves this thread may call into CPython. The returned owned pointer is
-            // immediately converted into a PyO3 `Bound`, which handles null/error propagation.
-            CallbackArgs::None => unsafe {
-                Bound::from_owned_ptr_or_err(
-                    py,
-                    ffi::compat::PyObject_CallNoArgs(self.callback.as_ptr()),
-                )
-                .map(Bound::unbind)
-            },
-            // SAFETY: `self.callback` and `arg` are live Python objects and the varargs list is
-            // terminated with a null pointer as required by `PyObject_CallFunctionObjArgs`.
-            // PyO3 converts a null return into `PyErr` and takes ownership of successful results.
-            CallbackArgs::One(arg) => unsafe {
-                Bound::from_owned_ptr_or_err(
-                    py,
-                    ffi::PyObject_CallFunctionObjArgs(
-                        self.callback.as_ptr(),
-                        arg.as_ptr(),
-                        std::ptr::null_mut::<ffi::PyObject>(),
-                    ),
-                )
-                .map(Bound::unbind)
-            },
+            CallbackArgs::None => call_callback_noargs(py, &self.callback),
+            CallbackArgs::One(arg) => call_callback_onearg(py, &self.callback, arg),
             CallbackArgs::Many(args) => self.callback.call1(py, args.clone_ref(py)),
         }
     }

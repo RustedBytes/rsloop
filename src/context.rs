@@ -22,6 +22,8 @@ pub fn capture_context(py: Python<'_>, explicit: Option<Py<PyAny>>) -> PyResult<
     let context = if let Some(context) = explicit {
         context
     } else {
+        // SAFETY: The GIL is held by `py`, and `PyContext_CopyCurrent` returns a new owned
+        // reference or null with a Python exception set. PyO3 converts both cases correctly.
         unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyContext_CopyCurrent())?.unbind() }
     };
 
@@ -41,6 +43,8 @@ pub fn is_nested_context_error(py: Python<'_>, err: &PyErr) -> bool {
 
 #[inline]
 pub fn enter_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
+    // SAFETY: `context` is a live Python context object and the GIL is held. CPython returns
+    // `0` on success and sets an exception on failure.
     let status = unsafe { ffi::PyContext_Enter(context.as_ptr()) };
     if status == 0 {
         Ok(())
@@ -51,12 +55,41 @@ pub fn enter_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
 
 #[inline]
 pub fn exit_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
+    // SAFETY: `context` is the same kind of live Python context object expected by CPython and
+    // the GIL is held. A nonzero result means an exception is available via `PyErr::fetch`.
     let status = unsafe { ffi::PyContext_Exit(context.as_ptr()) };
     if status == 0 {
         Ok(())
     } else {
         Err(PyErr::fetch(py))
     }
+}
+
+#[inline]
+fn call_noargs(py: Python<'_>, callback: &Py<PyAny>) -> PyResult<Py<PyAny>> {
+    // SAFETY: `callback` is a live Python callable and the GIL is held. The owned return pointer
+    // is transferred to PyO3, which converts null returns into `PyErr`.
+    unsafe { Bound::from_owned_ptr_or_err(py, ffi::compat::PyObject_CallNoArgs(callback.as_ptr())) }
+        .map(Bound::unbind)
+}
+
+#[inline]
+fn call_onearg(
+    py: Python<'_>,
+    callback: &Py<PyAny>,
+    arg: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    // SAFETY: `callback` and `arg` are live Python objects under the GIL, and the CPython varargs
+    // list is terminated with a null pointer. PyO3 owns successful returns and maps null to `PyErr`.
+    let ptr = unsafe {
+        ffi::PyObject_CallFunctionObjArgs(
+            callback.as_ptr(),
+            arg.as_ptr(),
+            std::ptr::null_mut::<ffi::PyObject>(),
+        )
+    };
+    // SAFETY: `ptr` is the owned result returned by CPython for the call above.
+    unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind)
 }
 
 pub fn run_in_context(
@@ -96,30 +129,18 @@ pub fn run_in_context_noargs(
     callback: &Py<PyAny>,
 ) -> PyResult<Py<PyAny>> {
     if !needs_run {
-        return unsafe {
-            Bound::from_owned_ptr_or_err(py, ffi::compat::PyObject_CallNoArgs(callback.as_ptr()))
-        }
-        .map(Bound::unbind);
+        return call_noargs(py, callback);
     }
 
     if let Err(err) = enter_context(py, context) {
         return if is_nested_context_error(py, &err) {
-            unsafe {
-                Bound::from_owned_ptr_or_err(
-                    py,
-                    ffi::compat::PyObject_CallNoArgs(callback.as_ptr()),
-                )
-            }
-            .map(Bound::unbind)
+            call_noargs(py, callback)
         } else {
             Err(err)
         };
     }
 
-    let callback_result = unsafe {
-        Bound::from_owned_ptr_or_err(py, ffi::compat::PyObject_CallNoArgs(callback.as_ptr()))
-    }
-    .map(Bound::unbind);
+    let callback_result = call_noargs(py, callback);
     let exit_result = exit_context(py, context);
 
     match (callback_result, exit_result) {
@@ -138,48 +159,18 @@ pub fn run_in_context_onearg(
     arg: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
     if !needs_run {
-        return unsafe {
-            Bound::from_owned_ptr_or_err(
-                py,
-                ffi::PyObject_CallFunctionObjArgs(
-                    callback.as_ptr(),
-                    arg.as_ptr(),
-                    std::ptr::null_mut::<ffi::PyObject>(),
-                ),
-            )
-        }
-        .map(Bound::unbind);
+        return call_onearg(py, callback, arg);
     }
 
     if let Err(err) = enter_context(py, context) {
         return if is_nested_context_error(py, &err) {
-            unsafe {
-                Bound::from_owned_ptr_or_err(
-                    py,
-                    ffi::PyObject_CallFunctionObjArgs(
-                        callback.as_ptr(),
-                        arg.as_ptr(),
-                        std::ptr::null_mut::<ffi::PyObject>(),
-                    ),
-                )
-            }
-            .map(Bound::unbind)
+            call_onearg(py, callback, arg)
         } else {
             Err(err)
         };
     }
 
-    let callback_result = unsafe {
-        Bound::from_owned_ptr_or_err(
-            py,
-            ffi::PyObject_CallFunctionObjArgs(
-                callback.as_ptr(),
-                arg.as_ptr(),
-                std::ptr::null_mut::<ffi::PyObject>(),
-            ),
-        )
-    }
-    .map(Bound::unbind);
+    let callback_result = call_onearg(py, callback, arg);
     let exit_result = exit_context(py, context);
 
     match (callback_result, exit_result) {

@@ -936,5 +936,6 @@ fn poll_fd_from_raw(fd: fd_ops::RawFd) -> std::io::Result<PollFd<OwnedFd>> {
     let dup: i32 = dup
         .try_into()
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "fd out of range"))?;
+    // SAFETY: `dup_raw_fd` returned a newly owned descriptor, and `OwnedFd` takes ownership of it.
     PollFd::new(unsafe { OwnedFd::from_raw_fd(dup) })
 }

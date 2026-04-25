@@ -262,6 +262,8 @@ impl StreamReaderFastPath {
                 let start = buffer.len();
                 let end = start + data.len();
                 buffer.resize(end)?;
+                // SAFETY: The bytearray was just resized to `end`, so `start..end` is in bounds.
+                // The GIL is held and this mutable view is used only for the immediate copy.
                 unsafe {
                     buffer.as_bytes_mut()[start..end].copy_from_slice(data);
                 }
@@ -1142,6 +1144,8 @@ impl StreamTransportCore {
         {
             let args = PyTuple::new(py, [data.len()])?.unbind();
             let buffer_obj = run_in_context(py, &context, context_needs_run, get_buffer, &args)?;
+            // SAFETY: `buffer_obj` is a live Python object under the GIL. CPython returns a new
+            // memoryview reference or null with an exception set; PyO3 wraps both cases correctly.
             let memoryview = unsafe {
                 Bound::from_owned_ptr_or_err(
                     py,
@@ -2161,6 +2165,8 @@ fn socket_from_owned_raw(fd: fd_ops::RawFd) -> PyResult<Socket> {
     let fd: i32 = fd
         .try_into()
         .map_err(|_| PyRuntimeError::new_err("socket fd out of range"))?;
+    // SAFETY: `fd` is an owned Unix socket descriptor handed to this function. `Socket` takes
+    // ownership and will close it exactly once.
     Ok(unsafe { Socket::from_raw_fd(fd) })
 }
 
@@ -2169,6 +2175,8 @@ fn socket_from_owned_raw(fd: fd_ops::RawFd) -> PyResult<Socket> {
     let fd: RawSocket = fd
         .try_into()
         .map_err(|_| PyRuntimeError::new_err("socket handle out of range"))?;
+    // SAFETY: `fd` is an owned Windows socket handle handed to this function. `Socket` takes
+    // ownership and will close it exactly once.
     Ok(unsafe { Socket::from_raw_socket(fd) })
 }
 
@@ -2346,6 +2354,7 @@ pub fn spawn_read_pipe_transport(
 ) -> PyResult<Py<PyStreamTransport>> {
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    // SAFETY: `dup_raw_fd` returned a newly owned descriptor. `File` takes ownership of it.
     let file = unsafe { std::fs::File::from_raw_fd(raw_fd_for_std(dup)?) };
     let callbacks = build_protocol_callbacks(py, &protocol)?;
     let mut extra = HashMap::with_capacity(2);
@@ -2413,6 +2422,7 @@ pub fn spawn_read_pipe_transport(
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
     let handle = fd_ops::duplicate_handle_from_fd(fd)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    // SAFETY: `duplicate_handle_from_fd` returned a newly owned handle. `File` takes ownership.
     let file = unsafe { std::fs::File::from_raw_handle(handle as _) };
     let callbacks = build_protocol_callbacks(py, &protocol)?;
     let mut extra = HashMap::with_capacity(2);
@@ -2483,6 +2493,7 @@ pub fn spawn_write_pipe_transport(
     } = spawn_context;
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    // SAFETY: `dup_raw_fd` returned a newly owned descriptor. `File` takes ownership of it.
     let file = unsafe { std::fs::File::from_raw_fd(raw_fd_for_std(dup)?) };
     let callbacks = build_protocol_callbacks(py, &protocol)?;
     let mut extra = HashMap::with_capacity(2 + extra_entries.as_ref().map_or(0, HashMap::len));
@@ -2556,6 +2567,7 @@ pub fn spawn_write_pipe_transport(
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
     let handle = fd_ops::duplicate_handle_from_fd(fd)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    // SAFETY: `duplicate_handle_from_fd` returned a newly owned handle. `File` takes ownership.
     let file = unsafe { std::fs::File::from_raw_handle(handle as _) };
     let callbacks = build_protocol_callbacks(py, &protocol)?;
     let mut extra = HashMap::with_capacity(2 + extra_entries.as_ref().map_or(0, HashMap::len));
@@ -2619,6 +2631,8 @@ pub fn tcp_stream_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStre
 
 #[cfg(unix)]
 pub fn unix_stream_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixStream> {
+    // SAFETY: `fd` is an owned Unix stream descriptor handed to this function. The returned
+    // `StdUnixStream` takes ownership.
     let stream = unsafe { StdUnixStream::from_raw_fd(raw_fd_for_std(fd)?) };
     stream
         .set_nonblocking(true)
@@ -2632,6 +2646,8 @@ pub fn tcp_listener_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpLi
 
 #[cfg(unix)]
 pub fn unix_listener_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixListener> {
+    // SAFETY: `fd` is an owned Unix listener descriptor handed to this function. The returned
+    // `StdUnixListener` takes ownership.
     let listener = unsafe { StdUnixListener::from_raw_fd(raw_fd_for_std(fd)?) };
     listener
         .set_nonblocking(true)
@@ -2763,6 +2779,7 @@ pub fn spawn_unix_transport(
     let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
     let writer_fd =
         fd_ops::dup_raw_fd(raw_fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    // SAFETY: `writer_fd` is a newly duplicated Unix stream descriptor for the direct writer.
     let direct_writer = unsafe { StdUnixStream::from_raw_fd(raw_fd_for_std(writer_fd)?) };
     direct_writer
         .set_nonblocking(true)
@@ -3245,6 +3262,8 @@ pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTc
         match listener.accept().await {
             Ok((stream, _addr)) => {
                 let raw = stream.into_raw_socket();
+                // SAFETY: `into_raw_socket` transfers ownership of the accepted socket to us, and
+                // `StdTcpStream::from_raw_socket` takes ownership of that handle.
                 let stream = unsafe { StdTcpStream::from_raw_socket(raw) };
                 let _ = stream.set_nonblocking(true);
                 let _ = stream.set_nodelay(true);
@@ -4210,6 +4229,7 @@ fn poll_fd_from_raw(fd: fd_ops::RawFd) -> io::Result<PollFd<OwnedFd>> {
     let dup: i32 = dup
         .try_into()
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "fd out of range"))?;
+    // SAFETY: `dup_raw_fd` returned a newly owned descriptor, and `OwnedFd` takes ownership.
     PollFd::new(unsafe { OwnedFd::from_raw_fd(dup) })
 }
 

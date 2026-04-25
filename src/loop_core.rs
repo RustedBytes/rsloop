@@ -864,6 +864,7 @@ impl LoopCore {
                 return Err(item);
             }
 
+            // SAFETY: `ready` points to the stack-local queue owned by `run_forever` on this thread.
             unsafe { (*ready).push_back(item) };
             Ok(())
         })

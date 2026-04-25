@@ -274,6 +274,8 @@ fn asyncio_task_kwarg_support(py: Python<'_>) -> PyResult<&'static TaskKwargSupp
 
 #[inline]
 fn call_callable_noargs(py: Python<'_>, callable: &Py<PyAny>) -> PyResult<Py<PyAny>> {
+    // SAFETY: `callable` is a live Python object and the GIL is held. PyO3 takes ownership of a
+    // non-null owned return and maps a null return to the active Python exception.
     unsafe { Bound::from_owned_ptr_or_err(py, ffi::compat::PyObject_CallNoArgs(callable.as_ptr())) }
         .map(Bound::unbind)
 }
@@ -284,17 +286,17 @@ fn call_callable_onearg(
     callable: &Py<PyAny>,
     arg: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    unsafe {
-        Bound::from_owned_ptr_or_err(
-            py,
-            ffi::PyObject_CallFunctionObjArgs(
-                callable.as_ptr(),
-                arg.as_ptr(),
-                std::ptr::null_mut::<ffi::PyObject>(),
-            ),
+    // SAFETY: `callable` and `arg` are live Python objects under the GIL, and the CPython varargs
+    // list is null-terminated. The owned result is immediately wrapped by PyO3.
+    let ptr = unsafe {
+        ffi::PyObject_CallFunctionObjArgs(
+            callable.as_ptr(),
+            arg.as_ptr(),
+            std::ptr::null_mut::<ffi::PyObject>(),
         )
-    }
-    .map(Bound::unbind)
+    };
+    // SAFETY: `ptr` is the owned result returned by CPython for the call above.
+    unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind)
 }
 
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
@@ -358,18 +360,14 @@ fn create_asyncio_future_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyRes
     #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
     {
         let args = [loop_obj.as_ptr()];
-        return unsafe {
-            Bound::from_owned_ptr_or_err(
-                py,
-                ffi::PyObject_Vectorcall(
-                    asyncio_future_cls(py)?.as_ptr(),
-                    args.as_ptr(),
-                    0,
-                    asyncio_future_loop_kwnames(py).as_ptr(),
-                ),
-            )
-        }
-        .map(Bound::unbind);
+        // SAFETY: The class and argument pointers are live under the GIL. `args` and kwnames live
+        // for the duration of the vectorcall, and PyO3 owns successful return pointers.
+        let cls = asyncio_future_cls(py)?.as_ptr();
+        let kwnames = asyncio_future_loop_kwnames(py).as_ptr();
+        // SAFETY: `cls`, `args`, and `kwnames` are live for this vectorcall under the GIL.
+        let ptr = unsafe { ffi::PyObject_Vectorcall(cls, args.as_ptr(), 0, kwnames) };
+        // SAFETY: `ptr` is the owned result returned by CPython for the vectorcall above.
+        return unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind);
     }
 
     #[cfg(not(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API)))))]
@@ -405,19 +403,14 @@ fn create_asyncio_task_for_loop(
             args.push(context.as_ptr());
         }
 
-        return unsafe {
-            Bound::from_owned_ptr_or_err(
-                py,
-                ffi::PyObject_Vectorcall(
-                    asyncio_task_cls(py)?.as_ptr(),
-                    args.as_ptr(),
-                    1,
-                    asyncio_task_kwnames_for_options(py, name.is_some(), context.is_some())
-                        .as_ptr(),
-                ),
-            )
-        }
-        .map(Bound::unbind);
+        // SAFETY: The asyncio Task class, positional argument array, and kwnames tuple are all live
+        // under the GIL for this call. PyO3 converts null returns into `PyErr`.
+        let cls = asyncio_task_cls(py)?.as_ptr();
+        let kwnames = asyncio_task_kwnames_for_options(py, name.is_some(), context.is_some());
+        // SAFETY: `cls`, `args`, and `kwnames` are live for this vectorcall under the GIL.
+        let ptr = unsafe { ffi::PyObject_Vectorcall(cls, args.as_ptr(), 1, kwnames.as_ptr()) };
+        // SAFETY: `ptr` is the owned result returned by CPython for the vectorcall above.
+        return unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind);
     }
 
     #[cfg(not(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API)))))]
@@ -551,15 +544,10 @@ fn set_socket_bool_option_unix(
     let value_len: libc::socklen_t = std::mem::size_of_val(&value)
         .try_into()
         .expect("socklen_t can represent c_int size");
-    let result = unsafe {
-        libc::setsockopt(
-            fd,
-            level,
-            option,
-            (&value as *const libc::c_int).cast(),
-            value_len,
-        )
-    };
+    let value_ptr = (&value as *const libc::c_int).cast();
+    // SAFETY: `fd` is range-checked as a socket descriptor, and `value` points to a live `c_int`
+    // with the correct length for boolean socket options.
+    let result = unsafe { libc::setsockopt(fd, level, option, value_ptr, value_len) };
     if result == 0 {
         Ok(())
     } else {
@@ -844,6 +832,8 @@ fn stdio_from_fd(fd: fd_ops::RawFd) -> PyResult<std::process::Stdio> {
     {
         let handle = fd_ops::duplicate_handle_from_fd(fd)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+        // SAFETY: `duplicate_handle_from_fd` returns a newly owned Windows handle. Wrapping it in
+        // `File` transfers ownership so it is closed exactly once.
         let file = unsafe { File::from_raw_handle(handle as _) };
         return Ok(std::process::Stdio::from(file));
     }
@@ -852,6 +842,8 @@ fn stdio_from_fd(fd: fd_ops::RawFd) -> PyResult<std::process::Stdio> {
     {
         let dup = fd_ops::dup_raw_fd(fd as fd_ops::RawFd)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+        // SAFETY: `dup_raw_fd` returns a newly owned file descriptor. `File::from_raw_fd` takes
+        // ownership of that descriptor.
         let file = unsafe { File::from_raw_fd(dup as i32) };
         Ok(std::process::Stdio::from(file))
     }
@@ -865,13 +857,18 @@ fn new_pipe() -> PyResult<(File, File)> {
 
         let mut read_end: HANDLE = std::ptr::null_mut();
         let mut write_end: HANDLE = std::ptr::null_mut();
+        // SAFETY: The out-pointers are valid for writes and the security attributes pointer is
+        // null as permitted by `CreatePipe`.
         let ok = unsafe { CreatePipe(&mut read_end, &mut write_end, std::ptr::null(), 0) };
         if ok == 0 {
             return Err(PyRuntimeError::new_err(
                 std::io::Error::last_os_error().to_string(),
             ));
         }
+        // SAFETY: `CreatePipe` initialized both handles on success, and each `File` takes
+        // ownership of one handle.
         let read_end = unsafe { File::from_raw_handle(read_end as _) };
+        // SAFETY: See above; `write_end` is the other owned pipe handle.
         let write_end = unsafe { File::from_raw_handle(write_end as _) };
         return Ok((read_end, write_end));
     }
@@ -879,13 +876,16 @@ fn new_pipe() -> PyResult<(File, File)> {
     #[cfg(unix)]
     {
         let mut fds = [0_i32; 2];
+        // SAFETY: `fds` has room for the two descriptors that `pipe` writes on success.
         let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
         if rc == -1 {
             return Err(PyRuntimeError::new_err(
                 std::io::Error::last_os_error().to_string(),
             ));
         }
+        // SAFETY: `pipe` initialized both descriptors on success, and `File` takes ownership.
         let read_end = unsafe { File::from_raw_fd(fds[0]) };
+        // SAFETY: See above; `fds[1]` is the owned write end.
         let write_end = unsafe { File::from_raw_fd(fds[1]) };
         Ok((read_end, write_end))
     }
@@ -1057,70 +1057,107 @@ fn parse_process_text_config(
 
 #[cfg(unix)]
 fn apply_unix_pre_exec(command: &mut Command, config: UnixPreExecConfig) {
+    // SAFETY: `pre_exec` installs a closure that runs in the child process after fork and before
+    // exec. The closure only invokes async-signal-safe libc operations and returns OS errors.
     unsafe {
-        command.pre_exec(move || {
-            if config.restore_signals {
-                if libc::signal(libc::SIGPIPE, libc::SIG_DFL) == libc::SIG_ERR {
-                    return Err(std::io::Error::last_os_error());
-                }
-                #[cfg(any(target_os = "linux", target_os = "android"))]
-                {
-                    if libc::signal(libc::SIGXFSZ, libc::SIG_DFL) == libc::SIG_ERR {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                }
-            }
+        command.pre_exec(move || apply_unix_pre_exec_child(&config));
+    }
+}
 
-            for fd in &config.pass_fds {
-                let flags = libc::fcntl(*fd, libc::F_GETFD);
-                if flags == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                if libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
+#[cfg(unix)]
+fn apply_unix_pre_exec_child(config: &UnixPreExecConfig) -> std::io::Result<()> {
+    if config.restore_signals {
+        reset_child_signal(libc::SIGPIPE)?;
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        reset_child_signal(libc::SIGXFSZ)?;
+    }
 
-            if config.start_new_session && libc::setsid() == -1 {
+    for fd in &config.pass_fds {
+        clear_child_fd_cloexec(*fd)?;
+    }
+
+    if config.start_new_session {
+        // SAFETY: Runs in the forked child before exec; `setsid` has no Rust aliasing concerns and
+        // reports failure through errno.
+        if unsafe { libc::setsid() } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    if let Some(process_group) = config.process_group {
+        if !(config.start_new_session && process_group == 0) {
+            // SAFETY: Runs in the child process for pid 0 (self); arguments are plain integers and
+            // errors are reported via errno.
+            if unsafe { libc::setpgid(0, process_group) } == -1 {
                 return Err(std::io::Error::last_os_error());
             }
-            if let Some(process_group) = config.process_group {
-                if !(config.start_new_session && process_group == 0)
-                    && libc::setpgid(0, process_group) == -1
-                {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            if let Some(groups) = &config.extra_groups {
-                #[cfg(any(target_os = "linux", target_os = "android"))]
-                let ngroups = groups.len();
-                #[cfg(not(any(target_os = "linux", target_os = "android")))]
-                let ngroups: libc::c_int = groups.len().try_into().map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "extra_groups length exceeds platform limit",
-                    )
-                })?;
+        }
+    }
+    if let Some(groups) = &config.extra_groups {
+        set_child_groups(groups)?;
+    }
+    if let Some(gid) = config.gid {
+        // SAFETY: Runs in the child process before exec with a numeric gid supplied by the caller.
+        if unsafe { libc::setgid(gid) } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    if let Some(uid) = config.uid {
+        // SAFETY: Runs in the child process before exec with a numeric uid supplied by the caller.
+        if unsafe { libc::setuid(uid) } == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    if let Some(umask) = config.umask {
+        // SAFETY: `umask` only changes the child process mask and has no memory-safety effects.
+        unsafe {
+            libc::umask(umask as libc::mode_t);
+        }
+    }
+    Ok(())
+}
 
-                if libc::setgroups(ngroups, groups.as_ptr()) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            if let Some(gid) = config.gid {
-                if libc::setgid(gid) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            if let Some(uid) = config.uid {
-                if libc::setuid(uid) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            if let Some(umask) = config.umask {
-                libc::umask(umask as libc::mode_t);
-            }
-            Ok(())
-        });
+#[cfg(unix)]
+fn reset_child_signal(signal: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: Runs in the forked child before exec, setting a signal disposition to the default.
+    if unsafe { libc::signal(signal, libc::SIG_DFL) } == libc::SIG_ERR {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn clear_child_fd_cloexec(fd: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: `fcntl` is called for an inherited fd in the child process and reports errors via
+    // errno. No Rust references are retained by the OS.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: Same fd as above; this updates descriptor flags in the child process only.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_child_groups(groups: &[u32]) -> std::io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let ngroups = groups.len();
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let ngroups: libc::c_int = groups.len().try_into().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "extra_groups length exceeds platform limit",
+        )
+    })?;
+
+    // SAFETY: `groups.as_ptr()` is valid for `groups.len()` entries for the duration of the call.
+    if unsafe { libc::setgroups(ngroups, groups.as_ptr()) } == -1 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
     }
 }
 
