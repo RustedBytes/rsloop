@@ -2262,6 +2262,10 @@ impl PyLoop {
     }
 
     #[pyo3(signature=(transport, protocol, sslcontext, *, server_side=false, server_hostname=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None))]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Mirrors asyncio loop.start_tls()"
+    )]
     fn start_tls(
         slf: Py<Self>,
         py: Python<'_>,

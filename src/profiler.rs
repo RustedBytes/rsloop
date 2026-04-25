@@ -3,7 +3,7 @@ mod imp {
     use std::cell::RefCell;
     use std::sync::{Mutex, OnceLock};
 
-    use pyo3::exceptions::{PyRuntimeError, PyValueError};
+    use pyo3::exceptions::PyRuntimeError;
     use pyo3::prelude::*;
     use tracy_client::{Client, Span};
 
@@ -64,7 +64,7 @@ mod imp {
         SESSION_SPAN.with(|slot| {
             slot.borrow_mut().take();
         });
-        drop(active.client);
+        let ActiveProfiler { client: _client } = active;
         Ok(())
     }
 }
