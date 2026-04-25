@@ -14,8 +14,14 @@ use crate::stream_transport::{
 
 pub enum ReadyItem {
     Callback(Arc<ReadyCallback>),
-    FutureSetResult { future: Py<PyAny>, value: Py<PyAny> },
-    FutureSetException { future: Py<PyAny>, value: Py<PyAny> },
+    FutureSetResult {
+        future: Py<PyAny>,
+        value: Py<PyAny>,
+    },
+    FutureSetException {
+        future: Py<PyAny>,
+        value: Py<PyAny>,
+    },
     StreamTransportRead(Arc<StreamTransportCore>),
     ProcessTransport(Arc<ProcessTransportCore>),
     ServerAccepted {

@@ -1,7 +1,14 @@
 import asyncio
 import rsloop
 
-from picows import ws_create_server, WSFrame, WSTransport, WSListener, WSMsgType, WSUpgradeRequest
+from picows import (
+    ws_create_server,
+    WSFrame,
+    WSTransport,
+    WSListener,
+    WSMsgType,
+    WSUpgradeRequest,
+)
 
 
 class ServerClientListener(WSListener):
@@ -26,7 +33,6 @@ async def main():
         print(f"Server started on {s.getsockname()}")
 
     await server.serve_forever()
-
 
 
 if __name__ == "__main__":

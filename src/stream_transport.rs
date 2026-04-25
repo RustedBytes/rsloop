@@ -3146,8 +3146,7 @@ pub(crate) fn spawn_accepted_transport_with_py(
 
 fn schedule_accepted_transport(server: &Arc<ServerCore>, stream: AcceptedStream, message: &str) {
     if server.tls.is_some() {
-        let result =
-            Python::try_attach(|py| spawn_accepted_transport_with_py(py, server, stream));
+        let result = Python::try_attach(|py| spawn_accepted_transport_with_py(py, server, stream));
         match result {
             Some(Ok(_)) => {}
             Some(Err(err)) => server.report_error(err, message),
@@ -3156,13 +3155,12 @@ fn schedule_accepted_transport(server: &Arc<ServerCore>, stream: AcceptedStream,
         return;
     }
 
-    if let Err(err) = server
-        .loop_core
-        .send_command(LoopCommand::Transport(LoopTransportCommand::ServerAccepted {
+    if let Err(err) = server.loop_core.send_command(LoopCommand::Transport(
+        LoopTransportCommand::ServerAccepted {
             server: Arc::clone(server),
             stream,
-        }))
-    {
+        },
+    )) {
         server.report_error(PyRuntimeError::new_err(err.to_string()), message);
     }
 }

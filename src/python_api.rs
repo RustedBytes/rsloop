@@ -1998,28 +1998,14 @@ impl PyLoop {
             )?;
             transport_from_socket_tls(
                 py,
-                stream_spawn_context(
-                    py,
-                    &core,
-                    &loop_obj,
-                    &protocol,
-                    &context,
-                    context_needs_run,
-                ),
+                stream_spawn_context(py, &core, &loop_obj, &protocol, &context, context_needs_run),
                 socket_obj,
                 tls,
             )
         } else {
             transport_from_socket(
                 py,
-                stream_spawn_context(
-                    py,
-                    &core,
-                    &loop_obj,
-                    &protocol,
-                    &context,
-                    context_needs_run,
-                ),
+                stream_spawn_context(py, &core, &loop_obj, &protocol, &context, context_needs_run),
                 socket_obj,
             )
         }?;

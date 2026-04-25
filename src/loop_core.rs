@@ -448,11 +448,9 @@ impl LoopCore {
                     }
                     ReadyItem::ServerAccepted { server, stream } => {
                         profiling::scope!("ready.server_accepted");
-                        if let Err(err) =
-                            crate::stream_transport::spawn_accepted_transport_with_py(
-                                py, &server, stream,
-                            )
-                        {
+                        if let Err(err) = crate::stream_transport::spawn_accepted_transport_with_py(
+                            py, &server, stream,
+                        ) {
                             server.report_error(err, "failed to accept connection");
                         }
                     }
@@ -740,9 +738,12 @@ impl LoopCore {
                     ReadyItem::ProcessTransport(core) => {
                         LoopCommand::Transport(LoopTransportCommand::Process(core))
                     }
-                    ReadyItem::ServerAccepted { server, stream } => LoopCommand::Transport(
-                        LoopTransportCommand::ServerAccepted { server, stream },
-                    ),
+                    ReadyItem::ServerAccepted { server, stream } => {
+                        LoopCommand::Transport(LoopTransportCommand::ServerAccepted {
+                            server,
+                            stream,
+                        })
+                    }
                 }),
             LoopCommand::Future(LoopFutureCommand::SetResult { future, value }) => self
                 .try_enqueue_local_ready(ReadyItem::FutureSetResult { future, value })
