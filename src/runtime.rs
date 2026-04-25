@@ -354,6 +354,11 @@ impl RuntimeDispatcher {
                 self.ready_batch
                     .push_back(ReadyItem::ProcessTransport(core));
             }
+            LoopCommand::Transport(LoopTransportCommand::ServerAccepted { server, stream }) => {
+                profiling::scope!("runtime.cmd.server_accepted");
+                self.ready_batch
+                    .push_back(ReadyItem::ServerAccepted { server, stream });
+            }
             LoopCommand::ScheduleTimer { callback, when } => {
                 profiling::scope!("runtime.cmd.schedule_timer");
                 let seq = self.next_timer_id;

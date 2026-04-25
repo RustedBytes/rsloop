@@ -8,7 +8,9 @@ use pyo3::types::PyTuple;
 use crate::callbacks::ReadyCallback;
 use crate::fd_ops::RawFd;
 use crate::process_transport::ProcessTransportCore;
-use crate::stream_transport::{ReaderTarget, ServerCore, ServerListener, StreamTransportCore};
+use crate::stream_transport::{
+    AcceptedStream, ReaderTarget, ServerCore, ServerListener, StreamTransportCore,
+};
 
 pub enum ReadyItem {
     Callback(Arc<ReadyCallback>),
@@ -16,6 +18,10 @@ pub enum ReadyItem {
     FutureSetException { future: Py<PyAny>, value: Py<PyAny> },
     StreamTransportRead(Arc<StreamTransportCore>),
     ProcessTransport(Arc<ProcessTransportCore>),
+    ServerAccepted {
+        server: Arc<ServerCore>,
+        stream: AcceptedStream,
+    },
     Stop,
 }
 
@@ -89,4 +95,8 @@ pub enum LoopFutureCommand {
 pub enum LoopTransportCommand {
     StreamRead(Arc<StreamTransportCore>),
     Process(Arc<ProcessTransportCore>),
+    ServerAccepted {
+        server: Arc<ServerCore>,
+        stream: AcceptedStream,
+    },
 }

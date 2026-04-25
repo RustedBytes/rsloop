@@ -1402,15 +1402,11 @@ async def __loop_create_connection(
         raise ValueError("host and port was not specified and no sock specified")
 
     try:
-        return await __ORIG_CREATE_CONNECTION(
-            self,
+        return self._create_connection_transport(
             protocol_factory,
-            ssl=ssl,
-            family=family,
-            proto=proto,
-            flags=flags,
             sock=sock,
             server_hostname=server_hostname,
+            ssl=ssl,
             ssl_handshake_timeout=ssl_handshake_timeout,
             ssl_shutdown_timeout=ssl_shutdown_timeout,
         )

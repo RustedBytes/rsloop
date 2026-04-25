@@ -1948,6 +1948,86 @@ impl PyLoop {
         })
     }
 
+    #[pyo3(signature=(protocol_factory, sock, *, ssl=None, server_hostname=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None))]
+    fn _create_connection_transport(
+        slf: Py<Self>,
+        py: Python<'_>,
+        protocol_factory: Py<PyAny>,
+        sock: Py<PyAny>,
+        ssl: Option<Py<PyAny>>,
+        server_hostname: Option<Py<PyAny>>,
+        ssl_handshake_timeout: Option<f64>,
+        ssl_shutdown_timeout: Option<f64>,
+    ) -> PyResult<Py<PyAny>> {
+        profiling::scope!("PyLoop::_create_connection_transport");
+        if server_hostname.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "server_hostname is only meaningful with ssl",
+            ));
+        }
+        if ssl_handshake_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_handshake_timeout is only meaningful with ssl",
+            ));
+        }
+        if ssl_shutdown_timeout.is_some() && ssl.is_none() {
+            return Err(PyValueError::new_err(
+                "ssl_shutdown_timeout is only meaningful with ssl",
+            ));
+        }
+
+        let loop_obj = Self::as_py_any(py, &slf);
+        let core = slf.borrow(py).core.clone();
+        let (context, context_needs_run) = capture_context(py, None)?;
+        let protocol = call_protocol_factory(
+            py,
+            &loop_obj,
+            &context,
+            context_needs_run,
+            &protocol_factory,
+        )?;
+        sock.call_method1(py, "setblocking", (false,))?;
+        let socket_obj = sock.clone_ref(py);
+        let transport = if let Some(ssl) = ssl.as_ref() {
+            let tls = client_tls_settings(
+                py,
+                ssl.bind(py),
+                server_hostname.as_ref().map(|value| value.bind(py)),
+                ssl_handshake_timeout,
+                ssl_shutdown_timeout,
+            )?;
+            transport_from_socket_tls(
+                py,
+                stream_spawn_context(
+                    py,
+                    &core,
+                    &loop_obj,
+                    &protocol,
+                    &context,
+                    context_needs_run,
+                ),
+                socket_obj,
+                tls,
+            )
+        } else {
+            transport_from_socket(
+                py,
+                stream_spawn_context(
+                    py,
+                    &core,
+                    &loop_obj,
+                    &protocol,
+                    &context,
+                    context_needs_run,
+                ),
+                socket_obj,
+            )
+        }?;
+
+        let result = PyTuple::new(py, [transport.into_any(), protocol])?;
+        Ok(result.unbind().into_any())
+    }
+
     #[pyo3(signature=(protocol_factory, path=None, *, sock=None, backlog=100, ssl=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None, start_serving=true, cleanup_socket=true))]
     #[expect(
         clippy::too_many_arguments,

@@ -242,7 +242,8 @@ impl LoopCore {
                 | ReadyItem::FutureSetResult { .. }
                 | ReadyItem::FutureSetException { .. }
                 | ReadyItem::StreamTransportRead(_)
-                | ReadyItem::ProcessTransport(_),
+                | ReadyItem::ProcessTransport(_)
+                | ReadyItem::ServerAccepted { .. },
             ) => unreachable!("schedule_callback only enqueues callback ready items"),
         }
 
@@ -444,6 +445,16 @@ impl LoopCore {
                     ReadyItem::ProcessTransport(core) => {
                         profiling::scope!("ready.process_transport");
                         core.drain_pending_events_with_py(py)?;
+                    }
+                    ReadyItem::ServerAccepted { server, stream } => {
+                        profiling::scope!("ready.server_accepted");
+                        if let Err(err) =
+                            crate::stream_transport::spawn_accepted_transport_with_py(
+                                py, &server, stream,
+                            )
+                        {
+                            server.report_error(err, "failed to accept connection");
+                        }
                     }
                 }
 
@@ -729,6 +740,9 @@ impl LoopCore {
                     ReadyItem::ProcessTransport(core) => {
                         LoopCommand::Transport(LoopTransportCommand::Process(core))
                     }
+                    ReadyItem::ServerAccepted { server, stream } => LoopCommand::Transport(
+                        LoopTransportCommand::ServerAccepted { server, stream },
+                    ),
                 }),
             LoopCommand::Future(LoopFutureCommand::SetResult { future, value }) => self
                 .try_enqueue_local_ready(ReadyItem::FutureSetResult { future, value })
@@ -741,6 +755,7 @@ impl LoopCore {
                     | ReadyItem::FutureSetException { .. }
                     | ReadyItem::StreamTransportRead(_)
                     | ReadyItem::ProcessTransport(_)
+                    | ReadyItem::ServerAccepted { .. }
                     | ReadyItem::Stop => {
                         unreachable!("local future result enqueue preserves item kind")
                     }
@@ -756,6 +771,7 @@ impl LoopCore {
                     | ReadyItem::FutureSetResult { .. }
                     | ReadyItem::StreamTransportRead(_)
                     | ReadyItem::ProcessTransport(_)
+                    | ReadyItem::ServerAccepted { .. }
                     | ReadyItem::Stop => {
                         unreachable!("local future exception enqueue preserves item kind")
                     }
@@ -771,6 +787,7 @@ impl LoopCore {
                     | ReadyItem::FutureSetResult { .. }
                     | ReadyItem::FutureSetException { .. }
                     | ReadyItem::ProcessTransport(_)
+                    | ReadyItem::ServerAccepted { .. }
                     | ReadyItem::Stop => {
                         unreachable!("local stream read enqueue preserves item kind")
                     }
@@ -786,8 +803,28 @@ impl LoopCore {
                     | ReadyItem::FutureSetResult { .. }
                     | ReadyItem::FutureSetException { .. }
                     | ReadyItem::StreamTransportRead(_)
+                    | ReadyItem::ServerAccepted { .. }
                     | ReadyItem::Stop => {
                         unreachable!("local process enqueue preserves item kind")
+                    }
+                }),
+            LoopCommand::Transport(LoopTransportCommand::ServerAccepted { server, stream }) => self
+                .try_enqueue_local_ready(ReadyItem::ServerAccepted { server, stream })
+                .or_else(|item| self.try_enqueue_active_ready(item))
+                .map_err(|item| match item {
+                    ReadyItem::ServerAccepted { server, stream } => {
+                        LoopCommand::Transport(LoopTransportCommand::ServerAccepted {
+                            server,
+                            stream,
+                        })
+                    }
+                    ReadyItem::Callback(_)
+                    | ReadyItem::FutureSetResult { .. }
+                    | ReadyItem::FutureSetException { .. }
+                    | ReadyItem::StreamTransportRead(_)
+                    | ReadyItem::ProcessTransport(_)
+                    | ReadyItem::Stop => {
+                        unreachable!("local accepted transport enqueue preserves item kind")
                     }
                 }),
             LoopCommand::RequestStop => self

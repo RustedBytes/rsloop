@@ -139,6 +139,12 @@ pub enum ServerListener {
     Unix(StdUnixListener),
 }
 
+pub enum AcceptedStream {
+    Tcp(StdTcpStream),
+    #[cfg(unix)]
+    Unix(StdUnixStream),
+}
+
 pub struct TransportSpawnContext {
     pub loop_core: Arc<LoopCore>,
     pub loop_obj: Py<PyAny>,
@@ -1799,7 +1805,7 @@ impl ServerCore {
         });
     }
 
-    fn report_error(&self, err: PyErr, message: &str) {
+    pub(crate) fn report_error(&self, err: PyErr, message: &str) {
         let _ = Python::try_attach(|py| -> PyResult<()> {
             let context = PyDict::new(py);
             context.set_item("message", message)?;
@@ -3126,6 +3132,41 @@ fn spawn_accepted_unix_transport(
     }
 }
 
+pub(crate) fn spawn_accepted_transport_with_py(
+    py: Python<'_>,
+    server: &Arc<ServerCore>,
+    stream: AcceptedStream,
+) -> PyResult<Py<PyStreamTransport>> {
+    match stream {
+        AcceptedStream::Tcp(stream) => spawn_accepted_tcp_transport(py, server, stream),
+        #[cfg(unix)]
+        AcceptedStream::Unix(stream) => spawn_accepted_unix_transport(py, server, stream),
+    }
+}
+
+fn schedule_accepted_transport(server: &Arc<ServerCore>, stream: AcceptedStream, message: &str) {
+    if server.tls.is_some() {
+        let result =
+            Python::try_attach(|py| spawn_accepted_transport_with_py(py, server, stream));
+        match result {
+            Some(Ok(_)) => {}
+            Some(Err(err)) => server.report_error(err, message),
+            None => {}
+        }
+        return;
+    }
+
+    if let Err(err) = server
+        .loop_core
+        .send_command(LoopCommand::Transport(LoopTransportCommand::ServerAccepted {
+            server: Arc::clone(server),
+            stream,
+        }))
+    {
+        server.report_error(PyRuntimeError::new_err(err.to_string()), message);
+    }
+}
+
 fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
     profiling::scope!("stream.run_tcp_accept_loop");
     let BlockingAcceptLoop {
@@ -3157,15 +3198,11 @@ fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
                     ) {
                         continue;
                     }
-                    let result =
-                        Python::try_attach(|py| spawn_accepted_tcp_transport(py, &server, stream));
-                    match result {
-                        Some(Ok(_)) => {}
-                        Some(Err(err)) => {
-                            server.report_error(err, "failed to accept TCP connection")
-                        }
-                        None => return,
-                    }
+                    schedule_accepted_transport(
+                        &server,
+                        AcceptedStream::Tcp(stream),
+                        "failed to accept TCP connection",
+                    );
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) => {
@@ -3235,15 +3272,11 @@ async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) 
                     ) {
                         continue;
                     }
-                    let result =
-                        Python::try_attach(|py| spawn_accepted_tcp_transport(py, &server, stream));
-                    match result {
-                        Some(Ok(_)) => {}
-                        Some(Err(err)) => {
-                            server.report_error(err, "failed to accept TCP connection")
-                        }
-                        None => return,
-                    }
+                    schedule_accepted_transport(
+                        &server,
+                        AcceptedStream::Tcp(stream),
+                        "failed to accept TCP connection",
+                    );
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) => {
@@ -3281,13 +3314,11 @@ pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTc
                 ) {
                     continue;
                 }
-                let result =
-                    Python::try_attach(|py| spawn_accepted_tcp_transport(py, &server, stream));
-                match result {
-                    Some(Ok(_)) => {}
-                    Some(Err(err)) => server.report_error(err, "failed to accept TCP connection"),
-                    None => return,
-                }
+                schedule_accepted_transport(
+                    &server,
+                    AcceptedStream::Tcp(stream),
+                    "failed to accept TCP connection",
+                );
             }
             Err(err) => {
                 report_server_io_error(&server, err, "TCP server accept failed");
@@ -3328,15 +3359,11 @@ fn run_unix_accept_loop(params: BlockingAcceptLoop<StdUnixListener>) {
                     ) {
                         continue;
                     }
-                    let result =
-                        Python::try_attach(|py| spawn_accepted_unix_transport(py, &server, stream));
-                    match result {
-                        Some(Ok(_)) => {}
-                        Some(Err(err)) => {
-                            server.report_error(err, "failed to accept Unix connection")
-                        }
-                        None => return,
-                    }
+                    schedule_accepted_transport(
+                        &server,
+                        AcceptedStream::Unix(stream),
+                        "failed to accept Unix connection",
+                    );
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) => {
@@ -3374,15 +3401,11 @@ async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener
                     ) {
                         continue;
                     }
-                    let result =
-                        Python::try_attach(|py| spawn_accepted_unix_transport(py, &server, stream));
-                    match result {
-                        Some(Ok(_)) => {}
-                        Some(Err(err)) => {
-                            server.report_error(err, "failed to accept Unix connection")
-                        }
-                        None => return,
-                    }
+                    schedule_accepted_transport(
+                        &server,
+                        AcceptedStream::Unix(stream),
+                        "failed to accept Unix connection",
+                    );
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) => {
