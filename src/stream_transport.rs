@@ -2370,6 +2370,97 @@ impl PipeTransportMode {
     }
 }
 
+struct StreamTransportStateConfig {
+    io_fd: Option<fd_ops::RawFd>,
+    runtime_socket_io: bool,
+    extra: HashMap<String, Py<PyAny>>,
+    reading: bool,
+    writable: bool,
+    can_write_eof: bool,
+    close_on_write_eof: bool,
+    server: Option<Weak<ServerCore>>,
+}
+
+struct StreamTransportBuildParts {
+    loop_core: Arc<LoopCore>,
+    loop_obj: Py<PyAny>,
+    state: StreamTransportState,
+}
+
+fn stream_transport_state_parts(
+    spawn_context: TransportSpawnContext,
+    callbacks: ProtocolCallbacks,
+    config: StreamTransportStateConfig,
+) -> StreamTransportBuildParts {
+    let TransportSpawnContext {
+        loop_core,
+        loop_obj,
+        protocol,
+        context,
+        context_needs_run,
+    } = spawn_context;
+
+    StreamTransportBuildParts {
+        loop_core,
+        loop_obj,
+        state: StreamTransportState {
+            io_fd: config.io_fd,
+            runtime_socket_io: config.runtime_socket_io,
+            protocol,
+            callbacks,
+            context,
+            context_needs_run,
+            extra: config.extra,
+            closing: false,
+            read_paused: false,
+            reading: config.reading,
+            writable: config.writable,
+            write_eof_requested: false,
+            can_write_eof: config.can_write_eof,
+            close_on_write_eof: config.close_on_write_eof,
+            lost_called: false,
+            writer_registered: false,
+            write_buffer_size: 0,
+            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
+            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
+            protocol_write_paused: false,
+            detached: false,
+            server: config.server,
+        },
+    }
+}
+
+fn new_stream_transport_core(
+    parts: StreamTransportBuildParts,
+    writer_tx: Sender<WriterCommand>,
+    direct_writer: Option<TaskedDirectWriter>,
+    lazy_writer: Option<LazyWriterConfig>,
+) -> Arc<StreamTransportCore> {
+    Arc::new(StreamTransportCore {
+        loop_core: parts.loop_core,
+        loop_obj: parts.loop_obj,
+        state: Mutex::new(parts.state),
+        pending_read_events: Mutex::new(VecDeque::new()),
+        read_events_scheduled: AtomicBool::new(false),
+        writer_tx,
+        direct_writer: direct_writer.map(Mutex::new),
+        lazy_writer: Mutex::new(lazy_writer),
+        workers: Mutex::new(Vec::new()),
+    })
+}
+
+fn new_py_stream_transport(
+    py: Python<'_>,
+    core: &Arc<StreamTransportCore>,
+) -> PyResult<Py<PyStreamTransport>> {
+    Py::new(
+        py,
+        PyStreamTransport {
+            core: Arc::clone(core),
+        },
+    )
+}
+
 fn pipe_transport_core(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -2380,58 +2471,27 @@ fn pipe_transport_core(
     Py<PyStreamTransport>,
     Receiver<WriterCommand>,
 )> {
-    let TransportSpawnContext {
-        loop_core,
-        loop_obj,
-        protocol,
-        context,
-        context_needs_run,
-    } = spawn_context;
-    let callbacks = build_protocol_callbacks(py, &protocol)?;
+    let callbacks = build_protocol_callbacks(py, &spawn_context.protocol)?;
     let (writer_tx, writer_rx) = mpsc::channel();
     let reading = mode.reading();
     let writable = mode.writable();
-    let core = Arc::new(StreamTransportCore {
-        loop_core,
-        loop_obj,
-        state: Mutex::new(StreamTransportState {
+    let parts = stream_transport_state_parts(
+        spawn_context,
+        callbacks,
+        StreamTransportStateConfig {
             io_fd: None,
             runtime_socket_io: false,
-            protocol,
-            callbacks,
-            context,
-            context_needs_run,
             extra,
-            closing: false,
-            read_paused: false,
             reading,
             writable,
-            write_eof_requested: false,
             can_write_eof: writable,
             close_on_write_eof: writable,
-            lost_called: false,
-            writer_registered: false,
-            write_buffer_size: 0,
-            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
-            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
-            protocol_write_paused: false,
-            detached: false,
             server: None,
-        }),
-        pending_read_events: Mutex::new(VecDeque::new()),
-        read_events_scheduled: AtomicBool::new(false),
-        writer_tx,
-        direct_writer: None,
-        lazy_writer: Mutex::new(None),
-        workers: Mutex::new(Vec::new()),
-    });
-
-    let transport = Py::new(
-        py,
-        PyStreamTransport {
-            core: Arc::clone(&core),
         },
-    )?;
+    );
+
+    let core = new_stream_transport_core(parts, writer_tx, None, None);
+    let transport = new_py_stream_transport(py, &core)?;
     Ok((core, transport, writer_rx))
 }
 
@@ -2521,72 +2581,58 @@ fn configured_tcp_listener_from_owned_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpLi
     Ok(socket.into())
 }
 
+#[cfg(unix)]
+fn duplicate_unix_direct_writer(raw_fd: fd_ops::RawFd) -> PyResult<StdUnixStream> {
+    let writer_fd =
+        fd_ops::dup_raw_fd(raw_fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    // SAFETY: `writer_fd` is a newly duplicated Unix stream descriptor for the direct writer.
+    let direct_writer = unsafe { StdUnixStream::from_raw_fd(raw_fd_for_std(writer_fd)?) };
+    direct_writer
+        .set_nonblocking(true)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    Ok(direct_writer)
+}
+
 pub fn spawn_tcp_transport(
     py: Python<'_>,
-    spawn_context: TransportSpawnContext,
+    mut spawn_context: TransportSpawnContext,
     stream: StdTcpStream,
     server: Option<Weak<ServerCore>>,
 ) -> PyResult<Py<PyStreamTransport>> {
-    let TransportSpawnContext {
-        loop_core,
-        loop_obj,
-        protocol,
-        context,
-        context_needs_run,
-    } = spawn_context;
     let raw_fd = tcp_stream_raw_fd(&stream);
     let extra = make_stream_extra(py, raw_fd, tcp_family(&stream))?;
-    let callbacks = build_protocol_callbacks(py, &protocol)?;
-    let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
+    let callbacks = build_protocol_callbacks(py, &spawn_context.protocol)?;
+    spawn_context.context_needs_run &= callbacks.stream_reader_fast_path.is_none();
     let direct_writer = duplicate_configured_tcp_stream(raw_fd)?;
     let writer = stream
         .try_clone()
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let (writer_tx, writer_rx) = mpsc::channel();
-    let core = Arc::new(StreamTransportCore {
-        loop_core,
-        loop_obj,
-        state: Mutex::new(StreamTransportState {
+    let parts = stream_transport_state_parts(
+        spawn_context,
+        callbacks,
+        StreamTransportStateConfig {
             io_fd: Some(raw_fd),
             runtime_socket_io: true,
-            protocol,
-            callbacks,
-            context,
-            context_needs_run,
             extra,
-            closing: false,
-            read_paused: false,
             reading: true,
             writable: true,
-            write_eof_requested: false,
             can_write_eof: true,
             close_on_write_eof: false,
-            lost_called: false,
-            writer_registered: false,
-            write_buffer_size: 0,
-            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
-            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
-            protocol_write_paused: false,
-            detached: false,
             server,
-        }),
-        pending_read_events: Mutex::new(VecDeque::new()),
-        read_events_scheduled: AtomicBool::new(false),
+        },
+    );
+    let core = new_stream_transport_core(
+        parts,
         writer_tx,
-        direct_writer: Some(Mutex::new(TaskedDirectWriter::Tcp(direct_writer))),
-        lazy_writer: Mutex::new(Some(LazyWriterConfig {
+        Some(TaskedDirectWriter::Tcp(direct_writer)),
+        Some(LazyWriterConfig {
             target: WriterTarget::Tcp(writer),
             writer_rx,
-        })),
-        workers: Mutex::new(Vec::new()),
-    });
+        }),
+    );
 
-    let transport = Py::new(
-        py,
-        PyStreamTransport {
-            core: Arc::clone(&core),
-        },
-    )?;
+    let transport = new_py_stream_transport(py, &core)?;
     core.connection_made(transport.clone_ref(py))?;
     if let Some(server) = core.server_ref().and_then(|weak| weak.upgrade()) {
         server.connection_opened();
@@ -2608,76 +2654,44 @@ pub fn spawn_tcp_transport(
 #[cfg(unix)]
 pub fn spawn_unix_transport(
     py: Python<'_>,
-    spawn_context: TransportSpawnContext,
+    mut spawn_context: TransportSpawnContext,
     stream: StdUnixStream,
     server: Option<Weak<ServerCore>>,
 ) -> PyResult<Py<PyStreamTransport>> {
-    let TransportSpawnContext {
-        loop_core,
-        loop_obj,
-        protocol,
-        context,
-        context_needs_run,
-    } = spawn_context;
     let raw_fd = unix_raw_fd(stream.as_raw_fd());
     let extra = make_stream_extra(py, raw_fd, libc::AF_UNIX)?;
-    let callbacks = build_protocol_callbacks(py, &protocol)?;
-    let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
-    let writer_fd =
-        fd_ops::dup_raw_fd(raw_fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    // SAFETY: `writer_fd` is a newly duplicated Unix stream descriptor for the direct writer.
-    let direct_writer = unsafe { StdUnixStream::from_raw_fd(raw_fd_for_std(writer_fd)?) };
-    direct_writer
-        .set_nonblocking(true)
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let callbacks = build_protocol_callbacks(py, &spawn_context.protocol)?;
+    spawn_context.context_needs_run &= callbacks.stream_reader_fast_path.is_none();
+    let direct_writer = duplicate_unix_direct_writer(raw_fd)?;
     let writer = stream
         .try_clone()
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let (writer_tx, writer_rx) = mpsc::channel();
-    let core = Arc::new(StreamTransportCore {
-        loop_core,
-        loop_obj,
-        state: Mutex::new(StreamTransportState {
+    let parts = stream_transport_state_parts(
+        spawn_context,
+        callbacks,
+        StreamTransportStateConfig {
             io_fd: Some(raw_fd),
             runtime_socket_io: true,
-            protocol,
-            callbacks,
-            context,
-            context_needs_run,
             extra,
-            closing: false,
-            read_paused: false,
             reading: true,
             writable: true,
-            write_eof_requested: false,
             can_write_eof: true,
             close_on_write_eof: false,
-            lost_called: false,
-            writer_registered: false,
-            write_buffer_size: 0,
-            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
-            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
-            protocol_write_paused: false,
-            detached: false,
             server,
-        }),
-        pending_read_events: Mutex::new(VecDeque::new()),
-        read_events_scheduled: AtomicBool::new(false),
+        },
+    );
+    let core = new_stream_transport_core(
+        parts,
         writer_tx,
-        direct_writer: Some(Mutex::new(TaskedDirectWriter::Unix(direct_writer))),
-        lazy_writer: Mutex::new(Some(LazyWriterConfig {
+        Some(TaskedDirectWriter::Unix(direct_writer)),
+        Some(LazyWriterConfig {
             target: WriterTarget::Unix(writer),
             writer_rx,
-        })),
-        workers: Mutex::new(Vec::new()),
-    });
+        }),
+    );
 
-    let transport = Py::new(
-        py,
-        PyStreamTransport {
-            core: Arc::clone(&core),
-        },
-    )?;
+    let transport = new_py_stream_transport(py, &core)?;
     core.connection_made(transport.clone_ref(py))?;
     if let Some(server) = core.server_ref().and_then(|weak| weak.upgrade()) {
         server.connection_opened();
@@ -2763,9 +2777,39 @@ struct TlsTransportConfig {
     call_connection_made: bool,
 }
 
+fn tls_stream_extra(
+    py: Python<'_>,
+    stream: &StreamKind,
+    extra_tls: HashMap<String, Py<PyAny>>,
+) -> PyResult<HashMap<String, Py<PyAny>>> {
+    match stream {
+        StreamKind::Tcp(stream) => Ok(merge_extra(
+            make_stream_extra(py, tcp_stream_raw_fd(stream), tcp_family(stream))?,
+            extra_tls,
+        )),
+        #[cfg(unix)]
+        StreamKind::Unix(stream) => Ok(merge_extra(
+            make_stream_extra(py, unix_raw_fd(stream.as_raw_fd()), libc::AF_UNIX)?,
+            extra_tls,
+        )),
+    }
+}
+
+fn tls_io_state(
+    stream: StreamKind,
+    connection: TlsConnectionKind,
+    shutdown_timeout: Duration,
+) -> Arc<Mutex<TlsIoState>> {
+    Arc::new(Mutex::new(TlsIoState {
+        stream,
+        connection,
+        shutdown_timeout,
+    }))
+}
+
 fn spawn_tls_transport(
     py: Python<'_>,
-    spawn_context: TransportSpawnContext,
+    mut spawn_context: TransportSpawnContext,
     stream: StreamKind,
     config: TlsTransportConfig,
 ) -> PyResult<Py<PyStreamTransport>> {
@@ -2777,78 +2821,33 @@ fn spawn_tls_transport(
         server,
         call_connection_made,
     } = config;
-    let TransportSpawnContext {
-        loop_core,
-        loop_obj,
-        protocol,
-        context,
-        context_needs_run,
-    } = spawn_context;
-    let extra = match &stream {
-        StreamKind::Tcp(stream) => merge_extra(
-            make_stream_extra(py, tcp_stream_raw_fd(stream), tcp_family(stream))?,
-            extra_tls,
-        ),
-        #[cfg(unix)]
-        StreamKind::Unix(stream) => merge_extra(
-            make_stream_extra(py, unix_raw_fd(stream.as_raw_fd()), libc::AF_UNIX)?,
-            extra_tls,
-        ),
-    };
-    let callbacks = build_protocol_callbacks(py, &protocol)?;
-    let context_needs_run = context_needs_run && callbacks.stream_reader_fast_path.is_none();
+    let extra = tls_stream_extra(py, &stream, extra_tls)?;
+    let callbacks = build_protocol_callbacks(py, &spawn_context.protocol)?;
+    spawn_context.context_needs_run &= callbacks.stream_reader_fast_path.is_none();
     let (writer_tx, writer_rx) = mpsc::channel();
     let stream_fd = stream.fd();
-    let tls_state = Arc::new(Mutex::new(TlsIoState {
-        stream,
-        connection,
-        shutdown_timeout,
-    }));
+    let tls_state = tls_io_state(stream, connection, shutdown_timeout);
 
     py.detach(|| complete_tls_handshake(&tls_state, handshake_timeout))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
 
-    let core = Arc::new(StreamTransportCore {
-        loop_core,
-        loop_obj,
-        state: Mutex::new(StreamTransportState {
+    let parts = stream_transport_state_parts(
+        spawn_context,
+        callbacks,
+        StreamTransportStateConfig {
             io_fd: Some(stream_fd),
             runtime_socket_io: true,
-            protocol,
-            callbacks,
-            context,
-            context_needs_run,
             extra,
-            closing: false,
-            read_paused: false,
             reading: true,
             writable: true,
-            write_eof_requested: false,
             can_write_eof: false,
             close_on_write_eof: false,
-            lost_called: false,
-            writer_registered: false,
-            write_buffer_size: 0,
-            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
-            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
-            protocol_write_paused: false,
-            detached: false,
             server,
-        }),
-        pending_read_events: Mutex::new(VecDeque::new()),
-        read_events_scheduled: AtomicBool::new(false),
-        writer_tx,
-        direct_writer: None,
-        lazy_writer: Mutex::new(None),
-        workers: Mutex::new(Vec::new()),
-    });
-
-    let transport = Py::new(
-        py,
-        PyStreamTransport {
-            core: Arc::clone(&core),
         },
-    )?;
+    );
+    let core = new_stream_transport_core(parts, writer_tx, None, None);
+
+    let transport = new_py_stream_transport(py, &core)?;
     if call_connection_made {
         core.connection_made(transport.clone_ref(py))?;
     }
@@ -2939,6 +2938,80 @@ fn configure_accepted_unix_stream(
     true
 }
 
+fn report_server_io_error(server: &ServerCore, err: io::Error, message: &str) {
+    if !server.is_closed() {
+        server.report_error(PyRuntimeError::new_err(err.to_string()), message);
+    }
+}
+
+fn server_spawn_context(
+    py: Python<'_>,
+    server: &Arc<ServerCore>,
+    protocol: Py<PyAny>,
+) -> TransportSpawnContext {
+    TransportSpawnContext {
+        loop_core: Arc::clone(&server.loop_core),
+        loop_obj: server.loop_obj.clone_ref(py),
+        protocol,
+        context: server.context.clone_ref(py),
+        context_needs_run: server.context_needs_run,
+    }
+}
+
+fn server_tls_settings(py: Python<'_>, tls: &ServerTlsSettings) -> ServerTlsSettings {
+    ServerTlsSettings {
+        config: Arc::clone(&tls.config),
+        handshake_timeout: tls.handshake_timeout,
+        shutdown_timeout: tls.shutdown_timeout,
+        ssl_context: tls.ssl_context.clone_ref(py),
+    }
+}
+
+fn spawn_accepted_tcp_transport(
+    py: Python<'_>,
+    server: &Arc<ServerCore>,
+    stream: StdTcpStream,
+) -> PyResult<Py<PyStreamTransport>> {
+    let protocol = server.create_protocol_with_py(py)?;
+    let spawn_context = server_spawn_context(py, server, protocol);
+    let server_ref = Some(Arc::downgrade(server));
+    if let Some(tls) = server.tls.as_ref() {
+        spawn_tls_server_transport(
+            py,
+            spawn_context,
+            StreamKind::Tcp(stream),
+            server_tls_settings(py, tls),
+            server_ref,
+            true,
+        )
+    } else {
+        spawn_tcp_transport(py, spawn_context, stream, server_ref)
+    }
+}
+
+#[cfg(unix)]
+fn spawn_accepted_unix_transport(
+    py: Python<'_>,
+    server: &Arc<ServerCore>,
+    stream: StdUnixStream,
+) -> PyResult<Py<PyStreamTransport>> {
+    let protocol = server.create_protocol_with_py(py)?;
+    let spawn_context = server_spawn_context(py, server, protocol);
+    let server_ref = Some(Arc::downgrade(server));
+    if let Some(tls) = server.tls.as_ref() {
+        spawn_tls_server_transport(
+            py,
+            spawn_context,
+            StreamKind::Unix(stream),
+            server_tls_settings(py, tls),
+            server_ref,
+            true,
+        )
+    } else {
+        spawn_unix_transport(py, spawn_context, stream, server_ref)
+    }
+}
+
 fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: Arc<AtomicBool>) {
     profiling::scope!("stream.run_tcp_accept_loop");
     loop {
@@ -2950,12 +3023,7 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
             Ok((false, _)) => continue,
             Ok((true, _)) => {}
             Err(err) => {
-                if !server.is_closed() {
-                    server.report_error(
-                        PyRuntimeError::new_err(err.to_string()),
-                        "TCP server accept failed",
-                    );
-                }
+                report_server_io_error(&server, err, "TCP server accept failed");
                 return;
             }
         }
@@ -2970,39 +3038,8 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                     ) {
                         continue;
                     }
-                    let result = Python::try_attach(|py| -> PyResult<_> {
-                        let protocol = server.create_protocol_with_py(py)?;
-                        let context = server.context.clone_ref(py);
-                        let spawn_context = TransportSpawnContext {
-                            loop_core: Arc::clone(&server.loop_core),
-                            loop_obj: server.loop_obj.clone_ref(py),
-                            protocol,
-                            context,
-                            context_needs_run: server.context_needs_run,
-                        };
-                        if let Some(tls) = server.tls.as_ref() {
-                            spawn_tls_server_transport(
-                                py,
-                                spawn_context,
-                                StreamKind::Tcp(stream),
-                                ServerTlsSettings {
-                                    config: Arc::clone(&tls.config),
-                                    handshake_timeout: tls.handshake_timeout,
-                                    shutdown_timeout: tls.shutdown_timeout,
-                                    ssl_context: tls.ssl_context.clone_ref(py),
-                                },
-                                Some(Arc::downgrade(&server)),
-                                true,
-                            )
-                        } else {
-                            spawn_tcp_transport(
-                                py,
-                                spawn_context,
-                                stream,
-                                Some(Arc::downgrade(&server)),
-                            )
-                        }
-                    });
+                    let result =
+                        Python::try_attach(|py| spawn_accepted_tcp_transport(py, &server, stream));
                     match result {
                         Some(Ok(_)) => {}
                         Some(Err(err)) => {
@@ -3013,12 +3050,7 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) => {
-                    if !server.is_closed() {
-                        server.report_error(
-                            PyRuntimeError::new_err(err.to_string()),
-                            "TCP server accept failed",
-                        );
-                    }
+                    report_server_io_error(&server, err, "TCP server accept failed");
                     return;
                 }
             }
@@ -3066,12 +3098,7 @@ async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) 
         }
 
         if let Err(err) = poll_fd.accept_ready().await {
-            if !server.is_closed() {
-                server.report_error(
-                    PyRuntimeError::new_err(err.to_string()),
-                    "TCP server accept failed",
-                );
-            }
+            report_server_io_error(&server, err, "TCP server accept failed");
             return;
         }
 
@@ -3086,39 +3113,8 @@ async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) 
                     ) {
                         continue;
                     }
-                    let result = Python::try_attach(|py| -> PyResult<_> {
-                        let protocol = server.create_protocol_with_py(py)?;
-                        let context = server.context.clone_ref(py);
-                        let spawn_context = TransportSpawnContext {
-                            loop_core: Arc::clone(&server.loop_core),
-                            loop_obj: server.loop_obj.clone_ref(py),
-                            protocol,
-                            context,
-                            context_needs_run: server.context_needs_run,
-                        };
-                        if let Some(tls) = server.tls.as_ref() {
-                            spawn_tls_server_transport(
-                                py,
-                                spawn_context,
-                                StreamKind::Tcp(stream),
-                                ServerTlsSettings {
-                                    config: Arc::clone(&tls.config),
-                                    handshake_timeout: tls.handshake_timeout,
-                                    shutdown_timeout: tls.shutdown_timeout,
-                                    ssl_context: tls.ssl_context.clone_ref(py),
-                                },
-                                Some(Arc::downgrade(&server)),
-                                true,
-                            )
-                        } else {
-                            spawn_tcp_transport(
-                                py,
-                                spawn_context,
-                                stream,
-                                Some(Arc::downgrade(&server)),
-                            )
-                        }
-                    });
+                    let result =
+                        Python::try_attach(|py| spawn_accepted_tcp_transport(py, &server, stream));
                     match result {
                         Some(Ok(_)) => {}
                         Some(Err(err)) => {
@@ -3129,12 +3125,7 @@ async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) 
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) => {
-                    if !server.is_closed() {
-                        server.report_error(
-                            PyRuntimeError::new_err(err.to_string()),
-                            "TCP server accept failed",
-                        );
-                    }
+                    report_server_io_error(&server, err, "TCP server accept failed");
                     return;
                 }
             }
@@ -3147,12 +3138,7 @@ pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTc
     let listener = match VibeTcpListener::from_std(listener) {
         Ok(listener) => listener,
         Err(err) => {
-            if !server.is_closed() {
-                server.report_error(
-                    PyRuntimeError::new_err(err.to_string()),
-                    "TCP server accept failed",
-                );
-            }
+            report_server_io_error(&server, err, "TCP server accept failed");
             return;
         }
     };
@@ -3175,39 +3161,8 @@ pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTc
                 ) {
                     continue;
                 }
-                let result = Python::try_attach(|py| -> PyResult<_> {
-                    let protocol = server.create_protocol_with_py(py)?;
-                    let context = server.context.clone_ref(py);
-                    let spawn_context = TransportSpawnContext {
-                        loop_core: Arc::clone(&server.loop_core),
-                        loop_obj: server.loop_obj.clone_ref(py),
-                        protocol,
-                        context,
-                        context_needs_run: server.context_needs_run,
-                    };
-                    if let Some(tls) = server.tls.as_ref() {
-                        spawn_tls_server_transport(
-                            py,
-                            spawn_context,
-                            StreamKind::Tcp(stream),
-                            ServerTlsSettings {
-                                config: Arc::clone(&tls.config),
-                                handshake_timeout: tls.handshake_timeout,
-                                shutdown_timeout: tls.shutdown_timeout,
-                                ssl_context: tls.ssl_context.clone_ref(py),
-                            },
-                            Some(Arc::downgrade(&server)),
-                            true,
-                        )
-                    } else {
-                        spawn_tcp_transport(
-                            py,
-                            spawn_context,
-                            stream,
-                            Some(Arc::downgrade(&server)),
-                        )
-                    }
-                });
+                let result =
+                    Python::try_attach(|py| spawn_accepted_tcp_transport(py, &server, stream));
                 match result {
                     Some(Ok(_)) => {}
                     Some(Err(err)) => server.report_error(err, "failed to accept TCP connection"),
@@ -3215,12 +3170,7 @@ pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTc
                 }
             }
             Err(err) => {
-                if !server.is_closed() {
-                    server.report_error(
-                        PyRuntimeError::new_err(err.to_string()),
-                        "TCP server accept failed",
-                    );
-                }
+                report_server_io_error(&server, err, "TCP server accept failed");
                 return;
             }
         }
@@ -3238,12 +3188,7 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
             Ok((false, _)) => continue,
             Ok((true, _)) => {}
             Err(err) => {
-                if !server.is_closed() {
-                    server.report_error(
-                        PyRuntimeError::new_err(err.to_string()),
-                        "Unix server accept failed",
-                    );
-                }
+                report_server_io_error(&server, err, "Unix server accept failed");
                 return;
             }
         }
@@ -3258,39 +3203,8 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
                     ) {
                         continue;
                     }
-                    let result = Python::try_attach(|py| -> PyResult<_> {
-                        let protocol = server.create_protocol_with_py(py)?;
-                        let context = server.context.clone_ref(py);
-                        let spawn_context = TransportSpawnContext {
-                            loop_core: Arc::clone(&server.loop_core),
-                            loop_obj: server.loop_obj.clone_ref(py),
-                            protocol,
-                            context,
-                            context_needs_run: server.context_needs_run,
-                        };
-                        if let Some(tls) = server.tls.as_ref() {
-                            spawn_tls_server_transport(
-                                py,
-                                spawn_context,
-                                StreamKind::Unix(stream),
-                                ServerTlsSettings {
-                                    config: Arc::clone(&tls.config),
-                                    handshake_timeout: tls.handshake_timeout,
-                                    shutdown_timeout: tls.shutdown_timeout,
-                                    ssl_context: tls.ssl_context.clone_ref(py),
-                                },
-                                Some(Arc::downgrade(&server)),
-                                true,
-                            )
-                        } else {
-                            spawn_unix_transport(
-                                py,
-                                spawn_context,
-                                stream,
-                                Some(Arc::downgrade(&server)),
-                            )
-                        }
-                    });
+                    let result =
+                        Python::try_attach(|py| spawn_accepted_unix_transport(py, &server, stream));
                     match result {
                         Some(Ok(_)) => {}
                         Some(Err(err)) => {
@@ -3301,12 +3215,7 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) => {
-                    if !server.is_closed() {
-                        server.report_error(
-                            PyRuntimeError::new_err(err.to_string()),
-                            "Unix server accept failed",
-                        );
-                    }
+                    report_server_io_error(&server, err, "Unix server accept failed");
                     return;
                 }
             }
@@ -3329,12 +3238,7 @@ async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener
         }
 
         if let Err(err) = poll_fd.accept_ready().await {
-            if !server.is_closed() {
-                server.report_error(
-                    PyRuntimeError::new_err(err.to_string()),
-                    "Unix server accept failed",
-                );
-            }
+            report_server_io_error(&server, err, "Unix server accept failed");
             return;
         }
 
@@ -3348,39 +3252,8 @@ async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener
                     ) {
                         continue;
                     }
-                    let result = Python::try_attach(|py| -> PyResult<_> {
-                        let protocol = server.create_protocol_with_py(py)?;
-                        let context = server.context.clone_ref(py);
-                        let spawn_context = TransportSpawnContext {
-                            loop_core: Arc::clone(&server.loop_core),
-                            loop_obj: server.loop_obj.clone_ref(py),
-                            protocol,
-                            context,
-                            context_needs_run: server.context_needs_run,
-                        };
-                        if let Some(tls) = server.tls.as_ref() {
-                            spawn_tls_server_transport(
-                                py,
-                                spawn_context,
-                                StreamKind::Unix(stream),
-                                ServerTlsSettings {
-                                    config: Arc::clone(&tls.config),
-                                    handshake_timeout: tls.handshake_timeout,
-                                    shutdown_timeout: tls.shutdown_timeout,
-                                    ssl_context: tls.ssl_context.clone_ref(py),
-                                },
-                                Some(Arc::downgrade(&server)),
-                                true,
-                            )
-                        } else {
-                            spawn_unix_transport(
-                                py,
-                                spawn_context,
-                                stream,
-                                Some(Arc::downgrade(&server)),
-                            )
-                        }
-                    });
+                    let result =
+                        Python::try_attach(|py| spawn_accepted_unix_transport(py, &server, stream));
                     match result {
                         Some(Ok(_)) => {}
                         Some(Err(err)) => {
@@ -3391,12 +3264,7 @@ async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener
                 }
                 Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
                 Err(err) => {
-                    if !server.is_closed() {
-                        server.report_error(
-                            PyRuntimeError::new_err(err.to_string()),
-                            "Unix server accept failed",
-                        );
-                    }
+                    report_server_io_error(&server, err, "Unix server accept failed");
                     return;
                 }
             }
@@ -3850,88 +3718,125 @@ fn run_stream_writer(
             },
         };
 
-        match command {
-            WriterCommand::Data(mut data) => {
-                let buffered_len = data.remaining().len();
-                if let Err(err) = write_all_owned(&mut writer, &mut data) {
-                    core.report_connection_lost_result(
-                        core.connection_lost(Some(PyRuntimeError::new_err(err.to_string()))),
-                    );
-                    return;
-                }
-                core.record_write_buffer_drained(buffered_len);
-
-                loop {
-                    match writer_rx.try_recv() {
-                        Ok(WriterCommand::Data(mut next)) => {
-                            let buffered_len = next.remaining().len();
-                            if let Err(err) = write_all_owned(&mut writer, &mut next) {
-                                core.report_connection_lost_result(core.connection_lost(Some(
-                                    PyRuntimeError::new_err(err.to_string()),
-                                )));
-                                return;
-                            }
-                            core.record_write_buffer_drained(buffered_len);
-                        }
-                        Ok(command) => {
-                            pending_command = Some(command);
-                            break;
-                        }
-                        Err(TryRecvError::Empty) => {
-                            core.set_write_backpressure_active(false);
-                            break;
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            core.set_write_backpressure_active(false);
-                            core.report_connection_lost_result(core.connection_lost(None));
-                            return;
-                        }
-                    }
-                }
-
-                if pending_command.is_none() {
-                    core.set_write_backpressure_active(false);
-                }
-            }
-            WriterCommand::WriteEof => {
-                if let Err(err) = writer.shutdown_write() {
-                    core.report_connection_lost_result(
-                        core.connection_lost(Some(PyRuntimeError::new_err(err.to_string()))),
-                    );
-                    return;
-                }
-                if core.close_on_write_eof() {
-                    core.report_connection_lost_result(core.connection_lost(None));
-                    return;
-                }
-            }
-            WriterCommand::Close => {
-                let close_result = writer.shutdown_close();
-                core.report_connection_lost_result(
-                    core.connection_lost(
-                        close_result
-                            .err()
-                            .map(|err| PyRuntimeError::new_err(err.to_string())),
-                    ),
-                );
-                return;
-            }
-            WriterCommand::Abort => {
-                let close_result = writer.shutdown_close();
-                core.report_connection_lost_result(
-                    core.connection_lost(
-                        close_result
-                            .err()
-                            .map(|err| PyRuntimeError::new_err(err.to_string())),
-                    ),
-                );
-                return;
-            }
-            WriterCommand::Stop => return,
+        if handle_stream_writer_command(
+            &core,
+            &mut writer,
+            &writer_rx,
+            command,
+            &mut pending_command,
+        ) {
+            continue;
         }
+        return;
     }
 
     core.report_connection_lost_result(core.connection_lost(None));
+}
+
+fn handle_stream_writer_command(
+    core: &Arc<StreamTransportCore>,
+    writer: &mut WriterTarget,
+    writer_rx: &Receiver<WriterCommand>,
+    command: WriterCommand,
+    pending_command: &mut Option<WriterCommand>,
+) -> bool {
+    match command {
+        WriterCommand::Data(data) => {
+            write_stream_data_batch(core, writer, writer_rx, data, pending_command)
+        }
+        WriterCommand::WriteEof => handle_stream_write_eof(core, writer),
+        WriterCommand::Close => {
+            report_writer_close_result(core, writer.shutdown_close());
+            false
+        }
+        WriterCommand::Abort => {
+            report_writer_close_result(core, writer.shutdown_close());
+            false
+        }
+        WriterCommand::Stop => false,
+    }
+}
+
+fn write_stream_data_batch(
+    core: &Arc<StreamTransportCore>,
+    writer: &mut WriterTarget,
+    writer_rx: &Receiver<WriterCommand>,
+    mut data: OwnedWriteBuffer,
+    pending_command: &mut Option<WriterCommand>,
+) -> bool {
+    if !write_one_stream_buffer(core, writer, &mut data) {
+        return false;
+    }
+
+    loop {
+        match writer_rx.try_recv() {
+            Ok(WriterCommand::Data(mut next)) => {
+                if !write_one_stream_buffer(core, writer, &mut next) {
+                    return false;
+                }
+            }
+            Ok(command) => {
+                *pending_command = Some(command);
+                break;
+            }
+            Err(TryRecvError::Empty) => {
+                core.set_write_backpressure_active(false);
+                break;
+            }
+            Err(TryRecvError::Disconnected) => {
+                core.set_write_backpressure_active(false);
+                core.report_connection_lost_result(core.connection_lost(None));
+                return false;
+            }
+        }
+    }
+
+    if pending_command.is_none() {
+        core.set_write_backpressure_active(false);
+    }
+    true
+}
+
+fn write_one_stream_buffer(
+    core: &Arc<StreamTransportCore>,
+    writer: &mut WriterTarget,
+    data: &mut OwnedWriteBuffer,
+) -> bool {
+    let buffered_len = data.remaining().len();
+    if let Err(err) = write_all_owned(writer, data) {
+        report_writer_io_error(core, err);
+        return false;
+    }
+    core.record_write_buffer_drained(buffered_len);
+    true
+}
+
+fn handle_stream_write_eof(core: &Arc<StreamTransportCore>, writer: &mut WriterTarget) -> bool {
+    if let Err(err) = writer.shutdown_write() {
+        report_writer_io_error(core, err);
+        return false;
+    }
+    if core.close_on_write_eof() {
+        core.report_connection_lost_result(core.connection_lost(None));
+        return false;
+    }
+    true
+}
+
+fn report_writer_io_error(core: &Arc<StreamTransportCore>, err: io::Error) {
+    core.report_connection_lost_result(
+        core.connection_lost(Some(PyRuntimeError::new_err(err.to_string()))),
+    );
+}
+
+fn report_writer_close_result(core: &Arc<StreamTransportCore>, result: io::Result<()>) {
+    core.report_connection_lost_result(
+        core.connection_lost(
+            result
+                .err()
+                .map(|err| PyRuntimeError::new_err(err.to_string())),
+        ),
+    );
 }
 
 fn run_tls_writer(
@@ -3955,84 +3860,101 @@ fn run_tls_writer(
             },
         };
 
-        match command {
-            WriterCommand::Data(data) => {
-                let buffered_len = data.remaining().len();
-                if let Err(err) = write_tls_data(&tls_state, data.remaining()) {
-                    core.report_connection_lost_result(
-                        core.connection_lost(Some(PyRuntimeError::new_err(err.to_string()))),
-                    );
-                    return;
-                }
-                core.record_write_buffer_drained(buffered_len);
-
-                loop {
-                    match writer_rx.try_recv() {
-                        Ok(WriterCommand::Data(next)) => {
-                            let buffered_len = next.remaining().len();
-                            if let Err(err) = write_tls_data(&tls_state, next.remaining()) {
-                                core.report_connection_lost_result(core.connection_lost(Some(
-                                    PyRuntimeError::new_err(err.to_string()),
-                                )));
-                                return;
-                            }
-                            core.record_write_buffer_drained(buffered_len);
-                        }
-                        Ok(command) => {
-                            pending_command = Some(command);
-                            break;
-                        }
-                        Err(TryRecvError::Empty) => {
-                            core.set_write_backpressure_active(false);
-                            break;
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            core.set_write_backpressure_active(false);
-                            core.report_connection_lost_result(core.connection_lost(None));
-                            return;
-                        }
-                    }
-                }
-
-                if pending_command.is_none() {
-                    core.set_write_backpressure_active(false);
-                }
-            }
-            WriterCommand::WriteEof => {}
-            WriterCommand::Close => {
-                match close_tls_writer(&tls_state) {
-                    Ok(()) => {
-                        core.report_connection_lost_result(core.connection_lost(None));
-                    }
-                    Err(err) if err.kind() == io::ErrorKind::TimedOut => {
-                        core.report_connection_lost_result(core.connection_lost(Some(
-                            PyTimeoutError::new_err("SSL shutdown timed out"),
-                        )));
-                    }
-                    Err(err) => {
-                        core.report_connection_lost_result(
-                            core.connection_lost(Some(PyRuntimeError::new_err(err.to_string()))),
-                        );
-                    }
-                }
-                return;
-            }
-            WriterCommand::Abort => {
-                let close_result = abort_tls_writer(&tls_state);
-                core.report_connection_lost_result(
-                    core.connection_lost(
-                        close_result
-                            .err()
-                            .map(|err| PyRuntimeError::new_err(err.to_string())),
-                    ),
-                );
-                return;
-            }
-            WriterCommand::Stop => return,
+        if handle_tls_writer_command(&core, &tls_state, &writer_rx, command, &mut pending_command) {
+            continue;
         }
+        return;
     }
 
     core.report_connection_lost_result(core.connection_lost(None));
+}
+
+fn handle_tls_writer_command(
+    core: &Arc<StreamTransportCore>,
+    tls_state: &Arc<Mutex<TlsIoState>>,
+    writer_rx: &Receiver<WriterCommand>,
+    command: WriterCommand,
+    pending_command: &mut Option<WriterCommand>,
+) -> bool {
+    match command {
+        WriterCommand::Data(data) => {
+            write_tls_data_batch(core, tls_state, writer_rx, data, pending_command)
+        }
+        WriterCommand::WriteEof => true,
+        WriterCommand::Close => {
+            report_tls_close_result(core, close_tls_writer(tls_state));
+            false
+        }
+        WriterCommand::Abort => {
+            report_writer_close_result(core, abort_tls_writer(tls_state));
+            false
+        }
+        WriterCommand::Stop => false,
+    }
+}
+
+fn write_tls_data_batch(
+    core: &Arc<StreamTransportCore>,
+    tls_state: &Arc<Mutex<TlsIoState>>,
+    writer_rx: &Receiver<WriterCommand>,
+    data: OwnedWriteBuffer,
+    pending_command: &mut Option<WriterCommand>,
+) -> bool {
+    if !write_one_tls_buffer(core, tls_state, &data) {
+        return false;
+    }
+
+    loop {
+        match writer_rx.try_recv() {
+            Ok(WriterCommand::Data(next)) => {
+                if !write_one_tls_buffer(core, tls_state, &next) {
+                    return false;
+                }
+            }
+            Ok(command) => {
+                *pending_command = Some(command);
+                break;
+            }
+            Err(TryRecvError::Empty) => {
+                core.set_write_backpressure_active(false);
+                break;
+            }
+            Err(TryRecvError::Disconnected) => {
+                core.set_write_backpressure_active(false);
+                core.report_connection_lost_result(core.connection_lost(None));
+                return false;
+            }
+        }
+    }
+
+    if pending_command.is_none() {
+        core.set_write_backpressure_active(false);
+    }
+    true
+}
+
+fn write_one_tls_buffer(
+    core: &Arc<StreamTransportCore>,
+    tls_state: &Arc<Mutex<TlsIoState>>,
+    data: &OwnedWriteBuffer,
+) -> bool {
+    let buffered_len = data.remaining().len();
+    if let Err(err) = write_tls_data(tls_state, data.remaining()) {
+        report_writer_io_error(core, err);
+        return false;
+    }
+    core.record_write_buffer_drained(buffered_len);
+    true
+}
+
+fn report_tls_close_result(core: &Arc<StreamTransportCore>, result: io::Result<()>) {
+    match result {
+        Ok(()) => core.report_connection_lost_result(core.connection_lost(None)),
+        Err(err) if err.kind() == io::ErrorKind::TimedOut => core.report_connection_lost_result(
+            core.connection_lost(Some(PyTimeoutError::new_err("SSL shutdown timed out"))),
+        ),
+        Err(err) => report_writer_io_error(core, err),
+    }
 }
 
 fn write_all_owned(writer: &mut WriterTarget, data: &mut OwnedWriteBuffer) -> io::Result<()> {
@@ -4253,27 +4175,45 @@ fn stream_reader_fast_path(
     py: Python<'_>,
     protocol: &Bound<'_, PyAny>,
 ) -> PyResult<Option<StreamReaderFastPath>> {
-    if let Ok(native_protocol) = protocol.extract::<Py<PyFastStreamProtocol>>() {
-        let reader = native_protocol.borrow(py).reader_ref(py);
-        return Ok(Some(StreamReaderFastPath::Native {
-            protocol: native_protocol,
-            reader,
-        }));
+    if let Some(native) = native_stream_reader_fast_path(py, protocol)? {
+        return Ok(Some(native));
     }
-
-    if let Ok(reader) = protocol.getattr("_rsloop_fast_reader") {
-        if !reader.is_none() {
-            let buffer = reader.getattr("_buffer")?;
-            let limit = reader.getattr("_limit")?.extract::<usize>()?;
-            return Ok(Some(StreamReaderFastPath::Generic {
-                protocol: Some(protocol.clone().unbind()),
-                reader: reader.unbind(),
-                buffer: buffer.unbind(),
-                limit,
-            }));
-        }
+    if let Some(generic) = generic_stream_reader_fast_path(protocol)? {
+        return Ok(Some(generic));
     }
+    asyncio_stream_reader_fast_path(py, protocol)
+}
 
+fn native_stream_reader_fast_path(
+    py: Python<'_>,
+    protocol: &Bound<'_, PyAny>,
+) -> PyResult<Option<StreamReaderFastPath>> {
+    let Ok(native_protocol) = protocol.extract::<Py<PyFastStreamProtocol>>() else {
+        return Ok(None);
+    };
+    let reader = native_protocol.borrow(py).reader_ref(py);
+    Ok(Some(StreamReaderFastPath::Native {
+        protocol: native_protocol,
+        reader,
+    }))
+}
+
+fn generic_stream_reader_fast_path(
+    protocol: &Bound<'_, PyAny>,
+) -> PyResult<Option<StreamReaderFastPath>> {
+    let Ok(reader) = protocol.getattr("_rsloop_fast_reader") else {
+        return Ok(None);
+    };
+    if reader.is_none() {
+        return Ok(None);
+    }
+    stream_reader_fast_path_from_reader(Some(protocol.clone().unbind()), reader)
+}
+
+fn asyncio_stream_reader_fast_path(
+    py: Python<'_>,
+    protocol: &Bound<'_, PyAny>,
+) -> PyResult<Option<StreamReaderFastPath>> {
     let asyncio_streams = py.import("asyncio.streams")?;
     let stream_reader_protocol_cls = asyncio_streams.getattr("StreamReaderProtocol")?;
     if !protocol.is_instance(&stream_reader_protocol_cls)? {
@@ -4284,12 +4224,18 @@ fn stream_reader_fast_path(
     if reader.is_none() {
         return Ok(None);
     }
+    stream_reader_fast_path_from_reader(Some(protocol.clone().unbind()), reader)
+}
 
+fn stream_reader_fast_path_from_reader(
+    protocol: Option<Py<PyAny>>,
+    reader: Bound<'_, PyAny>,
+) -> PyResult<Option<StreamReaderFastPath>> {
     let buffer = reader.getattr("_buffer")?;
     let limit = reader.getattr("_limit")?.extract::<usize>()?;
 
     Ok(Some(StreamReaderFastPath::Generic {
-        protocol: Some(protocol.clone().unbind()),
+        protocol,
         reader: reader.unbind(),
         buffer: buffer.unbind(),
         limit,
