@@ -85,58 +85,96 @@ fn service() -> io::Result<&'static Service> {
 #[cfg(windows)]
 fn start_service() -> Result<Service, String> {
     let (tx, rx) = mpsc::unbounded::<Command>();
-    let thread_tx = tx.clone();
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
 
+    spawn_service_thread(tx.clone(), rx, ready_tx)?;
+    wait_for_service_ready(tx, ready_rx)
+}
+
+#[cfg(windows)]
+fn spawn_service_thread(
+    thread_tx: mpsc::UnboundedSender<Command>,
+    rx: mpsc::UnboundedReceiver<Command>,
+    ready_tx: std::sync::mpsc::SyncSender<Result<(), String>>,
+) -> Result<(), String> {
     thread::Builder::new()
         .name("rsloop-vibeio".to_owned())
         .spawn(move || {
-            let runtime = match vibeio::RuntimeBuilder::new().build() {
-                Ok(runtime) => runtime,
-                Err(err) => {
-                    let _ = ready_tx.send(Err(err.to_string()));
+            let Ok(runtime) = build_service_runtime(&ready_tx) else {
+                return;
+            };
+            let _ = ready_tx.send(Ok(()));
+            runtime.block_on(run_service_commands(rx, thread_tx));
+        })
+        .map(|_| ())
+        .map_err(|err| err.to_string())
+}
+
+#[cfg(windows)]
+fn build_service_runtime(
+    ready_tx: &std::sync::mpsc::SyncSender<Result<(), String>>,
+) -> Result<vibeio::Runtime, ()> {
+    match vibeio::RuntimeBuilder::new().build() {
+        Ok(runtime) => Ok(runtime),
+        Err(err) => {
+            let _ = ready_tx.send(Err(err.to_string()));
+            Err(())
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn run_service_commands(
+    mut rx: mpsc::UnboundedReceiver<Command>,
+    thread_tx: mpsc::UnboundedSender<Command>,
+) {
+    let mut tasks: HashMap<u64, vibeio::JoinHandle<()>> = HashMap::new();
+
+    while let Some(command) = rx.next().await {
+        handle_service_command(command, &thread_tx, &mut tasks);
+    }
+
+    for (_, handle) in tasks.drain() {
+        handle.cancel();
+    }
+}
+
+#[cfg(windows)]
+fn handle_service_command(
+    command: Command,
+    thread_tx: &mpsc::UnboundedSender<Command>,
+    tasks: &mut HashMap<u64, vibeio::JoinHandle<()>>,
+) {
+    match command {
+        Command::Spawn { id, factory } => {
+            let finished_tx = thread_tx.clone();
+            let handle = vibeio::spawn(async move {
+                factory().await;
+                if finished_tx
+                    .unbounded_send(Command::Finished { id })
+                    .is_err()
+                {
                     return;
                 }
-            };
-
-            let _ = ready_tx.send(Ok(()));
-            runtime.block_on(async move {
-                let mut rx = rx;
-                let mut tasks: HashMap<u64, vibeio::JoinHandle<()>> = HashMap::new();
-
-                while let Some(command) = rx.next().await {
-                    match command {
-                        Command::Spawn { id, factory } => {
-                            let finished_tx = thread_tx.clone();
-                            let handle = vibeio::spawn(async move {
-                                factory().await;
-                                if finished_tx
-                                    .unbounded_send(Command::Finished { id })
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                            });
-                            tasks.insert(id, handle);
-                        }
-                        Command::Cancel { id } => {
-                            if let Some(handle) = tasks.remove(&id) {
-                                handle.cancel();
-                            }
-                        }
-                        Command::Finished { id } => {
-                            tasks.remove(&id);
-                        }
-                    }
-                }
-
-                for (_, handle) in tasks.drain() {
-                    handle.cancel();
-                }
             });
-        })
-        .map_err(|err| err.to_string())?;
+            tasks.insert(id, handle);
+        }
+        Command::Cancel { id } => {
+            if let Some(handle) = tasks.remove(&id) {
+                handle.cancel();
+            }
+        }
+        Command::Finished { id } => {
+            tasks.remove(&id);
+        }
+    }
+}
 
+#[cfg(windows)]
+fn wait_for_service_ready(
+    tx: mpsc::UnboundedSender<Command>,
+    ready_rx: std::sync::mpsc::Receiver<Result<(), String>>,
+) -> Result<Service, String> {
     match ready_rx.recv() {
         Ok(Ok(())) => Ok(Service {
             tx,

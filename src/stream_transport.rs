@@ -2213,21 +2213,10 @@ fn tcp_family(stream: &StdTcpStream) -> c_int {
 
 pub fn transport_from_socket(
     py: Python<'_>,
-    loop_core: Arc<LoopCore>,
-    loop_obj: Py<PyAny>,
-    protocol: Py<PyAny>,
-    context: Py<PyAny>,
-    context_needs_run: bool,
+    spawn_context: TransportSpawnContext,
     socket_obj: Py<PyAny>,
 ) -> PyResult<Py<PyStreamTransport>> {
     profiling::scope!("stream.transport_from_socket");
-    let spawn_context = TransportSpawnContext {
-        loop_core,
-        loop_obj,
-        protocol,
-        context,
-        context_needs_run,
-    };
     let family = socket_obj.getattr(py, "family")?.extract::<i32>(py)?;
     #[cfg(unix)]
     if family == libc::AF_UNIX {
@@ -2251,22 +2240,11 @@ pub fn transport_from_socket(
 
 pub fn transport_from_socket_tls(
     py: Python<'_>,
-    loop_core: Arc<LoopCore>,
-    loop_obj: Py<PyAny>,
-    protocol: Py<PyAny>,
-    context: Py<PyAny>,
-    context_needs_run: bool,
+    spawn_context: TransportSpawnContext,
     socket_obj: Py<PyAny>,
     tls: ClientTlsSettings,
 ) -> PyResult<Py<PyStreamTransport>> {
     profiling::scope!("stream.transport_from_socket_tls");
-    let spawn_context = TransportSpawnContext {
-        loop_core,
-        loop_obj,
-        protocol,
-        context,
-        context_needs_run,
-    };
     let family = socket_obj.getattr(py, "family")?.extract::<i32>(py)?;
     #[cfg(unix)]
     if family == libc::AF_UNIX {
@@ -2294,22 +2272,11 @@ pub fn transport_from_socket_tls(
 
 pub fn transport_from_socket_server_tls(
     py: Python<'_>,
-    loop_core: Arc<LoopCore>,
-    loop_obj: Py<PyAny>,
-    protocol: Py<PyAny>,
-    context: Py<PyAny>,
-    context_needs_run: bool,
+    spawn_context: TransportSpawnContext,
     socket_obj: Py<PyAny>,
     tls: ServerTlsSettings,
 ) -> PyResult<Py<PyStreamTransport>> {
     profiling::scope!("stream.transport_from_socket_server_tls");
-    let spawn_context = TransportSpawnContext {
-        loop_core,
-        loop_obj,
-        protocol,
-        context,
-        context_needs_run,
-    };
     let family = socket_obj.getattr(py, "family")?.extract::<i32>(py)?;
     #[cfg(unix)]
     if family == libc::AF_UNIX {
@@ -2352,66 +2319,17 @@ pub fn start_tls_transport(
     }
 }
 
-#[cfg(not(windows))]
 pub fn spawn_read_pipe_transport(
     py: Python<'_>,
-    loop_core: Arc<LoopCore>,
-    loop_obj: Py<PyAny>,
-    protocol: Py<PyAny>,
-    context: Py<PyAny>,
-    context_needs_run: bool,
+    spawn_context: TransportSpawnContext,
     pipe_obj: Py<PyAny>,
 ) -> PyResult<Py<PyStreamTransport>> {
-    let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
-    let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    // SAFETY: `dup_raw_fd` returned a newly owned descriptor. `File` takes ownership of it.
-    let file = unsafe { std::fs::File::from_raw_fd(raw_fd_for_std(dup)?) };
-    let callbacks = build_protocol_callbacks(py, &protocol)?;
-    let mut extra = HashMap::with_capacity(2);
-    extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
-    extra.insert("file".to_owned(), pipe_obj.clone_ref(py));
-
-    let (writer_tx, writer_rx) = mpsc::channel();
-    let core = Arc::new(StreamTransportCore {
-        loop_core,
-        loop_obj,
-        state: Mutex::new(StreamTransportState {
-            io_fd: None,
-            runtime_socket_io: false,
-            protocol,
-            callbacks,
-            context,
-            context_needs_run,
-            extra,
-            closing: false,
-            read_paused: false,
-            reading: true,
-            writable: false,
-            write_eof_requested: false,
-            can_write_eof: false,
-            close_on_write_eof: false,
-            lost_called: false,
-            writer_registered: false,
-            write_buffer_size: 0,
-            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
-            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
-            protocol_write_paused: false,
-            detached: false,
-            server: None,
-        }),
-        pending_read_events: Mutex::new(VecDeque::new()),
-        read_events_scheduled: AtomicBool::new(false),
-        writer_tx,
-        direct_writer: None,
-        lazy_writer: Mutex::new(None),
-        workers: Mutex::new(Vec::new()),
-    });
-
-    let transport = Py::new(
+    let file = pipe_file_from_obj(py, &pipe_obj)?;
+    let (core, transport, writer_rx) = pipe_transport_core(
         py,
-        PyStreamTransport {
-            core: Arc::clone(&core),
-        },
+        spawn_context,
+        pipe_extra(py, &pipe_obj, None),
+        PipeTransportMode::Read,
     )?;
     core.connection_made(transport.clone_ref(py))?;
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::File(file));
@@ -2419,27 +2337,60 @@ pub fn spawn_read_pipe_transport(
     Ok(transport)
 }
 
-#[cfg(windows)]
-pub fn spawn_read_pipe_transport(
+pub fn spawn_write_pipe_transport(
     py: Python<'_>,
-    loop_core: Arc<LoopCore>,
-    loop_obj: Py<PyAny>,
-    protocol: Py<PyAny>,
-    context: Py<PyAny>,
-    context_needs_run: bool,
+    spawn_context: TransportSpawnContext,
     pipe_obj: Py<PyAny>,
+    extra_entries: Option<HashMap<String, Py<PyAny>>>,
 ) -> PyResult<Py<PyStreamTransport>> {
-    let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
-    let handle = fd_ops::duplicate_handle_from_fd(fd)
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    // SAFETY: `duplicate_handle_from_fd` returned a newly owned handle. `File` takes ownership.
-    let file = unsafe { std::fs::File::from_raw_handle(handle as _) };
-    let callbacks = build_protocol_callbacks(py, &protocol)?;
-    let mut extra = HashMap::with_capacity(2);
-    extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
-    extra.insert("file".to_owned(), pipe_obj.clone_ref(py));
+    let file = pipe_file_from_obj(py, &pipe_obj)?;
+    let (core, transport, writer_rx) = pipe_transport_core(
+        py,
+        spawn_context,
+        pipe_extra(py, &pipe_obj, extra_entries),
+        PipeTransportMode::Write,
+    )?;
+    core.connection_made(transport.clone_ref(py))?;
+    spawn_writer_worker(core, WriterTarget::File(file), writer_rx);
+    Ok(transport)
+}
 
+enum PipeTransportMode {
+    Read,
+    Write,
+}
+
+impl PipeTransportMode {
+    fn reading(&self) -> bool {
+        matches!(self, Self::Read)
+    }
+
+    fn writable(&self) -> bool {
+        matches!(self, Self::Write)
+    }
+}
+
+fn pipe_transport_core(
+    py: Python<'_>,
+    spawn_context: TransportSpawnContext,
+    extra: HashMap<String, Py<PyAny>>,
+    mode: PipeTransportMode,
+) -> PyResult<(
+    Arc<StreamTransportCore>,
+    Py<PyStreamTransport>,
+    Receiver<WriterCommand>,
+)> {
+    let TransportSpawnContext {
+        loop_core,
+        loop_obj,
+        protocol,
+        context,
+        context_needs_run,
+    } = spawn_context;
+    let callbacks = build_protocol_callbacks(py, &protocol)?;
     let (writer_tx, writer_rx) = mpsc::channel();
+    let reading = mode.reading();
+    let writable = mode.writable();
     let core = Arc::new(StreamTransportCore {
         loop_core,
         loop_obj,
@@ -2453,11 +2404,11 @@ pub fn spawn_read_pipe_transport(
             extra,
             closing: false,
             read_paused: false,
-            reading: true,
-            writable: false,
+            reading,
+            writable,
             write_eof_requested: false,
-            can_write_eof: false,
-            close_on_write_eof: false,
+            can_write_eof: writable,
+            close_on_write_eof: writable,
             lost_called: false,
             writer_registered: false,
             write_buffer_size: 0,
@@ -2481,157 +2432,38 @@ pub fn spawn_read_pipe_transport(
             core: Arc::clone(&core),
         },
     )?;
-    core.connection_made(transport.clone_ref(py))?;
-    spawn_reader_worker(Arc::clone(&core), ReaderTarget::File(file));
-    spawn_writer_worker(core, WriterTarget::Sink(io::sink()), writer_rx);
-    Ok(transport)
+    Ok((core, transport, writer_rx))
+}
+
+fn pipe_extra(
+    py: Python<'_>,
+    pipe_obj: &Py<PyAny>,
+    extra_entries: Option<HashMap<String, Py<PyAny>>>,
+) -> HashMap<String, Py<PyAny>> {
+    let mut extra = HashMap::with_capacity(2 + extra_entries.as_ref().map_or(0, HashMap::len));
+    extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
+    extra.insert("file".to_owned(), pipe_obj.clone_ref(py));
+    if let Some(extra_entries) = extra_entries {
+        extra.extend(extra_entries);
+    }
+    extra
 }
 
 #[cfg(not(windows))]
-pub fn spawn_write_pipe_transport(
-    py: Python<'_>,
-    spawn_context: TransportSpawnContext,
-    pipe_obj: Py<PyAny>,
-    extra_entries: Option<HashMap<String, Py<PyAny>>>,
-) -> PyResult<Py<PyStreamTransport>> {
-    let TransportSpawnContext {
-        loop_core,
-        loop_obj,
-        protocol,
-        context,
-        context_needs_run,
-    } = spawn_context;
+fn pipe_file_from_obj(py: Python<'_>, pipe_obj: &Py<PyAny>) -> PyResult<fs::File> {
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     // SAFETY: `dup_raw_fd` returned a newly owned descriptor. `File` takes ownership of it.
-    let file = unsafe { std::fs::File::from_raw_fd(raw_fd_for_std(dup)?) };
-    let callbacks = build_protocol_callbacks(py, &protocol)?;
-    let mut extra = HashMap::with_capacity(2 + extra_entries.as_ref().map_or(0, HashMap::len));
-    extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
-    extra.insert("file".to_owned(), pipe_obj.clone_ref(py));
-    if let Some(extra_entries) = extra_entries {
-        extra.extend(extra_entries);
-    }
-
-    let (writer_tx, writer_rx) = mpsc::channel();
-    let core = Arc::new(StreamTransportCore {
-        loop_core,
-        loop_obj,
-        state: Mutex::new(StreamTransportState {
-            io_fd: None,
-            runtime_socket_io: false,
-            protocol,
-            callbacks,
-            context,
-            context_needs_run,
-            extra,
-            closing: false,
-            read_paused: false,
-            reading: false,
-            writable: true,
-            write_eof_requested: false,
-            can_write_eof: true,
-            close_on_write_eof: true,
-            lost_called: false,
-            writer_registered: false,
-            write_buffer_size: 0,
-            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
-            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
-            protocol_write_paused: false,
-            detached: false,
-            server: None,
-        }),
-        pending_read_events: Mutex::new(VecDeque::new()),
-        read_events_scheduled: AtomicBool::new(false),
-        writer_tx,
-        direct_writer: None,
-        lazy_writer: Mutex::new(None),
-        workers: Mutex::new(Vec::new()),
-    });
-
-    let transport = Py::new(
-        py,
-        PyStreamTransport {
-            core: Arc::clone(&core),
-        },
-    )?;
-    core.connection_made(transport.clone_ref(py))?;
-    spawn_writer_worker(core, WriterTarget::File(file), writer_rx);
-    Ok(transport)
+    Ok(unsafe { fs::File::from_raw_fd(raw_fd_for_std(dup)?) })
 }
 
 #[cfg(windows)]
-pub fn spawn_write_pipe_transport(
-    py: Python<'_>,
-    spawn_context: TransportSpawnContext,
-    pipe_obj: Py<PyAny>,
-    extra_entries: Option<HashMap<String, Py<PyAny>>>,
-) -> PyResult<Py<PyStreamTransport>> {
-    let TransportSpawnContext {
-        loop_core,
-        loop_obj,
-        protocol,
-        context,
-        context_needs_run,
-    } = spawn_context;
+fn pipe_file_from_obj(py: Python<'_>, pipe_obj: &Py<PyAny>) -> PyResult<fs::File> {
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
     let handle = fd_ops::duplicate_handle_from_fd(fd)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     // SAFETY: `duplicate_handle_from_fd` returned a newly owned handle. `File` takes ownership.
-    let file = unsafe { std::fs::File::from_raw_handle(handle as _) };
-    let callbacks = build_protocol_callbacks(py, &protocol)?;
-    let mut extra = HashMap::with_capacity(2 + extra_entries.as_ref().map_or(0, HashMap::len));
-    extra.insert("pipe".to_owned(), pipe_obj.clone_ref(py));
-    extra.insert("file".to_owned(), pipe_obj.clone_ref(py));
-    if let Some(extra_entries) = extra_entries {
-        extra.extend(extra_entries);
-    }
-
-    let (writer_tx, writer_rx) = mpsc::channel();
-    let core = Arc::new(StreamTransportCore {
-        loop_core,
-        loop_obj,
-        state: Mutex::new(StreamTransportState {
-            io_fd: None,
-            runtime_socket_io: false,
-            protocol,
-            callbacks,
-            context,
-            context_needs_run,
-            extra,
-            closing: false,
-            read_paused: false,
-            reading: false,
-            writable: true,
-            write_eof_requested: false,
-            can_write_eof: true,
-            close_on_write_eof: true,
-            lost_called: false,
-            writer_registered: false,
-            write_buffer_size: 0,
-            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
-            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
-            protocol_write_paused: false,
-            detached: false,
-            server: None,
-        }),
-        pending_read_events: Mutex::new(VecDeque::new()),
-        read_events_scheduled: AtomicBool::new(false),
-        writer_tx,
-        direct_writer: None,
-        lazy_writer: Mutex::new(None),
-        workers: Mutex::new(Vec::new()),
-    });
-
-    let transport = Py::new(
-        py,
-        PyStreamTransport {
-            core: Arc::clone(&core),
-        },
-    )?;
-    core.connection_made(transport.clone_ref(py))?;
-    spawn_writer_worker(core, WriterTarget::File(file), writer_rx);
-    Ok(transport)
+    Ok(unsafe { fs::File::from_raw_handle(handle as _) })
 }
 
 #[inline]
@@ -2886,12 +2718,14 @@ fn spawn_tls_client_transport(
         py,
         spawn_context,
         stream,
-        TlsConnectionKind::Client(connection),
-        tls_extra(py, &tls.ssl_context),
-        tls.handshake_timeout,
-        tls.shutdown_timeout,
-        server,
-        call_connection_made,
+        TlsTransportConfig {
+            connection: TlsConnectionKind::Client(connection),
+            tls_extra: tls_extra(py, &tls.ssl_context),
+            handshake_timeout: tls.handshake_timeout,
+            shutdown_timeout: tls.shutdown_timeout,
+            server,
+            call_connection_made,
+        },
     )
 }
 
@@ -2909,26 +2743,40 @@ fn spawn_tls_server_transport(
         py,
         spawn_context,
         stream,
-        TlsConnectionKind::Server(connection),
-        tls_extra(py, &tls.ssl_context),
-        tls.handshake_timeout,
-        tls.shutdown_timeout,
-        server,
-        call_connection_made,
+        TlsTransportConfig {
+            connection: TlsConnectionKind::Server(connection),
+            tls_extra: tls_extra(py, &tls.ssl_context),
+            handshake_timeout: tls.handshake_timeout,
+            shutdown_timeout: tls.shutdown_timeout,
+            server,
+            call_connection_made,
+        },
     )
 }
 
-fn spawn_tls_transport(
-    py: Python<'_>,
-    spawn_context: TransportSpawnContext,
-    stream: StreamKind,
+struct TlsTransportConfig {
     connection: TlsConnectionKind,
     tls_extra: HashMap<String, Py<PyAny>>,
     handshake_timeout: Duration,
     shutdown_timeout: Duration,
     server: Option<Weak<ServerCore>>,
     call_connection_made: bool,
+}
+
+fn spawn_tls_transport(
+    py: Python<'_>,
+    spawn_context: TransportSpawnContext,
+    stream: StreamKind,
+    config: TlsTransportConfig,
 ) -> PyResult<Py<PyStreamTransport>> {
+    let TlsTransportConfig {
+        connection,
+        tls_extra: extra_tls,
+        handshake_timeout,
+        shutdown_timeout,
+        server,
+        call_connection_made,
+    } = config;
     let TransportSpawnContext {
         loop_core,
         loop_obj,
@@ -2939,12 +2787,12 @@ fn spawn_tls_transport(
     let extra = match &stream {
         StreamKind::Tcp(stream) => merge_extra(
             make_stream_extra(py, tcp_stream_raw_fd(stream), tcp_family(stream))?,
-            tls_extra,
+            extra_tls,
         ),
         #[cfg(unix)]
         StreamKind::Unix(stream) => merge_extra(
             make_stream_extra(py, unix_raw_fd(stream.as_raw_fd()), libc::AF_UNIX)?,
-            tls_extra,
+            extra_tls,
         ),
     };
     let callbacks = build_protocol_callbacks(py, &protocol)?;

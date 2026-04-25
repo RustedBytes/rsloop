@@ -506,6 +506,23 @@ fn call_protocol_factory(
     run_in_context(py, context, context_needs_run, protocol_factory, &args)
 }
 
+fn stream_spawn_context(
+    py: Python<'_>,
+    loop_core: &Arc<LoopCore>,
+    loop_obj: &Py<PyAny>,
+    protocol: &Py<PyAny>,
+    context: &Py<PyAny>,
+    context_needs_run: bool,
+) -> TransportSpawnContext {
+    TransportSpawnContext {
+        loop_core: Arc::clone(loop_core),
+        loop_obj: loop_obj.clone_ref(py),
+        protocol: protocol.clone_ref(py),
+        context: context.clone_ref(py),
+        context_needs_run,
+    }
+}
+
 fn is_asyncio_subprocess_stream_protocol(py: Python<'_>, protocol: &Py<PyAny>) -> PyResult<bool> {
     let asyncio_subprocess = py.import("asyncio.subprocess")?;
     let cls = asyncio_subprocess.getattr("SubprocessStreamProtocol")?;
@@ -521,30 +538,59 @@ fn resolve_stream_addrinfos(
     flags: i32,
 ) -> PyResult<Vec<ResolvedStreamAddrinfo>> {
     let socket_mod = py.import("socket")?;
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("family", family)?;
-    kwargs.set_item("type", socket_mod.getattr("SOCK_STREAM")?)?;
-    kwargs.set_item("proto", proto)?;
-    kwargs.set_item("flags", flags)?;
-
-    let host = host.unwrap_or_else(|| py.None());
-    let port = port.unwrap_or_else(|| py.None());
-    let addrinfos = socket_mod
-        .getattr("getaddrinfo")?
-        .call((host, port), Some(&kwargs))?;
+    let addrinfos = call_getaddrinfo(
+        py,
+        &socket_mod,
+        AddrInfoQuery {
+            host,
+            port,
+            family,
+            proto,
+            flags,
+        },
+    )?;
 
     let mut resolved = Vec::new();
     for entry in addrinfos.try_iter()? {
-        let entry = entry?;
-        let tuple = entry.cast::<PyTuple>()?;
-        resolved.push((
-            tuple.get_item(0)?.extract::<i32>()?,
-            tuple.get_item(1)?.extract::<i32>()?,
-            tuple.get_item(2)?.extract::<i32>()?,
-            tuple.get_item(4)?.unbind(),
-        ));
+        resolved.push(parse_stream_addrinfo(entry?)?);
     }
     Ok(resolved)
+}
+
+struct AddrInfoQuery {
+    host: Option<Py<PyAny>>,
+    port: Option<Py<PyAny>>,
+    family: i32,
+    proto: i32,
+    flags: i32,
+}
+
+fn call_getaddrinfo<'py>(
+    py: Python<'py>,
+    socket_mod: &Bound<'py, PyModule>,
+    query: AddrInfoQuery,
+) -> PyResult<Bound<'py, PyAny>> {
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("family", query.family)?;
+    kwargs.set_item("type", socket_mod.getattr("SOCK_STREAM")?)?;
+    kwargs.set_item("proto", query.proto)?;
+    kwargs.set_item("flags", query.flags)?;
+
+    let host = query.host.unwrap_or_else(|| py.None());
+    let port = query.port.unwrap_or_else(|| py.None());
+    socket_mod
+        .getattr("getaddrinfo")?
+        .call((host, port), Some(&kwargs))
+}
+
+fn parse_stream_addrinfo(entry: Bound<'_, PyAny>) -> PyResult<ResolvedStreamAddrinfo> {
+    let tuple = entry.cast::<PyTuple>()?;
+    Ok((
+        tuple.get_item(0)?.extract::<i32>()?,
+        tuple.get_item(1)?.extract::<i32>()?,
+        tuple.get_item(2)?.extract::<i32>()?,
+        tuple.get_item(4)?.unbind(),
+    ))
 }
 
 fn build_stream_socket(
@@ -2062,22 +2108,28 @@ impl PyLoop {
                     )?;
                     transport_from_socket_tls(
                         py,
-                        core.clone(),
-                        loop_obj.clone_ref(py),
-                        protocol.clone_ref(py),
-                        context.clone_ref(py),
-                        context_needs_run,
+                        stream_spawn_context(
+                            py,
+                            &core,
+                            &loop_obj,
+                            &protocol,
+                            &context,
+                            context_needs_run,
+                        ),
                         socket_obj,
                         tls,
                     )
                 } else {
                     transport_from_socket(
                         py,
-                        core.clone(),
-                        loop_obj.clone_ref(py),
-                        protocol.clone_ref(py),
-                        context.clone_ref(py),
-                        context_needs_run,
+                        stream_spawn_context(
+                            py,
+                            &core,
+                            &loop_obj,
+                            &protocol,
+                            &context,
+                            context_needs_run,
+                        ),
                         socket_obj,
                     )
                 }
@@ -2283,22 +2335,28 @@ impl PyLoop {
                     )?;
                     transport_from_socket_tls(
                         py,
-                        core.clone(),
-                        loop_obj.clone_ref(py),
-                        protocol.clone_ref(py),
-                        context.clone_ref(py),
-                        context_needs_run,
+                        stream_spawn_context(
+                            py,
+                            &core,
+                            &loop_obj,
+                            &protocol,
+                            &context,
+                            context_needs_run,
+                        ),
                         socket_obj,
                         tls,
                     )
                 } else {
                     transport_from_socket(
                         py,
-                        core.clone(),
-                        loop_obj.clone_ref(py),
-                        protocol.clone_ref(py),
-                        context.clone_ref(py),
-                        context_needs_run,
+                        stream_spawn_context(
+                            py,
+                            &core,
+                            &loop_obj,
+                            &protocol,
+                            &context,
+                            context_needs_run,
+                        ),
                         socket_obj,
                     )
                 }
@@ -2362,22 +2420,28 @@ impl PyLoop {
                     )?;
                     transport_from_socket_server_tls(
                         py,
-                        core.clone(),
-                        loop_obj.clone_ref(py),
-                        protocol.clone_ref(py),
-                        context.clone_ref(py),
-                        context_needs_run,
+                        stream_spawn_context(
+                            py,
+                            &core,
+                            &loop_obj,
+                            &protocol,
+                            &context,
+                            context_needs_run,
+                        ),
                         socket_obj,
                         tls,
                     )
                 } else {
                     transport_from_socket(
                         py,
-                        core.clone(),
-                        loop_obj.clone_ref(py),
-                        protocol.clone_ref(py),
-                        context.clone_ref(py),
-                        context_needs_run,
+                        stream_spawn_context(
+                            py,
+                            &core,
+                            &loop_obj,
+                            &protocol,
+                            &context,
+                            context_needs_run,
+                        ),
                         socket_obj,
                     )
                 }
@@ -3023,11 +3087,14 @@ impl PyLoop {
                 let _ = pipe.call_method1(py, "setblocking", (false,));
                 spawn_read_pipe_transport(
                     py,
-                    core.clone(),
-                    loop_obj.clone_ref(py),
-                    protocol.clone_ref(py),
-                    context.clone_ref(py),
-                    context_needs_run,
+                    stream_spawn_context(
+                        py,
+                        &core,
+                        &loop_obj,
+                        &protocol,
+                        &context,
+                        context_needs_run,
+                    ),
                     pipe.clone_ref(py),
                 )
             })?;
