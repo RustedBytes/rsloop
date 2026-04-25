@@ -102,6 +102,47 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(rsloop.run(main()), "ok")
 
+    def test_run_fallback_handles_sigint(self) -> None:
+        script = r"""
+import asyncio
+import signal
+import sys
+import threading
+
+import rsloop
+import rsloop._run as rsloop_run
+
+rsloop_run.__sys.version_info = (3, 11)
+
+async def main():
+    try:
+        await asyncio.sleep(60)
+    finally:
+        print("main-cancelled", flush=True)
+
+threading.Timer(0.1, lambda: signal.raise_signal(signal.SIGINT)).start()
+try:
+    rsloop.run(main())
+except KeyboardInterrupt:
+    print("keyboard-interrupt", flush=True)
+    raise SystemExit(0)
+except BaseException as exc:
+    print(f"unexpected: {type(exc).__name__}: {exc}", flush=True)
+    raise SystemExit(2)
+else:
+    print("no-interrupt", flush=True)
+    raise SystemExit(3)
+"""
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("main-cancelled", proc.stdout)
+        self.assertIn("keyboard-interrupt", proc.stdout)
+
     @unittest.skipUnless(
         os.name == "posix" and os.path.isdir("/proc/self/fd"),
         "requires /proc/self/fd",

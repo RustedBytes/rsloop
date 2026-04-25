@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio as __asyncio
+import signal as __signal
 import sys as __sys
+import threading as __threading
 import typing as __typing
 
 from ._loop_compat import Loop
@@ -9,6 +11,10 @@ from ._loop_compat import cancel_all_tasks as __cancel_all_tasks
 
 _T = __typing.TypeVar("_T")
 _PREVIOUS_EVENT_LOOP_POLICY: __typing.Optional[__asyncio.AbstractEventLoopPolicy] = None
+
+
+def _noop() -> None:
+    pass
 
 
 def new_event_loop() -> Loop:
@@ -46,6 +52,25 @@ def uninstall() -> None:
     if isinstance(__asyncio.get_event_loop_policy(), EventLoopPolicy):
         __asyncio.set_event_loop_policy(_PREVIOUS_EVENT_LOOP_POLICY)
     _PREVIOUS_EVENT_LOOP_POLICY = None
+
+
+class _SigintHandler:
+    def __init__(self, loop: Loop, main_task: __asyncio.Task[__typing.Any]) -> None:
+        self._loop = loop
+        self._main_task = main_task
+        self.interrupt_count = 0
+
+    def __call__(
+        self,
+        signum: int,
+        frame: __typing.Optional[__typing.Any],
+    ) -> None:
+        self.interrupt_count += 1
+        if self.interrupt_count == 1 and not self._main_task.done():
+            self._main_task.cancel()
+            self._loop.call_soon_threadsafe(_noop)
+            return
+        raise KeyboardInterrupt()
 
 
 if __typing.TYPE_CHECKING:
@@ -86,7 +111,31 @@ else:
             __asyncio.set_event_loop(loop)
             if debug is not None:
                 loop.set_debug(debug)
-            return loop.run_until_complete(wrapper())
+            main_task = loop.create_task(wrapper())
+            sigint_handler = None
+            if (
+                __threading.current_thread() is __threading.main_thread()
+                and __signal.getsignal(__signal.SIGINT) is __signal.default_int_handler
+            ):
+                sigint_handler = _SigintHandler(loop, main_task)
+                try:
+                    __signal.signal(__signal.SIGINT, sigint_handler)
+                except ValueError:
+                    sigint_handler = None
+            try:
+                return loop.run_until_complete(main_task)
+            except __asyncio.CancelledError:
+                if sigint_handler is not None and sigint_handler.interrupt_count > 0:
+                    uncancel = getattr(main_task, "uncancel", None)
+                    if uncancel is None or uncancel() == 0:
+                        raise KeyboardInterrupt()
+                raise
+            finally:
+                if (
+                    sigint_handler is not None
+                    and __signal.getsignal(__signal.SIGINT) is sigint_handler
+                ):
+                    __signal.signal(__signal.SIGINT, __signal.default_int_handler)
         finally:
             try:
                 __cancel_all_tasks(loop)
