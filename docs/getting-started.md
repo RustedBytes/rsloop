@@ -21,8 +21,11 @@ uv add rsloop
 The package exports a small public surface:
 
 - `rsloop.Loop`
+- `rsloop.EventLoopPolicy`
 - `rsloop.new_event_loop()`
 - `rsloop.run(...)`
+- `rsloop.install()`
+- `rsloop.uninstall()`
 - `rsloop.profile()`
 - `rsloop.start_profiler()`
 - `rsloop.stop_profiler()`
@@ -45,6 +48,28 @@ print(result)
 ```
 
 This is similar to `asyncio.run(...)`, but it creates and uses an `rsloop` loop.
+
+## Install as the default asyncio loop
+
+Use `install()` when you want plain `asyncio` entry points to create `rsloop`
+loops:
+
+```python
+import asyncio
+import rsloop
+
+
+rsloop.install()
+try:
+    asyncio.run(main())
+finally:
+    rsloop.uninstall()
+```
+
+`uninstall()` restores the event loop policy that was active before
+`install()`, which is useful in tests that switch between loop implementations.
+If another library has already installed a different policy, `uninstall()`
+leaves that newer policy in place.
 
 ## Manual loop creation
 

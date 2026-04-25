@@ -19,7 +19,8 @@ The package exposes:
 
 - a native extension module at `rsloop._loop`
 - a Python wrapper in [`python/rsloop/__init__.py`](./python/rsloop/__init__.py)
-- `rsloop.Loop`, `rsloop.new_event_loop()`, and `rsloop.run(...)`
+- `rsloop.Loop`, `rsloop.EventLoopPolicy`, `rsloop.new_event_loop()`,
+  `rsloop.run(...)`, `rsloop.install()`, and `rsloop.uninstall()`
 
 Repository metadata currently targets Python `>=3.8`. The packaged project now
 supports the core event-loop surface on Linux, macOS, and Windows, including
@@ -67,6 +68,19 @@ async def main():
     ...
 
 rsloop.run(main())
+```
+
+Install as the default asyncio event loop policy:
+
+```python
+import asyncio
+import rsloop
+
+rsloop.install()
+try:
+    asyncio.run(main())
+finally:
+    rsloop.uninstall()
 ```
 
 Manual loop creation also works:

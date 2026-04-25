@@ -8,10 +8,44 @@ from ._loop_compat import Loop
 from ._loop_compat import cancel_all_tasks as __cancel_all_tasks
 
 _T = __typing.TypeVar("_T")
+_PREVIOUS_EVENT_LOOP_POLICY: __typing.Optional[__asyncio.AbstractEventLoopPolicy] = None
 
 
 def new_event_loop() -> Loop:
     return Loop()
+
+
+class EventLoopPolicy(__asyncio.DefaultEventLoopPolicy):
+    """Event loop policy that creates rsloop loops by default."""
+
+    def new_event_loop(self) -> Loop:
+        return new_event_loop()
+
+
+def install() -> None:
+    """Install rsloop as asyncio's default event loop policy."""
+
+    global _PREVIOUS_EVENT_LOOP_POLICY
+
+    policy = __asyncio.get_event_loop_policy()
+    if isinstance(policy, EventLoopPolicy):
+        return
+
+    _PREVIOUS_EVENT_LOOP_POLICY = policy
+    __asyncio.set_event_loop_policy(EventLoopPolicy())
+
+
+def uninstall() -> None:
+    """Restore the event loop policy that was active before install()."""
+
+    global _PREVIOUS_EVENT_LOOP_POLICY
+
+    if _PREVIOUS_EVENT_LOOP_POLICY is None:
+        return
+
+    if isinstance(__asyncio.get_event_loop_policy(), EventLoopPolicy):
+        __asyncio.set_event_loop_policy(_PREVIOUS_EVENT_LOOP_POLICY)
+    _PREVIOUS_EVENT_LOOP_POLICY = None
 
 
 if __typing.TYPE_CHECKING:

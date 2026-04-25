@@ -22,6 +22,71 @@ async def run_in_thread(func, /, *args):
 
 
 class RunTests(unittest.TestCase):
+    def test_install_makes_asyncio_create_rsloop_loops(self) -> None:
+        original_policy = asyncio.get_event_loop_policy()
+        try:
+            asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+
+            rsloop.install()
+            self.assertIsInstance(
+                asyncio.get_event_loop_policy(),
+                rsloop.EventLoopPolicy,
+            )
+
+            loop = asyncio.new_event_loop()
+            try:
+                self.assertIsInstance(loop, rsloop.Loop)
+            finally:
+                loop.close()
+        finally:
+            rsloop.uninstall()
+            asyncio.set_event_loop_policy(original_policy)
+
+    def test_installed_policy_affects_asyncio_run(self) -> None:
+        original_policy = asyncio.get_event_loop_policy()
+        try:
+            asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+            rsloop.install()
+
+            async def main() -> bool:
+                return isinstance(asyncio.get_running_loop(), rsloop.Loop)
+
+            self.assertTrue(asyncio.run(main()))
+        finally:
+            rsloop.uninstall()
+            asyncio.set_event_loop_policy(original_policy)
+
+    def test_uninstall_restores_previous_event_loop_policy(self) -> None:
+        original_policy = asyncio.get_event_loop_policy()
+        previous_policy = asyncio.DefaultEventLoopPolicy()
+        try:
+            asyncio.set_event_loop_policy(previous_policy)
+            rsloop.install()
+            rsloop.uninstall()
+
+            self.assertIs(asyncio.get_event_loop_policy(), previous_policy)
+            loop = asyncio.new_event_loop()
+            try:
+                self.assertNotIsInstance(loop, rsloop.Loop)
+            finally:
+                loop.close()
+        finally:
+            rsloop.uninstall()
+            asyncio.set_event_loop_policy(original_policy)
+
+    def test_uninstall_does_not_replace_newly_installed_policy(self) -> None:
+        original_policy = asyncio.get_event_loop_policy()
+        other_policy = asyncio.DefaultEventLoopPolicy()
+        try:
+            rsloop.install()
+            asyncio.set_event_loop_policy(other_policy)
+            rsloop.uninstall()
+
+            self.assertIs(asyncio.get_event_loop_policy(), other_policy)
+        finally:
+            rsloop.uninstall()
+            asyncio.set_event_loop_policy(original_policy)
+
     def test_set_event_loop_accepts_rsloop_loop(self) -> None:
         loop = rsloop.new_event_loop()
         try:

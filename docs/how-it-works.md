@@ -28,7 +28,8 @@ The Python package lives in `python/rsloop/`.
 Important files:
 
 - `__init__.py`: exports the public API
-- `_run.py`: defines `run(...)` and `new_event_loop()`
+- `_run.py`: defines `run(...)`, `new_event_loop()`, and the installable event
+  loop policy
 - `_loop_compat.py`: compatibility helpers and monkeypatches
 - `_bootstrap.py`: startup helpers, including Windows DLL and SSL-related setup
 - `_profile.py`: small Python wrappers around the profiler API

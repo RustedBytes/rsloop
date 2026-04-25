@@ -24,6 +24,8 @@ That means:
 
 - `rsloop.run(...)` is the easiest way to start.
 - `rsloop.new_event_loop()` creates a loop object manually.
+- `rsloop.install()` installs an asyncio event loop policy that creates `rsloop`
+  loops by default.
 - `rsloop.Loop` is the main event loop class.
 - Importing `rsloop` also installs a few compatibility patches so it fits better into normal `asyncio` code.
 

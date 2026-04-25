@@ -1482,7 +1482,7 @@ impl StreamTransportCore {
             };
             let low = low.unwrap_or(high / 4);
 
-            if high < low  {
+            if high < low {
                 return Err(PyValueError::new_err(format!(
                     "high ({high:?}) must be >= low ({low:?}) must be >= 0"
                 )));
@@ -3208,9 +3208,7 @@ pub(crate) fn run_server_accept_blocking(params: BlockingAcceptLoop<ServerListen
 #[cfg(target_os = "linux")]
 async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
     profiling::scope!("stream.run_tcp_accept_task");
-    let poll_fd = listener
-        .try_clone()
-        .and_then(PollFd::new);
+    let poll_fd = listener.try_clone().and_then(PollFd::new);
 
     let Ok(poll_fd) = poll_fd else {
         return;
@@ -3352,10 +3350,7 @@ fn run_unix_accept_loop(params: BlockingAcceptLoop<StdUnixListener>) {
 
 #[cfg(target_os = "linux")]
 async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener) {
-    let Ok(poll_fd) = listener
-        .try_clone()
-        .and_then(PollFd::new)
-    else {
+    let Ok(poll_fd) = listener.try_clone().and_then(PollFd::new) else {
         return;
     };
 
