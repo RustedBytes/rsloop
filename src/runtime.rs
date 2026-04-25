@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 use std::os::fd::{FromRawFd, OwnedFd};
@@ -9,7 +8,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::fd_ops;
-use crate::loop_core::{LoopCommand, LoopCore, ReadyItem};
+use crate::loop_core::{
+    LoopCommand, LoopCore, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
+    LoopTransportCommand, ReadyItem,
+};
 #[cfg(windows)]
 use crate::windows_vibeio;
 #[cfg(target_os = "linux")]
@@ -22,6 +24,9 @@ use crossbeam_channel::{Receiver, TryRecvError};
 use pyo3::prelude::*;
 #[cfg(unix)]
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
+
+mod timer_entry;
+use timer_entry::TimerEntry;
 
 struct RuntimeDispatcher {
     core: Arc<LoopCore>,
@@ -147,35 +152,6 @@ fn cancel_watch_task(task: WatchTask) {
 #[inline]
 fn cancel_watch_task(task: WatchTask) {
     task.cancel();
-}
-
-struct TimerEntry {
-    when: Instant,
-    seq: u64,
-    callback: Arc<crate::callbacks::ReadyCallback>,
-}
-
-impl PartialEq for TimerEntry {
-    fn eq(&self, other: &Self) -> bool {
-        self.when == other.when && self.seq == other.seq
-    }
-}
-
-impl Eq for TimerEntry {}
-
-impl PartialOrd for TimerEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for TimerEntry {
-    fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .when
-            .cmp(&self.when)
-            .then_with(|| other.seq.cmp(&self.seq))
-    }
 }
 
 pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>) {
@@ -348,22 +324,22 @@ impl RuntimeDispatcher {
                 profiling::scope!("runtime.cmd.schedule_ready");
                 self.ready_batch.push_back(ReadyItem::Callback(callback));
             }
-            LoopCommand::ScheduleFutureSetResult { future, value } => {
+            LoopCommand::Future(LoopFutureCommand::SetResult { future, value }) => {
                 profiling::scope!("runtime.cmd.future_set_result");
                 self.ready_batch
                     .push_back(ReadyItem::FutureSetResult { future, value });
             }
-            LoopCommand::ScheduleFutureSetException { future, value } => {
+            LoopCommand::Future(LoopFutureCommand::SetException { future, value }) => {
                 profiling::scope!("runtime.cmd.future_set_exception");
                 self.ready_batch
                     .push_back(ReadyItem::FutureSetException { future, value });
             }
-            LoopCommand::ScheduleStreamTransportRead(core) => {
+            LoopCommand::Transport(LoopTransportCommand::StreamRead(core)) => {
                 profiling::scope!("runtime.cmd.stream_transport_read");
                 self.ready_batch
                     .push_back(ReadyItem::StreamTransportRead(core));
             }
-            LoopCommand::ScheduleProcessTransport(core) => {
+            LoopCommand::Transport(LoopTransportCommand::Process(core)) => {
                 profiling::scope!("runtime.cmd.process_transport");
                 self.ready_batch
                     .push_back(ReadyItem::ProcessTransport(core));
@@ -378,10 +354,10 @@ impl RuntimeDispatcher {
                     callback,
                 });
             }
-            LoopCommand::EnterRun {
+            LoopCommand::Run(LoopRunCommand::EnterRun {
                 pending_ready,
                 wake_tx,
-            } => {
+            }) => {
                 profiling::scope!("runtime.cmd.enter_run");
                 self.active_run = Some(ActiveRun {
                     pending_ready,
@@ -389,12 +365,12 @@ impl RuntimeDispatcher {
                 });
                 self.dispatch_ready_batch();
             }
-            LoopCommand::FinishRun { done_tx } => {
+            LoopCommand::Run(LoopRunCommand::FinishRun { done_tx }) => {
                 profiling::scope!("runtime.cmd.finish_run");
                 self.finish_run();
                 let _ = done_tx.send(());
             }
-            LoopCommand::StartSignalWatcher(sig) => {
+            LoopCommand::Signal(LoopSignalCommand::StartWatcher(sig)) => {
                 #[cfg(unix)]
                 {
                     if let Some(watcher) = self.signal_tasks.remove(&sig) {
@@ -412,7 +388,9 @@ impl RuntimeDispatcher {
                         .name(format!("rsloop-signal-{sig}"))
                         .spawn(move || {
                             for delivered in signals.forever() {
-                                let _ = sender.send_command(LoopCommand::SignalFired(delivered));
+                                let _ = sender.send_command(LoopCommand::Signal(
+                                    LoopSignalCommand::Fired(delivered),
+                                ));
                             }
                         })
                         .expect("failed to spawn signal watcher thread");
@@ -421,7 +399,7 @@ impl RuntimeDispatcher {
                         .insert(sig, SignalWatcher { handle, join });
                 }
             }
-            LoopCommand::StopSignalWatcher(sig) => {
+            LoopCommand::Signal(LoopSignalCommand::StopWatcher(sig)) => {
                 #[cfg(unix)]
                 if let Some(watcher) = self.signal_tasks.remove(&sig) {
                     watcher.handle.close();
@@ -432,7 +410,7 @@ impl RuntimeDispatcher {
                     let _ = sig;
                 }
             }
-            LoopCommand::SignalFired(sig) => {
+            LoopCommand::Signal(LoopSignalCommand::Fired(sig)) => {
                 let maybe_ready = Python::attach(|py| -> PyResult<Option<_>> {
                     let (callback, args, context, context_needs_run) = {
                         let state = self.core.state.lock().expect("poisoned loop state");
@@ -462,13 +440,13 @@ impl RuntimeDispatcher {
                     self.ready_batch.push_back(ReadyItem::Callback(ready));
                 }
             }
-            LoopCommand::StartReader {
+            LoopCommand::Io(LoopIoCommand::StartReader {
                 fd,
                 callback,
                 args,
                 context,
                 context_needs_run,
-            } => {
+            }) => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
@@ -619,18 +597,18 @@ impl RuntimeDispatcher {
 
                 self.reader_tasks.insert(fd, task);
             }
-            LoopCommand::StopReader(fd) => {
+            LoopCommand::Io(LoopIoCommand::StopReader(fd)) => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
             }
-            LoopCommand::StartWriter {
+            LoopCommand::Io(LoopIoCommand::StartWriter {
                 fd,
                 callback,
                 args,
                 context,
                 context_needs_run,
-            } => {
+            }) => {
                 if let Some(task) = self.writer_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
@@ -736,12 +714,12 @@ impl RuntimeDispatcher {
 
                 self.writer_tasks.insert(fd, task);
             }
-            LoopCommand::StopWriter(fd) => {
+            LoopCommand::Io(LoopIoCommand::StopWriter(fd)) => {
                 if let Some(task) = self.writer_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
             }
-            LoopCommand::StartSocketReader { fd, core, reader } => {
+            LoopCommand::Io(LoopIoCommand::StartSocketReader { fd, core, reader }) => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
@@ -792,16 +770,16 @@ impl RuntimeDispatcher {
 
                 self.reader_tasks.insert(fd, task);
             }
-            LoopCommand::StopSocketReader(fd) => {
+            LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)) => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
             }
-            LoopCommand::StartServerAccept {
+            LoopCommand::Io(LoopIoCommand::StartServerAccept {
                 fd,
                 server,
                 listener,
-            } => {
+            }) => {
                 if let Some(task) = self.accept_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
@@ -830,9 +808,11 @@ impl RuntimeDispatcher {
                                 format!("rsloop-accept-{fd}"),
                                 move |stop| {
                                     crate::stream_transport::run_server_accept_blocking(
-                                        server,
-                                        crate::stream_transport::ServerListener::Tcp(listener),
-                                        stop,
+                                        crate::stream_transport::BlockingAcceptLoop::new(
+                                            server,
+                                            crate::stream_transport::ServerListener::Tcp(listener),
+                                            stop,
+                                        ),
                                     )
                                 },
                             ),
@@ -840,18 +820,22 @@ impl RuntimeDispatcher {
                     }
                     #[cfg(unix)]
                     other => WatchTask::spawn_thread(format!("rsloop-accept-{fd}"), move |stop| {
-                        crate::stream_transport::run_server_accept_blocking(server, other, stop)
+                        crate::stream_transport::run_server_accept_blocking(
+                            crate::stream_transport::BlockingAcceptLoop::new(server, other, stop),
+                        )
                     }),
                 };
 
                 #[cfg(all(not(target_os = "linux"), not(windows)))]
                 let task = WatchTask::spawn(format!("rsloop-accept-{fd}"), move |stop| {
-                    crate::stream_transport::run_server_accept_blocking(server, listener, stop)
+                    crate::stream_transport::run_server_accept_blocking(
+                        crate::stream_transport::BlockingAcceptLoop::new(server, listener, stop),
+                    )
                 });
 
                 self.accept_tasks.insert(fd, task);
             }
-            LoopCommand::StopServerAccept(fd) => {
+            LoopCommand::Io(LoopIoCommand::StopServerAccept(fd)) => {
                 if let Some(task) = self.accept_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }

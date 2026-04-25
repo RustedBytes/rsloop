@@ -12,7 +12,7 @@ use std::os::raw::c_int;
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
 #[cfg(windows)]
 use std::os::windows::io::{
-    AsRawHandle, AsRawSocket, FromRawHandle, FromRawSocket, IntoRawSocket, RawSocket,
+    AsRawHandle, AsRawSocket, FromRawHandle, FromRawSocket, IntoRawSocket, RawHandle, RawSocket,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -42,7 +42,7 @@ use crate::context::{
 };
 use crate::fast_streams::{PyFastStreamProtocol, PyFastStreamReader};
 use crate::fd_ops;
-use crate::loop_core::{LoopCommand, LoopCore};
+use crate::loop_core::{LoopCommand, LoopCore, LoopIoCommand, LoopTransportCommand};
 use crate::python_names;
 use crate::tls::{tls_extra, ClientTlsSettings, ServerTlsSettings};
 
@@ -145,6 +145,25 @@ pub struct TransportSpawnContext {
     pub context_needs_run: bool,
 }
 
+impl TransportSpawnContext {
+    pub fn new(
+        py: Python<'_>,
+        loop_core: Arc<LoopCore>,
+        loop_obj: &Py<PyAny>,
+        protocol: Py<PyAny>,
+        context: &Py<PyAny>,
+        context_needs_run: bool,
+    ) -> Self {
+        Self {
+            loop_core,
+            loop_obj: loop_obj.clone_ref(py),
+            protocol,
+            context: context.clone_ref(py),
+            context_needs_run,
+        }
+    }
+}
+
 pub struct ServerCreateParams {
     pub loop_core: Arc<LoopCore>,
     pub loop_obj: Py<PyAny>,
@@ -155,6 +174,44 @@ pub struct ServerCreateParams {
     pub listeners: Vec<ServerListener>,
     pub cleanup_path: Option<PathBuf>,
     pub tls: Option<Arc<ServerTlsSettings>>,
+}
+
+impl ServerCreateParams {
+    pub fn new(
+        spawn_context: TransportSpawnContext,
+        sockets: Vec<Py<PyAny>>,
+        listeners: Vec<ServerListener>,
+    ) -> Self {
+        let TransportSpawnContext {
+            loop_core,
+            loop_obj,
+            protocol,
+            context,
+            context_needs_run,
+        } = spawn_context;
+
+        Self {
+            loop_core,
+            loop_obj,
+            protocol_factory: protocol,
+            context,
+            context_needs_run,
+            sockets,
+            listeners,
+            cleanup_path: None,
+            tls: None,
+        }
+    }
+
+    pub fn with_cleanup_path(mut self, cleanup_path: Option<PathBuf>) -> Self {
+        self.cleanup_path = cleanup_path;
+        self
+    }
+
+    pub fn with_tls(mut self, tls: Option<Arc<ServerTlsSettings>>) -> Self {
+        self.tls = tls;
+        self
+    }
 }
 
 struct ProtocolCallbacks {
@@ -418,12 +475,27 @@ struct StreamTransportState {
     close_on_write_eof: bool,
     lost_called: bool,
     writer_registered: bool,
-    write_buffer_size: usize,
-    write_buffer_high_water: usize,
-    write_buffer_low_water: usize,
-    protocol_write_paused: bool,
+    write_buffer: StreamWriteBufferState,
     detached: bool,
     server: Option<Weak<ServerCore>>,
+}
+
+struct StreamWriteBufferState {
+    size: usize,
+    high_water: usize,
+    low_water: usize,
+    protocol_paused: bool,
+}
+
+impl Default for StreamWriteBufferState {
+    fn default() -> Self {
+        Self {
+            size: 0,
+            high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
+            low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
+            protocol_paused: false,
+        }
+    }
 }
 
 pub struct StreamTransportCore {
@@ -716,6 +788,8 @@ struct TlsIoState {
     shutdown_timeout: Duration,
 }
 
+type SharedTlsIoState = Arc<Mutex<TlsIoState>>;
+
 impl TlsIoState {
     #[inline]
     fn fd(&self) -> fd_ops::RawFd {
@@ -858,7 +932,9 @@ impl StreamTransportCore {
         if !self.read_events_scheduled.swap(true, Ordering::AcqRel)
             && self
                 .loop_core
-                .send_command(LoopCommand::ScheduleStreamTransportRead(Arc::clone(self)))
+                .send_command(LoopCommand::Transport(LoopTransportCommand::StreamRead(
+                    Arc::clone(self),
+                )))
                 .is_err()
         {
             self.read_events_scheduled.store(false, Ordering::Release);
@@ -1002,7 +1078,9 @@ impl StreamTransportCore {
             }
         }
     }
+}
 
+impl StreamTransportCore {
     #[inline]
     fn call_protocol_method0(
         &self,
@@ -1231,8 +1309,8 @@ impl StreamTransportCore {
             }
             state.lost_called = true;
             state.closing = true;
-            state.write_buffer_size = 0;
-            state.protocol_write_paused = false;
+            state.write_buffer.size = 0;
+            state.write_buffer.protocol_paused = false;
             (
                 state.callbacks.connection_lost.clone_ref(py),
                 state
@@ -1262,7 +1340,9 @@ impl StreamTransportCore {
         }
         Ok(())
     }
+}
 
+impl StreamTransportCore {
     fn set_protocol(&self, py: Python<'_>, protocol: Py<PyAny>) -> PyResult<()> {
         let callbacks = build_protocol_callbacks(py, &protocol)?;
         let mut state = self.state.lock().expect("poisoned transport state");
@@ -1376,12 +1456,13 @@ impl StreamTransportCore {
         self.state
             .lock()
             .expect("poisoned transport state")
-            .write_buffer_size
+            .write_buffer
+            .size
     }
 
     fn get_write_buffer_limits(&self) -> (usize, usize) {
         let state = self.state.lock().expect("poisoned transport state");
-        (state.write_buffer_low_water, state.write_buffer_high_water)
+        (state.write_buffer.low_water, state.write_buffer.high_water)
     }
 
     fn set_write_buffer_limits(
@@ -1404,18 +1485,18 @@ impl StreamTransportCore {
                 )));
             }
 
-            state.write_buffer_high_water = high;
-            state.write_buffer_low_water = low;
+            state.write_buffer.high_water = high;
+            state.write_buffer.low_water = low;
 
-            let should_pause = state.write_buffer_size > state.write_buffer_high_water
-                && !state.protocol_write_paused;
-            let should_resume = state.protocol_write_paused
-                && state.write_buffer_size <= state.write_buffer_low_water;
+            let should_pause = state.write_buffer.size > state.write_buffer.high_water
+                && !state.write_buffer.protocol_paused;
+            let should_resume = state.write_buffer.protocol_paused
+                && state.write_buffer.size <= state.write_buffer.low_water;
 
             if should_pause {
-                state.protocol_write_paused = true;
+                state.write_buffer.protocol_paused = true;
             } else if should_resume {
-                state.protocol_write_paused = false;
+                state.write_buffer.protocol_paused = false;
             }
 
             (should_pause, should_resume)
@@ -1429,7 +1510,9 @@ impl StreamTransportCore {
 
         Ok(())
     }
+}
 
+impl StreamTransportCore {
     #[inline]
     fn write_backpressure_active(&self) -> bool {
         self.state
@@ -1564,7 +1647,7 @@ impl StreamTransportCore {
         if let Some(fd) = self.runtime_socket_fd() {
             let _ = self
                 .loop_core
-                .send_command(LoopCommand::StopSocketReader(fd));
+                .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
         }
         for worker in self
             .workers
@@ -1586,13 +1669,14 @@ impl StreamTransportCore {
         let stream = StreamKind::Tcp(tcp_stream_from_owned_socket_fd(fd)?);
 
         Ok((
-            TransportSpawnContext {
-                loop_core: Arc::clone(&self.loop_core),
-                loop_obj: self.loop_obj.clone_ref(py),
+            TransportSpawnContext::new(
+                py,
+                Arc::clone(&self.loop_core),
+                &self.loop_obj,
                 protocol,
-                context,
+                &context,
                 context_needs_run,
-            },
+            ),
             stream,
         ))
     }
@@ -1653,9 +1737,11 @@ impl StreamTransportCore {
         }
 
         let mut state = self.state.lock().expect("poisoned transport state");
-        state.write_buffer_size = state.write_buffer_size.saturating_add(len);
-        if state.write_buffer_size > state.write_buffer_high_water && !state.protocol_write_paused {
-            state.protocol_write_paused = true;
+        state.write_buffer.size = state.write_buffer.size.saturating_add(len);
+        if state.write_buffer.size > state.write_buffer.high_water
+            && !state.write_buffer.protocol_paused
+        {
+            state.write_buffer.protocol_paused = true;
             return true;
         }
 
@@ -1669,11 +1755,11 @@ impl StreamTransportCore {
 
         let should_resume = {
             let mut state = self.state.lock().expect("poisoned transport state");
-            state.write_buffer_size = state.write_buffer_size.saturating_sub(len);
-            if state.protocol_write_paused
-                && state.write_buffer_size <= state.write_buffer_low_water
+            state.write_buffer.size = state.write_buffer.size.saturating_sub(len);
+            if state.write_buffer.protocol_paused
+                && state.write_buffer.size <= state.write_buffer.low_water
             {
-                state.protocol_write_paused = false;
+                state.write_buffer.protocol_paused = false;
                 true
             } else {
                 false
@@ -1688,9 +1774,9 @@ impl StreamTransportCore {
     fn clear_write_buffer(self: &Arc<Self>, resume_protocol: bool) {
         let should_resume = {
             let mut state = self.state.lock().expect("poisoned transport state");
-            let should_resume = resume_protocol && state.protocol_write_paused;
-            state.write_buffer_size = 0;
-            state.protocol_write_paused = false;
+            let should_resume = resume_protocol && state.write_buffer.protocol_paused;
+            state.write_buffer.size = 0;
+            state.write_buffer.protocol_paused = false;
             should_resume
         };
 
@@ -1785,7 +1871,7 @@ impl ServerCore {
         {
             let _ = self
                 .loop_core
-                .send_command(LoopCommand::StopServerAccept(fd));
+                .send_command(LoopCommand::Io(LoopIoCommand::StopServerAccept(fd)));
         }
 
         if let Some(path) = &self.cleanup_path {
@@ -1814,13 +1900,15 @@ impl ServerCore {
                     let task = match listener {
                         ServerListener::Tcp(listener) => {
                             WorkerThread::spawn("rsloop-tcp-accept", move |stop| {
-                                run_tcp_accept_loop(server, listener, stop)
+                                run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
                             })
                         }
                         #[cfg(unix)]
                         ServerListener::Unix(listener) => {
                             WorkerThread::spawn("rsloop-unix-accept", move |stop| {
-                                run_unix_accept_loop(server, listener, stop)
+                                run_unix_accept_loop(BlockingAcceptLoop::new(
+                                    server, listener, stop,
+                                ))
                             })
                         }
                     };
@@ -1837,11 +1925,13 @@ impl ServerCore {
                     ServerListener::Unix(listener) => unix_raw_fd(listener.as_raw_fd()),
                 };
                 accept_fds.push(fd);
-                let _ = self.loop_core.send_command(LoopCommand::StartServerAccept {
-                    fd,
-                    server: Arc::clone(self),
-                    listener,
-                });
+                let _ = self.loop_core.send_command(LoopCommand::Io(
+                    LoopIoCommand::StartServerAccept {
+                        fd,
+                        server: Arc::clone(self),
+                        listener,
+                    },
+                ));
             }
             return;
         }
@@ -1854,13 +1944,13 @@ impl ServerCore {
             let task = match listener {
                 ServerListener::Tcp(listener) => {
                     WorkerThread::spawn("rsloop-tcp-accept", move |stop| {
-                        run_tcp_accept_loop(server, listener, stop)
+                        run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
                     })
                 }
                 #[cfg(unix)]
                 ServerListener::Unix(listener) => {
                     WorkerThread::spawn("rsloop-unix-accept", move |stop| {
-                        run_unix_accept_loop(server, listener, stop)
+                        run_unix_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
                     })
                 }
             };
@@ -1919,7 +2009,7 @@ impl PyStreamTransport {
             let _ = self
                 .core
                 .loop_core
-                .send_command(LoopCommand::StopSocketReader(fd));
+                .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
         }
         if self.core.direct_writer.is_none() {
             let _ = self.core.writer_tx.send(WriterCommand::Close);
@@ -1945,7 +2035,7 @@ impl PyStreamTransport {
             let _ = self
                 .core
                 .loop_core
-                .send_command(LoopCommand::StopSocketReader(fd));
+                .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
         }
         if self.core.direct_writer.is_none() {
             let _ = self.core.writer_tx.send(WriterCommand::Abort);
@@ -2171,13 +2261,30 @@ fn raw_fd_for_std(fd: fd_ops::RawFd) -> PyResult<std::os::fd::RawFd> {
 }
 
 #[cfg(unix)]
+fn from_owned_raw_fd<T: FromRawFd>(fd: fd_ops::RawFd) -> PyResult<T> {
+    let fd = raw_fd_for_std(fd)?;
+    // SAFETY: The caller passes an owned descriptor and the returned Rust IO object takes over
+    // responsibility for closing it exactly once.
+    Ok(unsafe { T::from_raw_fd(fd) })
+}
+
+#[cfg(windows)]
+fn from_owned_raw_socket<T: FromRawSocket>(socket: RawSocket) -> T {
+    // SAFETY: The caller passes an owned socket handle and the returned Rust IO object takes over
+    // responsibility for closing it exactly once.
+    unsafe { T::from_raw_socket(socket) }
+}
+
+#[cfg(windows)]
+fn from_owned_raw_handle<T: FromRawHandle>(handle: RawHandle) -> T {
+    // SAFETY: The caller passes an owned Windows handle and the returned Rust IO object takes over
+    // responsibility for closing it exactly once.
+    unsafe { T::from_raw_handle(handle) }
+}
+
+#[cfg(unix)]
 fn socket_from_owned_raw(fd: fd_ops::RawFd) -> PyResult<Socket> {
-    let fd: i32 = fd
-        .try_into()
-        .map_err(|_| PyRuntimeError::new_err("socket fd out of range"))?;
-    // SAFETY: `fd` is an owned Unix socket descriptor handed to this function. `Socket` takes
-    // ownership and will close it exactly once.
-    Ok(unsafe { Socket::from_raw_fd(fd) })
+    from_owned_raw_fd(fd)
 }
 
 #[cfg(windows)]
@@ -2185,9 +2292,7 @@ fn socket_from_owned_raw(fd: fd_ops::RawFd) -> PyResult<Socket> {
     let fd: RawSocket = fd
         .try_into()
         .map_err(|_| PyRuntimeError::new_err("socket handle out of range"))?;
-    // SAFETY: `fd` is an owned Windows socket handle handed to this function. `Socket` takes
-    // ownership and will close it exactly once.
-    Ok(unsafe { Socket::from_raw_socket(fd) })
+    Ok(from_owned_raw_socket(fd))
 }
 
 #[inline]
@@ -2420,10 +2525,7 @@ fn stream_transport_state_parts(
             close_on_write_eof: config.close_on_write_eof,
             lost_called: false,
             writer_registered: false,
-            write_buffer_size: 0,
-            write_buffer_high_water: DEFAULT_WRITE_BUFFER_HIGH_WATER,
-            write_buffer_low_water: DEFAULT_WRITE_BUFFER_LOW_WATER,
-            protocol_write_paused: false,
+            write_buffer: StreamWriteBufferState::default(),
             detached: false,
             server: config.server,
         },
@@ -2513,8 +2615,7 @@ fn pipe_extra(
 fn pipe_file_from_obj(py: Python<'_>, pipe_obj: &Py<PyAny>) -> PyResult<fs::File> {
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    // SAFETY: `dup_raw_fd` returned a newly owned descriptor. `File` takes ownership of it.
-    Ok(unsafe { fs::File::from_raw_fd(raw_fd_for_std(dup)?) })
+    from_owned_raw_fd(dup)
 }
 
 #[cfg(windows)]
@@ -2522,8 +2623,7 @@ fn pipe_file_from_obj(py: Python<'_>, pipe_obj: &Py<PyAny>) -> PyResult<fs::File
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
     let handle = fd_ops::duplicate_handle_from_fd(fd)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    // SAFETY: `duplicate_handle_from_fd` returned a newly owned handle. `File` takes ownership.
-    Ok(unsafe { fs::File::from_raw_handle(handle as _) })
+    Ok(from_owned_raw_handle(handle as _))
 }
 
 #[inline]
@@ -2533,9 +2633,7 @@ pub fn tcp_stream_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStre
 
 #[cfg(unix)]
 pub fn unix_stream_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixStream> {
-    // SAFETY: `fd` is an owned Unix stream descriptor handed to this function. The returned
-    // `StdUnixStream` takes ownership.
-    let stream = unsafe { StdUnixStream::from_raw_fd(raw_fd_for_std(fd)?) };
+    let stream = from_owned_raw_fd::<StdUnixStream>(fd)?;
     stream
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -2548,9 +2646,7 @@ pub fn tcp_listener_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpLi
 
 #[cfg(unix)]
 pub fn unix_listener_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixListener> {
-    // SAFETY: `fd` is an owned Unix listener descriptor handed to this function. The returned
-    // `StdUnixListener` takes ownership.
-    let listener = unsafe { StdUnixListener::from_raw_fd(raw_fd_for_std(fd)?) };
+    let listener = from_owned_raw_fd::<StdUnixListener>(fd)?;
     listener
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -2585,8 +2681,7 @@ fn configured_tcp_listener_from_owned_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpLi
 fn duplicate_unix_direct_writer(raw_fd: fd_ops::RawFd) -> PyResult<StdUnixStream> {
     let writer_fd =
         fd_ops::dup_raw_fd(raw_fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    // SAFETY: `writer_fd` is a newly duplicated Unix stream descriptor for the direct writer.
-    let direct_writer = unsafe { StdUnixStream::from_raw_fd(raw_fd_for_std(writer_fd)?) };
+    let direct_writer = from_owned_raw_fd::<StdUnixStream>(writer_fd)?;
     direct_writer
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -2640,11 +2735,11 @@ pub fn spawn_tcp_transport(
 
     #[cfg(target_os = "linux")]
     core.loop_core
-        .send_command(LoopCommand::StartSocketReader {
+        .send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader {
             fd: raw_fd,
             core: Arc::clone(&core),
             reader: ReaderTarget::Tcp(stream),
-        })
+        }))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     #[cfg(not(target_os = "linux"))]
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::Tcp(stream));
@@ -2699,11 +2794,11 @@ pub fn spawn_unix_transport(
 
     #[cfg(target_os = "linux")]
     core.loop_core
-        .send_command(LoopCommand::StartSocketReader {
+        .send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader {
             fd: raw_fd,
             core: Arc::clone(&core),
             reader: ReaderTarget::Unix(stream),
-        })
+        }))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     #[cfg(not(target_os = "linux"))]
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::Unix(stream));
@@ -2799,7 +2894,7 @@ fn tls_io_state(
     stream: StreamKind,
     connection: TlsConnectionKind,
     shutdown_timeout: Duration,
-) -> Arc<Mutex<TlsIoState>> {
+) -> SharedTlsIoState {
     Arc::new(Mutex::new(TlsIoState {
         stream,
         connection,
@@ -2944,18 +3039,35 @@ fn report_server_io_error(server: &ServerCore, err: io::Error, message: &str) {
     }
 }
 
+pub(crate) struct BlockingAcceptLoop<L> {
+    server: Arc<ServerCore>,
+    listener: L,
+    stop: Arc<AtomicBool>,
+}
+
+impl<L> BlockingAcceptLoop<L> {
+    pub(crate) fn new(server: Arc<ServerCore>, listener: L, stop: Arc<AtomicBool>) -> Self {
+        Self {
+            server,
+            listener,
+            stop,
+        }
+    }
+}
+
 fn server_spawn_context(
     py: Python<'_>,
     server: &Arc<ServerCore>,
     protocol: Py<PyAny>,
 ) -> TransportSpawnContext {
-    TransportSpawnContext {
-        loop_core: Arc::clone(&server.loop_core),
-        loop_obj: server.loop_obj.clone_ref(py),
+    TransportSpawnContext::new(
+        py,
+        Arc::clone(&server.loop_core),
+        &server.loop_obj,
         protocol,
-        context: server.context.clone_ref(py),
-        context_needs_run: server.context_needs_run,
-    }
+        &server.context,
+        server.context_needs_run,
+    )
 }
 
 fn server_tls_settings(py: Python<'_>, tls: &ServerTlsSettings) -> ServerTlsSettings {
@@ -3012,8 +3124,13 @@ fn spawn_accepted_unix_transport(
     }
 }
 
-fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: Arc<AtomicBool>) {
+fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
     profiling::scope!("stream.run_tcp_accept_loop");
+    let BlockingAcceptLoop {
+        server,
+        listener,
+        stop,
+    } = params;
     loop {
         if stop.load(Ordering::Acquire) || server.is_closed() {
             return;
@@ -3069,15 +3186,20 @@ pub(crate) async fn run_server_accept_task(server: Arc<ServerCore>, listener: Se
 }
 
 #[cfg(not(target_os = "linux"))]
-pub(crate) fn run_server_accept_blocking(
-    server: Arc<ServerCore>,
-    listener: ServerListener,
-    stop: Arc<AtomicBool>,
-) {
+pub(crate) fn run_server_accept_blocking(params: BlockingAcceptLoop<ServerListener>) {
+    let BlockingAcceptLoop {
+        server,
+        listener,
+        stop,
+    } = params;
     match listener {
-        ServerListener::Tcp(listener) => run_tcp_accept_loop(server, listener, stop),
+        ServerListener::Tcp(listener) => {
+            run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
+        }
         #[cfg(unix)]
-        ServerListener::Unix(listener) => run_unix_accept_loop(server, listener, stop),
+        ServerListener::Unix(listener) => {
+            run_unix_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
+        }
     }
 }
 
@@ -3151,9 +3273,7 @@ pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTc
         match listener.accept().await {
             Ok((stream, _addr)) => {
                 let raw = stream.into_raw_socket();
-                // SAFETY: `into_raw_socket` transfers ownership of the accepted socket to us, and
-                // `StdTcpStream::from_raw_socket` takes ownership of that handle.
-                let stream = unsafe { StdTcpStream::from_raw_socket(raw) };
+                let stream = from_owned_raw_socket::<StdTcpStream>(raw);
                 if !configure_accepted_tcp_stream(
                     &server,
                     &stream,
@@ -3178,7 +3298,12 @@ pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTc
 }
 
 #[cfg(unix)]
-fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop: Arc<AtomicBool>) {
+fn run_unix_accept_loop(params: BlockingAcceptLoop<StdUnixListener>) {
+    let BlockingAcceptLoop {
+        server,
+        listener,
+        stop,
+    } = params;
     loop {
         if stop.load(Ordering::Acquire) || server.is_closed() {
             return;
@@ -3280,7 +3405,7 @@ fn spawn_reader_worker(core: Arc<StreamTransportCore>, reader: ReaderTarget) {
     core.register_worker(worker);
 }
 
-fn spawn_tls_reader_worker(core: Arc<StreamTransportCore>, tls_state: Arc<Mutex<TlsIoState>>) {
+fn spawn_tls_reader_worker(core: Arc<StreamTransportCore>, tls_state: SharedTlsIoState) {
     let thread_core = Arc::clone(&core);
     let worker = WorkerThread::spawn("rsloop-tls-reader", move |stop| {
         run_tls_reader(thread_core, tls_state, stop)
@@ -3303,7 +3428,7 @@ fn spawn_writer_worker(
 
 fn spawn_tls_writer_worker(
     core: Arc<StreamTransportCore>,
-    tls_state: Arc<Mutex<TlsIoState>>,
+    tls_state: SharedTlsIoState,
     writer_rx: Receiver<WriterCommand>,
 ) {
     let thread_core = Arc::clone(&core);
@@ -3313,7 +3438,7 @@ fn spawn_tls_writer_worker(
     core.register_worker(worker);
 }
 
-fn complete_tls_handshake(tls_state: &Arc<Mutex<TlsIoState>>, timeout: Duration) -> io::Result<()> {
+fn complete_tls_handshake(tls_state: &SharedTlsIoState, timeout: Duration) -> io::Result<()> {
     profiling::scope!("stream.complete_tls_handshake");
     let deadline = std::time::Instant::now() + timeout;
     loop {
@@ -3330,7 +3455,7 @@ fn complete_tls_handshake(tls_state: &Arc<Mutex<TlsIoState>>, timeout: Duration)
     }
 }
 
-fn tls_handshake_step(tls_state: &Arc<Mutex<TlsIoState>>) -> io::Result<bool> {
+fn tls_handshake_step(tls_state: &SharedTlsIoState) -> io::Result<bool> {
     let mut state = tls_state.lock().expect("poisoned tls state");
     if !state.connection.is_handshaking() {
         if state.connection.wants_write() {
@@ -3357,7 +3482,7 @@ fn tls_handshake_step(tls_state: &Arc<Mutex<TlsIoState>>) -> io::Result<bool> {
 }
 
 fn continue_tls_handshake_read(
-    tls_state: &Arc<Mutex<TlsIoState>>,
+    tls_state: &SharedTlsIoState,
     fd: fd_ops::RawFd,
     pollable: bool,
 ) -> io::Result<()> {
@@ -3397,7 +3522,7 @@ fn drain_tls_plaintext_locked(
 
 fn drain_buffered_tls_plaintext(
     core: &Arc<StreamTransportCore>,
-    tls_state: &Arc<Mutex<TlsIoState>>,
+    tls_state: &SharedTlsIoState,
     plaintext: &mut [u8],
 ) -> TlsReadOutcome {
     let mut state = tls_state.lock().expect("poisoned tls state");
@@ -3410,7 +3535,7 @@ fn drain_buffered_tls_plaintext(
 
 fn read_tls_records(
     core: &Arc<StreamTransportCore>,
-    tls_state: &Arc<Mutex<TlsIoState>>,
+    tls_state: &SharedTlsIoState,
     plaintext: &mut [u8],
 ) -> TlsReadOutcome {
     let mut state = tls_state.lock().expect("poisoned tls state");
@@ -3447,12 +3572,12 @@ fn read_tls_records(
     }
 }
 
-fn tls_socket_wait_target(tls_state: &Arc<Mutex<TlsIoState>>) -> (fd_ops::RawFd, bool) {
+fn tls_socket_wait_target(tls_state: &SharedTlsIoState) -> (fd_ops::RawFd, bool) {
     let state = tls_state.lock().expect("poisoned tls state");
     (state.fd(), state.pollable())
 }
 
-fn write_tls_data(tls_state: &Arc<Mutex<TlsIoState>>, data: &[u8]) -> io::Result<()> {
+fn write_tls_data(tls_state: &SharedTlsIoState, data: &[u8]) -> io::Result<()> {
     let mut state = tls_state.lock().expect("poisoned tls state");
     match state.connection.writer_write_all(data) {
         Ok(()) => flush_tls_io_locked(&mut state),
@@ -3460,7 +3585,7 @@ fn write_tls_data(tls_state: &Arc<Mutex<TlsIoState>>, data: &[u8]) -> io::Result
     }
 }
 
-fn close_tls_writer(tls_state: &Arc<Mutex<TlsIoState>>) -> io::Result<()> {
+fn close_tls_writer(tls_state: &SharedTlsIoState) -> io::Result<()> {
     let mut state = tls_state.lock().expect("poisoned tls state");
     let shutdown_timeout = state.shutdown_timeout;
     state.connection.send_close_notify();
@@ -3469,7 +3594,7 @@ fn close_tls_writer(tls_state: &Arc<Mutex<TlsIoState>>) -> io::Result<()> {
     result.and(close_result)
 }
 
-fn abort_tls_writer(tls_state: &Arc<Mutex<TlsIoState>>) -> io::Result<()> {
+fn abort_tls_writer(tls_state: &SharedTlsIoState) -> io::Result<()> {
     let state = tls_state.lock().expect("poisoned tls state");
     state.shutdown_close()
 }
@@ -3645,7 +3770,7 @@ pub(crate) fn run_socket_reader_blocking(
 
 fn run_tls_reader(
     core: Arc<StreamTransportCore>,
-    tls_state: Arc<Mutex<TlsIoState>>,
+    tls_state: SharedTlsIoState,
     stop: Arc<AtomicBool>,
 ) {
     profiling::scope!("stream.run_tls_reader");
@@ -3841,7 +3966,7 @@ fn report_writer_close_result(core: &Arc<StreamTransportCore>, result: io::Resul
 
 fn run_tls_writer(
     core: Arc<StreamTransportCore>,
-    tls_state: Arc<Mutex<TlsIoState>>,
+    tls_state: SharedTlsIoState,
     writer_rx: Receiver<WriterCommand>,
     stop: Arc<AtomicBool>,
 ) {
@@ -3871,7 +3996,7 @@ fn run_tls_writer(
 
 fn handle_tls_writer_command(
     core: &Arc<StreamTransportCore>,
-    tls_state: &Arc<Mutex<TlsIoState>>,
+    tls_state: &SharedTlsIoState,
     writer_rx: &Receiver<WriterCommand>,
     command: WriterCommand,
     pending_command: &mut Option<WriterCommand>,
@@ -3895,7 +4020,7 @@ fn handle_tls_writer_command(
 
 fn write_tls_data_batch(
     core: &Arc<StreamTransportCore>,
-    tls_state: &Arc<Mutex<TlsIoState>>,
+    tls_state: &SharedTlsIoState,
     writer_rx: &Receiver<WriterCommand>,
     data: OwnedWriteBuffer,
     pending_command: &mut Option<WriterCommand>,
@@ -3935,7 +4060,7 @@ fn write_tls_data_batch(
 
 fn write_one_tls_buffer(
     core: &Arc<StreamTransportCore>,
-    tls_state: &Arc<Mutex<TlsIoState>>,
+    tls_state: &SharedTlsIoState,
     data: &OwnedWriteBuffer,
 ) -> bool {
     let buffered_len = data.remaining().len();
@@ -4096,11 +4221,9 @@ fn wait_socket_ready_until(
 #[cfg(target_os = "linux")]
 fn poll_fd_from_raw(fd: fd_ops::RawFd) -> io::Result<PollFd<OwnedFd>> {
     let dup = fd_ops::dup_raw_fd(fd)?;
-    let dup: i32 = dup
-        .try_into()
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "fd out of range"))?;
-    // SAFETY: `dup_raw_fd` returned a newly owned descriptor, and `OwnedFd` takes ownership.
-    PollFd::new(unsafe { OwnedFd::from_raw_fd(dup) })
+    let owned = from_owned_raw_fd::<OwnedFd>(dup)
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
+    PollFd::new(owned)
 }
 
 fn tls_io_error(err: rustls::Error) -> io::Error {

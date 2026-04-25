@@ -14,12 +14,16 @@ use crate::callbacks::{CallbackId, CallbackKind, ReadyCallback};
 use crate::context::{capture_context, clear_running_loop, ensure_running_loop};
 use crate::errors::handle_callback_error;
 use crate::fd_ops::RawFd;
-use crate::process_transport::ProcessTransportCore;
 use crate::runtime::run_runtime_thread;
-use crate::stream_transport::{ReaderTarget, ServerCore, ServerListener, StreamTransportCore};
 use crossbeam_channel::Sender;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PySet, PyTuple};
+
+mod commands;
+pub use commands::{
+    LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
+    LoopTransportCommand, ReadyItem,
+};
 
 const READY_DRAIN_SLICE: usize = 64;
 
@@ -51,73 +55,6 @@ impl fmt::Display for LoopCoreError {
 }
 
 impl std::error::Error for LoopCoreError {}
-
-pub enum ReadyItem {
-    Callback(Arc<ReadyCallback>),
-    FutureSetResult { future: Py<PyAny>, value: Py<PyAny> },
-    FutureSetException { future: Py<PyAny>, value: Py<PyAny> },
-    StreamTransportRead(Arc<StreamTransportCore>),
-    ProcessTransport(Arc<ProcessTransportCore>),
-    Stop,
-}
-
-pub enum LoopCommand {
-    ScheduleReady(Arc<ReadyCallback>),
-    ScheduleTimer {
-        callback: Arc<ReadyCallback>,
-        when: Instant,
-    },
-    EnterRun {
-        pending_ready: Arc<Mutex<VecDeque<ReadyItem>>>,
-        wake_tx: std::sync::mpsc::Sender<()>,
-    },
-    FinishRun {
-        done_tx: std::sync::mpsc::Sender<()>,
-    },
-    StartSignalWatcher(i32),
-    StopSignalWatcher(i32),
-    SignalFired(i32),
-    StartReader {
-        fd: RawFd,
-        callback: Py<PyAny>,
-        args: Py<PyTuple>,
-        context: Py<PyAny>,
-        context_needs_run: bool,
-    },
-    StopReader(RawFd),
-    StartWriter {
-        fd: RawFd,
-        callback: Py<PyAny>,
-        args: Py<PyTuple>,
-        context: Py<PyAny>,
-        context_needs_run: bool,
-    },
-    StopWriter(RawFd),
-    ScheduleFutureSetResult {
-        future: Py<PyAny>,
-        value: Py<PyAny>,
-    },
-    ScheduleFutureSetException {
-        future: Py<PyAny>,
-        value: Py<PyAny>,
-    },
-    ScheduleStreamTransportRead(Arc<StreamTransportCore>),
-    ScheduleProcessTransport(Arc<ProcessTransportCore>),
-    StartSocketReader {
-        fd: RawFd,
-        core: Arc<StreamTransportCore>,
-        reader: ReaderTarget,
-    },
-    StopSocketReader(RawFd),
-    StartServerAccept {
-        fd: RawFd,
-        server: Arc<ServerCore>,
-        listener: ServerListener,
-    },
-    StopServerAccept(RawFd),
-    RequestStop,
-    Close,
-}
 
 pub struct SignalHandlerTemplate {
     pub callback: Py<PyAny>,
@@ -267,7 +204,9 @@ impl LoopCore {
     pub fn time(&self) -> f64 {
         self.start.elapsed().as_secs_f64()
     }
+}
 
+impl LoopCore {
     pub fn schedule_callback(
         self: &Arc<Self>,
         py: Python<'_>,
@@ -389,10 +328,10 @@ impl LoopCore {
                 wake_pending: Arc::clone(&wake_pending),
             });
         }
-        self.send_command(LoopCommand::EnterRun {
+        self.send_command(LoopCommand::Run(LoopRunCommand::EnterRun {
             pending_ready: Arc::clone(&pending_ready),
             wake_tx,
-        })
+        }))
         .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
 
         ensure_running_loop(py, &loop_obj)?;
@@ -558,7 +497,7 @@ impl LoopCore {
             .take();
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
-        self.send_command(LoopCommand::FinishRun { done_tx })
+        self.send_command(LoopCommand::Run(LoopRunCommand::FinishRun { done_tx }))
             .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
         match py.detach(move || done_rx.recv_timeout(SIGNAL_POLL_INTERVAL)) {
             Ok(()) => {}
@@ -576,7 +515,9 @@ impl LoopCore {
 
         run_result
     }
+}
 
+impl LoopCore {
     pub fn schedule_stop(&self) -> Result<(), LoopCoreError> {
         profiling::scope!("LoopCore::schedule_stop");
         self.send_command(LoopCommand::RequestStop)
@@ -607,7 +548,9 @@ impl LoopCore {
 
         Ok(())
     }
+}
 
+impl LoopCore {
     pub fn call_exception_handler(
         &self,
         py: Python<'_>,
@@ -691,12 +634,14 @@ impl LoopCore {
                     .reader_keepalive
                     .contains_key(&fd);
                 should_rearm.then(|| {
-                    Python::attach(|py| LoopCommand::StartReader {
-                        fd,
-                        callback: ready.callback().clone_ref(py),
-                        args: ready.clone_args_tuple(py),
-                        context: ready.context().clone_ref(py),
-                        context_needs_run: ready.context_needs_run(),
+                    Python::attach(|py| {
+                        LoopCommand::Io(LoopIoCommand::StartReader {
+                            fd,
+                            callback: ready.callback().clone_ref(py),
+                            args: ready.clone_args_tuple(py),
+                            context: ready.context().clone_ref(py),
+                            context_needs_run: ready.context_needs_run(),
+                        })
                     })
                 })
             }
@@ -708,12 +653,14 @@ impl LoopCore {
                     .writer_keepalive
                     .contains_key(&fd);
                 should_rearm.then(|| {
-                    Python::attach(|py| LoopCommand::StartWriter {
-                        fd,
-                        callback: ready.callback().clone_ref(py),
-                        args: ready.clone_args_tuple(py),
-                        context: ready.context().clone_ref(py),
-                        context_needs_run: ready.context_needs_run(),
+                    Python::attach(|py| {
+                        LoopCommand::Io(LoopIoCommand::StartWriter {
+                            fd,
+                            callback: ready.callback().clone_ref(py),
+                            args: ready.clone_args_tuple(py),
+                            context: ready.context().clone_ref(py),
+                            context_needs_run: ready.context_needs_run(),
+                        })
                     })
                 })
             }
@@ -771,24 +718,24 @@ impl LoopCore {
                     ReadyItem::Callback(callback) => LoopCommand::ScheduleReady(callback),
                     ReadyItem::Stop => LoopCommand::RequestStop,
                     ReadyItem::FutureSetResult { future, value } => {
-                        LoopCommand::ScheduleFutureSetResult { future, value }
+                        LoopCommand::Future(LoopFutureCommand::SetResult { future, value })
                     }
                     ReadyItem::FutureSetException { future, value } => {
-                        LoopCommand::ScheduleFutureSetException { future, value }
+                        LoopCommand::Future(LoopFutureCommand::SetException { future, value })
                     }
                     ReadyItem::StreamTransportRead(core) => {
-                        LoopCommand::ScheduleStreamTransportRead(core)
+                        LoopCommand::Transport(LoopTransportCommand::StreamRead(core))
                     }
                     ReadyItem::ProcessTransport(core) => {
-                        LoopCommand::ScheduleProcessTransport(core)
+                        LoopCommand::Transport(LoopTransportCommand::Process(core))
                     }
                 }),
-            LoopCommand::ScheduleFutureSetResult { future, value } => self
+            LoopCommand::Future(LoopFutureCommand::SetResult { future, value }) => self
                 .try_enqueue_local_ready(ReadyItem::FutureSetResult { future, value })
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
                     ReadyItem::FutureSetResult { future, value } => {
-                        LoopCommand::ScheduleFutureSetResult { future, value }
+                        LoopCommand::Future(LoopFutureCommand::SetResult { future, value })
                     }
                     ReadyItem::Callback(_)
                     | ReadyItem::FutureSetException { .. }
@@ -798,12 +745,12 @@ impl LoopCore {
                         unreachable!("local future result enqueue preserves item kind")
                     }
                 }),
-            LoopCommand::ScheduleFutureSetException { future, value } => self
+            LoopCommand::Future(LoopFutureCommand::SetException { future, value }) => self
                 .try_enqueue_local_ready(ReadyItem::FutureSetException { future, value })
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
                     ReadyItem::FutureSetException { future, value } => {
-                        LoopCommand::ScheduleFutureSetException { future, value }
+                        LoopCommand::Future(LoopFutureCommand::SetException { future, value })
                     }
                     ReadyItem::Callback(_)
                     | ReadyItem::FutureSetResult { .. }
@@ -813,12 +760,12 @@ impl LoopCore {
                         unreachable!("local future exception enqueue preserves item kind")
                     }
                 }),
-            LoopCommand::ScheduleStreamTransportRead(core) => self
+            LoopCommand::Transport(LoopTransportCommand::StreamRead(core)) => self
                 .try_enqueue_local_ready(ReadyItem::StreamTransportRead(core))
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
                     ReadyItem::StreamTransportRead(core) => {
-                        LoopCommand::ScheduleStreamTransportRead(core)
+                        LoopCommand::Transport(LoopTransportCommand::StreamRead(core))
                     }
                     ReadyItem::Callback(_)
                     | ReadyItem::FutureSetResult { .. }
@@ -828,12 +775,12 @@ impl LoopCore {
                         unreachable!("local stream read enqueue preserves item kind")
                     }
                 }),
-            LoopCommand::ScheduleProcessTransport(core) => self
+            LoopCommand::Transport(LoopTransportCommand::Process(core)) => self
                 .try_enqueue_local_ready(ReadyItem::ProcessTransport(core))
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
                     ReadyItem::ProcessTransport(core) => {
-                        LoopCommand::ScheduleProcessTransport(core)
+                        LoopCommand::Transport(LoopTransportCommand::Process(core))
                     }
                     ReadyItem::Callback(_)
                     | ReadyItem::FutureSetResult { .. }

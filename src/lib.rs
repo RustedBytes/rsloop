@@ -6,6 +6,7 @@ mod errors;
 mod fast_streams;
 mod fd_ops;
 mod loop_core;
+mod module_init;
 mod process_transport;
 mod profiler;
 mod python_api;
@@ -19,7 +20,10 @@ mod windows_vibeio;
 
 pub use callbacks::{PyHandle, PyTimerHandle, ReadyCallback};
 pub use fast_streams::{open_connection, start_server, PyFastStreamReader, PyFastStreamWriter};
-pub use loop_core::{LoopCommand, LoopCore};
+pub use loop_core::{
+    LoopCommand, LoopCore, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
+    LoopTransportCommand,
+};
 pub use process_transport::{PyProcessPipeTransport, PyProcessTransport};
 pub use profiler::{profiler_running, start_profiler, stop_profiler};
 pub use python_api::{
@@ -30,61 +34,8 @@ pub use stream_transport::{PyServer, PyStreamTransport};
 
 use pyo3::prelude::*;
 
-fn add_module_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyLoop>()?;
-    m.add_class::<PyHandle>()?;
-    m.add_class::<PyTimerHandle>()?;
-    m.add_class::<PyProcessTransport>()?;
-    m.add_class::<PyProcessPipeTransport>()?;
-    m.add_class::<PyServer>()?;
-    m.add_class::<PyStreamTransport>()?;
-    m.add_class::<PyFastStreamReader>()?;
-    m.add_class::<PyFastStreamWriter>()?;
-    Ok(())
-}
-
-fn add_event_loop_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(new_event_loop, m)?)?;
-    m.add_function(wrap_pyfunction!(asyncgen_firstiter_hook, m)?)?;
-    m.add_function(wrap_pyfunction!(asyncgen_finalizer_hook, m)?)?;
-    m.add_function(wrap_pyfunction!(future_done_stop, m)?)?;
-    m.add_function(wrap_pyfunction!(signal_bridge, m)?)?;
-    Ok(())
-}
-
-fn add_stream_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(open_connection, m)?)?;
-    m.add_function(wrap_pyfunction!(start_server, m)?)?;
-    Ok(())
-}
-
-fn add_profiler_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(profiler_running, m)?)?;
-    m.add_function(wrap_pyfunction!(start_profiler, m)?)?;
-    m.add_function(wrap_pyfunction!(stop_profiler, m)?)?;
-    Ok(())
-}
-
-fn add_module_compat_aliases(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add("_future_done_stop", m.getattr("future_done_stop")?)?;
-    m.add(
-        "_asyncgen_firstiter_hook",
-        m.getattr("asyncgen_firstiter_hook")?,
-    )?;
-    m.add(
-        "_asyncgen_finalizer_hook",
-        m.getattr("asyncgen_finalizer_hook")?,
-    )?;
-    Ok(())
-}
-
 #[pymodule(gil_used = false)]
 fn _loop(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    add_module_classes(m)?;
-    add_event_loop_functions(m)?;
-    add_stream_functions(m)?;
-    add_profiler_functions(m)?;
-    add_module_compat_aliases(m)?;
-    Ok(())
+    module_init::add_module_contents(m)
 }

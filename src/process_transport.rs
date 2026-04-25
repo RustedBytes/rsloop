@@ -20,7 +20,7 @@ use pyo3::types::{PyDict, PyTuple};
 use crate::async_event::AsyncEvent;
 use crate::context::{ensure_running_loop, run_in_context};
 use crate::fd_ops;
-use crate::loop_core::{LoopCommand, LoopCore};
+use crate::loop_core::{LoopCommand, LoopCore, LoopTransportCommand};
 use crate::stream_transport::spawn_write_pipe_transport;
 
 enum ProcessCommand {
@@ -105,6 +105,48 @@ pub struct ProcessTransportParams {
     pub stderr_override: Option<BoxedProcessReader>,
 }
 
+impl ProcessTransportParams {
+    pub fn new(
+        spawn_context: crate::stream_transport::TransportSpawnContext,
+        child: Child,
+    ) -> Self {
+        let crate::stream_transport::TransportSpawnContext {
+            loop_core,
+            loop_obj,
+            protocol,
+            context,
+            context_needs_run,
+        } = spawn_context;
+
+        Self {
+            loop_core,
+            loop_obj,
+            protocol,
+            context,
+            context_needs_run,
+            text_config: None,
+            child,
+            stdout_override: None,
+            stderr_override: None,
+        }
+    }
+
+    pub fn with_text_config(mut self, text_config: Option<ProcessTextConfig>) -> Self {
+        self.text_config = text_config;
+        self
+    }
+
+    pub fn with_stdio_overrides(
+        mut self,
+        stdout_override: Option<BoxedProcessReader>,
+        stderr_override: Option<BoxedProcessReader>,
+    ) -> Self {
+        self.stdout_override = stdout_override;
+        self.stderr_override = stderr_override;
+        self
+    }
+}
+
 struct ProcessPipes {
     stdin: Option<ChildStdin>,
     stdout: Option<BoxedProcessReader>,
@@ -160,7 +202,9 @@ impl ProcessTransportCore {
         if !self.events_scheduled.swap(true, Ordering::AcqRel)
             && self
                 .loop_core
-                .send_command(LoopCommand::ScheduleProcessTransport(Arc::clone(self)))
+                .send_command(LoopCommand::Transport(LoopTransportCommand::Process(
+                    Arc::clone(self),
+                )))
                 .is_err()
         {
             self.events_scheduled.store(false, Ordering::Release);
@@ -295,7 +339,9 @@ impl ProcessTransportCore {
             )
         });
     }
+}
 
+impl ProcessTransportCore {
     fn connection_made(&self, transport: Py<PyProcessTransport>) -> PyResult<()> {
         self.call_in_loop_context(|py| {
             self.call_protocol_method1(py, "connection_made", transport.into_any())?;
@@ -469,7 +515,9 @@ impl ProcessTransportCore {
         let exc = exc.map(|err| Python::attach(|py| err.value(py).to_string()));
         self.connection_lost_message(exc)
     }
+}
 
+impl ProcessTransportCore {
     #[inline]
     fn get_returncode(&self) -> Option<i32> {
         self.state
@@ -699,13 +747,14 @@ fn spawn_stdin_pipe_transport(
         .unbind();
     let transport = spawn_write_pipe_transport(
         py,
-        crate::stream_transport::TransportSpawnContext {
-            loop_core: core.loop_core.clone(),
-            loop_obj: core.loop_obj.clone_ref(py),
-            protocol: stdin_protocol,
-            context: stdin_context,
-            context_needs_run: false,
-        },
+        crate::stream_transport::TransportSpawnContext::new(
+            py,
+            core.loop_core.clone(),
+            &core.loop_obj,
+            stdin_protocol,
+            &stdin_context,
+            false,
+        ),
         file_obj.clone_ref(py),
         extra_entries,
     )?;

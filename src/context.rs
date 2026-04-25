@@ -81,15 +81,15 @@ fn call_onearg(
 ) -> PyResult<Py<PyAny>> {
     // SAFETY: `callback` and `arg` are live Python objects under the GIL, and the CPython varargs
     // list is terminated with a null pointer. PyO3 owns successful returns and maps null to `PyErr`.
-    let ptr = unsafe {
-        ffi::PyObject_CallFunctionObjArgs(
+    let result = unsafe {
+        let ptr = ffi::PyObject_CallFunctionObjArgs(
             callback.as_ptr(),
             arg.as_ptr(),
             std::ptr::null_mut::<ffi::PyObject>(),
-        )
+        );
+        Bound::from_owned_ptr_or_err(py, ptr)
     };
-    // SAFETY: `ptr` is the owned result returned by CPython for the call above.
-    unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind)
+    result.map(Bound::unbind)
 }
 
 pub fn run_in_context(

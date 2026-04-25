@@ -1,10 +1,5 @@
-use std::fs::File;
-#[cfg(unix)]
-use std::os::fd::FromRawFd;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-#[cfg(windows)]
-use std::os::windows::io::FromRawHandle;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::Command;
@@ -13,17 +8,20 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError};
-use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyModule, PySet, PySlice, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
+
+mod ffi_helpers;
+mod pre_exec;
+mod process_handles;
 
 use crate::callbacks::{CallbackKind, PyHandle, PyTimerHandle};
 use crate::context::{capture_context, ensure_running_loop, run_in_context};
 use crate::fd_ops;
 #[cfg(unix)]
 use crate::loop_core::SignalHandlerTemplate;
-use crate::loop_core::{LoopCommand, LoopCore, LoopCoreError};
+use crate::loop_core::{LoopCommand, LoopCore, LoopCoreError, LoopIoCommand, LoopSignalCommand};
 use crate::process_transport::{
     spawn_process_transport, BoxedProcessReader, ProcessTextConfig, ProcessTransportParams,
 };
@@ -40,20 +38,45 @@ use crate::stream_transport::{
 use crate::stream_transport::{unix_listener_from_owned_socket_fd, unix_server_listener};
 use crate::tls::{client_tls_settings, server_tls_settings};
 
-static ASYNCIO_TASK_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
-static ASYNCIO_FUTURE_CLS: OnceLock<Py<PyAny>> = OnceLock::new();
-static ASYNCIO_GET_RUNNING_LOOP_FN: OnceLock<Py<PyAny>> = OnceLock::new();
-static ASYNCIO_TASK_KWARG_SUPPORT: OnceLock<TaskKwargSupport> = OnceLock::new();
-#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
-static ASYNCIO_FUTURE_LOOP_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
-#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
-static ASYNCIO_TASK_LOOP_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
-#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
-static ASYNCIO_TASK_LOOP_NAME_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
-#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
-static ASYNCIO_TASK_LOOP_CONTEXT_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
-#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
-static ASYNCIO_TASK_LOOP_NAME_CONTEXT_KWNAMES: OnceLock<Py<PyTuple>> = OnceLock::new();
+struct PythonApiCaches {
+    asyncio_task_cls: OnceLock<Py<PyAny>>,
+    asyncio_future_cls: OnceLock<Py<PyAny>>,
+    asyncio_get_running_loop_fn: OnceLock<Py<PyAny>>,
+    asyncio_task_kwarg_support: OnceLock<TaskKwargSupport>,
+    #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+    asyncio_future_loop_kwnames: OnceLock<Py<PyTuple>>,
+    #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+    asyncio_task_loop_kwnames: OnceLock<Py<PyTuple>>,
+    #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+    asyncio_task_loop_name_kwnames: OnceLock<Py<PyTuple>>,
+    #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+    asyncio_task_loop_context_kwnames: OnceLock<Py<PyTuple>>,
+    #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+    asyncio_task_loop_name_context_kwnames: OnceLock<Py<PyTuple>>,
+}
+
+impl PythonApiCaches {
+    const fn new() -> Self {
+        Self {
+            asyncio_task_cls: OnceLock::new(),
+            asyncio_future_cls: OnceLock::new(),
+            asyncio_get_running_loop_fn: OnceLock::new(),
+            asyncio_task_kwarg_support: OnceLock::new(),
+            #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+            asyncio_future_loop_kwnames: OnceLock::new(),
+            #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+            asyncio_task_loop_kwnames: OnceLock::new(),
+            #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+            asyncio_task_loop_name_kwnames: OnceLock::new(),
+            #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+            asyncio_task_loop_context_kwnames: OnceLock::new(),
+            #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+            asyncio_task_loop_name_context_kwnames: OnceLock::new(),
+        }
+    }
+}
+
+static PYTHON_API_CACHES: PythonApiCaches = PythonApiCaches::new();
 
 type ResolvedStreamAddrinfo = (i32, i32, i32, Py<PyAny>);
 const PROCESS_UMASK_MAX: i64 = 0o777;
@@ -197,25 +220,25 @@ fn warn_default_executor_timeout(py: Python<'_>, timeout: f64) -> PyResult<()> {
 }
 
 fn asyncio_task_cls(py: Python<'_>) -> PyResult<&Py<PyAny>> {
-    if let Some(cached) = ASYNCIO_TASK_CLS.get() {
+    if let Some(cached) = PYTHON_API_CACHES.asyncio_task_cls.get() {
         return Ok(cached);
     }
 
     let loaded = py.import("asyncio")?.getattr("Task")?.unbind();
-    Ok(ASYNCIO_TASK_CLS.get_or_init(|| loaded))
+    Ok(PYTHON_API_CACHES.asyncio_task_cls.get_or_init(|| loaded))
 }
 
 fn asyncio_future_cls(py: Python<'_>) -> PyResult<&Py<PyAny>> {
-    if let Some(cached) = ASYNCIO_FUTURE_CLS.get() {
+    if let Some(cached) = PYTHON_API_CACHES.asyncio_future_cls.get() {
         return Ok(cached);
     }
 
     let loaded = py.import("asyncio")?.getattr("Future")?.unbind();
-    Ok(ASYNCIO_FUTURE_CLS.get_or_init(|| loaded))
+    Ok(PYTHON_API_CACHES.asyncio_future_cls.get_or_init(|| loaded))
 }
 
 fn asyncio_get_running_loop_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
-    if let Some(cached) = ASYNCIO_GET_RUNNING_LOOP_FN.get() {
+    if let Some(cached) = PYTHON_API_CACHES.asyncio_get_running_loop_fn.get() {
         return Ok(cached);
     }
 
@@ -223,16 +246,20 @@ fn asyncio_get_running_loop_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
         .import("asyncio.events")?
         .getattr("_get_running_loop")?
         .unbind();
-    Ok(ASYNCIO_GET_RUNNING_LOOP_FN.get_or_init(|| loaded))
+    Ok(PYTHON_API_CACHES
+        .asyncio_get_running_loop_fn
+        .get_or_init(|| loaded))
 }
 
 fn asyncio_task_kwarg_support(py: Python<'_>) -> PyResult<&'static TaskKwargSupport> {
-    if let Some(cached) = ASYNCIO_TASK_KWARG_SUPPORT.get() {
+    if let Some(cached) = PYTHON_API_CACHES.asyncio_task_kwarg_support.get() {
         return Ok(cached);
     }
 
     let support = detect_asyncio_task_kwarg_support(py)?;
-    Ok(ASYNCIO_TASK_KWARG_SUPPORT.get_or_init(|| support))
+    Ok(PYTHON_API_CACHES
+        .asyncio_task_kwarg_support
+        .get_or_init(|| support))
 }
 
 fn detect_asyncio_task_kwarg_support(py: Python<'_>) -> PyResult<TaskKwargSupport> {
@@ -296,10 +323,7 @@ fn mark_task_kwarg_supported(support: &mut TaskKwargSupport, kwarg_name: &str) {
 
 #[inline]
 fn call_callable_noargs(py: Python<'_>, callable: &Py<PyAny>) -> PyResult<Py<PyAny>> {
-    // SAFETY: `callable` is a live Python object and the GIL is held. PyO3 takes ownership of a
-    // non-null owned return and maps a null return to the active Python exception.
-    unsafe { Bound::from_owned_ptr_or_err(py, ffi::compat::PyObject_CallNoArgs(callable.as_ptr())) }
-        .map(Bound::unbind)
+    ffi_helpers::call_noargs(py, callable)
 }
 
 #[inline]
@@ -308,17 +332,7 @@ fn call_callable_onearg(
     callable: &Py<PyAny>,
     arg: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
-    // SAFETY: `callable` and `arg` are live Python objects under the GIL, and the CPython varargs
-    // list is null-terminated. The owned result is immediately wrapped by PyO3.
-    let ptr = unsafe {
-        ffi::PyObject_CallFunctionObjArgs(
-            callable.as_ptr(),
-            arg.as_ptr(),
-            std::ptr::null_mut::<ffi::PyObject>(),
-        )
-    };
-    // SAFETY: `ptr` is the owned result returned by CPython for the call above.
-    unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind)
+    ffi_helpers::call_onearg(py, callable, arg)
 }
 
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
@@ -343,7 +357,7 @@ fn keyword_tuple<const N: usize>(
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 fn asyncio_future_loop_kwnames(py: Python<'_>) -> PyResult<&Py<PyTuple>> {
     keyword_tuple(
-        &ASYNCIO_FUTURE_LOOP_KWNAMES,
+        &PYTHON_API_CACHES.asyncio_future_loop_kwnames,
         py,
         [python_names::loop_kw(py)],
     )
@@ -356,21 +370,23 @@ fn asyncio_task_kwnames_for_options(
     include_context: bool,
 ) -> PyResult<&Py<PyTuple>> {
     match (include_name, include_context) {
-        (false, false) => {
-            keyword_tuple(&ASYNCIO_TASK_LOOP_KWNAMES, py, [python_names::loop_kw(py)])
-        }
+        (false, false) => keyword_tuple(
+            &PYTHON_API_CACHES.asyncio_task_loop_kwnames,
+            py,
+            [python_names::loop_kw(py)],
+        ),
         (true, false) => keyword_tuple(
-            &ASYNCIO_TASK_LOOP_NAME_KWNAMES,
+            &PYTHON_API_CACHES.asyncio_task_loop_name_kwnames,
             py,
             [python_names::loop_kw(py), python_names::name_kw(py)],
         ),
         (false, true) => keyword_tuple(
-            &ASYNCIO_TASK_LOOP_CONTEXT_KWNAMES,
+            &PYTHON_API_CACHES.asyncio_task_loop_context_kwnames,
             py,
             [python_names::loop_kw(py), python_names::context_kw(py)],
         ),
         (true, true) => keyword_tuple(
-            &ASYNCIO_TASK_LOOP_NAME_CONTEXT_KWNAMES,
+            &PYTHON_API_CACHES.asyncio_task_loop_name_context_kwnames,
             py,
             [
                 python_names::loop_kw(py),
@@ -393,14 +409,9 @@ fn create_asyncio_future_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyRes
     #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
     {
         let args = [loop_obj.as_ptr()];
-        // SAFETY: The class and argument pointers are live under the GIL. `args` and kwnames live
-        // for the duration of the vectorcall, and PyO3 owns successful return pointers.
         let cls = asyncio_future_cls(py)?.as_ptr();
         let kwnames = asyncio_future_loop_kwnames(py)?.as_ptr();
-        // SAFETY: `cls`, `args`, and `kwnames` are live for this vectorcall under the GIL.
-        let ptr = unsafe { ffi::PyObject_Vectorcall(cls, args.as_ptr(), 0, kwnames) };
-        // SAFETY: `ptr` is the owned result returned by CPython for the vectorcall above.
-        return unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind);
+        return ffi_helpers::vectorcall(py, cls, args.as_ptr(), 0, kwnames);
     }
 
     #[cfg(not(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API)))))]
@@ -436,14 +447,9 @@ fn create_asyncio_task_for_loop(
             args.push(context.as_ptr());
         }
 
-        // SAFETY: The asyncio Task class, positional argument array, and kwnames tuple are all live
-        // under the GIL for this call. PyO3 converts null returns into `PyErr`.
         let cls = asyncio_task_cls(py)?.as_ptr();
         let kwnames = asyncio_task_kwnames_for_options(py, name.is_some(), context.is_some())?;
-        // SAFETY: `cls`, `args`, and `kwnames` are live for this vectorcall under the GIL.
-        let ptr = unsafe { ffi::PyObject_Vectorcall(cls, args.as_ptr(), 1, kwnames.as_ptr()) };
-        // SAFETY: `ptr` is the owned result returned by CPython for the vectorcall above.
-        return unsafe { Bound::from_owned_ptr_or_err(py, ptr) }.map(Bound::unbind);
+        return ffi_helpers::vectorcall(py, cls, args.as_ptr(), 1, kwnames.as_ptr());
     }
 
     #[cfg(not(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API)))))]
@@ -514,13 +520,14 @@ fn stream_spawn_context(
     context: &Py<PyAny>,
     context_needs_run: bool,
 ) -> TransportSpawnContext {
-    TransportSpawnContext {
-        loop_core: Arc::clone(loop_core),
-        loop_obj: loop_obj.clone_ref(py),
-        protocol: protocol.clone_ref(py),
-        context: context.clone_ref(py),
+    TransportSpawnContext::new(
+        py,
+        Arc::clone(loop_core),
+        loop_obj,
+        protocol.clone_ref(py),
+        context,
         context_needs_run,
-    }
+    )
 }
 
 fn is_asyncio_subprocess_stream_protocol(py: Python<'_>, protocol: &Py<PyAny>) -> PyResult<bool> {
@@ -956,67 +963,7 @@ fn parse_subprocess_stdio_marker(
 }
 
 fn stdio_from_fd(fd: fd_ops::RawFd) -> PyResult<std::process::Stdio> {
-    #[cfg(windows)]
-    {
-        let handle = fd_ops::duplicate_handle_from_fd(fd)
-            .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-        // SAFETY: `duplicate_handle_from_fd` returns a newly owned Windows handle. Wrapping it in
-        // `File` transfers ownership so it is closed exactly once.
-        let file = unsafe { File::from_raw_handle(handle as _) };
-        return Ok(std::process::Stdio::from(file));
-    }
-
-    #[cfg(unix)]
-    {
-        let dup = fd_ops::dup_raw_fd(fd as fd_ops::RawFd)
-            .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-        // SAFETY: `dup_raw_fd` returns a newly owned file descriptor. `File::from_raw_fd` takes
-        // ownership of that descriptor.
-        let file = unsafe { File::from_raw_fd(dup as i32) };
-        Ok(std::process::Stdio::from(file))
-    }
-}
-
-fn new_pipe() -> PyResult<(File, File)> {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::HANDLE;
-        use windows_sys::Win32::System::Pipes::CreatePipe;
-
-        let mut read_end: HANDLE = std::ptr::null_mut();
-        let mut write_end: HANDLE = std::ptr::null_mut();
-        // SAFETY: The out-pointers are valid for writes and the security attributes pointer is
-        // null as permitted by `CreatePipe`.
-        let ok = unsafe { CreatePipe(&mut read_end, &mut write_end, std::ptr::null(), 0) };
-        if ok == 0 {
-            return Err(PyRuntimeError::new_err(
-                std::io::Error::last_os_error().to_string(),
-            ));
-        }
-        // SAFETY: `CreatePipe` initialized both handles on success, and each `File` takes
-        // ownership of one handle.
-        let read_end = unsafe { File::from_raw_handle(read_end as _) };
-        // SAFETY: See above; `write_end` is the other owned pipe handle.
-        let write_end = unsafe { File::from_raw_handle(write_end as _) };
-        return Ok((read_end, write_end));
-    }
-
-    #[cfg(unix)]
-    {
-        let mut fds = [0_i32; 2];
-        // SAFETY: `fds` has room for the two descriptors that `pipe` writes on success.
-        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-        if rc == -1 {
-            return Err(PyRuntimeError::new_err(
-                std::io::Error::last_os_error().to_string(),
-            ));
-        }
-        // SAFETY: `pipe` initialized both descriptors on success, and `File` takes ownership.
-        let read_end = unsafe { File::from_raw_fd(fds[0]) };
-        // SAFETY: See above; `fds[1]` is the owned write end.
-        let write_end = unsafe { File::from_raw_fd(fds[1]) };
-        Ok((read_end, write_end))
-    }
+    process_handles::file_from_fd(fd).map(std::process::Stdio::from)
 }
 
 fn apply_stdio(
@@ -1034,7 +981,7 @@ fn apply_stdio(
 
     match (stdout, stderr) {
         (ProcessStdioSpec::Pipe, ProcessStdioSpec::Stdout) => {
-            let (read_end, write_end) = new_pipe()?;
+            let (read_end, write_end) = process_handles::new_pipe()?;
             let stderr_end = write_end
                 .try_clone()
                 .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -1171,143 +1118,6 @@ fn parse_process_text_config(
     }))
 }
 
-#[cfg(unix)]
-fn apply_unix_pre_exec(command: &mut Command, config: UnixPreExecConfig) {
-    // SAFETY: `pre_exec` installs a closure that runs in the child process after fork and before
-    // exec. The closure only invokes async-signal-safe libc operations and returns OS errors.
-    unsafe {
-        command.pre_exec(move || apply_unix_pre_exec_child(&config));
-    }
-}
-
-#[cfg(unix)]
-fn apply_unix_pre_exec_child(config: &UnixPreExecConfig) -> std::io::Result<()> {
-    restore_child_signals(config.restore_signals)?;
-    clear_pass_fds_cloexec(&config.pass_fds)?;
-    apply_child_session_and_group(config)?;
-    apply_child_identity(config)?;
-    apply_child_umask(config.umask);
-    Ok(())
-}
-
-#[cfg(unix)]
-fn restore_child_signals(restore_signals: bool) -> std::io::Result<()> {
-    if !restore_signals {
-        return Ok(());
-    }
-    reset_child_signal(libc::SIGPIPE)?;
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    reset_child_signal(libc::SIGXFSZ)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn clear_pass_fds_cloexec(pass_fds: &[i32]) -> std::io::Result<()> {
-    for fd in pass_fds {
-        clear_child_fd_cloexec(*fd)?;
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn apply_child_session_and_group(config: &UnixPreExecConfig) -> std::io::Result<()> {
-    if config.start_new_session {
-        // SAFETY: Runs in the forked child before exec; `setsid` has no Rust aliasing concerns and
-        // reports failure through errno.
-        if unsafe { libc::setsid() } == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
-    if let Some(process_group) = config.process_group {
-        if !(config.start_new_session && process_group == 0) {
-            // SAFETY: Runs in the child process for pid 0 (self); arguments are plain integers and
-            // errors are reported via errno.
-            if unsafe { libc::setpgid(0, process_group) } == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn apply_child_identity(config: &UnixPreExecConfig) -> std::io::Result<()> {
-    if let Some(groups) = &config.extra_groups {
-        set_child_groups(groups)?;
-    }
-    if let Some(gid) = config.gid {
-        // SAFETY: Runs in the child process before exec with a numeric gid supplied by the caller.
-        if unsafe { libc::setgid(gid) } == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
-    if let Some(uid) = config.uid {
-        // SAFETY: Runs in the child process before exec with a numeric uid supplied by the caller.
-        if unsafe { libc::setuid(uid) } == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn apply_child_umask(umask: Option<u32>) {
-    if let Some(umask) = umask {
-        // SAFETY: `umask` only changes the child process mask and has no memory-safety effects.
-        unsafe {
-            libc::umask(umask as libc::mode_t);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn reset_child_signal(signal: libc::c_int) -> std::io::Result<()> {
-    // SAFETY: Runs in the forked child before exec, setting a signal disposition to the default.
-    if unsafe { libc::signal(signal, libc::SIG_DFL) } == libc::SIG_ERR {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(unix)]
-fn clear_child_fd_cloexec(fd: libc::c_int) -> std::io::Result<()> {
-    // SAFETY: `fcntl` is called for an inherited fd in the child process and reports errors via
-    // errno. No Rust references are retained by the OS.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-    if flags == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: Same fd as above; this updates descriptor flags in the child process only.
-    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_child_groups(groups: &[u32]) -> std::io::Result<()> {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    let ngroups = groups.len();
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    let ngroups: libc::c_int = groups.len().try_into().map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "extra_groups length exceeds platform limit",
-        )
-    })?;
-
-    // SAFETY: `groups.as_ptr()` is valid for `groups.len()` entries for the duration of the call.
-    if unsafe { libc::setgroups(ngroups, groups.as_ptr()) } == -1 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(not(unix))]
-fn apply_unix_pre_exec(_command: &mut Command, _config: UnixPreExecConfig) {}
-
 fn apply_process_basic_kw(
     py: Python<'_>,
     command: &mut Command,
@@ -1366,25 +1176,32 @@ fn apply_process_executable(
     }
 }
 
+struct UnixProcessKw<'a, 'py> {
+    unix: &'a mut UnixPreExecConfig,
+    key: &'a str,
+    value: &'a Bound<'py, PyAny>,
+}
+
 fn apply_unix_process_kw(
     py: Python<'_>,
     unix: &mut UnixPreExecConfig,
     key: &str,
     value: &Bound<'_, PyAny>,
 ) -> PyResult<bool> {
-    if apply_unix_bool_process_kw(unix, key, value)? {
+    let mut kw = UnixProcessKw { unix, key, value };
+    if apply_unix_bool_process_kw(&mut kw)? {
         return Ok(true);
     }
-    if value.is_none() {
+    if kw.value.is_none() {
         return Ok(is_known_unix_process_kw(key));
     }
-    if apply_unix_fd_process_kw(unix, key, value)? {
+    if apply_unix_fd_process_kw(&mut kw)? {
         return Ok(true);
     }
-    if apply_unix_identity_process_kw(py, unix, key, value)? {
+    if apply_unix_identity_process_kw(py, &mut kw)? {
         return Ok(true);
     }
-    apply_unix_misc_process_kw(unix, key, value)
+    apply_unix_misc_process_kw(&mut kw)
 }
 
 fn is_known_unix_process_kw(key: &str) -> bool {
@@ -1394,15 +1211,12 @@ fn is_known_unix_process_kw(key: &str) -> bool {
     )
 }
 
-fn apply_unix_fd_process_kw(
-    unix: &mut UnixPreExecConfig,
-    key: &str,
-    value: &Bound<'_, PyAny>,
-) -> PyResult<bool> {
-    match key {
-        "process_group" => unix.process_group = Some(value.extract::<i32>()?),
+fn apply_unix_fd_process_kw(kw: &mut UnixProcessKw<'_, '_>) -> PyResult<bool> {
+    match kw.key {
+        "process_group" => kw.unix.process_group = Some(kw.value.extract::<i32>()?),
         "pass_fds" => {
-            unix.pass_fds = value
+            kw.unix.pass_fds = kw
+                .value
                 .try_iter()?
                 .map(|item| item.and_then(|value| value.extract::<i32>()))
                 .collect::<PyResult<Vec<_>>>()?;
@@ -1414,22 +1228,20 @@ fn apply_unix_fd_process_kw(
 
 fn apply_unix_identity_process_kw(
     py: Python<'_>,
-    unix: &mut UnixPreExecConfig,
-    key: &str,
-    value: &Bound<'_, PyAny>,
+    kw: &mut UnixProcessKw<'_, '_>,
 ) -> PyResult<bool> {
-    match key {
+    match kw.key {
         "group" => {
-            unix.gid = Some(resolve_numeric_id(
-                py, value, "grp", "getgrnam", "gr_gid", "group",
+            kw.unix.gid = Some(resolve_numeric_id(
+                py, kw.value, "grp", "getgrnam", "gr_gid", "group",
             )?);
         }
         "extra_groups" => {
-            unix.extra_groups = Some(resolve_extra_groups(py, value)?);
+            kw.unix.extra_groups = Some(resolve_extra_groups(py, kw.value)?);
         }
         "user" => {
-            unix.uid = Some(resolve_numeric_id(
-                py, value, "pwd", "getpwnam", "pw_uid", "user",
+            kw.unix.uid = Some(resolve_numeric_id(
+                py, kw.value, "pwd", "getpwnam", "pw_uid", "user",
             )?);
         }
         _ => return Ok(false),
@@ -1437,18 +1249,14 @@ fn apply_unix_identity_process_kw(
     Ok(true)
 }
 
-fn apply_unix_misc_process_kw(
-    unix: &mut UnixPreExecConfig,
-    key: &str,
-    value: &Bound<'_, PyAny>,
-) -> PyResult<bool> {
-    match key {
+fn apply_unix_misc_process_kw(kw: &mut UnixProcessKw<'_, '_>) -> PyResult<bool> {
+    match kw.key {
         "umask" => {
-            let mask = value.extract::<i64>()?;
+            let mask = kw.value.extract::<i64>()?;
             if !(0..=PROCESS_UMASK_MAX).contains(&mask) {
                 return Err(PyValueError::new_err("umask must be between 0 and 0o777"));
             }
-            unix.umask = Some(mask as u32);
+            kw.unix.umask = Some(mask as u32);
         }
         "preexec_fn" => {
             return Err(PyNotImplementedError::new_err(
@@ -1460,14 +1268,10 @@ fn apply_unix_misc_process_kw(
     Ok(true)
 }
 
-fn apply_unix_bool_process_kw(
-    unix: &mut UnixPreExecConfig,
-    key: &str,
-    value: &Bound<'_, PyAny>,
-) -> PyResult<bool> {
-    match key {
-        "restore_signals" => unix.restore_signals = value.is_truthy()?,
-        "start_new_session" => unix.start_new_session = value.is_truthy()?,
+fn apply_unix_bool_process_kw(kw: &mut UnixProcessKw<'_, '_>) -> PyResult<bool> {
+    match kw.key {
+        "restore_signals" => kw.unix.restore_signals = kw.value.is_truthy()?,
+        "start_new_session" => kw.unix.start_new_session = kw.value.is_truthy()?,
         _ => return Ok(false),
     }
     Ok(true)
@@ -1494,7 +1298,7 @@ fn apply_common_process_kwargs(
         apply_unix_process_kw(py, &mut spawn_config.unix, &key, &value)?;
     }
 
-    apply_unix_pre_exec(command, spawn_config.unix.clone());
+    pre_exec::apply(command, spawn_config.unix.clone());
     Ok(spawn_config)
 }
 
@@ -1676,7 +1480,6 @@ impl PyLoop {
 
         Ok(wrapped.call_method0("result")?.unbind())
     }
-
     fn create_future(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let core = Arc::clone(&slf.borrow(py).core);
         let loop_obj = Self::as_py_any(py, &slf);
@@ -1895,7 +1698,6 @@ impl PyLoop {
             self.get_debug()
         )
     }
-
     #[pyo3(signature=(protocol_factory, host=None, port=None, *, family=0, flags=1, sock=None, backlog=100, ssl=None, reuse_address=None, reuse_port=None, keep_alive=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None, start_serving=true))]
     #[expect(
         clippy::too_many_arguments,
@@ -1977,17 +1779,19 @@ impl PyLoop {
                     .collect::<Vec<_>>();
                 let server = create_py_server(
                     py,
-                    ServerCreateParams {
-                        loop_core: core.clone(),
-                        loop_obj: loop_obj.clone_ref(py),
-                        protocol_factory: protocol_factory.clone_ref(py),
-                        context: context.clone_ref(py),
-                        context_needs_run,
-                        sockets: server_sockets,
+                    ServerCreateParams::new(
+                        stream_spawn_context(
+                            py,
+                            &core,
+                            &loop_obj,
+                            &protocol_factory,
+                            &context,
+                            context_needs_run,
+                        ),
+                        server_sockets,
                         listeners,
-                        cleanup_path: None,
-                        tls: tls.clone(),
-                    },
+                    )
+                    .with_tls(tls.clone()),
                 )?;
                 if start_serving {
                     server.borrow(py).core.spawn_accept_tasks();
@@ -2226,17 +2030,20 @@ impl PyLoop {
                 };
                 let server = create_py_server(
                     py,
-                    ServerCreateParams {
-                        loop_core: core.clone(),
-                        loop_obj: loop_obj.clone_ref(py),
-                        protocol_factory: protocol_factory.clone_ref(py),
-                        context: context.clone_ref(py),
-                        context_needs_run,
+                    ServerCreateParams::new(
+                        stream_spawn_context(
+                            py,
+                            &core,
+                            &loop_obj,
+                            &protocol_factory,
+                            &context,
+                            context_needs_run,
+                        ),
                         sockets,
                         listeners,
-                        cleanup_path,
-                        tls: tls.clone(),
-                    },
+                    )
+                    .with_cleanup_path(cleanup_path)
+                    .with_tls(tls.clone()),
                 )?;
                 if start_serving {
                     server.borrow(py).core.spawn_accept_tasks();
@@ -2368,7 +2175,6 @@ impl PyLoop {
             })
         })
     }
-
     #[pyo3(signature=(protocol_factory, sock, *, ssl=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None))]
     fn connect_accepted_socket(
         slf: Py<Self>,
@@ -2524,13 +2330,13 @@ impl PyLoop {
             .reader_keepalive
             .insert(raw_fd, fd_ops::fileobj_keepalive(fd));
         self.core
-            .send_command(LoopCommand::StartReader {
+            .send_command(LoopCommand::Io(LoopIoCommand::StartReader {
                 fd: raw_fd,
                 callback,
                 args: args.clone().unbind(),
                 context,
                 context_needs_run,
-            })
+            }))
             .map_err(Self::map_loop_error)
     }
 
@@ -2545,7 +2351,7 @@ impl PyLoop {
             .remove(&raw_fd)
             .is_some();
         self.core
-            .send_command(LoopCommand::StopReader(raw_fd))
+            .send_command(LoopCommand::Io(LoopIoCommand::StopReader(raw_fd)))
             .map_err(Self::map_loop_error)?;
         Ok(removed)
     }
@@ -2567,13 +2373,13 @@ impl PyLoop {
             .writer_keepalive
             .insert(raw_fd, fd_ops::fileobj_keepalive(fd));
         self.core
-            .send_command(LoopCommand::StartWriter {
+            .send_command(LoopCommand::Io(LoopIoCommand::StartWriter {
                 fd: raw_fd,
                 callback,
                 args: args.clone().unbind(),
                 context,
                 context_needs_run,
-            })
+            }))
             .map_err(Self::map_loop_error)
     }
 
@@ -2588,7 +2394,7 @@ impl PyLoop {
             .remove(&raw_fd)
             .is_some();
         self.core
-            .send_command(LoopCommand::StopWriter(raw_fd))
+            .send_command(LoopCommand::Io(LoopIoCommand::StopWriter(raw_fd)))
             .map_err(Self::map_loop_error)?;
         Ok(removed)
     }
@@ -2780,7 +2586,6 @@ impl PyLoop {
         slf.call_method1(py, "run_in_executor", run_args)
             .map(|awaitable| awaitable.into_bound(py))
     }
-
     #[pyo3(signature=(executor, func, *args))]
     fn run_in_executor<'py>(
         slf: Py<Self>,
@@ -2929,17 +2734,19 @@ impl PyLoop {
             let transport = Python::attach(|py| {
                 spawn_process_transport(
                     py,
-                    ProcessTransportParams {
-                        loop_core: core.clone(),
-                        loop_obj: loop_obj.clone_ref(py),
-                        protocol: protocol.clone_ref(py),
-                        context: context.clone_ref(py),
-                        context_needs_run,
-                        text_config: text_config.clone().or(spawn_config.text),
+                    ProcessTransportParams::new(
+                        stream_spawn_context(
+                            py,
+                            &core,
+                            &loop_obj,
+                            &protocol,
+                            &context,
+                            context_needs_run,
+                        ),
                         child,
-                        stdout_override,
-                        stderr_override,
-                    },
+                    )
+                    .with_text_config(text_config.clone().or(spawn_config.text))
+                    .with_stdio_overrides(stdout_override, stderr_override),
                 )
             })?;
 
@@ -3041,17 +2848,19 @@ impl PyLoop {
             let transport = Python::attach(|py| {
                 spawn_process_transport(
                     py,
-                    ProcessTransportParams {
-                        loop_core: core.clone(),
-                        loop_obj: loop_obj.clone_ref(py),
-                        protocol: protocol.clone_ref(py),
-                        context: context.clone_ref(py),
-                        context_needs_run,
-                        text_config: text_config.clone().or(spawn_config.text),
+                    ProcessTransportParams::new(
+                        stream_spawn_context(
+                            py,
+                            &core,
+                            &loop_obj,
+                            &protocol,
+                            &context,
+                            context_needs_run,
+                        ),
                         child,
-                        stdout_override,
-                        stderr_override,
-                    },
+                    )
+                    .with_text_config(text_config.clone().or(spawn_config.text))
+                    .with_stdio_overrides(stdout_override, stderr_override),
                 )
             })?;
 
@@ -3061,7 +2870,6 @@ impl PyLoop {
             })
         })
     }
-
     fn connect_read_pipe(
         slf: Py<Self>,
         py: Python<'_>,
@@ -3130,13 +2938,14 @@ impl PyLoop {
                 let _ = pipe.call_method1(py, "setblocking", (false,));
                 spawn_write_pipe_transport(
                     py,
-                    TransportSpawnContext {
-                        loop_core: core.clone(),
-                        loop_obj: loop_obj.clone_ref(py),
-                        protocol: protocol.clone_ref(py),
-                        context: context.clone_ref(py),
+                    stream_spawn_context(
+                        py,
+                        &core,
+                        &loop_obj,
+                        &protocol,
+                        &context,
                         context_needs_run,
-                    },
+                    ),
                     pipe.clone_ref(py),
                     None,
                 )
@@ -3199,7 +3008,7 @@ impl PyLoop {
             };
 
             if newly_installed {
-                core.send_command(LoopCommand::StartSignalWatcher(sig))
+                core.send_command(LoopCommand::Signal(LoopSignalCommand::StartWatcher(sig)))
                     .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
             }
             Ok(())
@@ -3220,7 +3029,7 @@ impl PyLoop {
             removed
         };
         if removed {
-            core.send_command(LoopCommand::StopSignalWatcher(sig))
+            core.send_command(LoopCommand::Signal(LoopSignalCommand::StopWatcher(sig)))
                 .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
         }
         Ok(removed)
@@ -3449,14 +3258,14 @@ pub fn asyncgen_finalizer_hook(
 }
 
 #[pyfunction]
+#[pyo3(signature=(loop_obj, callback, args, context, *_signal_info))]
 pub fn signal_bridge(
     py: Python<'_>,
     loop_obj: &Bound<'_, PyAny>,
     callback: Py<PyAny>,
     args: Py<PyTuple>,
     context: Py<PyAny>,
-    _signum: i32,
-    _frame: Py<PyAny>,
+    _signal_info: &Bound<'_, PyTuple>,
 ) -> PyResult<()> {
     let mut call_items = Vec::with_capacity(args.bind(py).len() + 1);
     call_items.push(callback);
