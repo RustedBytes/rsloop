@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "rsloop"
-version = "0.1.14"
+version = "0.1.15"
 description = "An event loop for asyncio written in Rust"
 readme = "README.md"
 license = { file = "LICENSE" }

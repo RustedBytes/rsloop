@@ -516,6 +516,7 @@ impl PyProcessTransport {
         self.core.state.lock().expect("poisoned process state").pid
     }
 
+    #[inline]
     fn get_returncode(&self) -> Option<i32> {
         self.core.get_returncode()
     }
@@ -865,6 +866,7 @@ fn report_process_result(core: &Arc<ProcessTransportCore>, result: PyResult<()>,
     }
 }
 
+#[inline]
 fn report_process_io_error(core: &Arc<ProcessTransportCore>, err: std::io::Error, message: &str) {
     core.report_error(PyRuntimeError::new_err(err.to_string()), message);
 }

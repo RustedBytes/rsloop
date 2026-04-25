@@ -79,10 +79,12 @@ pub struct PyLoop {
 }
 
 impl PyLoop {
+    #[inline]
     fn as_py_any(py: Python<'_>, slf: &Py<Self>) -> Py<PyAny> {
         slf.clone_ref(py).into_any()
     }
 
+    #[inline]
     fn task_locals(py: Python<'_>, slf: &Py<Self>) -> PyResult<TaskLocals> {
         TaskLocals::new(Self::as_py_any(py, slf).into_bound(py)).copy_context(py)
     }
@@ -465,6 +467,7 @@ fn trim_task_source_traceback(py: Python<'_>, task: &Py<PyAny>) -> PyResult<()> 
     source_traceback.del_item(source_traceback.len()? - 1)
 }
 
+#[inline]
 fn call_protocol_factory(
     py: Python<'_>,
     loop_obj: &Py<PyAny>,

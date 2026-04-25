@@ -715,6 +715,7 @@ struct TlsIoState {
 }
 
 impl TlsIoState {
+    #[inline]
     fn fd(&self) -> fd_ops::RawFd {
         self.stream.fd()
     }
@@ -723,14 +724,17 @@ impl TlsIoState {
         self.stream.pollable()
     }
 
+    #[inline]
     fn shutdown_close(&self) -> io::Result<()> {
         self.stream.shutdown_close()
     }
 
+    #[inline]
     fn read_tls(&mut self) -> io::Result<usize> {
         self.connection.read_tls(&mut self.stream)
     }
 
+    #[inline]
     fn write_tls(&mut self) -> io::Result<usize> {
         self.connection.write_tls(&mut self.stream)
     }
@@ -770,11 +774,11 @@ struct WorkerThread {
 }
 
 impl WorkerThread {
-    fn spawn(name: String, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
+    fn spawn(name: &'static str, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
         let join = thread::Builder::new()
-            .name(name)
+            .name(name.to_owned())
             .spawn(move || task(thread_stop))
             .expect("failed to spawn stream worker");
         Self { stop, join }
@@ -800,6 +804,7 @@ impl StreamTransportCore {
         }
     }
 
+    #[inline]
     fn register_worker(&self, worker: WorkerThread) {
         self.workers
             .lock()
@@ -819,6 +824,7 @@ impl StreamTransportCore {
         spawn_writer_worker(Arc::clone(self), target, writer_rx);
     }
 
+    #[inline]
     fn server_ref(&self) -> Option<Weak<ServerCore>> {
         self.state
             .lock()
@@ -995,6 +1001,7 @@ impl StreamTransportCore {
         }
     }
 
+    #[inline]
     fn call_protocol_method0(
         &self,
         py: Python<'_>,
@@ -1005,6 +1012,7 @@ impl StreamTransportCore {
         run_in_context_noargs(py, context, context_needs_run, callback)
     }
 
+    #[inline]
     fn call_protocol_method1(
         &self,
         py: Python<'_>,
@@ -1266,6 +1274,7 @@ impl StreamTransportCore {
             .map(|value| value.clone_ref(py))
     }
 
+    #[inline]
     fn set_closing(&self) {
         self.state.lock().expect("poisoned transport state").closing = true;
     }
@@ -1407,6 +1416,7 @@ impl StreamTransportCore {
         Ok(())
     }
 
+    #[inline]
     fn write_backpressure_active(&self) -> bool {
         self.state
             .lock()
@@ -1414,6 +1424,7 @@ impl StreamTransportCore {
             .writer_registered
     }
 
+    #[inline]
     fn set_write_backpressure_active(&self, active: bool) {
         self.state
             .lock()
@@ -1705,10 +1716,12 @@ impl ServerCore {
         run_in_context(py, &self.context, self.context_needs_run, &callback, &args)
     }
 
+    #[inline]
     fn locals(&self, py: Python<'_>) -> PyResult<TaskLocals> {
         task_locals_for_loop(py, &self.loop_obj)
     }
 
+    #[inline]
     fn is_closed(&self) -> bool {
         self.state.lock().expect("poisoned server state").closed
     }
@@ -1718,10 +1731,12 @@ impl ServerCore {
         state.serving && !state.closed
     }
 
+    #[inline]
     fn connection_opened(&self) {
         self.active_connections.fetch_add(1, Ordering::SeqCst);
     }
 
+    #[inline]
     fn connection_lost(&self) {
         self.active_connections.fetch_sub(1, Ordering::SeqCst);
         self.closed_notify.notify_all();
@@ -1784,13 +1799,13 @@ impl ServerCore {
                     let server = Arc::clone(self);
                     let task = match listener {
                         ServerListener::Tcp(listener) => {
-                            WorkerThread::spawn("rsloop-tcp-accept".to_owned(), move |stop| {
+                            WorkerThread::spawn("rsloop-tcp-accept", move |stop| {
                                 run_tcp_accept_loop(server, listener, stop)
                             })
                         }
                         #[cfg(unix)]
                         ServerListener::Unix(listener) => {
-                            WorkerThread::spawn("rsloop-unix-accept".to_owned(), move |stop| {
+                            WorkerThread::spawn("rsloop-unix-accept", move |stop| {
                                 run_unix_accept_loop(server, listener, stop)
                             })
                         }
@@ -1824,13 +1839,13 @@ impl ServerCore {
             let server = Arc::clone(self);
             let task = match listener {
                 ServerListener::Tcp(listener) => {
-                    WorkerThread::spawn("rsloop-tcp-accept".to_owned(), move |stop| {
+                    WorkerThread::spawn("rsloop-tcp-accept", move |stop| {
                         run_tcp_accept_loop(server, listener, stop)
                     })
                 }
                 #[cfg(unix)]
                 ServerListener::Unix(listener) => {
-                    WorkerThread::spawn("rsloop-unix-accept".to_owned(), move |stop| {
+                    WorkerThread::spawn("rsloop-unix-accept", move |stop| {
                         run_unix_accept_loop(server, listener, stop)
                     })
                 }
@@ -2108,11 +2123,13 @@ fn file_raw_fd(file: &std::fs::File) -> fd_ops::RawFd {
 }
 
 #[cfg(unix)]
+#[inline]
 fn tcp_stream_raw_fd(stream: &StdTcpStream) -> fd_ops::RawFd {
     stream.as_raw_fd() as fd_ops::RawFd
 }
 
 #[cfg(windows)]
+#[inline]
 fn tcp_stream_raw_fd(stream: &StdTcpStream) -> fd_ops::RawFd {
     stream.as_raw_socket() as fd_ops::RawFd
 }
@@ -2128,6 +2145,7 @@ fn tcp_listener_raw_fd(listener: &StdTcpListener) -> fd_ops::RawFd {
 }
 
 #[cfg(unix)]
+#[inline]
 fn unix_raw_fd(fd: std::os::fd::RawFd) -> fd_ops::RawFd {
     fd as fd_ops::RawFd
 }
@@ -2154,6 +2172,7 @@ fn socket_from_owned_raw(fd: fd_ops::RawFd) -> PyResult<Socket> {
     Ok(unsafe { Socket::from_raw_socket(fd) })
 }
 
+#[inline]
 fn detached_socket_handle(py: Python<'_>, socket_obj: &Py<PyAny>) -> PyResult<fd_ops::RawFd> {
     socket_obj.call_method0(py, "detach")?.extract(py)
 }
@@ -2593,6 +2612,7 @@ pub fn spawn_write_pipe_transport(
     Ok(transport)
 }
 
+#[inline]
 pub fn tcp_stream_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
     configured_tcp_stream_from_owned_fd(fd)
 }
@@ -3447,7 +3467,7 @@ async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener
 
 fn spawn_reader_worker(core: Arc<StreamTransportCore>, reader: ReaderTarget) {
     let thread_core = Arc::clone(&core);
-    let worker = WorkerThread::spawn("rsloop-stream-reader".to_owned(), move |stop| {
+    let worker = WorkerThread::spawn("rsloop-stream-reader", move |stop| {
         run_stream_reader(thread_core, reader, stop)
     });
     core.register_worker(worker);
@@ -3455,7 +3475,7 @@ fn spawn_reader_worker(core: Arc<StreamTransportCore>, reader: ReaderTarget) {
 
 fn spawn_tls_reader_worker(core: Arc<StreamTransportCore>, tls_state: Arc<Mutex<TlsIoState>>) {
     let thread_core = Arc::clone(&core);
-    let worker = WorkerThread::spawn("rsloop-tls-reader".to_owned(), move |stop| {
+    let worker = WorkerThread::spawn("rsloop-tls-reader", move |stop| {
         run_tls_reader(thread_core, tls_state, stop)
     });
     core.register_worker(worker);
@@ -3468,7 +3488,7 @@ fn spawn_writer_worker(
 ) {
     profiling::scope!("stream.spawn_writer_worker");
     let thread_core = Arc::clone(&core);
-    let worker = WorkerThread::spawn("rsloop-stream-writer".to_owned(), move |stop| {
+    let worker = WorkerThread::spawn("rsloop-stream-writer", move |stop| {
         run_stream_writer(thread_core, writer, writer_rx, stop)
     });
     core.register_worker(worker);
@@ -3480,7 +3500,7 @@ fn spawn_tls_writer_worker(
     writer_rx: Receiver<WriterCommand>,
 ) {
     let thread_core = Arc::clone(&core);
-    let worker = WorkerThread::spawn("rsloop-tls-writer".to_owned(), move |stop| {
+    let worker = WorkerThread::spawn("rsloop-tls-writer", move |stop| {
         run_tls_writer(thread_core, tls_state, writer_rx, stop)
     });
     core.register_worker(worker);

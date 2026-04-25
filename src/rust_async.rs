@@ -6,6 +6,7 @@ pub use pyo3_async_runtimes::{into_future_with_locals, TaskLocals};
 
 /// Capture the current Python event loop and contextvars so a Rust future can
 /// be attached to the active `rsloop` task.
+#[inline]
 pub fn get_current_locals(py: Python<'_>) -> PyResult<TaskLocals> {
     pyo3_async_runtimes::async_std::get_current_locals(py)
 }

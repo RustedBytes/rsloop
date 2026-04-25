@@ -126,21 +126,25 @@ impl WatchTask {
 }
 
 #[cfg(target_os = "linux")]
+#[inline]
 fn abort_watch_task(task: WatchTask) {
     drop(task);
 }
 
 #[cfg(not(target_os = "linux"))]
+#[inline]
 fn abort_watch_task(task: WatchTask) {
     task.abort();
 }
 
 #[cfg(target_os = "linux")]
+#[inline]
 fn cancel_watch_task(task: WatchTask) {
     drop(task);
 }
 
 #[cfg(not(target_os = "linux"))]
+#[inline]
 fn cancel_watch_task(task: WatchTask) {
     task.cancel();
 }

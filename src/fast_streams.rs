@@ -21,14 +21,17 @@ impl ReadBuffer {
         }
     }
 
+    #[inline]
     fn len(&self) -> usize {
         self.bytes.len().saturating_sub(self.start)
     }
 
+    #[inline]
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    #[inline]
     fn unread(&self) -> &[u8] {
         &self.bytes[self.start..]
     }
@@ -47,6 +50,7 @@ impl ReadBuffer {
         self.compact_if_needed();
     }
 
+    #[inline]
     fn consume_all(&mut self) {
         self.start = self.bytes.len();
         self.compact_if_needed();
@@ -160,6 +164,7 @@ impl PyFastStreamReader {
         })
     }
 
+    #[inline]
     fn create_future(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         python_names::call_method0(py, self.loop_obj.bind(py), python_names::create_future(py))
     }
@@ -186,6 +191,7 @@ impl PyFastStreamReader {
         Ok(future)
     }
 
+    #[inline]
     fn bytes_object(py: Python<'_>, data: &[u8]) -> Py<PyAny> {
         PyBytes::new(py, data).unbind().into_any()
     }
@@ -346,6 +352,7 @@ impl PyFastStreamReader {
         self.maybe_pause_transport(py)
     }
 
+    #[inline]
     pub(crate) fn feed_eof_internal(&mut self, py: Python<'_>) -> PyResult<()> {
         self.eof = true;
         self.maybe_complete_waiter(py)
