@@ -65,6 +65,8 @@ enum PendingReadEvent {
 const DEFAULT_WRITE_BUFFER_HIGH_WATER: usize = 64 * 1024;
 const DEFAULT_WRITE_BUFFER_LOW_WATER: usize = DEFAULT_WRITE_BUFFER_HIGH_WATER / 4;
 const MAX_PENDING_READ_COALESCE_BYTES: usize = 256 * 1024;
+const BLOCKING_POLL_INTERVAL_MS: i32 = 50;
+const STREAM_READ_BUFFER_SIZE: usize = 64 * 1024;
 
 struct OwnedWriteBuffer {
     bytes: Box<[u8]>,
@@ -3136,9 +3138,9 @@ fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
             return;
         }
 
-        match fd_ops::poll_fd(tcp_listener_raw_fd(&listener), true, false, 50) {
-            Ok((false, _)) => continue,
-            Ok((true, _)) => {}
+        match poll_read_ready(tcp_listener_raw_fd(&listener)) {
+            Ok(false) => continue,
+            Ok(true) => {}
             Err(err) => {
                 report_server_io_error(&server, err, "TCP server accept failed");
                 return;
@@ -3309,9 +3311,9 @@ fn run_unix_accept_loop(params: BlockingAcceptLoop<StdUnixListener>) {
             return;
         }
 
-        match fd_ops::poll_fd(listener.as_raw_fd() as fd_ops::RawFd, true, false, 50) {
-            Ok((false, _)) => continue,
-            Ok((true, _)) => {}
+        match poll_read_ready(listener.as_raw_fd() as fd_ops::RawFd) {
+            Ok(false) => continue,
+            Ok(true) => {}
             Err(err) => {
                 report_server_io_error(&server, err, "Unix server accept failed");
                 return;
@@ -3605,7 +3607,7 @@ fn run_stream_reader(
     stop: Arc<AtomicBool>,
 ) {
     profiling::scope!("stream.run_stream_reader");
-    let mut buf = [0_u8; 65_536];
+    let mut buf = [0_u8; STREAM_READ_BUFFER_SIZE];
 
     loop {
         if stop.load(Ordering::Acquire) {
@@ -3623,7 +3625,7 @@ fn run_stream_reader(
         }
 
         if reader.pollable() {
-            match fd_ops::poll_fd(reader.fd(), true, false, 50) {
+            match fd_ops::poll_fd(reader.fd(), true, false, BLOCKING_POLL_INTERVAL_MS) {
                 Ok((false, _)) => continue,
                 Ok((true, _)) => {}
                 Err(err) => {
@@ -3666,7 +3668,7 @@ pub(crate) async fn run_socket_reader_task(
         )));
         return;
     };
-    let mut buf = [0_u8; 65_536];
+    let mut buf = [0_u8; STREAM_READ_BUFFER_SIZE];
 
     loop {
         if core.is_closing() {
@@ -3723,7 +3725,7 @@ pub(crate) async fn run_tcp_socket_reader_task(
             return;
         }
     };
-    let mut buf = vec![0_u8; 65_536];
+    let mut buf = vec![0_u8; STREAM_READ_BUFFER_SIZE];
 
     loop {
         if core.is_closing() {
@@ -3774,7 +3776,7 @@ fn run_tls_reader(
     stop: Arc<AtomicBool>,
 ) {
     profiling::scope!("stream.run_tls_reader");
-    let mut plaintext = [0_u8; 65_536];
+    let mut plaintext = [0_u8; STREAM_READ_BUFFER_SIZE];
 
     loop {
         if stop.load(Ordering::Acquire) {
@@ -4095,7 +4097,7 @@ fn write_all_owned(writer: &mut WriterTarget, data: &mut OwnedWriteBuffer) -> io
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                 if let Some(fd) = writer.fd().filter(|_| writer.pollable()) {
                     loop {
-                        match fd_ops::poll_fd(fd, false, true, 50) {
+                        match fd_ops::poll_fd(fd, false, true, BLOCKING_POLL_INTERVAL_MS) {
                             Ok((false, true)) => break,
                             Ok(_) => continue,
                             Err(err) => return Err(err),
@@ -4159,7 +4161,7 @@ fn flush_tls_close_io_locked(state: &mut TlsIoState, timeout: Duration) -> io::R
 fn wait_socket_ready(fd: fd_ops::RawFd, pollable: bool, read: bool, write: bool) -> io::Result<()> {
     if pollable {
         loop {
-            match fd_ops::poll_fd(fd, read, write, 50) {
+            match fd_ops::poll_fd(fd, read, write, BLOCKING_POLL_INTERVAL_MS) {
                 Ok((read_ready, write_ready))
                     if (!read || read_ready) && (!write || write_ready) =>
                 {
@@ -4173,6 +4175,10 @@ fn wait_socket_ready(fd: fd_ops::RawFd, pollable: bool, read: bool, write: bool)
 
     thread::sleep(Duration::from_millis(10));
     Ok(())
+}
+
+fn poll_read_ready(fd: fd_ops::RawFd) -> io::Result<bool> {
+    fd_ops::poll_fd(fd, true, false, BLOCKING_POLL_INTERVAL_MS).map(|(ready, _)| ready)
 }
 
 fn wait_socket_ready_until(

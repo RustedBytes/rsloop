@@ -76,10 +76,10 @@ pub(crate) fn cancel(task: TaskHandle) {
 
 #[cfg(windows)]
 fn service() -> io::Result<&'static Service> {
-    match SERVICE.get_or_init(start_service) {
-        Ok(service) => Ok(service),
-        Err(err) => Err(io::Error::other(err.clone())),
-    }
+    SERVICE
+        .get_or_init(start_service)
+        .as_ref()
+        .map_err(|err| io::Error::other(err.clone()))
 }
 
 #[cfg(windows)]

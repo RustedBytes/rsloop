@@ -38,6 +38,8 @@ use crate::stream_transport::{
 use crate::stream_transport::{unix_listener_from_owned_socket_fd, unix_server_listener};
 use crate::tls::{client_tls_settings, server_tls_settings};
 
+const WSAEISCONN: i32 = 10056;
+
 struct PythonApiCaches {
     asyncio_task_cls: OnceLock<Py<PyAny>>,
     asyncio_future_cls: OnceLock<Py<PyAny>>,
@@ -712,7 +714,7 @@ fn is_already_connected_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bo
 }
 
 fn is_already_connected_errno(errno: i32) -> bool {
-    errno == libc::EISCONN || errno == 10056
+    errno == libc::EISCONN || errno == WSAEISCONN
 }
 
 fn is_connect_in_progress_errno(errno: i32) -> bool {

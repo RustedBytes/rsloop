@@ -15,6 +15,8 @@ pub use self::windows::{
 
 pub type RawFd = i64;
 
+const FD_POLL_INTERVAL_MS: i32 = 50;
+
 pub fn fileobj_to_fd(_py: Python<'_>, fileobj: &Bound<'_, PyAny>) -> PyResult<RawFd> {
     if let Ok(fd) = fileobj.extract::<RawFd>() {
         return Ok(fd);
@@ -129,7 +131,7 @@ async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
     #[cfg(windows)]
     {
         return crate::blocking::run(format!("rsloop-fd-wait-{fd}"), move || loop {
-            match poll_fd(fd, read, write, 50)? {
+            match poll_fd(fd, read, write, FD_POLL_INTERVAL_MS)? {
                 (read_ready, write_ready) if (!read || read_ready) && (!write || write_ready) => {
                     return Ok::<(), io::Error>(());
                 }
@@ -148,7 +150,7 @@ async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
             .name(format!("rsloop-fd-wait-{fd}"))
             .spawn(move || {
                 let result = loop {
-                    match poll_fd(fd, read, write, 50) {
+                    match poll_fd(fd, read, write, FD_POLL_INTERVAL_MS) {
                         Ok((true, _)) if read => break Ok(()),
                         Ok((_, true)) if write => break Ok(()),
                         Ok(_) => continue,
