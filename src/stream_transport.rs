@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{self, Read, Write as _};
 use std::net::{Shutdown, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
+use std::ops::DerefMut;
 #[cfg(target_os = "linux")]
 use std::os::fd::OwnedFd;
 #[cfg(unix)]
@@ -735,6 +736,12 @@ impl TlsIoState {
     }
 }
 
+enum TlsReadOutcome {
+    Continue,
+    Eof,
+    ConnectionLost(String),
+}
+
 impl io::Write for WriterTarget {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
@@ -865,14 +872,14 @@ impl StreamTransportCore {
                     return Ok(());
                 }
 
-                std::mem::swap(&mut drained, &mut *queue);
+                std::mem::swap(&mut drained, queue.deref_mut());
             }
 
             while let Some(event) = drained.pop_front() {
                 match event {
                     PendingReadEvent::Data(data) => {
                         profiling::scope!("stream.pending.data");
-                        match pending_data.as_mut() {
+                        match &mut pending_data {
                             Some(buffer)
                                 if buffer.len() + data.len() <= MAX_PENDING_READ_COALESCE_BYTES =>
                             {
@@ -1426,7 +1433,7 @@ impl StreamTransportCore {
             return Err(io::Error::other("not direct-tasked"));
         };
         let mut writer = writer.lock().expect("poisoned direct tasked writer");
-        match &mut *writer {
+        match writer.deref_mut() {
             TaskedDirectWriter::Tcp(stream) => stream.write(data),
             #[cfg(unix)]
             TaskedDirectWriter::Unix(stream) => stream.write(data),
@@ -3490,41 +3497,154 @@ fn complete_tls_handshake(tls_state: &Arc<Mutex<TlsIoState>>, timeout: Duration)
             ));
         }
 
-        let mut state = tls_state.lock().expect("poisoned tls state");
-        if !state.connection.is_handshaking() {
-            if state.connection.wants_write() {
-                flush_tls_io_locked(&mut state)?;
-            }
+        if tls_handshake_step(tls_state)? {
             return Ok(());
         }
+    }
+}
 
+fn tls_handshake_step(tls_state: &Arc<Mutex<TlsIoState>>) -> io::Result<bool> {
+    let mut state = tls_state.lock().expect("poisoned tls state");
+    if !state.connection.is_handshaking() {
         if state.connection.wants_write() {
             flush_tls_io_locked(&mut state)?;
-            continue;
         }
-
-        if state.connection.wants_read() {
-            let fd = state.fd();
-            let pollable = state.pollable();
-            drop(state);
-            wait_socket_ready(fd, pollable, true, false)?;
-            let mut state = tls_state.lock().expect("poisoned tls state");
-            let n = state.read_tls()?;
-            if n == 0 && state.connection.is_handshaking() {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "TLS handshake ended before completion",
-                ));
-            }
-            state
-                .connection
-                .process_new_packets()
-                .map_err(tls_io_error)?;
-            continue;
-        }
-
-        thread::sleep(Duration::from_millis(10));
+        return Ok(true);
     }
+
+    if state.connection.wants_write() {
+        flush_tls_io_locked(&mut state)?;
+        return Ok(false);
+    }
+
+    if state.connection.wants_read() {
+        let fd = state.fd();
+        let pollable = state.pollable();
+        drop(state);
+        continue_tls_handshake_read(tls_state, fd, pollable)?;
+        return Ok(false);
+    }
+
+    thread::sleep(Duration::from_millis(10));
+    Ok(false)
+}
+
+fn continue_tls_handshake_read(
+    tls_state: &Arc<Mutex<TlsIoState>>,
+    fd: fd_ops::RawFd,
+    pollable: bool,
+) -> io::Result<()> {
+    wait_socket_ready(fd, pollable, true, false)?;
+    let mut state = tls_state.lock().expect("poisoned tls state");
+    let n = state.read_tls()?;
+    if n == 0 && state.connection.is_handshaking() {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "TLS handshake ended before completion",
+        ));
+    }
+    state.connection.process_new_packets().map_err(tls_io_error)
+}
+
+fn drain_tls_plaintext_locked(
+    core: &Arc<StreamTransportCore>,
+    state: &mut TlsIoState,
+    plaintext: &mut [u8],
+) -> Result<bool, String> {
+    let mut saw_data = false;
+    loop {
+        match state.connection.reader_read(plaintext) {
+            Ok(0) => break,
+            Ok(n) => {
+                saw_data = true;
+                core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
+                    &plaintext[..n],
+                )));
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+            Err(err) => return Err(err.to_string()),
+        }
+    }
+    Ok(saw_data)
+}
+
+fn drain_buffered_tls_plaintext(
+    core: &Arc<StreamTransportCore>,
+    tls_state: &Arc<Mutex<TlsIoState>>,
+    plaintext: &mut [u8],
+) -> TlsReadOutcome {
+    let mut state = tls_state.lock().expect("poisoned tls state");
+    match drain_tls_plaintext_locked(core, &mut state, plaintext) {
+        Ok(true) => TlsReadOutcome::Continue,
+        Ok(false) => TlsReadOutcome::Eof,
+        Err(err) => TlsReadOutcome::ConnectionLost(err),
+    }
+}
+
+fn read_tls_records(
+    core: &Arc<StreamTransportCore>,
+    tls_state: &Arc<Mutex<TlsIoState>>,
+    plaintext: &mut [u8],
+) -> TlsReadOutcome {
+    let mut state = tls_state.lock().expect("poisoned tls state");
+    match state.read_tls() {
+        Ok(0) => {
+            if let Err(err) = state.connection.process_new_packets().map_err(tls_io_error) {
+                return TlsReadOutcome::ConnectionLost(err.to_string());
+            }
+            match drain_tls_plaintext_locked(core, &mut state, plaintext) {
+                Ok(true) => TlsReadOutcome::Continue,
+                Ok(false) => TlsReadOutcome::Eof,
+                Err(err) => TlsReadOutcome::ConnectionLost(err),
+            }
+        }
+        Ok(_) => {
+            if let Err(err) = state.connection.process_new_packets().map_err(tls_io_error) {
+                return TlsReadOutcome::ConnectionLost(err.to_string());
+            }
+            if let Err(err) = flush_tls_io_locked(&mut state) {
+                return TlsReadOutcome::ConnectionLost(err.to_string());
+            }
+            match drain_tls_plaintext_locked(core, &mut state, plaintext) {
+                Ok(_) => TlsReadOutcome::Continue,
+                Err(err) => TlsReadOutcome::ConnectionLost(err),
+            }
+        }
+        Err(err)
+            if err.kind() == io::ErrorKind::WouldBlock
+                || err.kind() == io::ErrorKind::Interrupted =>
+        {
+            TlsReadOutcome::Continue
+        }
+        Err(err) => TlsReadOutcome::ConnectionLost(err.to_string()),
+    }
+}
+
+fn tls_socket_wait_target(tls_state: &Arc<Mutex<TlsIoState>>) -> (fd_ops::RawFd, bool) {
+    let state = tls_state.lock().expect("poisoned tls state");
+    (state.fd(), state.pollable())
+}
+
+fn write_tls_data(tls_state: &Arc<Mutex<TlsIoState>>, data: &[u8]) -> io::Result<()> {
+    let mut state = tls_state.lock().expect("poisoned tls state");
+    match state.connection.writer_write_all(data) {
+        Ok(()) => flush_tls_io_locked(&mut state),
+        Err(err) => Err(err),
+    }
+}
+
+fn close_tls_writer(tls_state: &Arc<Mutex<TlsIoState>>) -> io::Result<()> {
+    let mut state = tls_state.lock().expect("poisoned tls state");
+    let shutdown_timeout = state.shutdown_timeout;
+    state.connection.send_close_notify();
+    let result = flush_tls_close_io_locked(&mut state, shutdown_timeout);
+    let close_result = state.shutdown_close();
+    result.and(close_result)
+}
+
+fn abort_tls_writer(tls_state: &Arc<Mutex<TlsIoState>>) {
+    let state = tls_state.lock().expect("poisoned tls state");
+    let _ = state.shutdown_close();
 }
 
 fn run_stream_reader(
@@ -3719,36 +3839,16 @@ fn run_tls_reader(
             return;
         }
 
-        {
-            let mut state = tls_state.lock().expect("poisoned tls state");
-            let mut drained_buffered_plaintext = false;
-            loop {
-                match state.connection.reader_read(&mut plaintext) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        drained_buffered_plaintext = true;
-                        core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
-                            &plaintext[..n],
-                        )));
-                    }
-                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(err) => {
-                        core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-                            err.to_string(),
-                        )));
-                        return;
-                    }
-                }
-            }
-            if drained_buffered_plaintext {
-                continue;
+        match drain_buffered_tls_plaintext(&core, &tls_state, &mut plaintext) {
+            TlsReadOutcome::Continue => continue,
+            TlsReadOutcome::Eof => {}
+            TlsReadOutcome::ConnectionLost(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(err)));
+                return;
             }
         }
 
-        let (fd, pollable) = {
-            let state = tls_state.lock().expect("poisoned tls state");
-            (state.fd(), state.pollable())
-        };
+        let (fd, pollable) = tls_socket_wait_target(&tls_state);
         if let Err(err) = wait_socket_ready(fd, pollable, true, false) {
             core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
                 err.to_string(),
@@ -3756,77 +3856,14 @@ fn run_tls_reader(
             return;
         }
 
-        let mut state = tls_state.lock().expect("poisoned tls state");
-        match state.read_tls() {
-            Ok(0) => {
-                match state.connection.process_new_packets().map_err(tls_io_error) {
-                    Ok(()) => {}
-                    Err(err) => {
-                        core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-                            err.to_string(),
-                        )));
-                        return;
-                    }
-                }
-                let mut saw_data = false;
-                loop {
-                    match state.connection.reader_read(&mut plaintext) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            saw_data = true;
-                            core.enqueue_pending_read_event(PendingReadEvent::Data(
-                                Box::<[u8]>::from(&plaintext[..n]),
-                            ));
-                        }
-                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                        Err(err) => {
-                            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
-                                Some(err.to_string()),
-                            ));
-                            return;
-                        }
-                    }
-                }
-                if !saw_data {
-                    core.enqueue_pending_read_event(PendingReadEvent::Eof);
-                    return;
-                }
+        match read_tls_records(&core, &tls_state, &mut plaintext) {
+            TlsReadOutcome::Continue => continue,
+            TlsReadOutcome::Eof => {
+                core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                return;
             }
-            Ok(_) => {
-                if let Err(err) = state.connection.process_new_packets().map_err(tls_io_error) {
-                    core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-                        err.to_string(),
-                    )));
-                    return;
-                }
-                if let Err(err) = flush_tls_io_locked(&mut state) {
-                    core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-                        err.to_string(),
-                    )));
-                    return;
-                }
-                loop {
-                    match state.connection.reader_read(&mut plaintext) {
-                        Ok(0) => break,
-                        Ok(n) => core.enqueue_pending_read_event(PendingReadEvent::Data(
-                            Box::<[u8]>::from(&plaintext[..n]),
-                        )),
-                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                        Err(err) => {
-                            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
-                                Some(err.to_string()),
-                            ));
-                            return;
-                        }
-                    }
-                }
-            }
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-            Err(err) => {
-                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-                    err.to_string(),
-                )));
+            TlsReadOutcome::ConnectionLost(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(err)));
                 return;
             }
         }
@@ -3943,14 +3980,7 @@ fn run_tls_writer(
         match command {
             WriterCommand::Data(data) => {
                 let buffered_len = data.remaining().len();
-                let result = {
-                    let mut state = tls_state.lock().expect("poisoned tls state");
-                    match state.connection.writer_write_all(data.remaining()) {
-                        Ok(()) => flush_tls_io_locked(&mut state),
-                        Err(err) => Err(err),
-                    }
-                };
-                if let Err(err) = result {
+                if let Err(err) = write_tls_data(&tls_state, data.remaining()) {
                     let _ = core.connection_lost(Some(PyRuntimeError::new_err(err.to_string())));
                     return;
                 }
@@ -3960,14 +3990,7 @@ fn run_tls_writer(
                     match writer_rx.try_recv() {
                         Ok(WriterCommand::Data(next)) => {
                             let buffered_len = next.remaining().len();
-                            let result = {
-                                let mut state = tls_state.lock().expect("poisoned tls state");
-                                match state.connection.writer_write_all(next.remaining()) {
-                                    Ok(()) => flush_tls_io_locked(&mut state),
-                                    Err(err) => Err(err),
-                                }
-                            };
-                            if let Err(err) = result {
+                            if let Err(err) = write_tls_data(&tls_state, next.remaining()) {
                                 let _ = core.connection_lost(Some(PyRuntimeError::new_err(
                                     err.to_string(),
                                 )));
@@ -3997,15 +4020,7 @@ fn run_tls_writer(
             }
             WriterCommand::WriteEof => {}
             WriterCommand::Close => {
-                let close_result = {
-                    let mut state = tls_state.lock().expect("poisoned tls state");
-                    let shutdown_timeout = state.shutdown_timeout;
-                    state.connection.send_close_notify();
-                    let result = flush_tls_close_io_locked(&mut state, shutdown_timeout);
-                    let _ = state.shutdown_close();
-                    result
-                };
-                match close_result {
+                match close_tls_writer(&tls_state) {
                     Ok(()) => {
                         let _ = core.connection_lost(None);
                     }
@@ -4022,10 +4037,7 @@ fn run_tls_writer(
                 return;
             }
             WriterCommand::Abort => {
-                {
-                    let state = tls_state.lock().expect("poisoned tls state");
-                    let _ = state.shutdown_close();
-                }
+                abort_tls_writer(&tls_state);
                 let _ = core.connection_lost(None);
                 return;
             }

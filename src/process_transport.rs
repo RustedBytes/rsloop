@@ -452,6 +452,15 @@ impl ProcessTransportCore {
             .open_pipes
             .contains(&fd)
     }
+
+    fn register_pipe_transports(&self, transports: Vec<(i32, Py<PyAny>)>) {
+        if transports.is_empty() {
+            return;
+        }
+
+        let mut state = self.state.lock().expect("poisoned process state");
+        state.pipe_transports.extend(transports);
+    }
 }
 
 #[pymethods]
@@ -684,6 +693,7 @@ pub fn spawn_process_transport(
         events_scheduled: AtomicBool::new(false),
     });
 
+    let mut pipe_transport_entries = Vec::with_capacity(3);
     if let Some(stdin) = stdin {
         #[cfg(unix)]
         let file_obj: Py<PyAny> = make_python_pipe_file(py, stdin.as_raw_fd() as i64, "wb")?;
@@ -708,27 +718,18 @@ pub fn spawn_process_transport(
             file_obj.clone_ref(py),
             extra_entries,
         )?;
-        let _ = file_obj.call_method0(py, "close");
-        core.state
-            .lock()
-            .expect("poisoned process state")
-            .pipe_transports
-            .insert(0, transport.into_any());
+        if let Err(err) = file_obj.call_method0(py, "close") {
+            core.report_error(err, "subprocess stdin pipe close failed");
+        }
+        pipe_transport_entries.push((0, transport.into_any()));
     }
     if stdout.is_some() {
-        core.state
-            .lock()
-            .expect("poisoned process state")
-            .pipe_transports
-            .insert(1, new_process_pipe_transport(py, 1)?);
+        pipe_transport_entries.push((1, new_process_pipe_transport(py, 1)?));
     }
     if stderr.is_some() {
-        core.state
-            .lock()
-            .expect("poisoned process state")
-            .pipe_transports
-            .insert(2, new_process_pipe_transport(py, 2)?);
+        pipe_transport_entries.push((2, new_process_pipe_transport(py, 2)?));
     }
+    core.register_pipe_transports(pipe_transport_entries);
 
     let transport = Py::new(py, PyProcessTransport { core: core.clone() })?;
     core.connection_made(transport.clone_ref(py))?;

@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -415,10 +416,10 @@ impl LoopCore {
                             pending_ready.lock().expect("poisoned pending ready queue");
                         if !pending.is_empty() {
                             if ready_batch.is_empty() {
-                                std::mem::swap(&mut ready_batch, &mut *pending);
+                                std::mem::swap(&mut ready_batch, pending.deref_mut());
                             } else {
                                 pending.append(&mut ready_batch);
-                                std::mem::swap(&mut ready_batch, &mut *pending);
+                                std::mem::swap(&mut ready_batch, pending.deref_mut());
                             }
                         }
                         if pending.is_empty() {
