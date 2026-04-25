@@ -1,6 +1,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyTuple};
+use pyo3_async_runtimes::TaskLocals;
 
 use crate::python_api::PyLoop;
 use crate::python_names;
@@ -1010,14 +1011,11 @@ fn native_stream_loop(
     Ok(Some(loop_obj))
 }
 
-#[pyfunction(signature = (host=None, port=None, *, limit=DEFAULT_STREAM_LIMIT, **kwargs))]
-pub fn open_connection(
+fn host_port_objects(
     py: Python<'_>,
     host: Option<Py<PyAny>>,
     port: Option<Py<PyAny>>,
-    limit: usize,
-    kwargs: Option<&Bound<'_, PyDict>>,
-) -> PyResult<Py<PyAny>> {
+) -> (Py<PyAny>, Py<PyAny>) {
     let host_obj = host
         .as_ref()
         .map(|value| value.clone_ref(py))
@@ -1026,14 +1024,18 @@ pub fn open_connection(
         .as_ref()
         .map(|value| value.clone_ref(py))
         .unwrap_or_else(|| py.None());
-    let args = PyTuple::new(py, [host_obj.clone_ref(py), port_obj.clone_ref(py)])?;
+    (host_obj, port_obj)
+}
 
-    let Some(loop_obj) = native_stream_loop(py, kwargs)? else {
-        let kwargs = kwargs_with_limit(py, kwargs, limit)?;
-        return call_asyncio_streams_function(py, "open_connection", &args, Some(&kwargs));
-    };
-
-    let locals = task_locals_for_loop(py, &loop_obj)?;
+fn fast_open_connection_awaitable(
+    py: Python<'_>,
+    loop_obj: &Py<PyAny>,
+    host_obj: Py<PyAny>,
+    port_obj: Py<PyAny>,
+    limit: usize,
+    kwargs: Option<&Bound<'_, PyDict>>,
+) -> PyResult<(TaskLocals, Py<PyAny>)> {
+    let locals = task_locals_for_loop(py, loop_obj)?;
     let factory = Py::new(
         py,
         PyFastProtocolFactory {
@@ -1045,6 +1047,44 @@ pub fn open_connection(
     let kwargs = copy_kwargs(py, kwargs)?;
     let create_args = PyTuple::new(py, [factory.into_any(), host_obj, port_obj])?;
     let awaitable = loop_obj.call_method(py, "create_connection", &create_args, kwargs.as_ref())?;
+    Ok((locals, awaitable))
+}
+
+fn fast_open_connection_result(py: Python<'_>, created: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    let result = created.bind(py).cast::<PyTuple>()?;
+    let transport = result.get_item(0)?.unbind();
+    let protocol: Py<PyFastStreamProtocol> = result.get_item(1)?.extract()?;
+    let reader = protocol.borrow(py).reader.clone_ref(py);
+    let writer = Py::new(
+        py,
+        PyFastStreamWriter {
+            transport,
+            protocol,
+            reader: reader.clone_ref(py),
+        },
+    )?;
+    let output = PyTuple::new(py, [reader.into_any(), writer.into_any()])?;
+    Ok(output.unbind().into_any())
+}
+
+#[pyfunction(signature = (host=None, port=None, *, limit=DEFAULT_STREAM_LIMIT, **kwargs))]
+pub fn open_connection(
+    py: Python<'_>,
+    host: Option<Py<PyAny>>,
+    port: Option<Py<PyAny>>,
+    limit: usize,
+    kwargs: Option<&Bound<'_, PyDict>>,
+) -> PyResult<Py<PyAny>> {
+    let (host_obj, port_obj) = host_port_objects(py, host, port);
+    let args = PyTuple::new(py, [host_obj.clone_ref(py), port_obj.clone_ref(py)])?;
+
+    let Some(loop_obj) = native_stream_loop(py, kwargs)? else {
+        let kwargs = kwargs_with_limit(py, kwargs, limit)?;
+        return call_asyncio_streams_function(py, "open_connection", &args, Some(&kwargs));
+    };
+
+    let (locals, awaitable) =
+        fast_open_connection_awaitable(py, &loop_obj, host_obj, port_obj, limit, kwargs)?;
 
     Ok(pyo3_async_runtimes::async_std::future_into_py_with_locals(
         py,
@@ -1055,22 +1095,7 @@ pub fn open_connection(
             })?
             .await?;
 
-            Python::attach(|py| {
-                let result = created.bind(py).cast::<PyTuple>()?;
-                let transport = result.get_item(0)?.unbind();
-                let protocol: Py<PyFastStreamProtocol> = result.get_item(1)?.extract()?;
-                let reader = protocol.borrow(py).reader.clone_ref(py);
-                let writer = Py::new(
-                    py,
-                    PyFastStreamWriter {
-                        transport,
-                        protocol,
-                        reader: reader.clone_ref(py),
-                    },
-                )?;
-                let output = PyTuple::new(py, [reader.into_any(), writer.into_any()])?;
-                Ok(output.unbind().into_any())
-            })
+            Python::attach(|py| fast_open_connection_result(py, created))
         },
     )?
     .unbind())

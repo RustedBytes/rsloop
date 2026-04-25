@@ -231,19 +231,18 @@ fn asyncio_task_kwarg_support(py: Python<'_>) -> PyResult<&'static TaskKwargSupp
         return Ok(cached);
     }
 
+    let support = detect_asyncio_task_kwarg_support(py)?;
+    Ok(ASYNCIO_TASK_KWARG_SUPPORT.get_or_init(|| support))
+}
+
+fn detect_asyncio_task_kwarg_support(py: Python<'_>) -> PyResult<TaskKwargSupport> {
     let inspect = py.import("inspect")?;
-    let signature = match inspect
-        .getattr("signature")?
-        .call1((asyncio_task_cls(py)?.clone_ref(py),))
-    {
-        Ok(signature) => signature,
-        Err(_) => {
-            return Ok(ASYNCIO_TASK_KWARG_SUPPORT.get_or_init(|| TaskKwargSupport {
-                name: true,
-                context: false,
-                eager_start: false,
-            }));
-        }
+    let Some(signature) = asyncio_task_signature(py, &inspect)? else {
+        return Ok(TaskKwargSupport {
+            name: true,
+            context: false,
+            eager_start: false,
+        });
     };
     let parameters = signature.getattr("parameters")?;
     let keyword_only = inspect.getattr("Parameter")?.getattr("KEYWORD_ONLY")?;
@@ -254,22 +253,45 @@ fn asyncio_task_kwarg_support(py: Python<'_>) -> PyResult<&'static TaskKwargSupp
     };
 
     for kwarg_name in ["name", "context", "eager_start"] {
-        let parameter = match parameters.get_item(kwarg_name) {
-            Ok(parameter) => parameter,
-            Err(_) => continue,
-        };
-        if !parameter.getattr("kind")?.eq(&keyword_only)? {
-            continue;
-        }
-        match kwarg_name {
-            "name" => support.name = true,
-            "context" => support.context = true,
-            "eager_start" => support.eager_start = true,
-            _ => {}
+        if has_keyword_only_parameter(&parameters, &keyword_only, kwarg_name)? {
+            mark_task_kwarg_supported(&mut support, kwarg_name);
         }
     }
 
-    Ok(ASYNCIO_TASK_KWARG_SUPPORT.get_or_init(|| support))
+    Ok(support)
+}
+
+fn asyncio_task_signature<'py>(
+    py: Python<'py>,
+    inspect: &Bound<'py, PyModule>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    match inspect
+        .getattr("signature")?
+        .call1((asyncio_task_cls(py)?.clone_ref(py),))
+    {
+        Ok(signature) => Ok(Some(signature)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn has_keyword_only_parameter(
+    parameters: &Bound<'_, PyAny>,
+    keyword_only: &Bound<'_, PyAny>,
+    kwarg_name: &str,
+) -> PyResult<bool> {
+    let Ok(parameter) = parameters.get_item(kwarg_name) else {
+        return Ok(false);
+    };
+    parameter.getattr("kind")?.eq(keyword_only)
+}
+
+fn mark_task_kwarg_supported(support: &mut TaskKwargSupport, kwarg_name: &str) {
+    match kwarg_name {
+        "name" => support.name = true,
+        "context" => support.context = true,
+        "eager_start" => support.eager_start = true,
+        _ => {}
+    }
 }
 
 #[inline]
@@ -699,52 +721,91 @@ fn build_tcp_server_sockets(
 
     for (addr_family, sock_type, proto, sockaddr) in addrinfos {
         let sock = build_stream_socket(py, addr_family, sock_type, proto)?;
-        if reuse_address == Some(true) {
-            sock.call_method1(
-                py,
-                "setsockopt",
-                (sol_socket.clone(), so_reuseaddr.clone(), 1),
-            )?;
-        }
-        if reuse_port == Some(true) {
-            if let Some(so_reuseport) = &so_reuseport {
-                sock.call_method1(
-                    py,
-                    "setsockopt",
-                    (sol_socket.clone(), so_reuseport.clone(), 1),
-                )?;
-            }
-        }
-        if let Some(keep_alive) = keep_alive {
-            #[cfg(unix)]
-            {
-                set_socket_bool_option_unix(
-                    py,
-                    &sock,
-                    libc::SOL_SOCKET,
-                    libc::SO_KEEPALIVE,
-                    keep_alive,
-                )?;
-            }
-            #[cfg(not(unix))]
-            {
-                sock.call_method1(
-                    py,
-                    "setsockopt",
-                    (
-                        sol_socket.clone(),
-                        so_keepalive.clone(),
-                        i32::from(keep_alive),
-                    ),
-                )?;
-            }
-        }
+        apply_tcp_server_socket_options(
+            py,
+            &sock,
+            TcpSocketOptionRefs {
+                sol_socket: &sol_socket,
+                so_reuseaddr: &so_reuseaddr,
+                so_reuseport: so_reuseport.as_ref(),
+                #[cfg(not(unix))]
+                so_keepalive: &so_keepalive,
+            },
+            reuse_address,
+            reuse_port,
+            keep_alive,
+        )?;
         sock.call_method1(py, "bind", (sockaddr,))?;
         sock.call_method1(py, "listen", (backlog,))?;
         sockets.push(sock);
     }
 
     Ok(sockets)
+}
+
+struct TcpSocketOptionRefs<'py, 'a> {
+    sol_socket: &'a Bound<'py, PyAny>,
+    so_reuseaddr: &'a Bound<'py, PyAny>,
+    so_reuseport: Option<&'a Bound<'py, PyAny>>,
+    #[cfg(not(unix))]
+    so_keepalive: &'a Bound<'py, PyAny>,
+}
+
+fn apply_tcp_server_socket_options(
+    py: Python<'_>,
+    sock: &Py<PyAny>,
+    options: TcpSocketOptionRefs<'_, '_>,
+    reuse_address: Option<bool>,
+    reuse_port: Option<bool>,
+    keep_alive: Option<bool>,
+) -> PyResult<()> {
+    if reuse_address == Some(true) {
+        sock.call_method1(
+            py,
+            "setsockopt",
+            (options.sol_socket.clone(), options.so_reuseaddr.clone(), 1),
+        )?;
+    }
+    if reuse_port == Some(true) {
+        if let Some(so_reuseport) = options.so_reuseport {
+            sock.call_method1(
+                py,
+                "setsockopt",
+                (options.sol_socket.clone(), so_reuseport.clone(), 1),
+            )?;
+        }
+    }
+    if let Some(keep_alive) = keep_alive {
+        #[cfg(unix)]
+        set_tcp_keepalive_option(py, sock, keep_alive)?;
+        #[cfg(not(unix))]
+        set_tcp_keepalive_option(py, sock, options, keep_alive)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_tcp_keepalive_option(py: Python<'_>, sock: &Py<PyAny>, keep_alive: bool) -> PyResult<()> {
+    set_socket_bool_option_unix(py, sock, libc::SOL_SOCKET, libc::SO_KEEPALIVE, keep_alive)
+}
+
+#[cfg(not(unix))]
+fn set_tcp_keepalive_option(
+    py: Python<'_>,
+    sock: &Py<PyAny>,
+    options: TcpSocketOptionRefs<'_, '_>,
+    keep_alive: bool,
+) -> PyResult<()> {
+    sock.call_method1(
+        py,
+        "setsockopt",
+        (
+            options.sol_socket.clone(),
+            options.so_keepalive.clone(),
+            i32::from(keep_alive),
+        ),
+    )?;
+    Ok(())
 }
 
 fn build_unix_server_socket(
@@ -771,6 +832,7 @@ fn build_unix_server_socket(
     Ok(sock.unbind())
 }
 
+#[derive(Clone, Copy)]
 enum ProcessStdioSpec {
     Inherit,
     Pipe,
@@ -817,24 +879,34 @@ fn parse_process_stdio(
     value: &Py<PyAny>,
     allow_stdout_redirect: bool,
 ) -> PyResult<ProcessStdioSpec> {
-    let subprocess = py.import("asyncio.subprocess")?;
     let bound = value.bind(py);
     if bound.is_none() {
         return Ok(ProcessStdioSpec::Inherit);
     }
-    if bound.eq(&subprocess.getattr("PIPE")?)? {
-        return Ok(ProcessStdioSpec::Pipe);
+    parse_subprocess_stdio_marker(py, bound, allow_stdout_redirect)?.map_or_else(
+        || Ok(ProcessStdioSpec::Fd(fd_ops::fileobj_to_fd(py, bound)?)),
+        Ok,
+    )
+}
+
+fn parse_subprocess_stdio_marker(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+    allow_stdout_redirect: bool,
+) -> PyResult<Option<ProcessStdioSpec>> {
+    let subprocess = py.import("asyncio.subprocess")?;
+    if value.eq(&subprocess.getattr("PIPE")?)? {
+        return Ok(Some(ProcessStdioSpec::Pipe));
     }
-    if bound.eq(&subprocess.getattr("DEVNULL")?)? {
-        return Ok(ProcessStdioSpec::DevNull);
+    if value.eq(&subprocess.getattr("DEVNULL")?)? {
+        return Ok(Some(ProcessStdioSpec::DevNull));
     }
-    if allow_stdout_redirect && bound.eq(&subprocess.getattr("STDOUT")?)? {
-        return Ok(ProcessStdioSpec::Stdout);
+    let is_stdout = value.eq(&subprocess.getattr("STDOUT")?)?;
+    match (allow_stdout_redirect, is_stdout) {
+        (true, true) => Ok(Some(ProcessStdioSpec::Stdout)),
+        (false, true) => Err(PyValueError::new_err("STDOUT can only be used for stderr")),
+        (_, false) => Ok(None),
     }
-    if !allow_stdout_redirect && bound.eq(&subprocess.getattr("STDOUT")?)? {
-        return Err(PyValueError::new_err("STDOUT can only be used for stderr"));
-    }
-    Ok(ProcessStdioSpec::Fd(fd_ops::fileobj_to_fd(py, bound)?))
 }
 
 fn stdio_from_fd(fd: fd_ops::RawFd) -> PyResult<std::process::Stdio> {
@@ -909,23 +981,7 @@ fn apply_stdio(
 ) -> PyResult<(Option<BoxedProcessReader>, Option<BoxedProcessReader>)> {
     use std::process::Stdio;
 
-    match stdin {
-        ProcessStdioSpec::Inherit => {
-            command.stdin(Stdio::inherit());
-        }
-        ProcessStdioSpec::Pipe => {
-            command.stdin(Stdio::piped());
-        }
-        ProcessStdioSpec::DevNull => {
-            command.stdin(Stdio::null());
-        }
-        ProcessStdioSpec::Fd(fd) => {
-            command.stdin(stdio_from_fd(fd)?);
-        }
-        ProcessStdioSpec::Stdout => {
-            return Err(PyValueError::new_err("STDOUT can only be used for stderr"));
-        }
-    }
+    command.stdin(stdin_stdio(stdin)?);
 
     let mut stdout_override = None;
     let stderr_override = None;
@@ -941,54 +997,58 @@ fn apply_stdio(
             stdout_override = Some(Box::new(read_end) as BoxedProcessReader);
         }
         (stdout, stderr) => {
-            match stdout {
-                ProcessStdioSpec::Inherit => {
-                    command.stdout(Stdio::inherit());
-                }
-                ProcessStdioSpec::Pipe => {
-                    command.stdout(Stdio::piped());
-                }
-                ProcessStdioSpec::DevNull => {
-                    command.stdout(Stdio::null());
-                }
-                ProcessStdioSpec::Fd(fd) => {
-                    command.stdout(stdio_from_fd(fd)?);
-                }
-                ProcessStdioSpec::Stdout => {
-                    return Err(PyValueError::new_err("STDOUT can only be used for stderr"));
-                }
-            }
-
-            match stderr {
-                ProcessStdioSpec::Inherit => {
-                    command.stderr(Stdio::inherit());
-                }
-                ProcessStdioSpec::Pipe => {
-                    command.stderr(Stdio::piped());
-                }
-                ProcessStdioSpec::DevNull => {
-                    command.stderr(Stdio::null());
-                }
-                ProcessStdioSpec::Fd(fd) => {
-                    command.stderr(stdio_from_fd(fd)?);
-                }
-                ProcessStdioSpec::Stdout => {
-                    match stdout {
-                        ProcessStdioSpec::Inherit => command.stderr(Stdio::inherit()),
-                        ProcessStdioSpec::DevNull => command.stderr(Stdio::null()),
-                        ProcessStdioSpec::Fd(fd) => command.stderr(stdio_from_fd(fd)?),
-                        ProcessStdioSpec::Pipe | ProcessStdioSpec::Stdout => {
-                            return Err(PyRuntimeError::new_err(
-                                "invalid stderr=STDOUT configuration",
-                            ));
-                        }
-                    };
-                }
-            }
+            command.stdout(output_stdio(stdout)?);
+            command.stderr(stderr_stdio(stderr, stdout)?);
         }
     }
 
     Ok((stdout_override, stderr_override))
+}
+
+fn stdin_stdio(spec: ProcessStdioSpec) -> PyResult<std::process::Stdio> {
+    match spec {
+        ProcessStdioSpec::Stdout => {
+            Err(PyValueError::new_err("STDOUT can only be used for stderr"))
+        }
+        spec => output_stdio(spec),
+    }
+}
+
+fn output_stdio(spec: ProcessStdioSpec) -> PyResult<std::process::Stdio> {
+    use std::process::Stdio;
+
+    match spec {
+        ProcessStdioSpec::Inherit => Ok(Stdio::inherit()),
+        ProcessStdioSpec::Pipe => Ok(Stdio::piped()),
+        ProcessStdioSpec::DevNull => Ok(Stdio::null()),
+        ProcessStdioSpec::Fd(fd) => stdio_from_fd(fd),
+        ProcessStdioSpec::Stdout => {
+            Err(PyValueError::new_err("STDOUT can only be used for stderr"))
+        }
+    }
+}
+
+fn stderr_stdio(
+    stderr: ProcessStdioSpec,
+    stdout: ProcessStdioSpec,
+) -> PyResult<std::process::Stdio> {
+    if matches!(stderr, ProcessStdioSpec::Stdout) {
+        return stderr_stdout_stdio(stdout);
+    }
+    output_stdio(stderr)
+}
+
+fn stderr_stdout_stdio(stdout: ProcessStdioSpec) -> PyResult<std::process::Stdio> {
+    use std::process::Stdio;
+
+    match stdout {
+        ProcessStdioSpec::Inherit => Ok(Stdio::inherit()),
+        ProcessStdioSpec::DevNull => Ok(Stdio::null()),
+        ProcessStdioSpec::Fd(fd) => stdio_from_fd(fd),
+        ProcessStdioSpec::Pipe | ProcessStdioSpec::Stdout => Err(PyRuntimeError::new_err(
+            "invalid stderr=STDOUT configuration",
+        )),
+    }
 }
 
 fn resolve_numeric_id(
@@ -1076,16 +1136,35 @@ fn apply_unix_pre_exec(command: &mut Command, config: UnixPreExecConfig) {
 
 #[cfg(unix)]
 fn apply_unix_pre_exec_child(config: &UnixPreExecConfig) -> std::io::Result<()> {
-    if config.restore_signals {
-        reset_child_signal(libc::SIGPIPE)?;
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        reset_child_signal(libc::SIGXFSZ)?;
-    }
+    restore_child_signals(config.restore_signals)?;
+    clear_pass_fds_cloexec(&config.pass_fds)?;
+    apply_child_session_and_group(config)?;
+    apply_child_identity(config)?;
+    apply_child_umask(config.umask);
+    Ok(())
+}
 
-    for fd in &config.pass_fds {
+#[cfg(unix)]
+fn restore_child_signals(restore_signals: bool) -> std::io::Result<()> {
+    if !restore_signals {
+        return Ok(());
+    }
+    reset_child_signal(libc::SIGPIPE)?;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    reset_child_signal(libc::SIGXFSZ)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn clear_pass_fds_cloexec(pass_fds: &[i32]) -> std::io::Result<()> {
+    for fd in pass_fds {
         clear_child_fd_cloexec(*fd)?;
     }
+    Ok(())
+}
 
+#[cfg(unix)]
+fn apply_child_session_and_group(config: &UnixPreExecConfig) -> std::io::Result<()> {
     if config.start_new_session {
         // SAFETY: Runs in the forked child before exec; `setsid` has no Rust aliasing concerns and
         // reports failure through errno.
@@ -1102,6 +1181,11 @@ fn apply_unix_pre_exec_child(config: &UnixPreExecConfig) -> std::io::Result<()> 
             }
         }
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn apply_child_identity(config: &UnixPreExecConfig) -> std::io::Result<()> {
     if let Some(groups) = &config.extra_groups {
         set_child_groups(groups)?;
     }
@@ -1117,13 +1201,17 @@ fn apply_unix_pre_exec_child(config: &UnixPreExecConfig) -> std::io::Result<()> 
             return Err(std::io::Error::last_os_error());
         }
     }
-    if let Some(umask) = config.umask {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn apply_child_umask(umask: Option<u32>) {
+    if let Some(umask) = umask {
         // SAFETY: `umask` only changes the child process mask and has no memory-safety effects.
         unsafe {
             libc::umask(umask as libc::mode_t);
         }
     }
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -1181,40 +1269,54 @@ fn apply_process_basic_kw(
     value: &Bound<'_, PyAny>,
 ) -> PyResult<bool> {
     match key {
-        "cwd" => {
-            let os = py.import("os")?;
-            let path = os
-                .getattr("fspath")?
-                .call1((value.clone(),))?
-                .extract::<String>()?;
-            command.current_dir(path);
-            Ok(true)
-        }
-        "env" => {
-            let env_dict = value.cast::<PyDict>()?;
-            for (env_key, env_value) in env_dict.iter() {
-                command.env(env_key.extract::<String>()?, env_value.extract::<String>()?);
-            }
-            Ok(true)
-        }
-        "executable" => {
-            let os = py.import("os")?;
-            let executable = os
-                .getattr("fspath")?
-                .call1((value.clone(),))?
-                .extract::<String>()?;
-            #[cfg(unix)]
-            command.arg0(executable);
-            #[cfg(windows)]
-            {
-                drop(executable);
-                return Err(PyNotImplementedError::new_err(
-                    "subprocess executable override is not implemented on Windows",
-                ));
-            }
-            Ok(true)
-        }
+        "cwd" => apply_process_cwd(py, command, value).map(|()| true),
+        "env" => apply_process_env(command, value).map(|()| true),
+        "executable" => apply_process_executable(py, command, value).map(|()| true),
         _ => Ok(false),
+    }
+}
+
+fn process_fspath(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
+    py.import("os")?
+        .getattr("fspath")?
+        .call1((value.clone(),))?
+        .extract::<String>()
+}
+
+fn apply_process_cwd(
+    py: Python<'_>,
+    command: &mut Command,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    command.current_dir(process_fspath(py, value)?);
+    Ok(())
+}
+
+fn apply_process_env(command: &mut Command, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    let env_dict = value.cast::<PyDict>()?;
+    for (env_key, env_value) in env_dict.iter() {
+        command.env(env_key.extract::<String>()?, env_value.extract::<String>()?);
+    }
+    Ok(())
+}
+
+fn apply_process_executable(
+    py: Python<'_>,
+    command: &mut Command,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let executable = process_fspath(py, value)?;
+    #[cfg(unix)]
+    {
+        command.arg0(executable);
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        drop(executable);
+        Err(PyNotImplementedError::new_err(
+            "subprocess executable override is not implemented on Windows",
+        ))
     }
 }
 
@@ -1224,43 +1326,102 @@ fn apply_unix_process_kw(
     key: &str,
     value: &Bound<'_, PyAny>,
 ) -> PyResult<bool> {
+    if apply_unix_bool_process_kw(unix, key, value)? {
+        return Ok(true);
+    }
+    if value.is_none() {
+        return Ok(is_known_unix_process_kw(key));
+    }
+    if apply_unix_fd_process_kw(unix, key, value)? {
+        return Ok(true);
+    }
+    if apply_unix_identity_process_kw(py, unix, key, value)? {
+        return Ok(true);
+    }
+    apply_unix_misc_process_kw(unix, key, value)
+}
+
+fn is_known_unix_process_kw(key: &str) -> bool {
+    matches!(
+        key,
+        "process_group" | "pass_fds" | "group" | "extra_groups" | "user" | "umask" | "preexec_fn"
+    )
+}
+
+fn apply_unix_fd_process_kw(
+    unix: &mut UnixPreExecConfig,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
     match key {
-        "restore_signals" => unix.restore_signals = value.is_truthy()?,
-        "start_new_session" => unix.start_new_session = value.is_truthy()?,
-        "process_group" if !value.is_none() => unix.process_group = Some(value.extract::<i32>()?),
-        "pass_fds" if !value.is_none() => {
+        "process_group" => unix.process_group = Some(value.extract::<i32>()?),
+        "pass_fds" => {
             unix.pass_fds = value
                 .try_iter()?
                 .map(|item| item.and_then(|value| value.extract::<i32>()))
                 .collect::<PyResult<Vec<_>>>()?;
         }
-        "group" if !value.is_none() => {
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn apply_unix_identity_process_kw(
+    py: Python<'_>,
+    unix: &mut UnixPreExecConfig,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "group" => {
             unix.gid = Some(resolve_numeric_id(
                 py, value, "grp", "getgrnam", "gr_gid", "group",
             )?);
         }
-        "extra_groups" if !value.is_none() => {
+        "extra_groups" => {
             unix.extra_groups = Some(resolve_extra_groups(py, value)?);
         }
-        "user" if !value.is_none() => {
+        "user" => {
             unix.uid = Some(resolve_numeric_id(
                 py, value, "pwd", "getpwnam", "pw_uid", "user",
             )?);
         }
-        "umask" if !value.is_none() => {
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn apply_unix_misc_process_kw(
+    unix: &mut UnixPreExecConfig,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "umask" => {
             let mask = value.extract::<i64>()?;
             if !(0..=PROCESS_UMASK_MAX).contains(&mask) {
                 return Err(PyValueError::new_err("umask must be between 0 and 0o777"));
             }
             unix.umask = Some(mask as u32);
         }
-        "preexec_fn" if !value.is_none() => {
+        "preexec_fn" => {
             return Err(PyNotImplementedError::new_err(
                 "preexec_fn remains unsupported in rust-impl because it is unsafe in this runtime model",
             ));
         }
-        "process_group" | "pass_fds" | "group" | "extra_groups" | "user" | "umask"
-        | "preexec_fn" => {}
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn apply_unix_bool_process_kw(
+    unix: &mut UnixPreExecConfig,
+    key: &str,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<bool> {
+    match key {
+        "restore_signals" => unix.restore_signals = value.is_truthy()?,
+        "start_new_session" => unix.start_new_session = value.is_truthy()?,
         _ => return Ok(false),
     }
     Ok(true)
