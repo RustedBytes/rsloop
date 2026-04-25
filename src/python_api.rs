@@ -300,12 +300,31 @@ fn call_callable_onearg(
 }
 
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
-fn asyncio_future_loop_kwnames(py: Python<'_>) -> &Py<PyTuple> {
-    ASYNCIO_FUTURE_LOOP_KWNAMES.get_or_init(|| {
-        PyTuple::new(py, [python_names::loop_kw(py)])
-            .expect("loop keyword tuple")
-            .unbind()
-    })
+fn keyword_tuple<const N: usize>(
+    slot: &'static OnceLock<Py<PyTuple>>,
+    py: Python<'_>,
+    names: [&Bound<'_, pyo3::types::PyString>; N],
+) -> PyResult<&'static Py<PyTuple>> {
+    if let Some(tuple) = slot.get() {
+        return Ok(tuple);
+    }
+
+    let tuple = PyTuple::new(py, names)?.unbind();
+    match slot.set(tuple) {
+        Ok(()) => {}
+        Err(_already_initialized) => {}
+    }
+    slot.get()
+        .ok_or_else(|| PyRuntimeError::new_err("failed to initialize keyword tuple cache"))
+}
+
+#[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
+fn asyncio_future_loop_kwnames(py: Python<'_>) -> PyResult<&Py<PyTuple>> {
+    keyword_tuple(
+        &ASYNCIO_FUTURE_LOOP_KWNAMES,
+        py,
+        [python_names::loop_kw(py)],
+    )
 }
 
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
@@ -313,38 +332,30 @@ fn asyncio_task_kwnames_for_options(
     py: Python<'_>,
     include_name: bool,
     include_context: bool,
-) -> &Py<PyTuple> {
+) -> PyResult<&Py<PyTuple>> {
     match (include_name, include_context) {
-        (false, false) => ASYNCIO_TASK_LOOP_KWNAMES.get_or_init(|| {
-            PyTuple::new(py, [python_names::loop_kw(py)])
-                .expect("loop keyword tuple")
-                .unbind()
-        }),
-        (true, false) => ASYNCIO_TASK_LOOP_NAME_KWNAMES.get_or_init(|| {
-            PyTuple::new(py, [python_names::loop_kw(py), python_names::name_kw(py)])
-                .expect("loop/name keyword tuple")
-                .unbind()
-        }),
-        (false, true) => ASYNCIO_TASK_LOOP_CONTEXT_KWNAMES.get_or_init(|| {
-            PyTuple::new(
-                py,
-                [python_names::loop_kw(py), python_names::context_kw(py)],
-            )
-            .expect("loop/context keyword tuple")
-            .unbind()
-        }),
-        (true, true) => ASYNCIO_TASK_LOOP_NAME_CONTEXT_KWNAMES.get_or_init(|| {
-            PyTuple::new(
-                py,
-                [
-                    python_names::loop_kw(py),
-                    python_names::name_kw(py),
-                    python_names::context_kw(py),
-                ],
-            )
-            .expect("loop/name/context keyword tuple")
-            .unbind()
-        }),
+        (false, false) => {
+            keyword_tuple(&ASYNCIO_TASK_LOOP_KWNAMES, py, [python_names::loop_kw(py)])
+        }
+        (true, false) => keyword_tuple(
+            &ASYNCIO_TASK_LOOP_NAME_KWNAMES,
+            py,
+            [python_names::loop_kw(py), python_names::name_kw(py)],
+        ),
+        (false, true) => keyword_tuple(
+            &ASYNCIO_TASK_LOOP_CONTEXT_KWNAMES,
+            py,
+            [python_names::loop_kw(py), python_names::context_kw(py)],
+        ),
+        (true, true) => keyword_tuple(
+            &ASYNCIO_TASK_LOOP_NAME_CONTEXT_KWNAMES,
+            py,
+            [
+                python_names::loop_kw(py),
+                python_names::name_kw(py),
+                python_names::context_kw(py),
+            ],
+        ),
     }
 }
 
@@ -363,7 +374,7 @@ fn create_asyncio_future_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyRes
         // SAFETY: The class and argument pointers are live under the GIL. `args` and kwnames live
         // for the duration of the vectorcall, and PyO3 owns successful return pointers.
         let cls = asyncio_future_cls(py)?.as_ptr();
-        let kwnames = asyncio_future_loop_kwnames(py).as_ptr();
+        let kwnames = asyncio_future_loop_kwnames(py)?.as_ptr();
         // SAFETY: `cls`, `args`, and `kwnames` are live for this vectorcall under the GIL.
         let ptr = unsafe { ffi::PyObject_Vectorcall(cls, args.as_ptr(), 0, kwnames) };
         // SAFETY: `ptr` is the owned result returned by CPython for the vectorcall above.
@@ -406,7 +417,7 @@ fn create_asyncio_task_for_loop(
         // SAFETY: The asyncio Task class, positional argument array, and kwnames tuple are all live
         // under the GIL for this call. PyO3 converts null returns into `PyErr`.
         let cls = asyncio_task_cls(py)?.as_ptr();
-        let kwnames = asyncio_task_kwnames_for_options(py, name.is_some(), context.is_some());
+        let kwnames = asyncio_task_kwnames_for_options(py, name.is_some(), context.is_some())?;
         // SAFETY: `cls`, `args`, and `kwnames` are live for this vectorcall under the GIL.
         let ptr = unsafe { ffi::PyObject_Vectorcall(cls, args.as_ptr(), 1, kwnames.as_ptr()) };
         // SAFETY: `ptr` is the owned result returned by CPython for the vectorcall above.
