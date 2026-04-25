@@ -82,6 +82,9 @@ pub(crate) fn call_method0(
     obj: &Bound<'_, PyAny>,
     method: &Bound<'_, PyString>,
 ) -> PyResult<Py<PyAny>> {
+    // SAFETY: `obj` and `method` are live Python objects under the active GIL, and the argument
+    // list is correctly null-terminated for `PyObject_CallMethodObjArgs`. PyO3 takes ownership of
+    // non-null returns and converts null returns into `PyErr`.
     unsafe {
         Bound::from_owned_ptr_or_err(
             py,
@@ -102,6 +105,8 @@ pub(crate) fn call_method1(
     method: &Bound<'_, PyString>,
     arg: &Bound<'_, PyAny>,
 ) -> PyResult<Py<PyAny>> {
+    // SAFETY: `obj`, `method`, and `arg` are live Python objects under the active GIL, and the
+    // varargs list is null-terminated as required by CPython. PyO3 wraps the owned return pointer.
     unsafe {
         Bound::from_owned_ptr_or_err(
             py,

@@ -126,6 +126,9 @@ impl ReadyCallback {
     fn invoke_direct(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         profiling::scope!("ReadyCallback::invoke_direct");
         match &self.args {
+            // SAFETY: `self.callback` is a live Python callable owned by `Py<PyAny>`, and the GIL
+            // token proves this thread may call into CPython. The returned owned pointer is
+            // immediately converted into a PyO3 `Bound`, which handles null/error propagation.
             CallbackArgs::None => unsafe {
                 Bound::from_owned_ptr_or_err(
                     py,
@@ -133,6 +136,9 @@ impl ReadyCallback {
                 )
                 .map(Bound::unbind)
             },
+            // SAFETY: `self.callback` and `arg` are live Python objects and the varargs list is
+            // terminated with a null pointer as required by `PyObject_CallFunctionObjArgs`.
+            // PyO3 converts a null return into `PyErr` and takes ownership of successful results.
             CallbackArgs::One(arg) => unsafe {
                 Bound::from_owned_ptr_or_err(
                     py,

@@ -970,6 +970,21 @@ fn kwargs_with_limit<'py>(
     Ok(dict)
 }
 
+fn copy_kwargs<'py>(
+    py: Python<'py>,
+    kwargs: Option<&Bound<'py, PyDict>>,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    let Some(kwargs) = kwargs else {
+        return Ok(None);
+    };
+
+    let copied = PyDict::new(py);
+    for (key, value) in kwargs.iter() {
+        copied.set_item(key, value)?;
+    }
+    Ok(Some(copied))
+}
+
 fn native_stream_loop(
     py: Python<'_>,
     kwargs: Option<&Bound<'_, PyDict>>,
@@ -1020,13 +1035,7 @@ pub fn open_connection(
             client_connected_cb: py.None(),
         },
     )?;
-    let kwargs = kwargs.map(|kwargs| {
-        let copied = PyDict::new(py);
-        for (key, value) in kwargs.iter() {
-            let _ = copied.set_item(key, value);
-        }
-        copied
-    });
+    let kwargs = copy_kwargs(py, kwargs)?;
     let create_args = PyTuple::new(py, [factory.into_any(), host_obj, port_obj])?;
     let awaitable = loop_obj.call_method(py, "create_connection", &create_args, kwargs.as_ref())?;
 
@@ -1100,13 +1109,7 @@ pub fn start_server(
             client_connected_cb,
         },
     )?;
-    let kwargs = kwargs.map(|kwargs| {
-        let copied = PyDict::new(py);
-        for (key, value) in kwargs.iter() {
-            let _ = copied.set_item(key, value);
-        }
-        copied
-    });
+    let kwargs = copy_kwargs(py, kwargs)?;
     let create_args = PyTuple::new(py, [factory.into_any(), host_obj, port_obj])?;
     let awaitable = loop_obj.call_method(py, "create_server", &create_args, kwargs.as_ref())?;
 

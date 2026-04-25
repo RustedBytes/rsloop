@@ -43,16 +43,24 @@ fn add_module_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn add_module_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn add_event_loop_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(new_event_loop, m)?)?;
     m.add_function(wrap_pyfunction!(asyncgen_firstiter_hook, m)?)?;
     m.add_function(wrap_pyfunction!(asyncgen_finalizer_hook, m)?)?;
     m.add_function(wrap_pyfunction!(future_done_stop, m)?)?;
-    m.add_function(wrap_pyfunction!(open_connection, m)?)?;
-    m.add_function(wrap_pyfunction!(profiler_running, m)?)?;
     m.add_function(wrap_pyfunction!(signal_bridge, m)?)?;
-    m.add_function(wrap_pyfunction!(start_profiler, m)?)?;
+    Ok(())
+}
+
+fn add_stream_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(open_connection, m)?)?;
     m.add_function(wrap_pyfunction!(start_server, m)?)?;
+    Ok(())
+}
+
+fn add_profiler_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(profiler_running, m)?)?;
+    m.add_function(wrap_pyfunction!(start_profiler, m)?)?;
     m.add_function(wrap_pyfunction!(stop_profiler, m)?)?;
     Ok(())
 }
@@ -74,7 +82,9 @@ fn add_module_compat_aliases(m: &Bound<'_, PyModule>) -> PyResult<()> {
 fn _loop(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     add_module_classes(m)?;
-    add_module_functions(m)?;
+    add_event_loop_functions(m)?;
+    add_stream_functions(m)?;
+    add_profiler_functions(m)?;
     add_module_compat_aliases(m)?;
     Ok(())
 }
