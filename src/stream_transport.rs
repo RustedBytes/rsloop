@@ -1050,6 +1050,10 @@ impl StreamTransportCore {
             .call_exception_handler(py, Some(&self.loop_obj), context.unbind().into_any())
     }
 
+    fn report_error(&self, err: PyErr, message: &str) {
+        let _ = Python::try_attach(|py| self.report_error_with_py(py, err, message));
+    }
+
     pub fn connection_made(&self, transport: Py<PyStreamTransport>) -> PyResult<()> {
         profiling::scope!("StreamTransportCore::connection_made");
         self.call_in_loop_context(|py| {
@@ -1099,6 +1103,12 @@ impl StreamTransportCore {
         }
 
         self.call_in_loop_context(|py| self.connection_lost_with_py(py, exc))
+    }
+
+    fn report_connection_lost_result(&self, result: PyResult<()>) {
+        if let Err(err) = result {
+            self.report_error(err, "stream connection_lost callback failed");
+        }
     }
 
     fn data_received_with_py(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
@@ -2665,7 +2675,9 @@ fn configured_tcp_stream_from_owned_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStre
     socket
         .set_nonblocking(true)
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    let _ = socket.set_tcp_nodelay(true);
+    socket
+        .set_tcp_nodelay(true)
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     Ok(socket.into())
 }
 
@@ -2749,11 +2761,13 @@ pub fn spawn_tcp_transport(
     }
 
     #[cfg(target_os = "linux")]
-    let _ = core.loop_core.send_command(LoopCommand::StartSocketReader {
-        fd: raw_fd,
-        core: Arc::clone(&core),
-        reader: ReaderTarget::Tcp(stream),
-    });
+    core.loop_core
+        .send_command(LoopCommand::StartSocketReader {
+            fd: raw_fd,
+            core: Arc::clone(&core),
+            reader: ReaderTarget::Tcp(stream),
+        })
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     #[cfg(not(target_os = "linux"))]
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::Tcp(stream));
     Ok(transport)
@@ -2838,11 +2852,13 @@ pub fn spawn_unix_transport(
     }
 
     #[cfg(target_os = "linux")]
-    let _ = core.loop_core.send_command(LoopCommand::StartSocketReader {
-        fd: raw_fd,
-        core: Arc::clone(&core),
-        reader: ReaderTarget::Unix(stream),
-    });
+    core.loop_core
+        .send_command(LoopCommand::StartSocketReader {
+            fd: raw_fd,
+            core: Arc::clone(&core),
+            reader: ReaderTarget::Unix(stream),
+        })
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     #[cfg(not(target_os = "linux"))]
     spawn_reader_worker(Arc::clone(&core), ReaderTarget::Unix(stream));
     Ok(transport)
@@ -3046,6 +3062,35 @@ pub fn unix_server_listener(listener: StdUnixListener) -> ServerListener {
     ServerListener::Unix(listener)
 }
 
+fn configure_accepted_tcp_stream(
+    server: &Arc<ServerCore>,
+    stream: &StdTcpStream,
+    message: &str,
+) -> bool {
+    if let Err(err) = stream.set_nonblocking(true) {
+        server.report_error(PyRuntimeError::new_err(err.to_string()), message);
+        return false;
+    }
+    if let Err(err) = stream.set_nodelay(true) {
+        server.report_error(PyRuntimeError::new_err(err.to_string()), message);
+        return false;
+    }
+    true
+}
+
+#[cfg(unix)]
+fn configure_accepted_unix_stream(
+    server: &Arc<ServerCore>,
+    stream: &StdUnixStream,
+    message: &str,
+) -> bool {
+    if let Err(err) = stream.set_nonblocking(true) {
+        server.report_error(PyRuntimeError::new_err(err.to_string()), message);
+        return false;
+    }
+    true
+}
+
 fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: Arc<AtomicBool>) {
     profiling::scope!("stream.run_tcp_accept_loop");
     loop {
@@ -3070,8 +3115,13 @@ fn run_tcp_accept_loop(server: Arc<ServerCore>, listener: StdTcpListener, stop: 
         loop {
             match listener.accept() {
                 Ok((stream, _addr)) => {
-                    let _ = stream.set_nonblocking(true);
-                    let _ = stream.set_nodelay(true);
+                    if !configure_accepted_tcp_stream(
+                        &server,
+                        &stream,
+                        "failed to configure TCP connection",
+                    ) {
+                        continue;
+                    }
                     let result = Python::try_attach(|py| -> PyResult<_> {
                         let protocol = server.create_protocol_with_py(py)?;
                         let context = server.context.clone_ref(py);
@@ -3181,8 +3231,13 @@ async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) 
             let accept_result = listener.accept();
             match accept_result {
                 Ok((stream, _addr)) => {
-                    let _ = stream.set_nonblocking(true);
-                    let _ = stream.set_nodelay(true);
+                    if !configure_accepted_tcp_stream(
+                        &server,
+                        &stream,
+                        "failed to configure TCP connection",
+                    ) {
+                        continue;
+                    }
                     let result = Python::try_attach(|py| -> PyResult<_> {
                         let protocol = server.create_protocol_with_py(py)?;
                         let context = server.context.clone_ref(py);
@@ -3265,8 +3320,13 @@ pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTc
                 // SAFETY: `into_raw_socket` transfers ownership of the accepted socket to us, and
                 // `StdTcpStream::from_raw_socket` takes ownership of that handle.
                 let stream = unsafe { StdTcpStream::from_raw_socket(raw) };
-                let _ = stream.set_nonblocking(true);
-                let _ = stream.set_nodelay(true);
+                if !configure_accepted_tcp_stream(
+                    &server,
+                    &stream,
+                    "failed to configure TCP connection",
+                ) {
+                    continue;
+                }
                 let result = Python::try_attach(|py| -> PyResult<_> {
                     let protocol = server.create_protocol_with_py(py)?;
                     let context = server.context.clone_ref(py);
@@ -3343,7 +3403,13 @@ fn run_unix_accept_loop(server: Arc<ServerCore>, listener: StdUnixListener, stop
         loop {
             match listener.accept() {
                 Ok((stream, _addr)) => {
-                    let _ = stream.set_nonblocking(true);
+                    if !configure_accepted_unix_stream(
+                        &server,
+                        &stream,
+                        "failed to configure Unix connection",
+                    ) {
+                        continue;
+                    }
                     let result = Python::try_attach(|py| -> PyResult<_> {
                         let protocol = server.create_protocol_with_py(py)?;
                         let context = server.context.clone_ref(py);
@@ -3427,7 +3493,13 @@ async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener
         loop {
             match listener.accept() {
                 Ok((stream, _addr)) => {
-                    let _ = stream.set_nonblocking(true);
+                    if !configure_accepted_unix_stream(
+                        &server,
+                        &stream,
+                        "failed to configure Unix connection",
+                    ) {
+                        continue;
+                    }
                     let result = Python::try_attach(|py| -> PyResult<_> {
                         let protocol = server.create_protocol_with_py(py)?;
                         let context = server.context.clone_ref(py);
@@ -3681,9 +3753,9 @@ fn close_tls_writer(tls_state: &Arc<Mutex<TlsIoState>>) -> io::Result<()> {
     result.and(close_result)
 }
 
-fn abort_tls_writer(tls_state: &Arc<Mutex<TlsIoState>>) {
+fn abort_tls_writer(tls_state: &Arc<Mutex<TlsIoState>>) -> io::Result<()> {
     let state = tls_state.lock().expect("poisoned tls state");
-    let _ = state.shutdown_close();
+    state.shutdown_close()
 }
 
 fn run_stream_reader(
@@ -3934,7 +4006,9 @@ fn run_stream_writer(
             WriterCommand::Data(mut data) => {
                 let buffered_len = data.remaining().len();
                 if let Err(err) = write_all_owned(&mut writer, &mut data) {
-                    let _ = core.connection_lost(Some(PyRuntimeError::new_err(err.to_string())));
+                    core.report_connection_lost_result(
+                        core.connection_lost(Some(PyRuntimeError::new_err(err.to_string()))),
+                    );
                     return;
                 }
                 core.record_write_buffer_drained(buffered_len);
@@ -3944,8 +4018,8 @@ fn run_stream_writer(
                         Ok(WriterCommand::Data(mut next)) => {
                             let buffered_len = next.remaining().len();
                             if let Err(err) = write_all_owned(&mut writer, &mut next) {
-                                let _ = core.connection_lost(Some(PyRuntimeError::new_err(
-                                    err.to_string(),
+                                core.report_connection_lost_result(core.connection_lost(Some(
+                                    PyRuntimeError::new_err(err.to_string()),
                                 )));
                                 return;
                             }
@@ -3961,7 +4035,7 @@ fn run_stream_writer(
                         }
                         Err(TryRecvError::Disconnected) => {
                             core.set_write_backpressure_active(false);
-                            let _ = core.connection_lost(None);
+                            core.report_connection_lost_result(core.connection_lost(None));
                             return;
                         }
                     }
@@ -3972,27 +4046,44 @@ fn run_stream_writer(
                 }
             }
             WriterCommand::WriteEof => {
-                let _ = writer.shutdown_write();
+                if let Err(err) = writer.shutdown_write() {
+                    core.report_connection_lost_result(
+                        core.connection_lost(Some(PyRuntimeError::new_err(err.to_string()))),
+                    );
+                    return;
+                }
                 if core.close_on_write_eof() {
-                    let _ = core.connection_lost(None);
+                    core.report_connection_lost_result(core.connection_lost(None));
                     return;
                 }
             }
             WriterCommand::Close => {
-                let _ = writer.shutdown_close();
-                let _ = core.connection_lost(None);
+                let close_result = writer.shutdown_close();
+                core.report_connection_lost_result(
+                    core.connection_lost(
+                        close_result
+                            .err()
+                            .map(|err| PyRuntimeError::new_err(err.to_string())),
+                    ),
+                );
                 return;
             }
             WriterCommand::Abort => {
-                let _ = writer.shutdown_close();
-                let _ = core.connection_lost(None);
+                let close_result = writer.shutdown_close();
+                core.report_connection_lost_result(
+                    core.connection_lost(
+                        close_result
+                            .err()
+                            .map(|err| PyRuntimeError::new_err(err.to_string())),
+                    ),
+                );
                 return;
             }
             WriterCommand::Stop => return,
         }
     }
 
-    let _ = core.connection_lost(None);
+    core.report_connection_lost_result(core.connection_lost(None));
 }
 
 fn run_tls_writer(
@@ -4020,7 +4111,9 @@ fn run_tls_writer(
             WriterCommand::Data(data) => {
                 let buffered_len = data.remaining().len();
                 if let Err(err) = write_tls_data(&tls_state, data.remaining()) {
-                    let _ = core.connection_lost(Some(PyRuntimeError::new_err(err.to_string())));
+                    core.report_connection_lost_result(
+                        core.connection_lost(Some(PyRuntimeError::new_err(err.to_string()))),
+                    );
                     return;
                 }
                 core.record_write_buffer_drained(buffered_len);
@@ -4030,8 +4123,8 @@ fn run_tls_writer(
                         Ok(WriterCommand::Data(next)) => {
                             let buffered_len = next.remaining().len();
                             if let Err(err) = write_tls_data(&tls_state, next.remaining()) {
-                                let _ = core.connection_lost(Some(PyRuntimeError::new_err(
-                                    err.to_string(),
+                                core.report_connection_lost_result(core.connection_lost(Some(
+                                    PyRuntimeError::new_err(err.to_string()),
                                 )));
                                 return;
                             }
@@ -4047,7 +4140,7 @@ fn run_tls_writer(
                         }
                         Err(TryRecvError::Disconnected) => {
                             core.set_write_backpressure_active(false);
-                            let _ = core.connection_lost(None);
+                            core.report_connection_lost_result(core.connection_lost(None));
                             return;
                         }
                     }
@@ -4061,30 +4154,37 @@ fn run_tls_writer(
             WriterCommand::Close => {
                 match close_tls_writer(&tls_state) {
                     Ok(()) => {
-                        let _ = core.connection_lost(None);
+                        core.report_connection_lost_result(core.connection_lost(None));
                     }
                     Err(err) if err.kind() == io::ErrorKind::TimedOut => {
-                        let _ = core.connection_lost(Some(PyTimeoutError::new_err(
-                            "SSL shutdown timed out",
+                        core.report_connection_lost_result(core.connection_lost(Some(
+                            PyTimeoutError::new_err("SSL shutdown timed out"),
                         )));
                     }
                     Err(err) => {
-                        let _ =
-                            core.connection_lost(Some(PyRuntimeError::new_err(err.to_string())));
+                        core.report_connection_lost_result(
+                            core.connection_lost(Some(PyRuntimeError::new_err(err.to_string()))),
+                        );
                     }
                 }
                 return;
             }
             WriterCommand::Abort => {
-                abort_tls_writer(&tls_state);
-                let _ = core.connection_lost(None);
+                let close_result = abort_tls_writer(&tls_state);
+                core.report_connection_lost_result(
+                    core.connection_lost(
+                        close_result
+                            .err()
+                            .map(|err| PyRuntimeError::new_err(err.to_string())),
+                    ),
+                );
                 return;
             }
             WriterCommand::Stop => return,
         }
     }
 
-    let _ = core.connection_lost(None);
+    core.report_connection_lost_result(core.connection_lost(None));
 }
 
 fn write_all_owned(writer: &mut WriterTarget, data: &mut OwnedWriteBuffer) -> io::Result<()> {

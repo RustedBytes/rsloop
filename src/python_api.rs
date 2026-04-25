@@ -639,7 +639,6 @@ fn listener_sources_from_sockets(
 ) -> PyResult<Vec<crate::stream_transport::ServerListener>> {
     let mut listeners = Vec::with_capacity(sockets.len());
     for socket in sockets {
-        let family = socket.getattr(py, "family")?.extract::<i32>(py)?;
         #[cfg(windows)]
         let fd = socket.call_method0(py, "fileno")?.extract(py)?;
         #[cfg(not(windows))]
@@ -649,6 +648,7 @@ fn listener_sources_from_sockets(
             .extract(py)?;
         #[cfg(unix)]
         {
+            let family = socket.getattr(py, "family")?.extract::<i32>(py)?;
             listeners.push(if family == libc::AF_UNIX {
                 unix_server_listener(unix_listener_from_owned_socket_fd(fd)?)
             } else {
@@ -657,7 +657,6 @@ fn listener_sources_from_sockets(
         }
         #[cfg(not(unix))]
         {
-            let _ = family;
             listeners.push(tcp_server_listener(tcp_listener_from_owned_socket_fd(fd)?));
         }
     }

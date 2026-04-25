@@ -64,7 +64,13 @@ where
 #[cfg(windows)]
 pub(crate) fn cancel(task: TaskHandle) {
     if let Ok(service) = service() {
-        let _ = service.tx.unbounded_send(Command::Cancel { id: task.id });
+        if service
+            .tx
+            .unbounded_send(Command::Cancel { id: task.id })
+            .is_err()
+        {
+            return;
+        }
     }
 }
 
@@ -104,7 +110,12 @@ fn start_service() -> Result<Service, String> {
                             let finished_tx = thread_tx.clone();
                             let handle = vibeio::spawn(async move {
                                 factory().await;
-                                let _ = finished_tx.unbounded_send(Command::Finished { id });
+                                if finished_tx
+                                    .unbounded_send(Command::Finished { id })
+                                    .is_err()
+                                {
+                                    return;
+                                }
                             });
                             tasks.insert(id, handle);
                         }
