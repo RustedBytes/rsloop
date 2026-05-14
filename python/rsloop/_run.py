@@ -5,6 +5,7 @@ import signal as __signal
 import sys as __sys
 import threading as __threading
 import typing as __typing
+import warnings as __warnings
 
 from ._loop_compat import Loop
 from ._loop_compat import cancel_all_tasks as __cancel_all_tasks
@@ -17,15 +18,44 @@ def _noop() -> None:
     pass
 
 
+def _get_event_loop_policy() -> __asyncio.AbstractEventLoopPolicy:
+    with __warnings.catch_warnings():
+        __warnings.filterwarnings(
+            "ignore",
+            category=DeprecationWarning,
+            message="'asyncio\\.get_event_loop_policy' is deprecated.*",
+        )
+        return __asyncio.get_event_loop_policy()
+
+
+def _set_event_loop_policy(
+    policy: __typing.Optional[__asyncio.AbstractEventLoopPolicy],
+) -> None:
+    with __warnings.catch_warnings():
+        __warnings.filterwarnings(
+            "ignore",
+            category=DeprecationWarning,
+            message="'asyncio\\.set_event_loop_policy' is deprecated.*",
+        )
+        __asyncio.set_event_loop_policy(policy)
+
+
 def new_event_loop() -> Loop:
     return Loop()
 
 
-class EventLoopPolicy(__asyncio.DefaultEventLoopPolicy):
-    """Event loop policy that creates rsloop loops by default."""
+with __warnings.catch_warnings():
+    __warnings.filterwarnings(
+        "ignore",
+        category=DeprecationWarning,
+        message="'asyncio\\.DefaultEventLoopPolicy' is deprecated.*",
+    )
 
-    def new_event_loop(self) -> Loop:
-        return new_event_loop()
+    class EventLoopPolicy(__asyncio.DefaultEventLoopPolicy):
+        """Event loop policy that creates rsloop loops by default."""
+
+        def new_event_loop(self) -> Loop:
+            return new_event_loop()
 
 
 def install() -> None:
@@ -33,12 +63,12 @@ def install() -> None:
 
     global _PREVIOUS_EVENT_LOOP_POLICY
 
-    policy = __asyncio.get_event_loop_policy()
+    policy = _get_event_loop_policy()
     if isinstance(policy, EventLoopPolicy):
         return
 
     _PREVIOUS_EVENT_LOOP_POLICY = policy
-    __asyncio.set_event_loop_policy(EventLoopPolicy())
+    _set_event_loop_policy(EventLoopPolicy())
 
 
 def uninstall() -> None:
@@ -49,8 +79,8 @@ def uninstall() -> None:
     if _PREVIOUS_EVENT_LOOP_POLICY is None:
         return
 
-    if isinstance(__asyncio.get_event_loop_policy(), EventLoopPolicy):
-        __asyncio.set_event_loop_policy(_PREVIOUS_EVENT_LOOP_POLICY)
+    if isinstance(_get_event_loop_policy(), EventLoopPolicy):
+        _set_event_loop_policy(_PREVIOUS_EVENT_LOOP_POLICY)
     _PREVIOUS_EVENT_LOOP_POLICY = None
 
 

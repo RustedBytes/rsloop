@@ -1949,6 +1949,7 @@ impl PyLoop {
     }
 
     #[pyo3(signature=(protocol_factory, sock, *, ssl=None, server_hostname=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None))]
+    #[allow(clippy::too_many_arguments)]
     fn _create_connection_transport(
         slf: Py<Self>,
         py: Python<'_>,
