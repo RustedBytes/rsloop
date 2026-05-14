@@ -293,13 +293,14 @@ finally:
     rsloop.stop_profiler()
 ```
 
-This starts a Tracy client inside the process. Build a release binary, open
-`tracy-profiler.exe`, then connect to the running process while the profiled
+This starts a Tracy client inside the process. Build a release binary, open the
+Tracy desktop profiler, then connect to the running process while the profiled
 code is executing.
 
-The current Tracy feature set is aimed at local Windows profiling:
-`enable`, `only-localhost`, `sampling`, and `flush-on-exit`. The last one helps
-short-lived runs flush data before exit.
+Linux and macOS release wheels are built with profiler support enabled. Other
+builds still need `--features profiler` when built locally. The Tracy feature
+set is aimed at local profiling: `enable`, `only-localhost`, `sampling`, and
+`flush-on-exit`. The last one helps short-lived runs flush data before exit.
 
 If the extension was built without `--features profiler`, `profile()` and
 `start_profiler()` raise a runtime error.

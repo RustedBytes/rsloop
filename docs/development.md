@@ -73,6 +73,8 @@ Those four questions usually point you to the right part of the codebase.
 ## Profiling
 
 Profiling support exists behind the Rust `profiler` feature and uses Tracy.
+Release wheels for Linux and macOS include this feature; local development
+builds need it enabled explicitly.
 
 Example build:
 
