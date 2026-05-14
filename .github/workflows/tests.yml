@@ -27,6 +27,7 @@ jobs:
   test-supported-pythons:
     name: ${{ matrix.os_name }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -57,10 +58,13 @@ jobs:
         with:
           toolchain: 1.94.0
 
-      - name: Cache Cargo registry and target
+      - name: Cache Cargo registry
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Run tests across supported Python versions
+        timeout-minutes: 50
         shell: bash
         env:
           RSLOOP_PYTHON_VERSIONS: ${{ inputs.python_versions || '' }}
