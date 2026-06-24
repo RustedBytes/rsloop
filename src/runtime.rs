@@ -15,7 +15,7 @@ use crate::loop_core::{
 #[cfg(windows)]
 use crate::windows_vibeio;
 #[cfg(target_os = "linux")]
-use compio::net::PollFd;
+use compio::runtime::fd::PollFd;
 #[cfg(target_os = "linux")]
 use compio::runtime::{JoinHandle as CompioJoinHandle, Runtime as CompioRuntime};
 #[cfg(not(target_os = "linux"))]

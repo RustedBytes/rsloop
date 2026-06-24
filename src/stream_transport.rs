@@ -22,7 +22,7 @@ use std::thread;
 use std::time::Duration;
 
 #[cfg(target_os = "linux")]
-use compio::net::PollFd;
+use compio::runtime::fd::PollFd;
 #[cfg(target_os = "linux")]
 use compio::time::sleep as compio_sleep;
 use pyo3::exceptions::{PyRuntimeError, PyTimeoutError, PyValueError};
