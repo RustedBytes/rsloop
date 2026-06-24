@@ -43,3 +43,27 @@ Issues = "https://github.com/RustedBytes/rsloop/issues"
 python-source = "python"
 module-name = "rsloop._loop"
 features = ["pyo3/extension-module"]
+
+[dependency-groups]
+dev = [
+    "maturin>=1.14.1",
+    "mkdocs>=1.6.1",
+    "ruff>=0.15.19",
+    "rust-just>=1.54.0",
+    { include-group = "test" },
+]
+# Dependencies for the library/framework tests in tests/packages
+test = [
+    "aiohttp>=3.10.11",
+    "django>=4.2.30",
+    "falcon>=4.1.0",
+    "fastapi>=0.124.4",
+    "faststream[nats]>=0.5.48",
+    "granian>=1.6.4",
+    "hypercorn>=0.17.3",
+    "litestar>=2.24.0",
+    "quart>=0.19.9",
+    "sanic>=25.3.0",
+    "starlette>=0.44.0",
+    "uvicorn>=0.33.0",
+]
