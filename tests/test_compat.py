@@ -199,6 +199,32 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(received, b"response-before-eof")
         self.assertEqual(events, ["data", "eof", "lost"])
 
+    def test_create_server_sock_listens_bound_socket(self) -> None:
+        async def main() -> bytes:
+            loop = asyncio.get_running_loop()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+
+            class ServerProtocol(asyncio.Protocol):
+                def connection_made(self, transport):
+                    transport.write(b"bound-socket-server")
+                    transport.close()
+
+            server = await loop.create_server(ServerProtocol, sock=sock)
+            try:
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                try:
+                    return await asyncio.wait_for(reader.read(), 1.0)
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        self.assertEqual(rsloop.run(main()), b"bound-socket-server")
+
     def test_external_socket_read_wakes_without_waiting_for_timer(self) -> None:
         ready = threading.Event()
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -1761,6 +1761,7 @@ impl PyLoop {
         pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
             let sockets = Python::attach(|py| -> PyResult<Vec<Py<PyAny>>> {
                 if let Some(sock) = &sock {
+                    sock.call_method1(py, "listen", (backlog,))?;
                     sock.call_method1(py, "setblocking", (false,))?;
                     return Ok(vec![sock.clone_ref(py)]);
                 }

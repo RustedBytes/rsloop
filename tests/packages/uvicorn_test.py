@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-import socket
 from typing import Any
 
 import rsloop
-import uvicorn
+
+from _smoke import run_uvicorn_app
 
 
 async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
@@ -29,63 +28,8 @@ async def app(scope: dict[str, Any], receive: Any, send: Any) -> None:
     await send({"type": "http.response.body", "body": b"uvicorn-rsloop"})
 
 
-def reserve_port() -> int:
-    sock = socket.socket()
-    try:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-    finally:
-        sock.close()
-
-
-async def get(path: str, port: int) -> bytes:
-    reader, writer = await asyncio.open_connection("127.0.0.1", port)
-    try:
-        writer.write(
-            (
-                f"GET {path} HTTP/1.1\r\n"
-                f"Host: 127.0.0.1:{port}\r\n"
-                "Connection: close\r\n\r\n"
-            ).encode()
-        )
-        await writer.drain()
-        return await reader.read()
-    finally:
-        writer.close()
-        await writer.wait_closed()
-
-
-async def wait_started(server: uvicorn.Server) -> None:
-    for _ in range(100):
-        if server.started:
-            return
-        await asyncio.sleep(0.05)
-    raise RuntimeError("uvicorn server did not start")
-
-
 async def main() -> None:
-    port = reserve_port()
-    server = uvicorn.Server(
-        uvicorn.Config(
-            app,
-            host="127.0.0.1",
-            port=port,
-            loop="none",
-            lifespan="on",
-            log_level="warning",
-            access_log=False,
-        )
-    )
-
-    task = asyncio.create_task(server.serve())
-    try:
-        await wait_started(server)
-        response = await get("/", port)
-        assert b"uvicorn-rsloop" in response, response
-        print("uvicorn ok")
-    finally:
-        server.should_exit = True
-        await task
+    await run_uvicorn_app(app, b"uvicorn-rsloop", name="uvicorn")
 
 
 if __name__ == "__main__":

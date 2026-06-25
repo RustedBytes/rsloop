@@ -13,6 +13,11 @@ test: tls-test-certs
 test-frameworks:
     uv run --with uvicorn python tests/packages/uvicorn_test.py
     uv run --with fastapi --with uvicorn python tests/packages/fastapi_test.py
+    uv run --with starlette --with uvicorn python tests/packages/starlette_test.py
+    uv run --with aiohttp python tests/packages/aiohttp_test.py
     uv run --with sanic python tests/packages/sanic_test.py
+    uv run --with litestar --with uvicorn python tests/packages/litestar_test.py
+    uv run --with django --with uvicorn python tests/packages/django_asgi_test.py
+    uv run --with falcon --with uvicorn python tests/packages/falcon_test.py
+    uv run --with quart --with hypercorn python tests/packages/quart_test.py
     uv run --with 'faststream[nats]' python tests/packages/faststream_test.py
-    uv run --with litestar --with granian python tests/packages/litestar_granian_test.py
