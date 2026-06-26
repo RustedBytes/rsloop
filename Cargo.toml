@@ -31,7 +31,7 @@ rustls-native-certs = "0.8"
 rustls-pemfile = "2"
 signal-hook = "0.4"
 socket2 = "0.6"
-tracy-client = { version = "0.18", default-features = false, features = ["enable", "only-localhost", "sampling", "flush-on-exit"], optional = true }
+tracy-client = { version = "0.18", default-features = false, features = ["enable", "only-localhost", "sampling"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 tokio = { version = "1", default-features = false, features = ["io-util"] }
