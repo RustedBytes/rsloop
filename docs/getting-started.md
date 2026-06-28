@@ -16,6 +16,12 @@ With `uv`:
 uv add rsloop
 ```
 
+From [conda-forge](https://conda-forge.org), using [pixi](https://pixi.prefix.dev/latest/#installation):
+
+```bash
+pixi add rsloop
+```
+
 ## The public API
 
 The package exports a small public surface:
