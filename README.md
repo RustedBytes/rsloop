@@ -305,8 +305,11 @@ code is executing.
 
 Linux and macOS release wheels are built with profiler support enabled. Other
 builds still need `--features profiler` when built locally. The Tracy feature
-set is aimed at local profiling: `enable`, `only-localhost`, `sampling`, and
-`flush-on-exit`. The last one helps short-lived runs flush data before exit.
+set is aimed at local profiling: `enable`, `only-localhost`, and `sampling`.
+
+For very short-lived runs you can force the process to block on exit until a
+server has connected and drained all data by setting `TRACY_NO_EXIT=1` in the
+environment.
 
 If the extension was built without `--features profiler`, `profile()` and
 `start_profiler()` raise a runtime error.
