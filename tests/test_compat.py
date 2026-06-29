@@ -856,3 +856,39 @@ class CompatibilityTests(unittest.TestCase):
             )
 
         rsloop.run(main())
+
+    def test_create_subprocess_exec_defaults_to_inherit(self) -> None:
+        # High-level create_subprocess_exec leaves stdin/stdout/stderr at None,
+        # which means "inherit the parent's fds" -> no pipe streams are created.
+        async def main() -> None:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                "import sys;sys.exit(0)",
+            )
+            await proc.wait()
+            self.assertIsNone(proc.stdin)
+            self.assertIsNone(proc.stdout)
+            self.assertIsNone(proc.stderr)
+
+        rsloop.run(main())
+
+    def test_loop_subprocess_exec_defaults_to_pipe(self) -> None:
+        # Low-level loop.subprocess_exec defaults omitted stdio to PIPE, so a
+        # pipe transport is created for each of stdin/stdout/stderr.
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            transport, _ = await loop.subprocess_exec(
+                asyncio.SubprocessProtocol,
+                sys.executable,
+                "-c",
+                "import sys;sys.exit(0)",
+            )
+            try:
+                self.assertIsNotNone(transport.get_pipe_transport(0))
+                self.assertIsNotNone(transport.get_pipe_transport(1))
+                self.assertIsNotNone(transport.get_pipe_transport(2))
+            finally:
+                transport.close()
+
+        rsloop.run(main())
