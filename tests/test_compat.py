@@ -268,6 +268,35 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(received, b"external-socket-data")
         self.assertLess(elapsed, 0.5)
 
+    def test_call_later_raises_for_nan(self) -> None:
+        # Regression for upstream issue #48: math.inf / oversized delays used to
+        # panic in Duration::from_secs_f64. They must now schedule without firing
+        # prematurely (inf, huge), fire ASAP (negative), and reject NaN.
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+
+            with self.assertRaises(ValueError):
+                loop.call_later(float("nan"), lambda: None)
+            with self.assertRaises(ValueError):
+                loop.call_at(float("nan"), lambda: None)
+            with self.assertRaises(ValueError):
+                await asyncio.sleep(float("nan"))
+
+        rsloop.run(main())
+
+    def test_sleep_forever(self) -> None:
+        # Regression for upstream issue #48: asyncio.sleep(math.inf) (anyio's
+        # sleep_forever) should be valid and be canceallable.
+
+        async def main() -> None:
+            task = asyncio.create_task(asyncio.sleep(float("inf")))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        rsloop.run(main())
+
     def test_shutdown_default_executor_timeout_warns_and_falls_back_to_nowait(
         self,
     ) -> None:
