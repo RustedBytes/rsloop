@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyDict, PyModule, PySet, PySlice, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
 
@@ -929,6 +930,24 @@ impl Default for UnixPreExecConfig {
     }
 }
 
+static PIPE_CELL: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+
+/// Default for an omitted `stdin`/`stdout`/`stderr`: `subprocess.PIPE` (== -1),
+/// matching CPython's loop methods. An explicit `None` arrives as `Option::None`
+/// instead and is honored as "inherit the parent's fd" by `parse_process_stdio`.
+fn default_stdio_pipe() -> Py<PyAny> {
+    Python::attach(|py| {
+        PIPE_CELL
+            .get_or_try_init(py, || {
+                py.import("asyncio.subprocess")?
+                    .getattr("PIPE")
+                    .map(Bound::unbind)
+            })
+            .expect("asyncio.subprocess is always importable")
+            .clone_ref(py)
+    })
+}
+
 fn parse_process_stdio(
     py: Python<'_>,
     value: &Py<PyAny>,
@@ -950,7 +969,7 @@ fn parse_subprocess_stdio_marker(
     allow_stdout_redirect: bool,
 ) -> PyResult<Option<ProcessStdioSpec>> {
     let subprocess = py.import("asyncio.subprocess")?;
-    if value.eq(&subprocess.getattr("PIPE")?)? {
+    if value.eq(default_stdio_pipe())? {
         return Ok(Some(ProcessStdioSpec::Pipe));
     }
     if value.eq(&subprocess.getattr("DEVNULL")?)? {
@@ -2713,7 +2732,7 @@ impl PyLoop {
         })
     }
 
-    #[pyo3(signature=(protocol_factory, cmd, *, stdin=None, stdout=None, stderr=None, universal_newlines=false, shell=true, bufsize=0, encoding=None, errors=None, text=None, **kwargs))]
+    #[pyo3(signature=(protocol_factory, cmd, *, stdin=default_stdio_pipe(), stdout=default_stdio_pipe(), stderr=default_stdio_pipe(), universal_newlines=false, shell=true, bufsize=0, encoding=None, errors=None, text=None, **kwargs))]
     #[expect(
         clippy::too_many_arguments,
         reason = "Mirrors asyncio loop.subprocess_shell()"
@@ -2723,9 +2742,9 @@ impl PyLoop {
         py: Python<'py>,
         protocol_factory: Py<PyAny>,
         cmd: Py<PyAny>,
-        stdin: Option<Py<PyAny>>,
-        stdout: Option<Py<PyAny>>,
-        stderr: Option<Py<PyAny>>,
+        stdin: Py<PyAny>,
+        stdout: Py<PyAny>,
+        stderr: Py<PyAny>,
         universal_newlines: bool,
         shell: bool,
         bufsize: i32,
@@ -2745,10 +2764,6 @@ impl PyLoop {
         let loop_obj = Self::as_py_any(py, &slf);
         let core = slf.borrow(py).core.clone();
         let (context, context_needs_run) = capture_context(py, None)?;
-        let subprocess = py.import("asyncio.subprocess")?;
-        let stdin = stdin.unwrap_or(subprocess.getattr("PIPE")?.unbind());
-        let stdout = stdout.unwrap_or(subprocess.getattr("PIPE")?.unbind());
-        let stderr = stderr.unwrap_or(subprocess.getattr("PIPE")?.unbind());
         let text_config = parse_process_text_config(
             py,
             universal_newlines,
@@ -2837,7 +2852,7 @@ impl PyLoop {
         })
     }
 
-    #[pyo3(signature=(protocol_factory, program, *args, stdin=None, stdout=None, stderr=None, universal_newlines=false, shell=false, bufsize=0, encoding=None, errors=None, text=None, **kwargs))]
+    #[pyo3(signature=(protocol_factory, program, *args, stdin=default_stdio_pipe(), stdout=default_stdio_pipe(), stderr=default_stdio_pipe(), universal_newlines=false, shell=false, bufsize=0, encoding=None, errors=None, text=None, **kwargs))]
     #[expect(
         clippy::too_many_arguments,
         reason = "Mirrors asyncio loop.subprocess_exec()"
@@ -2848,9 +2863,9 @@ impl PyLoop {
         protocol_factory: Py<PyAny>,
         program: Py<PyAny>,
         args: &Bound<'py, PyTuple>,
-        stdin: Option<Py<PyAny>>,
-        stdout: Option<Py<PyAny>>,
-        stderr: Option<Py<PyAny>>,
+        stdin: Py<PyAny>,
+        stdout: Py<PyAny>,
+        stderr: Py<PyAny>,
         universal_newlines: bool,
         shell: bool,
         bufsize: i32,
@@ -2870,10 +2885,6 @@ impl PyLoop {
         let loop_obj = Self::as_py_any(py, &slf);
         let core = slf.borrow(py).core.clone();
         let (context, context_needs_run) = capture_context(py, None)?;
-        let subprocess = py.import("asyncio.subprocess")?;
-        let stdin = stdin.unwrap_or(subprocess.getattr("PIPE")?.unbind());
-        let stdout = stdout.unwrap_or(subprocess.getattr("PIPE")?.unbind());
-        let stderr = stderr.unwrap_or(subprocess.getattr("PIPE")?.unbind());
         let text_config = parse_process_text_config(
             py,
             universal_newlines,
