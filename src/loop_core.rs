@@ -500,6 +500,21 @@ impl LoopCore {
         self.set_ready_drain_active(false);
         self.clear_runtime_thread();
         clear_running_loop(py)?;
+
+        // Preserve callbacks that were queued but not yet executed when the run
+        // ended. This matters when a propagating BaseException (e.g. SystemExit
+        // or KeyboardInterrupt) breaks out of the drain loop mid-batch:
+        // FinishRun moves pending_ready back into the runtime's ready_batch.
+        if !ready_batch.is_empty() || !local_ready.is_empty() {
+            // We want to *prepend* the scheduled items to preserve order (even
+            // if it's not strictly guaranteed). so rebuild and replace the pending Deque
+            let mut leftover = std::mem::take(&mut ready_batch);
+            leftover.extend(local_ready.drain(..));
+            let mut pending = pending_ready.lock().expect("poisoned pending ready queue");
+            leftover.append(pending.deref_mut());
+            *pending = leftover;
+        }
+
         self.active_ready_dispatch
             .lock()
             .expect("poisoned active ready dispatch")
