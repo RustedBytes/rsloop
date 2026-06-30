@@ -881,6 +881,7 @@ pub fn spawn_process_transport(
     Ok(transport)
 }
 
+#[cfg(unix)]
 fn make_python_pipe_file(py: Python<'_>, fd: fd_ops::RawFd, mode: &str) -> PyResult<Py<PyAny>> {
     let os = py.import("os")?;
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;

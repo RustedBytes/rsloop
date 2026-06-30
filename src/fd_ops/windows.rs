@@ -8,7 +8,8 @@ use windows_sys::Win32::Foundation::{
     DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Networking::WinSock::{
-    FD_SET, FD_SETSIZE, SOCKET, SOCKET_ERROR, TIMEVAL, select as winsock_select,
+    FD_SET, FD_SETSIZE, SO_TYPE, SOCK_STREAM, SOCKET, SOCKET_ERROR, SOL_SOCKET, TIMEVAL,
+    getsockopt as winsock_getsockopt, select as winsock_select,
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
@@ -152,7 +153,36 @@ fn new_fd_set(socket: SOCKET, enabled: bool) -> FD_SET {
 
 pub fn duplicate_tcp_stream(fd: RawFd) -> io::Result<StdTcpStream> {
     let dup = duplicate_socket(fd)?;
-    let socket = socket_from_raw(raw_fd_to_socket(dup)?);
+    let raw = raw_fd_to_socket(dup)?;
+    let socket = socket_from_raw(raw);
+    if socket_type(raw)? != SOCK_STREAM {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "socket is not a TCP stream",
+        ));
+    }
     socket.set_nonblocking(true)?;
     Ok(socket.into())
+}
+
+fn socket_type(socket: SOCKET) -> io::Result<i32> {
+    let mut socket_type = 0_i32;
+    let mut len = mem::size_of_val(&socket_type)
+        .try_into()
+        .expect("socket type length fits in i32");
+    // SAFETY: `socket_type` and `len` are valid out-parameters for Winsock `getsockopt`, and
+    // the socket handle is only borrowed for the duration of the call.
+    let result = unsafe {
+        winsock_getsockopt(
+            socket,
+            SOL_SOCKET,
+            SO_TYPE,
+            (&mut socket_type as *mut i32).cast(),
+            &mut len,
+        )
+    };
+    if result == SOCKET_ERROR {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(socket_type)
 }
