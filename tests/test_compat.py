@@ -885,3 +885,22 @@ class CompatibilityTests(unittest.TestCase):
             )
 
         rsloop.run(main())
+
+    def test_set_write_buffer_limits_arguments_are_optional(self) -> None:
+        # Regression test for issue #49: both arguments must be optional,
+        # matching asyncio.WriteTransport.set_write_buffer_limits().
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            left, right = socket.socketpair()
+            with left, right:
+                transport, _ = await loop.create_connection(
+                    asyncio.Protocol, sock=left
+                )
+                try:
+                    transport.set_write_buffer_limits(0)  # high only (the issue's call)
+                    transport.set_write_buffer_limits(low=100)  # low only
+                    transport.set_write_buffer_limits()  # no args -> defaults
+                finally:
+                    transport.close()
+
+        rsloop.run(main())
