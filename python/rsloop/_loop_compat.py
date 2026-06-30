@@ -313,7 +313,13 @@ class __RsloopDatagramTransport:
     async def _read_loop(self):
         while not self._closing:
             try:
-                data, addr = await self._loop.sock_recvfrom(self._sock, self.max_size)
+                if self._extra["peername"] is not None:
+                    data = await self._loop.sock_recv(self._sock, self.max_size)
+                    addr = self._extra["peername"]
+                else:
+                    data, addr = await self._loop.sock_recvfrom(
+                        self._sock, self.max_size
+                    )
             except _asyncio.CancelledError:
                 return
             except OSError as exc:
