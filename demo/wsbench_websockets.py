@@ -2,6 +2,8 @@
 uv run --with websockets demo/wsbench_websockets.py
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import ssl
