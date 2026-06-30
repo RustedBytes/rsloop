@@ -932,9 +932,7 @@ class CompatibilityTests(unittest.TestCase):
             loop = asyncio.get_running_loop()
             left, right = socket.socketpair()
             with left, right:
-                transport, _ = await loop.create_connection(
-                    asyncio.Protocol, sock=left
-                )
+                transport, _ = await loop.create_connection(asyncio.Protocol, sock=left)
                 try:
                     transport.set_write_buffer_limits(0)  # high only (the issue's call)
                     transport.set_write_buffer_limits(low=100)  # low only
