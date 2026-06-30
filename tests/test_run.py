@@ -7,6 +7,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import threading
 import unittest
 import warnings
 
@@ -132,6 +133,44 @@ class RunTests(unittest.TestCase):
             return "ok"
 
         self.assertEqual(rsloop.run(main()), "ok")
+
+    def test_baseexception_does_not_leak_wakeups(self) -> None:
+        # A callback that completes the awaited future (queuing the suspended
+        # task's __wakeup) and then raises a BaseException unwinds run_forever
+        # mid-batch. The queued wakeup must survive into the next run; otherwise
+        # the task can never be resumed and a later run_until_complete hangs
+        # forever.
+        loop = rsloop.new_event_loop()
+
+        # Guard against the regression actually hanging the test suite.
+        watchdog = threading.Timer(5.0, loop.call_soon_threadsafe, (loop.stop,))
+        watchdog.start()
+        try:
+            asyncio.set_event_loop(loop)
+            fut: asyncio.Future[str] = loop.create_future()
+
+            def trigger() -> None:
+                fut.set_result("woken")
+                raise SystemExit(5)
+
+            async def main() -> str:
+                loop.call_soon(trigger)
+                return await fut
+
+            main_task = loop.create_task(main())
+            with self.assertRaises(SystemExit):
+                loop.run_until_complete(main_task)
+
+            # The future completed, but the task was suspended when SystemExit
+            # unwound the loop. Its wakeup must have been preserved.
+            self.assertTrue(fut.done())
+            self.assertFalse(main_task.done())
+
+            self.assertEqual(loop.run_until_complete(main_task), "woken")
+        finally:
+            watchdog.cancel()
+            asyncio.set_event_loop(None)
+            loop.close()
 
     def test_run_fallback_handles_sigint(self) -> None:
         script = r"""

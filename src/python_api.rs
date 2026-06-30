@@ -41,6 +41,11 @@ use crate::tls::{client_tls_settings, server_tls_settings};
 
 const WSAEISCONN: i32 = 10056;
 
+/// Upper bound (~1 century) for timer delays, so math.inf and other oversized
+/// values clamp to a far-future deadline instead of panicking the conversion
+/// to `Duration`/`Instant` (issue #48).
+const MAX_TIMER_DELAY_SECS: f64 = 100.0 * 365.0 * 24.0 * 60.0 * 60.0;
+
 struct PythonApiCaches {
     asyncio_task_cls: OnceLock<Py<PyAny>>,
     asyncio_future_cls: OnceLock<Py<PyAny>>,
@@ -1381,7 +1386,12 @@ impl PyLoop {
         args: &Bound<'_, PyTuple>,
         context: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyTimerHandle>> {
-        let delay = delay.max(0.0);
+        // Clamp so math.inf / oversized delays never panic
+        // Duration::from_secs_f64 (issue #48); negatives fire ASAP.
+        if delay.is_nan() {
+            return Err(PyValueError::new_err("delay cannot be NaN"));
+        }
+        let delay = delay.clamp(0.0, MAX_TIMER_DELAY_SECS);
         let (ready, when) = self.core.schedule_timer(
             py,
             Duration::from_secs_f64(delay),
@@ -1402,8 +1412,8 @@ impl PyLoop {
         args: &Bound<'_, PyTuple>,
         context: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyTimerHandle>> {
-        let delay = (when - self.time()).max(0.0);
-        self.call_later(py, delay, callback, args, context)
+        // call_later clamps negatives and rejects NaN; don't mask either here.
+        self.call_later(py, when - self.time(), callback, args, context)
     }
 
     fn time(&self) -> f64 {

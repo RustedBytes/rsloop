@@ -2131,6 +2131,7 @@ impl PyStreamTransport {
         self.core.get_write_buffer_limits()
     }
 
+    #[pyo3(signature=(high=None, low=None))]
     fn set_write_buffer_limits(&self, high: Option<usize>, low: Option<usize>) -> PyResult<()> {
         self.core.set_write_buffer_limits(high, low)
     }

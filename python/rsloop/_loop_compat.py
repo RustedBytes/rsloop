@@ -544,8 +544,7 @@ async def __loop_create_datagram_endpoint(
             raise OSError("getaddrinfo() returned empty list")
 
         family, socktype, proto, _, sockaddr = addrinfos[0]
-        if remote_addr is not None:
-            resolved_remote_addr = sockaddr
+        resolved_remote_addr = sockaddr if remote_addr is not None else None
         sock = __socket.socket(family=family, type=socktype, proto=proto)
         sock.setblocking(False)
         if reuse_port:
@@ -556,11 +555,16 @@ async def __loop_create_datagram_endpoint(
             sock.setsockopt(__socket.SOL_SOCKET, __socket.SO_BROADCAST, 1)
         if local_addr is not None:
             sock.bind(local_addr)
-        elif remote_addr is not None:
-            if family == __socket.AF_INET6:
-                sock.bind(("::", 0))
+        elif resolved_remote_addr is not None:
+            if allow_broadcast:
+                if family == __socket.AF_INET6:
+                    sock.bind(("::", 0))
+                else:
+                    sock.bind(("0.0.0.0", 0))
             else:
-                sock.bind(("0.0.0.0", 0))
+                # Connect the datagram socket so getpeername()/peername work and
+                # the local source address is filled in.
+                sock.connect(resolved_remote_addr)
     else:
         sock.setblocking(False)
 

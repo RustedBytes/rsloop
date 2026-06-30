@@ -268,6 +268,35 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(received, b"external-socket-data")
         self.assertLess(elapsed, 0.5)
 
+    def test_call_later_raises_for_nan(self) -> None:
+        # Regression for upstream issue #48: math.inf / oversized delays used to
+        # panic in Duration::from_secs_f64. They must now schedule without firing
+        # prematurely (inf, huge), fire ASAP (negative), and reject NaN.
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+
+            with self.assertRaises(ValueError):
+                loop.call_later(float("nan"), lambda: None)
+            with self.assertRaises(ValueError):
+                loop.call_at(float("nan"), lambda: None)
+            with self.assertRaises(ValueError):
+                await asyncio.sleep(float("nan"))
+
+        rsloop.run(main())
+
+    def test_sleep_forever(self) -> None:
+        # Regression for upstream issue #48: asyncio.sleep(math.inf) (anyio's
+        # sleep_forever) should be valid and be canceallable.
+
+        async def main() -> None:
+            task = asyncio.create_task(asyncio.sleep(float("inf")))
+            await asyncio.sleep(0.05)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        rsloop.run(main())
+
     def test_shutdown_default_executor_timeout_warns_and_falls_back_to_nowait(
         self,
     ) -> None:
@@ -569,6 +598,11 @@ class CompatibilityTests(unittest.TestCase):
                     remote_addr=("127.0.0.1", port),
                 )
                 try:
+                    # remote_addr connects the socket, so peername is populated.
+                    peername = client_transport.get_extra_info("peername")
+                    self.assertEqual(peername[:2], ("127.0.0.1", port))
+                    sock = client_transport.get_extra_info("socket")
+                    self.assertEqual(tuple(sock.getpeername()), tuple(peername))
                     return await asyncio.wait_for(done, 1.0)
                 finally:
                     client_transport.close()
@@ -890,5 +924,22 @@ class CompatibilityTests(unittest.TestCase):
                 self.assertIsNotNone(transport.get_pipe_transport(2))
             finally:
                 transport.close()
+
+    def test_set_write_buffer_limits_arguments_are_optional(self) -> None:
+        # Regression test for issue #49: both arguments must be optional,
+        # matching asyncio.WriteTransport.set_write_buffer_limits().
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            left, right = socket.socketpair()
+            with left, right:
+                transport, _ = await loop.create_connection(
+                    asyncio.Protocol, sock=left
+                )
+                try:
+                    transport.set_write_buffer_limits(0)  # high only (the issue's call)
+                    transport.set_write_buffer_limits(low=100)  # low only
+                    transport.set_write_buffer_limits()  # no args -> defaults
+                finally:
+                    transport.close()
 
         rsloop.run(main())
