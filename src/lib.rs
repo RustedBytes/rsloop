@@ -19,7 +19,7 @@ mod tls;
 mod windows_vibeio;
 
 pub use callbacks::{PyHandle, PyTimerHandle, ReadyCallback};
-pub use fast_streams::{open_connection, start_server, PyFastStreamReader, PyFastStreamWriter};
+pub use fast_streams::{PyFastStreamReader, PyFastStreamWriter, open_connection, start_server};
 pub use loop_core::{
     LoopCommand, LoopCore, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
     LoopTransportCommand,
@@ -27,8 +27,8 @@ pub use loop_core::{
 pub use process_transport::{PyProcessPipeTransport, PyProcessTransport};
 pub use profiler::{profiler_running, start_profiler, stop_profiler};
 pub use python_api::{
-    asyncgen_finalizer_hook, asyncgen_firstiter_hook, future_done_stop, new_event_loop,
-    signal_bridge, PyLoop,
+    PyLoop, asyncgen_finalizer_hook, asyncgen_firstiter_hook, future_done_stop, new_event_loop,
+    signal_bridge,
 };
 pub use stream_transport::{PyServer, PyStreamTransport};
 

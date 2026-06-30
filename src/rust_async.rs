@@ -2,7 +2,7 @@ use std::future::Future;
 
 use pyo3::prelude::*;
 
-pub use pyo3_async_runtimes::{into_future_with_locals, TaskLocals};
+pub use pyo3_async_runtimes::{TaskLocals, into_future_with_locals};
 
 /// Capture the current Python event loop and contextvars so a Rust future can
 /// be attached to the active `rsloop` task.

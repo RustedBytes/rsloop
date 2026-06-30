@@ -44,7 +44,7 @@ use crate::fast_streams::{PyFastStreamProtocol, PyFastStreamReader};
 use crate::fd_ops;
 use crate::loop_core::{LoopCommand, LoopCore, LoopIoCommand, LoopTransportCommand};
 use crate::python_names;
-use crate::tls::{tls_extra, ClientTlsSettings, ServerTlsSettings};
+use crate::tls::{ClientTlsSettings, ServerTlsSettings, tls_extra};
 
 enum WriterCommand {
     Data(OwnedWriteBuffer),

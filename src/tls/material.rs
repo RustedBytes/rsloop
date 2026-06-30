@@ -4,8 +4,8 @@ use std::io::{self, BufReader, Cursor};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::RootCertStore;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 pub(super) fn root_store_from_context(
     py: Python<'_>,

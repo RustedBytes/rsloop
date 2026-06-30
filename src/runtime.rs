@@ -1,9 +1,9 @@
 use std::collections::{BinaryHeap, HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 use std::os::fd::{FromRawFd, OwnedFd};
+use std::sync::Arc;
 #[cfg(not(target_os = "linux"))]
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 

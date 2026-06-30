@@ -130,12 +130,16 @@ pub async fn wait_writable(fd: RawFd) -> PyResult<()> {
 async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
     #[cfg(windows)]
     {
-        return crate::blocking::run(format!("rsloop-fd-wait-{fd}"), move || loop {
-            match poll_fd(fd, read, write, FD_POLL_INTERVAL_MS)? {
-                (read_ready, write_ready) if (!read || read_ready) && (!write || write_ready) => {
-                    return Ok::<(), io::Error>(());
+        return crate::blocking::run(format!("rsloop-fd-wait-{fd}"), move || {
+            loop {
+                match poll_fd(fd, read, write, FD_POLL_INTERVAL_MS)? {
+                    (read_ready, write_ready)
+                        if (!read || read_ready) && (!write || write_ready) =>
+                    {
+                        return Ok::<(), io::Error>(());
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         })
         .await

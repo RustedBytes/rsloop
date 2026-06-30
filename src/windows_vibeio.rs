@@ -7,16 +7,16 @@ use std::io;
 #[cfg(windows)]
 use std::pin::Pin;
 #[cfg(windows)]
-use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(windows)]
 use std::sync::OnceLock;
+#[cfg(windows)]
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(windows)]
 use std::thread;
 
 #[cfg(windows)]
-use futures::channel::mpsc;
-#[cfg(windows)]
 use futures::StreamExt;
+#[cfg(windows)]
+use futures::channel::mpsc;
 
 #[cfg(windows)]
 type LocalBoxFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;

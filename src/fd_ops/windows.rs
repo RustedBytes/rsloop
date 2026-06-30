@@ -5,14 +5,14 @@ use std::os::windows::io::{FromRawSocket, IntoRawSocket};
 
 use socket2::Socket;
 use windows_sys::Win32::Foundation::{
-    DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
+    DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Networking::WinSock::{
-    select as winsock_select, FD_SET, FD_SETSIZE, SOCKET, SOCKET_ERROR, TIMEVAL,
+    FD_SET, FD_SETSIZE, SOCKET, SOCKET_ERROR, TIMEVAL, select as winsock_select,
 };
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-use super::{raw_fd_to_c_int, RawFd};
+use super::{RawFd, raw_fd_to_c_int};
 
 pub(super) fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
     match duplicate_socket(fd) {
