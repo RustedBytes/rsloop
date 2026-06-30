@@ -88,6 +88,9 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: ${{ matrix.python_version }}
+          cache-suffix: ${{ matrix.os_name }}-py${{ matrix.python_version }}
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
