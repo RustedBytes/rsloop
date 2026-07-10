@@ -941,3 +941,13 @@ class CompatibilityTests(unittest.TestCase):
                     transport.close()
 
         rsloop.run(main())
+
+    def test_open_connection_errors_fast_on_refuse(self) -> None:
+        """Ensure we fail fast when connecting to a closed port."""
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            with self.assertRaises(ConnectionRefusedError):
+                transport, _ = await asyncio.wait_for(loop.create_connection(asyncio.Protocol, host="127.0.0.1", port=53673), timeout=3.0)
+                transport.close()
+
+        rsloop.run(main())
