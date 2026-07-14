@@ -112,6 +112,10 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     };
     let mut readfds = new_fd_set(socket, read);
     let mut writefds = new_fd_set(socket, write);
+    // Winsock reports a failed non-blocking connect in the exception set. Treat
+    // that as write readiness so callers can inspect SO_ERROR instead of waiting
+    // forever. Do not watch it for reads because it also represents OOB data.
+    let mut exceptfds = new_fd_set(socket, write);
 
     let readfds_ptr = if read {
         &mut readfds
@@ -123,15 +127,18 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     } else {
         std::ptr::null_mut()
     };
-    let exceptfds = std::ptr::null_mut();
     // SAFETY: The fd sets and timeout live for the duration of the call. Null pointers are passed
     // for disabled interests as required by winsock `select`.
-    let ready = unsafe { winsock_select(0, readfds_ptr, writefds_ptr, exceptfds, &mut timeout) };
+    let ready =
+        unsafe { winsock_select(0, readfds_ptr, writefds_ptr, &mut exceptfds, &mut timeout) };
     if ready == SOCKET_ERROR {
         return Err(io::Error::last_os_error());
     }
 
-    Ok((read && readfds.fd_count > 0, write && writefds.fd_count > 0))
+    Ok((
+        read && readfds.fd_count > 0,
+        write && (writefds.fd_count > 0 || exceptfds.fd_count > 0),
+    ))
 }
 
 fn raw_fd_to_socket(fd: RawFd) -> io::Result<SOCKET> {
