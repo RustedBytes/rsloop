@@ -26,26 +26,24 @@ EXCEPTION_GROUP = getattr(builtins, "ExceptionGroup", None)
 class CompatibilityTests(unittest.TestCase):
     def test_create_connection_refused_does_not_hang(self) -> None:
         async def main() -> None:
-            # Bind without listening so the port stays reserved while refusing
-            # connections. Keeping the address numeric makes this test exercise
-            # the socket-connect readiness path directly.
+            # Close a bound socket to obtain a port with no listener. On some
+            # macOS versions a connection to a bound-but-not-listening socket
+            # remains in progress instead of being refused.
             probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
+            probe.close()
 
-            try:
-                loop = asyncio.get_running_loop()
-                with self.assertRaises(ConnectionRefusedError):
-                    await asyncio.wait_for(
-                        loop.create_connection(
-                            asyncio.Protocol,
-                            host="127.0.0.1",
-                            port=port,
-                        ),
-                        timeout=3.0,
-                    )
-            finally:
-                probe.close()
+            loop = asyncio.get_running_loop()
+            with self.assertRaises(ConnectionRefusedError):
+                await asyncio.wait_for(
+                    loop.create_connection(
+                        asyncio.Protocol,
+                        host="127.0.0.1",
+                        port=port,
+                    ),
+                    timeout=3.0,
+                )
 
         rsloop.run(main())
 

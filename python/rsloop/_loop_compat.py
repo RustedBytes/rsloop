@@ -1410,7 +1410,7 @@ async def __loop_create_connection(
     elif sock is None:
         raise ValueError("host and port was not specified and no sock specified")
 
-    try:
+    def create_transport():
         return self._create_connection_transport(
             protocol_factory,
             sock=sock,
@@ -1419,6 +1419,13 @@ async def __loop_create_connection(
             ssl_handshake_timeout=ssl_handshake_timeout,
             ssl_shutdown_timeout=ssl_shutdown_timeout,
         )
+
+    try:
+        if ssl:
+            # The Rust TLS handshake uses blocking socket I/O. Keep it off the
+            # event-loop thread so a concurrently scheduled peer can handshake.
+            return await self.run_in_executor(None, create_transport)
+        return create_transport()
     except BaseException:
         if created_sock is not None:
             created_sock.close()
