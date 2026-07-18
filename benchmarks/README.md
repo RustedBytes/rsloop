@@ -57,7 +57,7 @@ The runner executes each loop/workload in a fresh subprocess and reports:
 
 Current workloads:
 
-- `callbacks`: chained `call_soon()` dispatch
+- `callbacks`: pre-scheduled batch of `call_soon()` callbacks (schedule + dispatch cost)
 - `tasks`: many tiny `asyncio.sleep(0)` tasks
 - `tcp_streams`: local `asyncio.start_server()` / `asyncio.open_connection()` echo round trips
 

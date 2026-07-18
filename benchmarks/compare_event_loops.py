@@ -294,6 +294,10 @@ def run_with_loop(loop_name: str, coro: asyncio.coroutines) -> ChildResult:
 
 
 async def bench_callbacks(loop_name: str, iterations: int) -> ChildResult:
+    # Pre-schedule the full batch instead of chaining callbacks: a chain
+    # forces asyncio/uvloop into one event-loop iteration (including a
+    # kernel poll) per callback, which measures selector overhead rather
+    # than call_soon dispatch cost.
     loop = asyncio.get_running_loop()
     done = loop.create_future()
     remaining = iterations
@@ -303,11 +307,10 @@ async def bench_callbacks(loop_name: str, iterations: int) -> ChildResult:
         remaining -= 1
         if remaining == 0:
             done.set_result(None)
-            return
-        loop.call_soon(callback)
 
     start = time.perf_counter()
-    loop.call_soon(callback)
+    for _ in range(iterations):
+        loop.call_soon(callback)
     await done
     return ChildResult(
         loop_name,

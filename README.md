@@ -347,26 +347,26 @@ uv run --with maturin maturin develop --release
 uv run --with uvloop python benchmarks/compare_event_loops.py
 ```
 
-An example output from that script on Linux with CPython 3.14.0:
+An example output from that script on macOS (arm64) with CPython 3.14:
 
 ```
 callbacks (200,000 ops)
 loop           median_s       best_s      ops_per_s     peak_rss   vs_fastest
-rsloop         0.026938     0.026501      7,424,571     31.6 MiB        1.00x
-uvloop         2.488100     2.486339         80,383     31.0 MiB       92.37x
-asyncio        2.587463     2.585188         77,296     29.5 MiB       96.05x
+rsloop         0.033083     0.032710      6,045,401     67.5 MiB        1.00x
+uvloop         0.040958     0.040721      4,883,026     72.8 MiB        1.24x
+asyncio        0.082233     0.082093      2,432,114     65.3 MiB        2.49x
 
 tasks (50,000 ops)
 loop           median_s       best_s      ops_per_s     peak_rss   vs_fastest
-rsloop         0.060862     0.060544        821,534     37.8 MiB        1.00x
-uvloop         0.067037     0.066937        745,855     38.4 MiB        1.10x
-asyncio        0.105238     0.104145        475,115     36.2 MiB        1.73x
+rsloop         0.063593     0.063286        786,247     37.6 MiB        1.00x
+uvloop         0.069614     0.069420        718,251     38.4 MiB        1.09x
+asyncio        0.108114     0.107502        462,473     36.1 MiB        1.70x
 
 tcp_streams (5,000 ops)
 loop           median_s       best_s      ops_per_s     peak_rss   vs_fastest
-rsloop         0.099350     0.092110         50,327     32.3 MiB        1.00x
-uvloop         0.133553     0.130359         37,438     31.5 MiB        1.34x
-asyncio        0.300831     0.295368         16,621     29.6 MiB        3.03x
+rsloop         0.090940     0.083355         54,981     32.2 MiB        1.00x
+uvloop         0.133182     0.127404         37,543     31.5 MiB        1.46x
+asyncio        0.302337     0.299813         16,538     29.6 MiB        3.32x
 ```
 
 See [`benchmarks/README.md`](./benchmarks/README.md) for workload details and
