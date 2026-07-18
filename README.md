@@ -303,9 +303,9 @@ This starts a Tracy client inside the process. Build a release binary, open the
 Tracy desktop profiler, then connect to the running process while the profiled
 code is executing.
 
-Linux and macOS release wheels are built with profiler support enabled. Other
-builds still need `--features profiler` when built locally. The Tracy feature
-set is aimed at local profiling: `enable`, `only-localhost`, and `sampling`.
+Release wheels do not include profiler support. Build locally with
+`--features profiler` to enable it. The Tracy feature set is aimed at local
+profiling: `enable`, `only-localhost`, and `sampling`.
 
 For very short-lived runs you can force the process to block on exit until a
 server has connected and drained all data by setting `TRACY_NO_EXIT=1` in the

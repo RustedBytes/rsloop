@@ -15,16 +15,16 @@ jobs:
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
+      # The profiler retains state for every short-lived readiness worker, so it
+      # is reserved for explicit local builds instead of published wheels.
       matrix:
         include:
           - os_name: linux
             runner: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
-            maturin_args: "--features profiler"
           - os_name: linux-arm64
             runner: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
-            maturin_args: "--features profiler"
           - os_name: windows-amd64
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
@@ -35,11 +35,9 @@ jobs:
           - os_name: macos-intel
             runner: macos-15-intel
             rust_target: x86_64-apple-darwin
-            maturin_args: "--features profiler"
           - os_name: macos-arm64
             runner: macos-15
             rust_target: aarch64-apple-darwin
-            maturin_args: "--features profiler"
 
     steps:
       - name: Check out repository
