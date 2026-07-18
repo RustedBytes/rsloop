@@ -17,11 +17,11 @@ mod ffi_helpers;
 mod pre_exec;
 mod process_handles;
 
-use crate::callbacks::{CallbackKind, PyTimerHandle};
+use crate::callbacks::{CallbackKind, PyTimerHandle, ReadyCallback};
 use crate::context::{capture_context, ensure_running_loop, run_in_context};
 use crate::fd_ops;
 #[cfg(unix)]
-use crate::loop_core::SignalHandlerTemplate;
+use crate::loop_core::{FdWatch, SignalHandlerTemplate};
 use crate::loop_core::{LoopCommand, LoopCore, LoopCoreError, LoopIoCommand, LoopSignalCommand};
 use crate::process_transport::{
     BoxedProcessReader, ProcessTextConfig, ProcessTransportParams, spawn_process_transport,
@@ -2450,35 +2450,75 @@ impl PyLoop {
     ) -> PyResult<()> {
         let raw_fd = fd_ops::fileobj_to_fd(py, fd)?;
         let (context, context_needs_run) = capture_context(py, None)?;
-        self.core
+        // One persistent callback per registration: every readiness event
+        // schedules this same object, and removal cancels it so already
+        // queued fires are skipped (mirrors asyncio's reader Handle).
+        let ready = Arc::new(ReadyCallback::new(
+            py,
+            self.core.next_callback_id(),
+            CallbackKind::Reader(raw_fd),
+            callback,
+            args.clone().unbind(),
+            context,
+            context_needs_run,
+        ));
+        let previous = self
+            .core
             .state
             .lock()
             .expect("poisoned loop state")
             .reader_keepalive
-            .insert(raw_fd, fd_ops::fileobj_keepalive(fd));
+            .insert(
+                raw_fd,
+                FdWatch {
+                    fileobj: fd_ops::fileobj_keepalive(fd),
+                    ready: Arc::clone(&ready),
+                },
+            );
+        if let Some(previous) = previous {
+            previous.ready.cancel();
+        }
         self.core
             .send_command(LoopCommand::Io(LoopIoCommand::StartReader {
                 fd: raw_fd,
-                callback,
-                args: args.clone().unbind(),
-                context,
-                context_needs_run,
+                callback: ready,
             }))
             .map_err(Self::map_loop_error)
     }
 
     fn remove_reader(&self, py: Python<'_>, fd: &Bound<'_, PyAny>) -> PyResult<bool> {
         let raw_fd = fd_ops::fileobj_to_fd(py, fd)?;
-        let removed = self
-            .core
-            .state
-            .lock()
-            .expect("poisoned loop state")
-            .reader_keepalive
-            .remove(&raw_fd)
-            .is_some();
+        let removed_fd = {
+            let mut state = self.core.state.lock().expect("poisoned loop state");
+            let key = if state.reader_keepalive.contains_key(&raw_fd) {
+                Some(raw_fd)
+            } else {
+                // The file object may already be closed (fileno() == -1);
+                // find the registration by object identity so the watch is
+                // still torn down.
+                state
+                    .reader_keepalive
+                    .iter()
+                    .find(|(_, watch)| watch.fileobj.as_ptr() == fd.as_ptr())
+                    .map(|(watch_fd, _)| *watch_fd)
+            };
+            key.and_then(|key| {
+                state
+                    .reader_keepalive
+                    .remove(&key)
+                    .map(|watch| (key, watch))
+            })
+        };
+
+        let (stop_fd, removed) = match removed_fd {
+            Some((key, watch)) => {
+                watch.ready.cancel();
+                (key, true)
+            }
+            None => (raw_fd, false),
+        };
         self.core
-            .send_command(LoopCommand::Io(LoopIoCommand::StopReader(raw_fd)))
+            .send_command(LoopCommand::Io(LoopIoCommand::StopReader(stop_fd)))
             .map_err(Self::map_loop_error)?;
         Ok(removed)
     }
@@ -2493,35 +2533,69 @@ impl PyLoop {
     ) -> PyResult<()> {
         let raw_fd = fd_ops::fileobj_to_fd(py, fd)?;
         let (context, context_needs_run) = capture_context(py, None)?;
-        self.core
+        let ready = Arc::new(ReadyCallback::new(
+            py,
+            self.core.next_callback_id(),
+            CallbackKind::Writer(raw_fd),
+            callback,
+            args.clone().unbind(),
+            context,
+            context_needs_run,
+        ));
+        let previous = self
+            .core
             .state
             .lock()
             .expect("poisoned loop state")
             .writer_keepalive
-            .insert(raw_fd, fd_ops::fileobj_keepalive(fd));
+            .insert(
+                raw_fd,
+                FdWatch {
+                    fileobj: fd_ops::fileobj_keepalive(fd),
+                    ready: Arc::clone(&ready),
+                },
+            );
+        if let Some(previous) = previous {
+            previous.ready.cancel();
+        }
         self.core
             .send_command(LoopCommand::Io(LoopIoCommand::StartWriter {
                 fd: raw_fd,
-                callback,
-                args: args.clone().unbind(),
-                context,
-                context_needs_run,
+                callback: ready,
             }))
             .map_err(Self::map_loop_error)
     }
 
     fn remove_writer(&self, py: Python<'_>, fd: &Bound<'_, PyAny>) -> PyResult<bool> {
         let raw_fd = fd_ops::fileobj_to_fd(py, fd)?;
-        let removed = self
-            .core
-            .state
-            .lock()
-            .expect("poisoned loop state")
-            .writer_keepalive
-            .remove(&raw_fd)
-            .is_some();
+        let removed_fd = {
+            let mut state = self.core.state.lock().expect("poisoned loop state");
+            let key = if state.writer_keepalive.contains_key(&raw_fd) {
+                Some(raw_fd)
+            } else {
+                state
+                    .writer_keepalive
+                    .iter()
+                    .find(|(_, watch)| watch.fileobj.as_ptr() == fd.as_ptr())
+                    .map(|(watch_fd, _)| *watch_fd)
+            };
+            key.and_then(|key| {
+                state
+                    .writer_keepalive
+                    .remove(&key)
+                    .map(|watch| (key, watch))
+            })
+        };
+
+        let (stop_fd, removed) = match removed_fd {
+            Some((key, watch)) => {
+                watch.ready.cancel();
+                (key, true)
+            }
+            None => (raw_fd, false),
+        };
         self.core
-            .send_command(LoopCommand::Io(LoopIoCommand::StopWriter(raw_fd)))
+            .send_command(LoopCommand::Io(LoopIoCommand::StopWriter(stop_fd)))
             .map_err(Self::map_loop_error)?;
         Ok(removed)
     }

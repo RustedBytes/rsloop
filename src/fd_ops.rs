@@ -85,7 +85,17 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     }
 
     let revents = pollfd.revents as i32;
-    let error_bits = (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) as i32;
+    // POLLNVAL means the descriptor is not open (e.g. the socket was closed
+    // out from under the watcher). Reporting it as "ready" would make
+    // watchers fire forever on a dead fd, so surface it as an error instead;
+    // a closed fd produces no readiness events on asyncio either.
+    if revents & (libc::POLLNVAL as i32) != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "file descriptor is not open",
+        ));
+    }
+    let error_bits = (libc::POLLERR | libc::POLLHUP) as i32;
     Ok((
         read && (revents & ((libc::POLLIN as i32) | error_bits)) != 0,
         write && (revents & ((libc::POLLOUT as i32) | error_bits)) != 0,

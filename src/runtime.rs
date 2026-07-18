@@ -463,13 +463,7 @@ impl RuntimeDispatcher {
                     self.ready_batch.push_back(ReadyItem::Callback(ready));
                 }
             }
-            LoopCommand::Io(LoopIoCommand::StartReader {
-                fd,
-                callback,
-                args,
-                context,
-                context_needs_run,
-            }) => {
+            LoopCommand::Io(LoopIoCommand::StartReader { fd, callback }) => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
@@ -484,33 +478,18 @@ impl RuntimeDispatcher {
                         if poll_fd.read_ready().await.is_err() {
                             return;
                         }
+                        if callback.cancelled() {
+                            return;
+                        }
 
-                        let ready = Python::attach(|py| {
-                            Arc::new(crate::callbacks::ReadyCallback::new(
-                                py,
-                                sender.next_callback_id(),
-                                crate::callbacks::CallbackKind::Reader(fd),
-                                callback.clone_ref(py),
-                                args.clone_ref(py),
-                                context.clone_ref(py),
-                                context_needs_run,
-                            ))
-                        });
-
-                        let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                        let _ = sender.send_command(LoopCommand::ScheduleReady(callback));
                     })
                 };
 
                 #[cfg(windows)]
                 let task = {
                     let sender = Arc::clone(&self.core);
-                    let (service_callback, service_args, service_context) = Python::attach(|py| {
-                        (
-                            callback.clone_ref(py),
-                            args.clone_ref(py),
-                            context.clone_ref(py),
-                        )
-                    });
+                    let service_callback = Arc::clone(&callback);
                     match fd_ops::duplicate_tcp_stream(fd).and_then(|stream| {
                         if stream.peer_addr().is_err() {
                             return Err(std::io::Error::new(
@@ -525,23 +504,12 @@ impl RuntimeDispatcher {
                                 stream.peek(&mut buf).await.map(|_| ())
                             }
                             .await;
-                            if ready_result.is_err() {
+                            if ready_result.is_err() || service_callback.cancelled() {
                                 return;
                             }
 
-                            let ready = Python::attach(|py| {
-                                Arc::new(crate::callbacks::ReadyCallback::new(
-                                    py,
-                                    sender.next_callback_id(),
-                                    crate::callbacks::CallbackKind::Reader(fd),
-                                    service_callback.clone_ref(py),
-                                    service_args.clone_ref(py),
-                                    service_context.clone_ref(py),
-                                    context_needs_run,
-                                ))
-                            });
-
-                            let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                            let _ =
+                                sender.send_command(LoopCommand::ScheduleReady(service_callback));
                         })
                     }) {
                         Ok(task) => WatchTask::Vibeio(task),
@@ -560,23 +528,11 @@ impl RuntimeDispatcher {
                                     }
                                 }
 
-                                if stop.load(AtomicOrdering::Acquire) {
+                                if stop.load(AtomicOrdering::Acquire) || callback.cancelled() {
                                     return;
                                 }
 
-                                let ready = Python::attach(|py| {
-                                    Arc::new(crate::callbacks::ReadyCallback::new(
-                                        py,
-                                        sender.next_callback_id(),
-                                        crate::callbacks::CallbackKind::Reader(fd),
-                                        callback.clone_ref(py),
-                                        args.clone_ref(py),
-                                        context.clone_ref(py),
-                                        context_needs_run,
-                                    ))
-                                });
-
-                                let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                                let _ = sender.send_command(LoopCommand::ScheduleReady(callback));
                             })
                         }
                     }
@@ -598,23 +554,11 @@ impl RuntimeDispatcher {
                             }
                         }
 
-                        if stop.load(AtomicOrdering::Acquire) {
+                        if stop.load(AtomicOrdering::Acquire) || callback.cancelled() {
                             return;
                         }
 
-                        let ready = Python::attach(|py| {
-                            Arc::new(crate::callbacks::ReadyCallback::new(
-                                py,
-                                sender.next_callback_id(),
-                                crate::callbacks::CallbackKind::Reader(fd),
-                                callback.clone_ref(py),
-                                args.clone_ref(py),
-                                context.clone_ref(py),
-                                context_needs_run,
-                            ))
-                        });
-
-                        let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                        let _ = sender.send_command(LoopCommand::ScheduleReady(callback));
                     })
                 };
 
@@ -625,13 +569,7 @@ impl RuntimeDispatcher {
                     cancel_watch_task(task);
                 }
             }
-            LoopCommand::Io(LoopIoCommand::StartWriter {
-                fd,
-                callback,
-                args,
-                context,
-                context_needs_run,
-            }) => {
+            LoopCommand::Io(LoopIoCommand::StartWriter { fd, callback }) => {
                 if let Some(task) = self.writer_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
@@ -646,27 +584,18 @@ impl RuntimeDispatcher {
                         if poll_fd.write_ready().await.is_err() {
                             return;
                         }
+                        if callback.cancelled() {
+                            return;
+                        }
 
-                        let ready = Python::attach(|py| {
-                            Arc::new(crate::callbacks::ReadyCallback::new(
-                                py,
-                                sender.next_callback_id(),
-                                crate::callbacks::CallbackKind::Writer(fd),
-                                callback.clone_ref(py),
-                                args.clone_ref(py),
-                                context.clone_ref(py),
-                                context_needs_run,
-                            ))
-                        });
-
-                        let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
+                        let _ = sender.send_command(LoopCommand::ScheduleReady(callback));
                     })
                 };
 
-                #[cfg(windows)]
+                #[cfg(not(target_os = "linux"))]
                 let task = {
                     let sender = Arc::clone(&self.core);
-                    WatchTask::spawn_thread(format!("rsloop-writer-{fd}"), move |stop| {
+                    let watch_body = move |stop: Arc<AtomicBool>| {
                         loop {
                             if stop.load(AtomicOrdering::Acquire) {
                                 return;
@@ -679,60 +608,20 @@ impl RuntimeDispatcher {
                             }
                         }
 
-                        if stop.load(AtomicOrdering::Acquire) {
+                        if stop.load(AtomicOrdering::Acquire) || callback.cancelled() {
                             return;
                         }
 
-                        let ready = Python::attach(|py| {
-                            Arc::new(crate::callbacks::ReadyCallback::new(
-                                py,
-                                sender.next_callback_id(),
-                                crate::callbacks::CallbackKind::Writer(fd),
-                                callback.clone_ref(py),
-                                args.clone_ref(py),
-                                context.clone_ref(py),
-                                context_needs_run,
-                            ))
-                        });
-
-                        let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
-                    })
-                };
-
-                #[cfg(all(not(target_os = "linux"), not(windows)))]
-                let task = {
-                    let sender = Arc::clone(&self.core);
-                    WatchTask::spawn(format!("rsloop-writer-{fd}"), move |stop| {
-                        loop {
-                            if stop.load(AtomicOrdering::Acquire) {
-                                return;
-                            }
-                            match fd_ops::poll_fd(fd, false, true, 50) {
-                                Ok((false, true)) => break,
-                                Ok((false, false)) => continue,
-                                Ok((true, _)) => continue,
-                                Err(_) => return,
-                            }
-                        }
-
-                        if stop.load(AtomicOrdering::Acquire) {
-                            return;
-                        }
-
-                        let ready = Python::attach(|py| {
-                            Arc::new(crate::callbacks::ReadyCallback::new(
-                                py,
-                                sender.next_callback_id(),
-                                crate::callbacks::CallbackKind::Writer(fd),
-                                callback.clone_ref(py),
-                                args.clone_ref(py),
-                                context.clone_ref(py),
-                                context_needs_run,
-                            ))
-                        });
-
-                        let _ = sender.send_command(LoopCommand::ScheduleReady(ready));
-                    })
+                        let _ = sender.send_command(LoopCommand::ScheduleReady(callback));
+                    };
+                    #[cfg(windows)]
+                    {
+                        WatchTask::spawn_thread(format!("rsloop-writer-{fd}"), watch_body)
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        WatchTask::spawn(format!("rsloop-writer-{fd}"), watch_body)
+                    }
                 };
 
                 self.writer_tasks.insert(fd, task);

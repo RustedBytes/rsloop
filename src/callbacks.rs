@@ -60,9 +60,6 @@ pub struct ReadyCallback {
     kind: CallbackKind,
     callback: Py<PyAny>,
     args: CallbackArgs,
-    // Retained only for fd watch callbacks, which re-arm themselves with the
-    // original tuple; other kinds skip the extra reference.
-    args_tuple: Option<Py<PyTuple>>,
     context: Py<PyAny>,
     context_needs_run: bool,
     cancelled: AtomicBool,
@@ -90,17 +87,12 @@ impl ReadyCallback {
             ),
             _ => CallbackArgs::Many(args_tuple.clone_ref(py)),
         };
-        let args_tuple = match kind {
-            CallbackKind::Reader(_) | CallbackKind::Writer(_) => Some(args_tuple),
-            _ => None,
-        };
 
         Self {
             id,
             kind,
             callback,
             args,
-            args_tuple,
             context,
             context_needs_run,
             cancelled: AtomicBool::new(false),
@@ -162,21 +154,6 @@ impl ReadyCallback {
             CallbackArgs::None => call_callback_noargs(py, &self.callback),
             CallbackArgs::One(arg) => call_callback_onearg(py, &self.callback, arg),
             CallbackArgs::Many(args) => self.callback.call1(py, args.clone_ref(py)),
-        }
-    }
-
-    pub fn clone_args_tuple(&self, py: Python<'_>) -> Py<PyTuple> {
-        match &self.args_tuple {
-            Some(args_tuple) => args_tuple.clone_ref(py),
-            // Only fd watch callbacks retain their tuple; rebuild for any
-            // other caller.
-            None => match &self.args {
-                CallbackArgs::None => PyTuple::empty(py).unbind(),
-                CallbackArgs::One(arg) => PyTuple::new(py, [arg.clone_ref(py)])
-                    .expect("single-arg tuple")
-                    .unbind(),
-                CallbackArgs::Many(args) => args.clone_ref(py),
-            },
         }
     }
 

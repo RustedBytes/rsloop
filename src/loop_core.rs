@@ -91,6 +91,16 @@ pub struct SignalHandlerTemplate {
     pub context_needs_run: bool,
 }
 
+/// One fd watch registration. `ready` is the single callback shared with the
+/// watcher task; cancelling it neutralizes fires that are already queued.
+/// `fileobj` keeps the registered file object alive and lets
+/// remove_reader()/remove_writer() find the registration by identity even
+/// after the file object has been closed (fileno() == -1).
+pub struct FdWatch {
+    pub fileobj: Py<PyAny>,
+    pub ready: Arc<ReadyCallback>,
+}
+
 struct ActiveReadyDispatch {
     pending_ready: Arc<Mutex<VecDeque<ReadyItem>>>,
     wake_tx: std::sync::mpsc::Sender<()>,
@@ -107,8 +117,8 @@ pub struct LoopState {
     pub executor_shutdown_called: bool,
     pub signal_handlers: HashMap<i32, SignalHandlerTemplate>,
     pub previous_signal_handlers: HashMap<i32, Py<PyAny>>,
-    pub reader_keepalive: HashMap<RawFd, Py<PyAny>>,
-    pub writer_keepalive: HashMap<RawFd, Py<PyAny>>,
+    pub reader_keepalive: HashMap<RawFd, FdWatch>,
+    pub writer_keepalive: HashMap<RawFd, FdWatch>,
     pub task_factory: Option<Py<PyAny>>,
     pub exception_handler: Option<Py<PyAny>>,
     pub default_executor: Option<Py<PyAny>>,
@@ -694,45 +704,36 @@ impl LoopCore {
     }
 
     fn rearm_fd_watch_if_needed(&self, ready: &ReadyCallback) {
+        // Only re-arm when this callback is still the current registration
+        // for the fd: a stale fire that outlived remove_reader()/add_reader()
+        // must not restart a watcher for the superseded callback.
         let command = match ready.kind() {
-            CallbackKind::Reader(fd) => {
-                let should_rearm = self
-                    .state
-                    .lock()
-                    .expect("poisoned loop state")
-                    .reader_keepalive
-                    .contains_key(&fd);
-                should_rearm.then(|| {
-                    Python::attach(|py| {
-                        LoopCommand::Io(LoopIoCommand::StartReader {
-                            fd,
-                            callback: ready.callback().clone_ref(py),
-                            args: ready.clone_args_tuple(py),
-                            context: ready.context().clone_ref(py),
-                            context_needs_run: ready.context_needs_run(),
-                        })
+            CallbackKind::Reader(fd) => self
+                .state
+                .lock()
+                .expect("poisoned loop state")
+                .reader_keepalive
+                .get(&fd)
+                .filter(|watch| std::ptr::eq(Arc::as_ptr(&watch.ready), ready))
+                .map(|watch| {
+                    LoopCommand::Io(LoopIoCommand::StartReader {
+                        fd,
+                        callback: Arc::clone(&watch.ready),
                     })
-                })
-            }
-            CallbackKind::Writer(fd) => {
-                let should_rearm = self
-                    .state
-                    .lock()
-                    .expect("poisoned loop state")
-                    .writer_keepalive
-                    .contains_key(&fd);
-                should_rearm.then(|| {
-                    Python::attach(|py| {
-                        LoopCommand::Io(LoopIoCommand::StartWriter {
-                            fd,
-                            callback: ready.callback().clone_ref(py),
-                            args: ready.clone_args_tuple(py),
-                            context: ready.context().clone_ref(py),
-                            context_needs_run: ready.context_needs_run(),
-                        })
+                }),
+            CallbackKind::Writer(fd) => self
+                .state
+                .lock()
+                .expect("poisoned loop state")
+                .writer_keepalive
+                .get(&fd)
+                .filter(|watch| std::ptr::eq(Arc::as_ptr(&watch.ready), ready))
+                .map(|watch| {
+                    LoopCommand::Io(LoopIoCommand::StartWriter {
+                        fd,
+                        callback: Arc::clone(&watch.ready),
                     })
-                })
-            }
+                }),
             _ => None,
         };
 
