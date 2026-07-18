@@ -244,7 +244,15 @@ impl PyFastStreamReader {
     }
 
     fn maybe_pause_transport(&mut self, py: Python<'_>) -> PyResult<()> {
-        if !self.transport.bind(py).is_none() && !self.paused && self.buffer.len() > 2 * self.limit
+        // Never pause while a coroutine is waiting for data: a pending
+        // readexactly()/read() waiter may need more than 2 * limit bytes to
+        // complete, and pausing would starve it forever. This mirrors
+        // asyncio.StreamReader._wait_for_data, which resumes the transport
+        // while a reader is waiting.
+        if self.waiter.is_none()
+            && !self.transport.bind(py).is_none()
+            && !self.paused
+            && self.buffer.len() > 2 * self.limit
         {
             match python_names::call_method0(
                 py,

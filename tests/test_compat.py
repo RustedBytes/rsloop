@@ -222,6 +222,44 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(received, b"response-before-eof")
         self.assertEqual(events, ["data", "eof", "lost"])
 
+    def test_readexactly_larger_than_flow_control_window(self) -> None:
+        # Regression test: a readexactly() waiting for more than 2 * limit
+        # bytes (default limit 64 KiB) used to deadlock because the reader
+        # paused the transport once 2 * limit bytes were buffered while the
+        # waiter still needed more data to complete. The stall also cascaded
+        # into the peer's drain(), so the whole round trip is bounded by a
+        # timeout instead of individual awaits.
+        payload = b"x" * (1024 * 1024)
+
+        async def echo_roundtrip() -> bytes:
+            async def handle_echo(
+                reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                data = await reader.readexactly(len(payload))
+                writer.write(data)
+                await writer.drain()
+                writer.close()
+
+            server = await asyncio.start_server(handle_echo, "127.0.0.1", 0)
+            try:
+                host, port = server.sockets[0].getsockname()[:2]
+                reader, writer = await asyncio.open_connection(host, port)
+                try:
+                    writer.write(payload)
+                    await writer.drain()
+                    return await reader.readexactly(len(payload))
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        async def main() -> bytes:
+            return await asyncio.wait_for(echo_roundtrip(), 15.0)
+
+        self.assertEqual(rsloop.run(main()), payload)
+
     def test_create_server_sock_listens_bound_socket(self) -> None:
         async def main() -> bytes:
             loop = asyncio.get_running_loop()

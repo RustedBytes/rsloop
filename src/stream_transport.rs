@@ -17,7 +17,7 @@ use std::os::windows::io::{
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
@@ -531,6 +531,10 @@ pub struct StreamTransportCore {
     direct_writer: Option<Mutex<TaskedDirectWriter>>,
     lazy_writer: Mutex<Option<LazyWriterConfig>>,
     workers: Mutex<Vec<WorkerThread>>,
+    // Signaled whenever `read_paused` clears or the transport starts
+    // closing, so a paused reader worker resumes immediately instead of
+    // sleeping through a poll interval.
+    state_cv: Condvar,
     // The extra map is fixed at construction; cache the text-mode marker so
     // the per-write hot path avoids a state lock plus hash lookup.
     has_text_encoding: bool,
@@ -1368,6 +1372,7 @@ impl StreamTransportCore {
             state.closing = true;
             state.write_buffer.size = 0;
             state.write_buffer.protocol_paused = false;
+            self.state_cv.notify_all();
             (
                 state.callbacks.connection_lost.clone_ref(py),
                 state
@@ -1428,6 +1433,7 @@ impl StreamTransportCore {
     #[inline]
     fn set_closing(&self) {
         self.state.lock().expect("poisoned transport state").closing = true;
+        self.state_cv.notify_all();
     }
 
     fn runtime_socket_fd(&self) -> Option<fd_ops::RawFd> {
@@ -1446,6 +1452,8 @@ impl StreamTransportCore {
         state.closing = true;
         state.reading = false;
         state.writable = false;
+        drop(state);
+        self.state_cv.notify_all();
     }
 
     fn is_closing_or_lost(&self) -> bool {
@@ -1481,6 +1489,8 @@ impl StreamTransportCore {
         let mut state = self.state.lock().expect("poisoned transport state");
         state.read_paused = false;
         state.reading = true;
+        drop(state);
+        self.state_cv.notify_all();
     }
 
     fn is_reading(&self) -> bool {
@@ -1488,17 +1498,15 @@ impl StreamTransportCore {
     }
 
     fn wait_until_readable(&self) {
-        loop {
-            let paused = {
-                self.state
-                    .lock()
-                    .expect("poisoned transport state")
-                    .read_paused
-            };
-            if !paused || self.is_closing() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(10));
+        let mut state = self.state.lock().expect("poisoned transport state");
+        while state.read_paused && !state.closing {
+            // The timeout is only a backstop against missed notifications;
+            // resume_reading()/set_closing() wake the worker immediately.
+            let (guard, _) = self
+                .state_cv
+                .wait_timeout(state, Duration::from_millis(50))
+                .expect("poisoned transport state");
+            state = guard;
         }
     }
 
@@ -2614,6 +2622,7 @@ fn new_stream_transport_core(
         direct_writer: direct_writer.map(Mutex::new),
         lazy_writer: Mutex::new(lazy_writer),
         workers: Mutex::new(Vec::new()),
+        state_cv: Condvar::new(),
         has_text_encoding,
     })
 }
