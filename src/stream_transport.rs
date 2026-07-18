@@ -68,6 +68,21 @@ const MAX_PENDING_READ_COALESCE_BYTES: usize = 256 * 1024;
 const BLOCKING_POLL_INTERVAL_MS: i32 = 50;
 const STREAM_READ_BUFFER_SIZE: usize = 64 * 1024;
 
+// After a successful read on a blocking reader worker, retry non-blocking
+// reads for this long before falling back to poll(). Request/response peers
+// usually answer within microseconds, and skipping the poll() sleep/wake
+// halves per-roundtrip latency on actively chatting connections.
+fn reader_spin_window() -> Duration {
+    static WINDOW: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *WINDOW.get_or_init(|| {
+        let micros = std::env::var("RSLOOP_READER_SPIN_US")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(30);
+        Duration::from_micros(micros.min(1_000))
+    })
+}
+
 struct OwnedWriteBuffer {
     bytes: Box<[u8]>,
     offset: usize,
@@ -516,6 +531,9 @@ pub struct StreamTransportCore {
     direct_writer: Option<Mutex<TaskedDirectWriter>>,
     lazy_writer: Mutex<Option<LazyWriterConfig>>,
     workers: Mutex<Vec<WorkerThread>>,
+    // The extra map is fixed at construction; cache the text-mode marker so
+    // the per-write hot path avoids a state lock plus hash lookup.
+    has_text_encoding: bool,
 }
 
 struct ServerState {
@@ -951,6 +969,17 @@ impl StreamTransportCore {
 
     pub(crate) fn drain_pending_read_events_with_py(&self, py: Python<'_>) -> PyResult<()> {
         profiling::scope!("StreamTransportCore::drain_pending_read_events_with_py");
+        // Snapshot the reader fast path once per drain instead of re-locking
+        // transport state for every data event.
+        let fast_path = {
+            let state = self.state.lock().expect("poisoned transport state");
+            state
+                .callbacks
+                .stream_reader_fast_path
+                .as_ref()
+                .map(|value| value.clone_ref(py))
+        };
+        let fast_path = fast_path.as_ref();
         let mut pending_data: Option<PendingReadBuffer> = None;
         let mut drained = VecDeque::new();
         loop {
@@ -978,9 +1007,11 @@ impl StreamTransportCore {
                                 buffer.extend(data);
                             }
                             Some(_) => {
-                                if let Err(err) =
-                                    self.flush_pending_data_with_py(py, &mut pending_data)
-                                {
+                                if let Err(err) = self.flush_pending_data_with_py(
+                                    py,
+                                    &mut pending_data,
+                                    fast_path,
+                                ) {
                                     let _ = self.report_error_with_py(
                                         py,
                                         err,
@@ -997,7 +1028,9 @@ impl StreamTransportCore {
                     }
                     PendingReadEvent::Eof => {
                         profiling::scope!("stream.pending.eof");
-                        if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data) {
+                        if let Err(err) =
+                            self.flush_pending_data_with_py(py, &mut pending_data, fast_path)
+                        {
                             let _ = self.report_error_with_py(
                                 py,
                                 err,
@@ -1033,7 +1066,9 @@ impl StreamTransportCore {
                     }
                     PendingReadEvent::ConnectionLost(message) => {
                         profiling::scope!("stream.pending.connection_lost");
-                        if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data) {
+                        if let Err(err) =
+                            self.flush_pending_data_with_py(py, &mut pending_data, fast_path)
+                        {
                             let _ = self.report_error_with_py(
                                 py,
                                 err,
@@ -1050,7 +1085,9 @@ impl StreamTransportCore {
                     }
                     PendingReadEvent::PauseWriting => {
                         profiling::scope!("stream.pending.pause_writing");
-                        if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data) {
+                        if let Err(err) =
+                            self.flush_pending_data_with_py(py, &mut pending_data, fast_path)
+                        {
                             let _ = self.report_error_with_py(
                                 py,
                                 err,
@@ -1064,7 +1101,9 @@ impl StreamTransportCore {
                     }
                     PendingReadEvent::ResumeWriting => {
                         profiling::scope!("stream.pending.resume_writing");
-                        if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data) {
+                        if let Err(err) =
+                            self.flush_pending_data_with_py(py, &mut pending_data, fast_path)
+                        {
                             let _ = self.report_error_with_py(
                                 py,
                                 err,
@@ -1079,7 +1118,7 @@ impl StreamTransportCore {
                 }
             }
 
-            if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data) {
+            if let Err(err) = self.flush_pending_data_with_py(py, &mut pending_data, fast_path) {
                 let _ = self.report_error_with_py(py, err, "stream data_received callback failed");
                 let _ = self.connection_lost_with_py(py, None);
                 self.read_events_scheduled.store(false, Ordering::Release);
@@ -1117,6 +1156,7 @@ impl StreamTransportCore {
         &self,
         py: Python<'_>,
         pending_data: &mut Option<PendingReadBuffer>,
+        fast_path: Option<&StreamReaderFastPath>,
     ) -> PyResult<()> {
         let Some(data) = pending_data.take() else {
             return Ok(());
@@ -1126,7 +1166,11 @@ impl StreamTransportCore {
             return Ok(());
         }
 
-        self.data_received_with_py(py, data.as_slice())
+        if let Some(fast_path) = fast_path {
+            return fast_path.feed_data(py, data.as_slice());
+        }
+
+        self.data_received_slow_path(py, data.as_slice())
     }
 
     fn report_error_with_py(&self, py: Python<'_>, err: PyErr, message: &str) -> PyResult<()> {
@@ -1158,9 +1202,10 @@ impl StreamTransportCore {
                 )
             };
             if let Some(fast_path) = fast_path.as_ref()
-                && fast_path.connection_made(py, transport.clone_ref(py))? {
-                    return Ok(());
-                }
+                && fast_path.connection_made(py, transport.clone_ref(py))?
+            {
+                return Ok(());
+            }
             self.call_protocol_method1(
                 py,
                 &callback,
@@ -1212,6 +1257,10 @@ impl StreamTransportCore {
             return fast_path.feed_data(py, data);
         }
 
+        self.data_received_slow_path(py, data)
+    }
+
+    fn data_received_slow_path(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
         let (data_received, get_buffer, buffer_updated, context, context_needs_run) = {
             let state = self.state.lock().expect("poisoned transport state");
             (
@@ -1966,9 +2015,8 @@ impl ServerCore {
     }
 }
 
-#[pymethods]
 impl PyStreamTransport {
-    fn write(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+    pub(crate) fn write_data(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
         if self.core.is_closing() {
             return Ok(());
         }
@@ -1977,7 +2025,9 @@ impl PyStreamTransport {
         }
 
         let borrowed_bytes;
-        let converted = if let Some(encoding) = self.core.get_extra(py, "text_encoding") {
+        let converted = if self.core.has_text_encoding
+            && let Some(encoding) = self.core.get_extra(py, "text_encoding")
+        {
             if data.is_instance_of::<PyString>() {
                 let errors = self
                     .core
@@ -2002,10 +2052,17 @@ impl PyStreamTransport {
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
         Ok(())
     }
+}
+
+#[pymethods]
+impl PyStreamTransport {
+    fn write(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.write_data(py, data)
+    }
 
     fn writelines(&self, py: Python<'_>, seq: &Bound<'_, PyAny>) -> PyResult<()> {
         for item in seq.try_iter()? {
-            self.write(py, &item?)?;
+            self.write_data(py, &item?)?;
         }
         Ok(())
     }
@@ -2546,6 +2603,7 @@ fn new_stream_transport_core(
     direct_writer: Option<TaskedDirectWriter>,
     lazy_writer: Option<LazyWriterConfig>,
 ) -> Arc<StreamTransportCore> {
+    let has_text_encoding = parts.state.extra.contains_key("text_encoding");
     Arc::new(StreamTransportCore {
         loop_core: parts.loop_core,
         loop_obj: parts.loop_obj,
@@ -2556,6 +2614,7 @@ fn new_stream_transport_core(
         direct_writer: direct_writer.map(Mutex::new),
         lazy_writer: Mutex::new(lazy_writer),
         workers: Mutex::new(Vec::new()),
+        has_text_encoding,
     })
 }
 
@@ -3624,6 +3683,7 @@ fn run_stream_reader(
 ) {
     profiling::scope!("stream.run_stream_reader");
     let mut buf = [0_u8; STREAM_READ_BUFFER_SIZE];
+    let spin_window = reader_spin_window();
 
     loop {
         if stop.load(Ordering::Acquire) {
@@ -3658,8 +3718,16 @@ fn run_stream_reader(
                 core.enqueue_pending_read_event(PendingReadEvent::Eof);
                 return;
             }
-            Ok(n) => core
-                .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
+            Ok(n) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
+                    &buf[..n],
+                )));
+                if !spin_window.is_zero()
+                    && !spin_read_stream(&core, &mut reader, &stop, &mut buf, spin_window)
+                {
+                    return;
+                }
+            }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => {
@@ -3667,6 +3735,56 @@ fn run_stream_reader(
                     err.to_string(),
                 )));
                 return;
+            }
+        }
+    }
+}
+
+/// Retry non-blocking reads for a bounded window after a successful read.
+/// Returns `false` when the connection terminated (event already enqueued)
+/// and the reader loop must exit.
+fn spin_read_stream(
+    core: &Arc<StreamTransportCore>,
+    reader: &mut ReaderTarget,
+    stop: &Arc<AtomicBool>,
+    buf: &mut [u8],
+    spin_window: Duration,
+) -> bool {
+    let mut deadline = std::time::Instant::now() + spin_window;
+    loop {
+        // Keep the hot path to atomics only: the closing/paused states are
+        // re-checked by the outer loop within `spin_window` at the latest,
+        // and after every successful read below.
+        if stop.load(Ordering::Acquire) {
+            return true;
+        }
+
+        match reader.read(buf) {
+            Ok(0) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                return false;
+            }
+            Ok(n) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
+                    &buf[..n],
+                )));
+                if core.is_closing() || !core.is_reading() {
+                    return true;
+                }
+                deadline = std::time::Instant::now() + spin_window;
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() >= deadline {
+                    return true;
+                }
+                std::hint::spin_loop();
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return false;
             }
         }
     }

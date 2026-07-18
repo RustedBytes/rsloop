@@ -50,6 +50,7 @@ struct RuntimeDispatcher {
 struct ActiveRun {
     pending_ready: Arc<std::sync::Mutex<VecDeque<ReadyItem>>>,
     wake_tx: std::sync::mpsc::Sender<()>,
+    wake_pending: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(unix)]
@@ -334,6 +335,11 @@ impl RuntimeDispatcher {
                 profiling::scope!("runtime.cmd.schedule_ready");
                 self.ready_batch.push_back(ReadyItem::Callback(callback));
             }
+            LoopCommand::ScheduleReadyHandle(handle) => {
+                profiling::scope!("runtime.cmd.schedule_ready_handle");
+                self.ready_batch
+                    .push_back(ReadyItem::HandleCallback(handle));
+            }
             LoopCommand::Future(LoopFutureCommand::SetResult { future, value }) => {
                 profiling::scope!("runtime.cmd.future_set_result");
                 self.ready_batch
@@ -372,11 +378,13 @@ impl RuntimeDispatcher {
             LoopCommand::Run(LoopRunCommand::EnterRun {
                 pending_ready,
                 wake_tx,
+                wake_pending,
             }) => {
                 profiling::scope!("runtime.cmd.enter_run");
                 self.active_run = Some(ActiveRun {
                     pending_ready,
                     wake_tx,
+                    wake_pending,
                 });
                 self.dispatch_ready_batch();
             }
@@ -887,7 +895,15 @@ impl RuntimeDispatcher {
             .expect("poisoned pending ready queue");
         pending.extend(self.ready_batch.drain(..));
         drop(pending);
-        let _ = active_run.wake_tx.send(());
+        // Mirror the wake protocol used by try_enqueue_active_ready so the
+        // loop thread's spin-wait observes runtime-dispatched work (timers,
+        // fd watchers) too, and redundant wake tokens are not queued.
+        if !active_run
+            .wake_pending
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            let _ = active_run.wake_tx.send(());
+        }
         false
     }
 

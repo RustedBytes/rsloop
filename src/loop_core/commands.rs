@@ -5,7 +5,7 @@ use std::time::Instant;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-use crate::callbacks::ReadyCallback;
+use crate::callbacks::{PyHandle, ReadyCallback};
 use crate::fd_ops::RawFd;
 use crate::process_transport::ProcessTransportCore;
 use crate::stream_transport::{
@@ -14,6 +14,7 @@ use crate::stream_transport::{
 
 pub enum ReadyItem {
     Callback(Arc<ReadyCallback>),
+    HandleCallback(Py<PyHandle>),
     FutureSetResult {
         future: Py<PyAny>,
         value: Py<PyAny>,
@@ -33,6 +34,7 @@ pub enum ReadyItem {
 
 pub enum LoopCommand {
     ScheduleReady(Arc<ReadyCallback>),
+    ScheduleReadyHandle(Py<PyHandle>),
     ScheduleTimer {
         callback: Arc<ReadyCallback>,
         when: Instant,
@@ -50,6 +52,7 @@ pub enum LoopRunCommand {
     EnterRun {
         pending_ready: Arc<Mutex<VecDeque<ReadyItem>>>,
         wake_tx: std::sync::mpsc::Sender<()>,
+        wake_pending: Arc<std::sync::atomic::AtomicBool>,
     },
     FinishRun {
         done_tx: std::sync::mpsc::Sender<()>,

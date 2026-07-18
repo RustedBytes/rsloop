@@ -5,9 +5,18 @@ use pyo3_async_runtimes::TaskLocals;
 
 use crate::python_api::PyLoop;
 use crate::python_names;
-use crate::stream_transport::task_locals_for_loop;
+use crate::stream_transport::{PyStreamTransport, task_locals_for_loop};
 
 const DEFAULT_STREAM_LIMIT: usize = 65_536;
+
+/// Create a future on `loop_obj`, skipping the Python-level method dispatch
+/// when the loop is a native rsloop instance running on this thread.
+fn loop_create_future(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<Py<PyAny>> {
+    if let Some(future) = crate::python_api::try_fast_create_future(py, loop_obj)? {
+        return Ok(future);
+    }
+    python_names::call_method0(py, loop_obj.bind(py), python_names::create_future(py))
+}
 
 struct ReadBuffer {
     bytes: Vec<u8>,
@@ -167,7 +176,7 @@ impl PyFastStreamReader {
 
     #[inline]
     fn create_future(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        python_names::call_method0(py, self.loop_obj.bind(py), python_names::create_future(py))
+        loop_create_future(py, &self.loop_obj)
     }
 
     fn ready_result_future(&self, py: Python<'_>, value: Py<PyAny>) -> PyResult<Py<PyAny>> {
@@ -541,10 +550,8 @@ impl PyFastStreamProtocol {
         reader: Py<PyFastStreamReader>,
         client_connected_cb: Py<PyAny>,
     ) -> PyResult<Self> {
-        let closed =
-            python_names::call_method0(py, loop_obj.bind(py), python_names::create_future(py))?;
-        let ready_none =
-            python_names::call_method0(py, loop_obj.bind(py), python_names::create_future(py))?;
+        let closed = loop_create_future(py, &loop_obj)?;
+        let ready_none = loop_create_future(py, &loop_obj)?;
         python_names::call_method1(
             py,
             ready_none.bind(py),
@@ -578,11 +585,7 @@ impl PyFastStreamProtocol {
     }
 
     fn ready_exception_future(&self, py: Python<'_>, exc: Py<PyAny>) -> PyResult<Py<PyAny>> {
-        let future = python_names::call_method0(
-            py,
-            self.loop_obj.bind(py),
-            python_names::create_future(py),
-        )?;
+        let future = loop_create_future(py, &self.loop_obj)?;
         python_names::call_method1(
             py,
             future.bind(py),
@@ -593,11 +596,7 @@ impl PyFastStreamProtocol {
     }
 
     fn push_drain_waiter(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let future = python_names::call_method0(
-            py,
-            self.loop_obj.bind(py),
-            python_names::create_future(py),
-        )?;
+        let future = loop_create_future(py, &self.loop_obj)?;
         self.drain_waiters.push(future.clone_ref(py));
         Ok(future)
     }
@@ -832,6 +831,11 @@ impl PyFastStreamWriter {
     }
 
     fn write(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        // Native transports take the direct Rust path; only foreign
+        // transports go through Python method dispatch.
+        if let Ok(transport) = self.transport.bind(py).cast_exact::<PyStreamTransport>() {
+            return transport.borrow().write_data(py, data);
+        }
         self.transport.call_method1(py, "write", (data,))?;
         Ok(())
     }
@@ -1003,9 +1007,10 @@ fn native_stream_loop(
     }
     if let Some(kwargs) = kwargs
         && let Some(ssl) = kwargs.get_item("ssl")?
-            && !ssl.is_none() {
-                return Ok(None);
-            }
+        && !ssl.is_none()
+    {
+        return Ok(None);
+    }
     Ok(Some(loop_obj))
 }
 

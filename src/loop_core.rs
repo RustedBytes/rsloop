@@ -27,10 +27,38 @@ pub use commands::{
 
 const READY_DRAIN_SLICE: usize = 64;
 
+// One combined thread-local record instead of three separate `thread_local!`
+// cells: each cell access costs a dynamic TLS lookup (`_tlv_get_addr` on
+// macOS), and the local-enqueue fast path is hot enough for that to show up
+// in profiles.
+struct ActiveLoopTls {
+    core: Cell<*const LoopCore>,
+    ready_queue: Cell<*mut VecDeque<ReadyItem>>,
+    drain_active: Cell<bool>,
+}
+
 thread_local! {
-    static ACTIVE_LOOP_CORE: Cell<*const LoopCore> = const { Cell::new(std::ptr::null()) };
-    static ACTIVE_READY_QUEUE: Cell<*mut VecDeque<ReadyItem>> = const { Cell::new(std::ptr::null_mut()) };
-    static ACTIVE_READY_DRAIN: Cell<bool> = const { Cell::new(false) };
+    static ACTIVE_LOOP_TLS: ActiveLoopTls = const {
+        ActiveLoopTls {
+            core: Cell::new(std::ptr::null()),
+            ready_queue: Cell::new(std::ptr::null_mut()),
+            drain_active: Cell::new(false),
+        }
+    };
+}
+
+// Bounded busy-wait before parking on the wake channel. Cross-thread wakeups
+// (transport reader workers, the runtime thread) otherwise pay a full condvar
+// sleep/wake cycle, which dominates ping-pong style I/O latency.
+fn wake_spin_window() -> Duration {
+    static WINDOW: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *WINDOW.get_or_init(|| {
+        let micros = std::env::var("RSLOOP_WAKE_SPIN_US")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(40);
+        Duration::from_micros(micros.min(1_000))
+    })
 }
 
 #[derive(Debug)]
@@ -214,10 +242,10 @@ impl LoopCore {
         callback: Py<PyAny>,
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
-    ) -> PyResult<Arc<ReadyCallback>> {
+    ) -> PyResult<Py<crate::callbacks::PyHandle>> {
         profiling::scope!("LoopCore::schedule_callback");
         let (captured, context_needs_run) = capture_context(py, context)?;
-        let ready = Arc::new(ReadyCallback::new(
+        let ready = ReadyCallback::new(
             py,
             self.next_callback_id(),
             kind,
@@ -225,43 +253,14 @@ impl LoopCore {
             args,
             captured,
             context_needs_run,
-        ));
+        );
+        let handle = Py::new(py, crate::callbacks::PyHandle::new(ready))?;
 
-        match self.try_enqueue_local_ready(ReadyItem::Callback(Arc::clone(&ready))) {
-            Ok(()) => return Ok(ready),
-            Err(ReadyItem::Callback(callback)) => {
-                if self
-                    .try_enqueue_active_ready(ReadyItem::Callback(callback))
-                    .is_ok()
-                {
-                    return Ok(ready);
-                }
-            }
-            Err(
-                ReadyItem::Stop
-                | ReadyItem::FutureSetResult { .. }
-                | ReadyItem::FutureSetException { .. }
-                | ReadyItem::StreamTransportRead(_)
-                | ReadyItem::ProcessTransport(_)
-                | ReadyItem::ServerAccepted { .. },
-            ) => unreachable!("schedule_callback only enqueues callback ready items"),
-        }
-
-        self.command_tx
-            .send(LoopCommand::ScheduleReady(Arc::clone(&ready)))
-            .map_err(|_| {
-                pyo3::exceptions::PyRuntimeError::new_err(LoopCoreError::ChannelClosed.to_string())
-            })?;
-        #[cfg(target_os = "linux")]
-        if let Some(waker) = self
-            .runtime_waker
-            .lock()
-            .expect("poisoned runtime waker")
-            .as_ref()
-        {
-            waker.wake_by_ref();
-        }
-        Ok(ready)
+        // send_command falls through local enqueue, the active-run pending
+        // queue, and finally the runtime command channel.
+        self.send_command(LoopCommand::ScheduleReadyHandle(handle.clone_ref(py)))
+            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+        Ok(handle)
     }
 
     pub fn schedule_timer(
@@ -332,6 +331,7 @@ impl LoopCore {
         self.send_command(LoopCommand::Run(LoopRunCommand::EnterRun {
             pending_ready: Arc::clone(&pending_ready),
             wake_tx,
+            wake_pending: Arc::clone(&wake_pending),
         }))
         .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
 
@@ -342,6 +342,7 @@ impl LoopCore {
 
         let mut pending_signal_error: Option<PyErr> = None;
         let mut ready_batch = VecDeque::new();
+        let mut spin_next_wait = false;
         let run_result = loop {
             self.set_ready_drain_active(true);
 
@@ -349,9 +350,11 @@ impl LoopCore {
             let mut processed_since_refill = 0_usize;
             loop {
                 if ready_batch.is_empty() || processed_since_refill >= READY_DRAIN_SLICE {
-                    let should_check_pending =
-                        ready_batch.is_empty() || wake_pending.load(Ordering::Acquire);
-                    if should_check_pending {
+                    // Every cross-thread producer raises `wake_pending` after
+                    // pushing, so the pending queue only needs to be locked
+                    // when the flag is set; a hot chain of locally scheduled
+                    // callbacks otherwise skips the mutex entirely.
+                    if wake_pending.load(Ordering::Acquire) {
                         let mut pending =
                             pending_ready.lock().expect("poisoned pending ready queue");
                         if !pending.is_empty() {
@@ -388,6 +391,7 @@ impl LoopCore {
                 let item = ready_batch
                     .pop_front()
                     .expect("ready batch was checked as non-empty");
+                spin_next_wait = true;
                 match item {
                     ReadyItem::Stop => {
                         profiling::scope!("ready.stop");
@@ -395,7 +399,18 @@ impl LoopCore {
                     }
                     ReadyItem::Callback(callback) => {
                         profiling::scope!("ready.callback");
-                        if let Some(err) = self.execute_ready(py, Some(&loop_obj), &callback)? {
+                        if let Some(err) =
+                            self.execute_ready(py, Some(&loop_obj), callback.as_ref())?
+                        {
+                            ready_error = Some(err);
+                            break;
+                        }
+                    }
+                    ReadyItem::HandleCallback(handle) => {
+                        profiling::scope!("ready.handle_callback");
+                        if let Some(err) =
+                            self.execute_ready(py, Some(&loop_obj), handle.get().ready())?
+                        {
                             ready_error = Some(err);
                             break;
                         }
@@ -473,14 +488,45 @@ impl LoopCore {
             }
 
             if pending_signal_error.is_none()
-                && let Err(err) = py.check_signals() {
-                    let _ = self.send_command(LoopCommand::RequestStop);
-                    pending_signal_error = Some(err);
-                    continue;
-                }
+                && let Err(err) = py.check_signals()
+            {
+                let _ = self.send_command(LoopCommand::RequestStop);
+                pending_signal_error = Some(err);
+                continue;
+            }
 
             let wake_rx = Arc::clone(&wake_rx);
+            let spin_window = if std::mem::take(&mut spin_next_wait) {
+                wake_spin_window()
+            } else {
+                Duration::ZERO
+            };
+            let spin_wake_pending = Arc::clone(&wake_pending);
             match py.detach(move || {
+                // Busy-wait briefly for the next wakeup while work is flowing;
+                // this skips the condvar round trip that dominates request/
+                // response latency. If nothing shows up, park as before.
+                if !spin_window.is_zero() {
+                    let spin_deadline = Instant::now() + spin_window;
+                    'spin: loop {
+                        for _ in 0..64 {
+                            if spin_wake_pending.load(Ordering::Acquire) {
+                                // Consume at most one queued wake token so
+                                // tokens for wakeups observed via the spin
+                                // path cannot accumulate. Missing a token here
+                                // is fine: the drain loop re-reads the pending
+                                // queue directly.
+                                let _ = wake_rx.lock().expect("poisoned wake receiver").try_recv();
+                                return Ok(());
+                            }
+                            std::hint::spin_loop();
+                        }
+                        if Instant::now() >= spin_deadline {
+                            break 'spin;
+                        }
+                    }
+                }
+
                 wake_rx
                     .lock()
                     .expect("poisoned wake receiver")
@@ -625,7 +671,7 @@ impl LoopCore {
         &self,
         py: Python<'_>,
         loop_obj: Option<&Py<PyAny>>,
-        ready: &Arc<ReadyCallback>,
+        ready: &ReadyCallback,
     ) -> PyResult<Option<PyErr>> {
         profiling::scope!("LoopCore::execute_ready");
         if ready.cancelled() {
@@ -647,7 +693,7 @@ impl LoopCore {
         result
     }
 
-    fn rearm_fd_watch_if_needed(&self, ready: &Arc<ReadyCallback>) {
+    fn rearm_fd_watch_if_needed(&self, ready: &ReadyCallback) {
         let command = match ready.kind() {
             CallbackKind::Reader(fd) => {
                 let should_rearm = self
@@ -697,7 +743,7 @@ impl LoopCore {
 
     #[inline]
     pub(crate) fn mark_runtime_thread(&self) {
-        ACTIVE_LOOP_CORE.with(|current| current.set(self as *const Self));
+        ACTIVE_LOOP_TLS.with(|tls| tls.core.set(self as *const Self));
     }
 
     #[cfg(target_os = "linux")]
@@ -707,28 +753,28 @@ impl LoopCore {
 
     #[inline]
     pub(crate) fn install_local_ready_queue(&self, ready: *mut VecDeque<ReadyItem>) {
-        ACTIVE_READY_QUEUE.with(|current| current.set(ready));
+        ACTIVE_LOOP_TLS.with(|tls| tls.ready_queue.set(ready));
     }
 
     #[inline]
     pub(crate) fn clear_runtime_thread(&self) {
-        ACTIVE_LOOP_CORE.with(|current| {
-            if std::ptr::eq(current.get(), self) {
-                current.set(std::ptr::null());
+        ACTIVE_LOOP_TLS.with(|tls| {
+            if std::ptr::eq(tls.core.get(), self) {
+                tls.core.set(std::ptr::null());
             }
+            tls.ready_queue.set(std::ptr::null_mut());
+            tls.drain_active.set(false);
         });
-        ACTIVE_READY_QUEUE.with(|current| current.set(std::ptr::null_mut()));
-        ACTIVE_READY_DRAIN.with(|current| current.set(false));
     }
 
     #[inline]
     pub(crate) fn set_ready_drain_active(&self, active: bool) {
-        ACTIVE_READY_DRAIN.with(|current| current.set(active));
+        ACTIVE_LOOP_TLS.with(|tls| tls.drain_active.set(active));
     }
 
     #[inline]
     pub(crate) fn on_runtime_thread(&self) -> bool {
-        ACTIVE_LOOP_CORE.with(|current| std::ptr::eq(current.get(), self))
+        ACTIVE_LOOP_TLS.with(|tls| std::ptr::eq(tls.core.get(), self))
     }
 
     #[inline]
@@ -739,6 +785,7 @@ impl LoopCore {
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
                     ReadyItem::Callback(callback) => LoopCommand::ScheduleReady(callback),
+                    ReadyItem::HandleCallback(handle) => LoopCommand::ScheduleReadyHandle(handle),
                     ReadyItem::Stop => LoopCommand::RequestStop,
                     ReadyItem::FutureSetResult { future, value } => {
                         LoopCommand::Future(LoopFutureCommand::SetResult { future, value })
@@ -759,6 +806,13 @@ impl LoopCore {
                         })
                     }
                 }),
+            LoopCommand::ScheduleReadyHandle(handle) => self
+                .try_enqueue_local_ready(ReadyItem::HandleCallback(handle))
+                .or_else(|item| self.try_enqueue_active_ready(item))
+                .map_err(|item| match item {
+                    ReadyItem::HandleCallback(handle) => LoopCommand::ScheduleReadyHandle(handle),
+                    _ => unreachable!("local handle enqueue preserves item kind"),
+                }),
             LoopCommand::Future(LoopFutureCommand::SetResult { future, value }) => self
                 .try_enqueue_local_ready(ReadyItem::FutureSetResult { future, value })
                 .or_else(|item| self.try_enqueue_active_ready(item))
@@ -766,12 +820,7 @@ impl LoopCore {
                     ReadyItem::FutureSetResult { future, value } => {
                         LoopCommand::Future(LoopFutureCommand::SetResult { future, value })
                     }
-                    ReadyItem::Callback(_)
-                    | ReadyItem::FutureSetException { .. }
-                    | ReadyItem::StreamTransportRead(_)
-                    | ReadyItem::ProcessTransport(_)
-                    | ReadyItem::ServerAccepted { .. }
-                    | ReadyItem::Stop => {
+                    _ => {
                         unreachable!("local future result enqueue preserves item kind")
                     }
                 }),
@@ -782,12 +831,7 @@ impl LoopCore {
                     ReadyItem::FutureSetException { future, value } => {
                         LoopCommand::Future(LoopFutureCommand::SetException { future, value })
                     }
-                    ReadyItem::Callback(_)
-                    | ReadyItem::FutureSetResult { .. }
-                    | ReadyItem::StreamTransportRead(_)
-                    | ReadyItem::ProcessTransport(_)
-                    | ReadyItem::ServerAccepted { .. }
-                    | ReadyItem::Stop => {
+                    _ => {
                         unreachable!("local future exception enqueue preserves item kind")
                     }
                 }),
@@ -798,12 +842,7 @@ impl LoopCore {
                     ReadyItem::StreamTransportRead(core) => {
                         LoopCommand::Transport(LoopTransportCommand::StreamRead(core))
                     }
-                    ReadyItem::Callback(_)
-                    | ReadyItem::FutureSetResult { .. }
-                    | ReadyItem::FutureSetException { .. }
-                    | ReadyItem::ProcessTransport(_)
-                    | ReadyItem::ServerAccepted { .. }
-                    | ReadyItem::Stop => {
+                    _ => {
                         unreachable!("local stream read enqueue preserves item kind")
                     }
                 }),
@@ -814,12 +853,7 @@ impl LoopCore {
                     ReadyItem::ProcessTransport(core) => {
                         LoopCommand::Transport(LoopTransportCommand::Process(core))
                     }
-                    ReadyItem::Callback(_)
-                    | ReadyItem::FutureSetResult { .. }
-                    | ReadyItem::FutureSetException { .. }
-                    | ReadyItem::StreamTransportRead(_)
-                    | ReadyItem::ServerAccepted { .. }
-                    | ReadyItem::Stop => {
+                    _ => {
                         unreachable!("local process enqueue preserves item kind")
                     }
                 }),
@@ -833,12 +867,7 @@ impl LoopCore {
                             stream,
                         })
                     }
-                    ReadyItem::Callback(_)
-                    | ReadyItem::FutureSetResult { .. }
-                    | ReadyItem::FutureSetException { .. }
-                    | ReadyItem::StreamTransportRead(_)
-                    | ReadyItem::ProcessTransport(_)
-                    | ReadyItem::Stop => {
+                    _ => {
                         unreachable!("local accepted transport enqueue preserves item kind")
                     }
                 }),
@@ -852,18 +881,12 @@ impl LoopCore {
 
     #[inline]
     fn try_enqueue_local_ready(&self, item: ReadyItem) -> Result<(), ReadyItem> {
-        let same_loop = ACTIVE_LOOP_CORE.with(|current| std::ptr::eq(current.get(), self));
-        if !same_loop {
-            return Err(item);
-        }
+        ACTIVE_LOOP_TLS.with(|tls| {
+            if !std::ptr::eq(tls.core.get(), self) || !tls.drain_active.get() {
+                return Err(item);
+            }
 
-        let ready_drain_active = ACTIVE_READY_DRAIN.with(Cell::get);
-        if !ready_drain_active {
-            return Err(item);
-        }
-
-        ACTIVE_READY_QUEUE.with(|current| {
-            let ready = current.get();
+            let ready = tls.ready_queue.get();
             if ready.is_null() {
                 return Err(item);
             }

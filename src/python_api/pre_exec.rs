@@ -30,80 +30,89 @@ fn apply_in_child(config: &UnixPreExecConfig) -> std::io::Result<()> {
 
 #[cfg(unix)]
 /// SAFETY: Must only be called from the child process between fork and exec.
-unsafe fn restore_child_signals(restore_signals: bool) -> std::io::Result<()> { unsafe {
-    if !restore_signals {
-        return Ok(());
-    }
+unsafe fn restore_child_signals(restore_signals: bool) -> std::io::Result<()> {
+    unsafe {
+        if !restore_signals {
+            return Ok(());
+        }
 
-    if libc::signal(libc::SIGPIPE, libc::SIG_DFL) == libc::SIG_ERR {
-        return Err(std::io::Error::last_os_error());
-    }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    if libc::signal(libc::SIGXFSZ, libc::SIG_DFL) == libc::SIG_ERR {
-        return Err(std::io::Error::last_os_error());
-    }
+        if libc::signal(libc::SIGPIPE, libc::SIG_DFL) == libc::SIG_ERR {
+            return Err(std::io::Error::last_os_error());
+        }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if libc::signal(libc::SIGXFSZ, libc::SIG_DFL) == libc::SIG_ERR {
+            return Err(std::io::Error::last_os_error());
+        }
 
-    Ok(())
-}}
+        Ok(())
+    }
+}
 
 #[cfg(unix)]
 /// SAFETY: Must only be called from the child process between fork and exec.
-unsafe fn clear_pass_fds_cloexec(pass_fds: &[i32]) -> std::io::Result<()> { unsafe {
-    for fd in pass_fds {
-        let flags = libc::fcntl(*fd, libc::F_GETFD);
-        if flags == -1 {
-            return Err(std::io::Error::last_os_error());
+unsafe fn clear_pass_fds_cloexec(pass_fds: &[i32]) -> std::io::Result<()> {
+    unsafe {
+        for fd in pass_fds {
+            let flags = libc::fcntl(*fd, libc::F_GETFD);
+            if flags == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
         }
-        if libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) == -1 {
-            return Err(std::io::Error::last_os_error());
-        }
+        Ok(())
     }
-    Ok(())
-}}
+}
 
 #[cfg(unix)]
 /// SAFETY: Must only be called from the child process between fork and exec.
-unsafe fn apply_child_attributes(config: &UnixPreExecConfig) -> std::io::Result<()> { unsafe {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    let ngroups = config.extra_groups.as_ref().map(Vec::len);
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    let ngroups = config
-        .extra_groups
-        .as_ref()
-        .map(|groups| {
-            groups.len().try_into().map_err(|_| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "extra_groups length exceeds platform limit",
-                )
+unsafe fn apply_child_attributes(config: &UnixPreExecConfig) -> std::io::Result<()> {
+    unsafe {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let ngroups = config.extra_groups.as_ref().map(Vec::len);
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        let ngroups = config
+            .extra_groups
+            .as_ref()
+            .map(|groups| {
+                groups.len().try_into().map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "extra_groups length exceeds platform limit",
+                    )
+                })
             })
-        })
-        .transpose()?;
+            .transpose()?;
 
-    if config.start_new_session && libc::setsid() == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if let Some(process_group) = config.process_group
-        && !(config.start_new_session && process_group == 0)
+        if config.start_new_session && libc::setsid() == -1 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if let Some(process_group) = config.process_group
+            && !(config.start_new_session && process_group == 0)
             && libc::setpgid(0, process_group) == -1
         {
             return Err(std::io::Error::last_os_error());
         }
-    if let Some(groups) = &config.extra_groups
-        && libc::setgroups(ngroups.expect("extra_groups present"), groups.as_ptr()) == -1 {
+        if let Some(groups) = &config.extra_groups
+            && libc::setgroups(ngroups.expect("extra_groups present"), groups.as_ptr()) == -1
+        {
             return Err(std::io::Error::last_os_error());
         }
-    if let Some(gid) = config.gid
-        && libc::setgid(gid) == -1 {
+        if let Some(gid) = config.gid
+            && libc::setgid(gid) == -1
+        {
             return Err(std::io::Error::last_os_error());
         }
-    if let Some(uid) = config.uid
-        && libc::setuid(uid) == -1 {
+        if let Some(uid) = config.uid
+            && libc::setuid(uid) == -1
+        {
             return Err(std::io::Error::last_os_error());
         }
-    if let Some(umask) = config.umask {
-        libc::umask(umask as libc::mode_t);
-    }
+        if let Some(umask) = config.umask {
+            libc::umask(umask as libc::mode_t);
+        }
 
-    Ok(())
-}}
+        Ok(())
+    }
+}

@@ -17,7 +17,7 @@ mod ffi_helpers;
 mod pre_exec;
 mod process_handles;
 
-use crate::callbacks::{CallbackKind, PyHandle, PyTimerHandle};
+use crate::callbacks::{CallbackKind, PyTimerHandle};
 use crate::context::{capture_context, ensure_running_loop, run_in_context};
 use crate::fd_ops;
 #[cfg(unix)]
@@ -128,10 +128,10 @@ impl PyLoop {
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
     ) -> PyResult<Py<PyAny>> {
-        let ready = self
+        let handle = self
             .core
             .schedule_callback(py, kind, callback, args, context)?;
-        Ok(Py::new(py, PyHandle::new(ready.id(), &ready))?.into_any())
+        Ok(handle.into_any())
     }
 
     #[allow(dead_code)]
@@ -432,6 +432,23 @@ fn create_asyncio_future_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyRes
 
 fn create_asyncio_future_for_running_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
     call_callable_noargs(py, asyncio_future_cls(py)?)
+}
+
+/// Fast-path future creation for internal callers that hold a loop object:
+/// when `loop_obj` is exactly a `PyLoop` running on this thread, skip the
+/// Python-level `create_future` method dispatch. Returns `Ok(None)` when the
+/// caller must fall back to calling `loop.create_future()`.
+pub(crate) fn try_fast_create_future(
+    py: Python<'_>,
+    loop_obj: &Py<PyAny>,
+) -> PyResult<Option<Py<PyAny>>> {
+    let Ok(pyloop) = loop_obj.bind(py).cast_exact::<PyLoop>() else {
+        return Ok(None);
+    };
+    if !pyloop.borrow().core.on_runtime_thread() {
+        return Ok(None);
+    }
+    create_asyncio_future_for_running_loop(py).map(Some)
 }
 
 fn create_asyncio_task_for_loop(
@@ -828,13 +845,14 @@ fn apply_tcp_server_socket_options(
         )?;
     }
     if reuse_port == Some(true)
-        && let Some(so_reuseport) = options.so_reuseport {
-            sock.call_method1(
-                py,
-                "setsockopt",
-                (options.sol_socket.clone(), so_reuseport.clone(), 1),
-            )?;
-        }
+        && let Some(so_reuseport) = options.so_reuseport
+    {
+        sock.call_method1(
+            py,
+            "setsockopt",
+            (options.sol_socket.clone(), so_reuseport.clone(), 1),
+        )?;
+    }
     if let Some(keep_alive) = keep_alive {
         #[cfg(unix)]
         set_tcp_keepalive_option(py, sock, keep_alive)?;
@@ -1517,11 +1535,11 @@ impl PyLoop {
         Ok(wrapped.call_method0("result")?.unbind())
     }
     fn create_future(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let core = Arc::clone(&slf.borrow(py).core);
-        let loop_obj = Self::as_py_any(py, &slf);
-        if core.on_runtime_thread() {
+        if slf.borrow(py).core.on_runtime_thread() {
             return create_asyncio_future_for_running_loop(py);
         }
+
+        let loop_obj = Self::as_py_any(py, &slf);
         if is_current_running_loop(py, &loop_obj)? {
             return create_asyncio_future_for_running_loop(py);
         }
@@ -1540,7 +1558,6 @@ impl PyLoop {
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Py<PyAny>> {
         let core = Arc::clone(&slf.borrow(py).core);
-        let loop_obj = Self::as_py_any(py, &slf);
         let task_kwarg_support = asyncio_task_kwarg_support(py)?;
         let extra_kwargs = kwargs
             .as_ref()
@@ -1553,6 +1570,8 @@ impl PyLoop {
         if !core.has_task_factory() && !has_kwargs && core.on_runtime_thread() {
             return create_asyncio_task_for_running_loop(py, coro);
         }
+
+        let loop_obj = Self::as_py_any(py, &slf);
 
         let task_factory = if core.has_task_factory() {
             core.state
@@ -1590,17 +1609,20 @@ impl PyLoop {
                     .unwrap_or_else(|| py.None());
                 task_kwargs.set_item("name", factory_name)?;
             } else if task_kwarg_support.name
-                && let Some(name) = name.as_ref() {
-                    task_kwargs.set_item("name", name)?;
-                }
+                && let Some(name) = name.as_ref()
+            {
+                task_kwargs.set_item("name", name)?;
+            }
             if let Some(context) = context.as_ref()
-                && (task_factory.is_some() || task_kwarg_support.context) {
-                    task_kwargs.set_item("context", context)?;
-                }
+                && (task_factory.is_some() || task_kwarg_support.context)
+            {
+                task_kwargs.set_item("context", context)?;
+            }
             if let Some(eager_start) = eager_start
-                && (task_factory.is_some() || task_kwarg_support.eager_start) {
-                    task_kwargs.set_item("eager_start", eager_start)?;
-                }
+                && (task_factory.is_some() || task_kwarg_support.eager_start)
+            {
+                task_kwargs.set_item("eager_start", eager_start)?;
+            }
             Some(task_kwargs)
         } else {
             None
