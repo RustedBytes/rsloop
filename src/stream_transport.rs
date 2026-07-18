@@ -1723,6 +1723,7 @@ impl StreamTransportCore {
             worker.abort();
         }
 
+        #[allow(unused_variables)]
         let family = socket.bind(py).getattr("family")?.extract::<i32>()?;
         #[cfg(unix)]
         let stream = if family == libc::AF_UNIX {
@@ -2395,6 +2396,7 @@ pub fn transport_from_socket(
     socket_obj: Py<PyAny>,
 ) -> PyResult<Py<PyStreamTransport>> {
     profiling::scope!("stream.transport_from_socket");
+    #[allow(unused_variables)]
     let family = socket_obj.getattr(py, "family")?.extract::<i32>(py)?;
     #[cfg(unix)]
     if family == libc::AF_UNIX {
@@ -2423,6 +2425,7 @@ pub fn transport_from_socket_tls(
     tls: ClientTlsSettings,
 ) -> PyResult<Py<PyStreamTransport>> {
     profiling::scope!("stream.transport_from_socket_tls");
+    #[allow(unused_variables)]
     let family = socket_obj.getattr(py, "family")?.extract::<i32>(py)?;
     #[cfg(unix)]
     if family == libc::AF_UNIX {
@@ -2455,6 +2458,7 @@ pub fn transport_from_socket_server_tls(
     tls: ServerTlsSettings,
 ) -> PyResult<Py<PyStreamTransport>> {
     profiling::scope!("stream.transport_from_socket_server_tls");
+    #[allow(unused_variables)]
     let family = socket_obj.getattr(py, "family")?.extract::<i32>(py)?;
     #[cfg(unix)]
     if family == libc::AF_UNIX {

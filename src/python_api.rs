@@ -20,8 +20,9 @@ mod process_handles;
 use crate::callbacks::{CallbackKind, PyTimerHandle, ReadyCallback};
 use crate::context::{capture_context, ensure_running_loop, run_in_context};
 use crate::fd_ops;
+use crate::loop_core::FdWatch;
 #[cfg(unix)]
-use crate::loop_core::{FdWatch, SignalHandlerTemplate};
+use crate::loop_core::SignalHandlerTemplate;
 use crate::loop_core::{LoopCommand, LoopCore, LoopCoreError, LoopIoCommand, LoopSignalCommand};
 use crate::process_transport::{
     BoxedProcessReader, ProcessTextConfig, ProcessTransportParams, spawn_process_transport,
