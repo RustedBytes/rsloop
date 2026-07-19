@@ -1963,69 +1963,43 @@ impl ServerCore {
             std::mem::take(&mut state.listeners)
         };
 
-        #[cfg(target_os = "linux")]
-        {
-            if self.tls.is_some() {
-                let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
-                for listener in listeners {
-                    let server = Arc::clone(self);
-                    let task = match listener {
-                        ServerListener::Tcp(listener) => {
-                            WorkerThread::spawn("rsloop-tcp-accept", move |stop| {
-                                run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-                            })
-                        }
-                        #[cfg(unix)]
-                        ServerListener::Unix(listener) => {
-                            WorkerThread::spawn("rsloop-unix-accept", move |stop| {
-                                run_unix_accept_loop(BlockingAcceptLoop::new(
-                                    server, listener, stop,
-                                ))
-                            })
-                        }
-                    };
-                    tasks.push(task);
-                }
-                return;
-            }
-
-            let mut accept_fds = self.accept_fds.lock().expect("poisoned accept fds");
+        if self.tls.is_some() {
+            let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
             for listener in listeners {
-                let fd = match &listener {
-                    ServerListener::Tcp(listener) => tcp_listener_raw_fd(listener),
+                let server = Arc::clone(self);
+                let task = match listener {
+                    ServerListener::Tcp(listener) => {
+                        WorkerThread::spawn("rsloop-tcp-accept", move |stop| {
+                            run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
+                        })
+                    }
                     #[cfg(unix)]
-                    ServerListener::Unix(listener) => unix_raw_fd(listener.as_raw_fd()),
+                    ServerListener::Unix(listener) => {
+                        WorkerThread::spawn("rsloop-unix-accept", move |stop| {
+                            run_unix_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
+                        })
+                    }
                 };
-                accept_fds.push(fd);
-                let _ = self.loop_core.send_command(LoopCommand::Io(
-                    LoopIoCommand::StartServerAccept {
+                tasks.push(task);
+            }
+            return;
+        }
+
+        let mut accept_fds = self.accept_fds.lock().expect("poisoned accept fds");
+        for listener in listeners {
+            let fd = match &listener {
+                ServerListener::Tcp(listener) => tcp_listener_raw_fd(listener),
+                #[cfg(unix)]
+                ServerListener::Unix(listener) => unix_raw_fd(listener.as_raw_fd()),
+            };
+            accept_fds.push(fd);
+            let _ =
+                self.loop_core
+                    .send_command(LoopCommand::Io(LoopIoCommand::StartServerAccept {
                         fd,
                         server: Arc::clone(self),
                         listener,
-                    },
-                ));
-            }
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
-        #[cfg(not(target_os = "linux"))]
-        for listener in listeners {
-            let server = Arc::clone(self);
-            let task = match listener {
-                ServerListener::Tcp(listener) => {
-                    WorkerThread::spawn("rsloop-tcp-accept", move |stop| {
-                        run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-                    })
-                }
-                #[cfg(unix)]
-                ServerListener::Unix(listener) => {
-                    WorkerThread::spawn("rsloop-unix-accept", move |stop| {
-                        run_unix_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-                    })
-                }
-            };
-            tasks.push(task);
+                    }));
         }
     }
 }
@@ -2819,7 +2793,6 @@ pub fn spawn_tcp_transport(
         server.connection_opened();
     }
 
-    #[cfg(target_os = "linux")]
     core.loop_core
         .send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader {
             fd: raw_fd,
@@ -2827,8 +2800,6 @@ pub fn spawn_tcp_transport(
             reader: ReaderTarget::Tcp(stream),
         }))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    #[cfg(not(target_os = "linux"))]
-    spawn_reader_worker(Arc::clone(&core), ReaderTarget::Tcp(stream));
     Ok(transport)
 }
 
@@ -2878,7 +2849,6 @@ pub fn spawn_unix_transport(
         server.connection_opened();
     }
 
-    #[cfg(target_os = "linux")]
     core.loop_core
         .send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader {
             fd: raw_fd,
@@ -2886,8 +2856,6 @@ pub fn spawn_unix_transport(
             reader: ReaderTarget::Unix(stream),
         }))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    #[cfg(not(target_os = "linux"))]
-    spawn_reader_worker(Arc::clone(&core), ReaderTarget::Unix(stream));
     Ok(transport)
 }
 
