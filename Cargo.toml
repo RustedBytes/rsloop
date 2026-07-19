@@ -1,6 +1,6 @@
 [package]
 name = "rsloop"
-version = "0.1.25"
+version = "0.1.26"
 edition = "2024"
 description = "An event loop for asyncio written in Rust"
 license = "Apache-2.0"

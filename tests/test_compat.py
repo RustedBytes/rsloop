@@ -7,6 +7,7 @@ import inspect
 import os
 import signal
 import socket
+import struct
 import sys
 import tempfile
 import time
@@ -221,6 +222,48 @@ class CompatibilityTests(unittest.TestCase):
         received, events = rsloop.run(main())
         self.assertEqual(received, b"response-before-eof")
         self.assertEqual(events, ["data", "eof", "lost"])
+
+    @unittest.skipUnless(sys.platform == "win32", "requires Winsock")
+    def test_write_reports_reset_while_reading_is_paused(self) -> None:
+        async def main() -> BaseException | None:
+            loop = asyncio.get_running_loop()
+            connection_lost = loop.create_future()
+
+            class ClientProtocol(asyncio.Protocol):
+                def connection_made(self, transport):
+                    transport.set_write_buffer_limits(0)
+                    transport.pause_reading()
+
+                def connection_lost(self, exc):
+                    if not connection_lost.done():
+                        connection_lost.set_result(exc)
+
+            server_sock = socket.create_server(("127.0.0.1", 0))
+            try:
+                transport, _ = await loop.create_connection(
+                    ClientProtocol, *server_sock.getsockname()[:2]
+                )
+                peer_sock, _ = server_sock.accept()
+                peer_sock.setsockopt(
+                    socket.SOL_SOCKET,
+                    socket.SO_LINGER,
+                    struct.pack("ii", 1, 0),
+                )
+                peer_sock.close()
+                try:
+                    for _ in range(1000):
+                        await asyncio.sleep(0)
+                        transport.write(b"foo")
+                        if connection_lost.done():
+                            break
+
+                    return await asyncio.wait_for(connection_lost, 3.0)
+                finally:
+                    transport.close()
+            finally:
+                server_sock.close()
+
+        self.assertIsNotNone(rsloop.run(main()))
 
     def test_readexactly_larger_than_flow_control_window(self) -> None:
         # Regression test: a readexactly() waiting for more than 2 * limit

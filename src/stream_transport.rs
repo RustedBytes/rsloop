@@ -1607,7 +1607,17 @@ impl StreamTransportCore {
         };
         let mut writer = writer.lock().expect("poisoned direct tasked writer");
         match writer.deref_mut() {
-            TaskedDirectWriter::Tcp(stream) => stream.write(data),
+            TaskedDirectWriter::Tcp(stream) => {
+                #[cfg(windows)]
+                // A paused reader does not consume Winsock's asynchronous reset
+                // notification. Surface it before another small write can appear
+                // to succeed from the local send buffer.
+                if let Some(err) = stream.take_error()? {
+                    return Err(err);
+                }
+
+                stream.write(data)
+            }
             #[cfg(unix)]
             TaskedDirectWriter::Unix(stream) => stream.write(data),
         }
