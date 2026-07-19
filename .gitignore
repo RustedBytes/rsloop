@@ -9,6 +9,7 @@ tmp/
 *.pyd
 
 python/rsloop/_loop.*
+python/rsloop/rsloop.pdb
 
 benchmarks/profiles*
 benchmarks/compare_event_loops.results.json
