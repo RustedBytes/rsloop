@@ -4,9 +4,11 @@ import asyncio
 import importlib.util
 import os
 import pathlib
+import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -18,8 +20,9 @@ TLS_GENERATOR = (
     pathlib.Path(__file__)
     .resolve()
     .parents[1]
-    .joinpath("scripts", "generate-test-tls-certs.sh")
+    .joinpath("scripts", "generate_test_tls_certs.py")
 )
+UV = shutil.which("uv") or "uv"
 
 
 def ensure_tls_fixtures() -> None:
@@ -29,7 +32,19 @@ def ensure_tls_fixtures() -> None:
     ):
         return
 
-    subprocess.run([str(TLS_GENERATOR), str(TLS_FIXTURES_DIR)], check=True)
+    subprocess.run(
+        [
+            UV,
+            "run",
+            "--no-project",
+            "--python",
+            sys.executable,
+            "python",
+            str(TLS_GENERATOR),
+            str(TLS_FIXTURES_DIR),
+        ],
+        check=True,
+    )
 
 
 ensure_tls_fixtures()

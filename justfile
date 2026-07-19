@@ -1,7 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 tls-test-certs outdir="tests/fixtures/tls":
-    ./scripts/generate-test-tls-certs.sh {{outdir}}
+    uv run --no-project python scripts/generate_test_tls_certs.py {{outdir}}
 
 fmt:
     uv run ruff format .
