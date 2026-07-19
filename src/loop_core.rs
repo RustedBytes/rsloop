@@ -5,7 +5,6 @@ use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-#[cfg(target_os = "linux")]
 use std::task::Waker;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -153,7 +152,6 @@ pub struct LoopCore {
     next_callback_id: AtomicU64,
     command_tx: Sender<LoopCommand>,
     runtime_thread: Mutex<Option<JoinHandle<()>>>,
-    #[cfg(target_os = "linux")]
     runtime_waker: Mutex<Option<Waker>>,
     active_ready_dispatch: Mutex<Option<ActiveReadyDispatch>>,
 }
@@ -169,7 +167,6 @@ impl LoopCore {
             next_callback_id: AtomicU64::new(1),
             command_tx,
             runtime_thread: Mutex::new(None),
-            #[cfg(target_os = "linux")]
             runtime_waker: Mutex::new(None),
             active_ready_dispatch: Mutex::new(None),
         });
@@ -196,7 +193,6 @@ impl LoopCore {
         self.command_tx
             .send(command)
             .map_err(|_| LoopCoreError::ChannelClosed)?;
-        #[cfg(target_os = "linux")]
         if let Some(waker) = self
             .runtime_waker
             .lock()
@@ -747,7 +743,6 @@ impl LoopCore {
         ACTIVE_LOOP_TLS.with(|tls| tls.core.set(self as *const Self));
     }
 
-    #[cfg(target_os = "linux")]
     pub(crate) fn set_runtime_waker(&self, waker: Option<Waker>) {
         *self.runtime_waker.lock().expect("poisoned runtime waker") = waker;
     }

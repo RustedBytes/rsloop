@@ -3,10 +3,8 @@ use std::fs;
 use std::io::{self, Read, Write as _};
 use std::net::{Shutdown, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
 use std::ops::DerefMut;
-#[cfg(target_os = "linux")]
-use std::os::fd::OwnedFd;
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use std::os::raw::c_int;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
@@ -21,20 +19,16 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
-#[cfg(target_os = "linux")]
-use compio::runtime::fd::PollFd;
-#[cfg(target_os = "linux")]
-use compio::time::sleep as compio_sleep;
 use pyo3::exceptions::{PyRuntimeError, PyTimeoutError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyByteArrayMethods, PyBytes, PyDict, PySlice, PyString, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
 use rustls::{ClientConnection, ServerConnection};
 use socket2::Socket;
-#[cfg(windows)]
 use tokio::io::AsyncReadExt;
-#[cfg(windows)]
 use vibeio::net::{PollTcpStream as VibePollTcpStream, TcpListener as VibeTcpListener};
+#[cfg(unix)]
+use vibeio::net::{PollUnixStream as VibePollUnixStream, UnixListener as VibeUnixListener};
 
 use crate::async_event::AsyncEvent;
 use crate::context::{
@@ -3296,7 +3290,6 @@ fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
     }
 }
 
-#[cfg(target_os = "linux")]
 pub(crate) async fn run_server_accept_task(server: Arc<ServerCore>, listener: ServerListener) {
     profiling::scope!("stream.run_server_accept_task");
     match listener {
@@ -3306,72 +3299,8 @@ pub(crate) async fn run_server_accept_task(server: Arc<ServerCore>, listener: Se
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn run_server_accept_blocking(params: BlockingAcceptLoop<ServerListener>) {
-    let BlockingAcceptLoop {
-        server,
-        listener,
-        stop,
-    } = params;
-    match listener {
-        ServerListener::Tcp(listener) => {
-            run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-        }
-        #[cfg(unix)]
-        ServerListener::Unix(listener) => {
-            run_unix_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
 async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
     profiling::scope!("stream.run_tcp_accept_task");
-    let poll_fd = listener.try_clone().and_then(PollFd::new);
-
-    let Ok(poll_fd) = poll_fd else {
-        return;
-    };
-
-    loop {
-        if server.is_closed() {
-            return;
-        }
-
-        if let Err(err) = poll_fd.accept_ready().await {
-            report_server_io_error(&server, err, "TCP server accept failed");
-            return;
-        }
-
-        loop {
-            let accept_result = listener.accept();
-            match accept_result {
-                Ok((stream, _addr)) => {
-                    if !configure_accepted_tcp_stream(
-                        &server,
-                        &stream,
-                        "failed to configure TCP connection",
-                    ) {
-                        continue;
-                    }
-                    schedule_accepted_transport(
-                        &server,
-                        AcceptedStream::Tcp(stream),
-                        "failed to accept TCP connection",
-                    );
-                }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                Err(err) => {
-                    report_server_io_error(&server, err, "TCP server accept failed");
-                    return;
-                }
-            }
-        }
-    }
-}
-
-#[cfg(windows)]
-pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
     let listener = match VibeTcpListener::from_std(listener) {
         Ok(listener) => listener,
         Err(err) => {
@@ -3387,7 +3316,11 @@ pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTc
 
         match listener.accept().await {
             Ok((stream, _addr)) => {
+                #[cfg(unix)]
+                let stream = unsafe { StdTcpStream::from_raw_fd(stream.into_raw_fd()) };
+                #[cfg(windows)]
                 let raw = stream.into_raw_socket();
+                #[cfg(windows)]
                 let stream = from_owned_raw_socket::<StdTcpStream>(raw);
                 if !configure_accepted_tcp_stream(
                     &server,
@@ -3457,10 +3390,14 @@ fn run_unix_accept_loop(params: BlockingAcceptLoop<StdUnixListener>) {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener) {
-    let Ok(poll_fd) = listener.try_clone().and_then(PollFd::new) else {
-        return;
+    let listener = match VibeUnixListener::from_std(listener) {
+        Ok(listener) => listener,
+        Err(err) => {
+            report_server_io_error(&server, err, "Unix server accept failed");
+            return;
+        }
     };
 
     loop {
@@ -3468,32 +3405,25 @@ async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener
             return;
         }
 
-        if let Err(err) = poll_fd.accept_ready().await {
-            report_server_io_error(&server, err, "Unix server accept failed");
-            return;
-        }
-
-        loop {
-            match listener.accept() {
-                Ok((stream, _addr)) => {
-                    if !configure_accepted_unix_stream(
-                        &server,
-                        &stream,
-                        "failed to configure Unix connection",
-                    ) {
-                        continue;
-                    }
-                    schedule_accepted_transport(
-                        &server,
-                        AcceptedStream::Unix(stream),
-                        "failed to accept Unix connection",
-                    );
+        match listener.accept().await {
+            Ok((stream, _addr)) => {
+                let stream = unsafe { StdUnixStream::from_raw_fd(stream.into_raw_fd()) };
+                if !configure_accepted_unix_stream(
+                    &server,
+                    &stream,
+                    "failed to configure Unix connection",
+                ) {
+                    continue;
                 }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                Err(err) => {
-                    report_server_io_error(&server, err, "Unix server accept failed");
-                    return;
-                }
+                schedule_accepted_transport(
+                    &server,
+                    AcceptedStream::Unix(stream),
+                    "failed to accept Unix connection",
+                );
+            }
+            Err(err) => {
+                report_server_io_error(&server, err, "Unix server accept failed");
+                return;
             }
         }
     }
@@ -3815,61 +3745,6 @@ fn spin_read_stream(
     }
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) async fn run_socket_reader_task(
-    core: Arc<StreamTransportCore>,
-    mut reader: ReaderTarget,
-) {
-    profiling::scope!("stream.run_socket_reader_task");
-    let Ok(poll_fd) = poll_fd_from_raw(reader.fd()) else {
-        core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-            "failed to attach socket reader".to_owned(),
-        )));
-        return;
-    };
-    let mut buf = [0_u8; STREAM_READ_BUFFER_SIZE];
-
-    loop {
-        if core.is_closing() {
-            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
-            return;
-        }
-
-        while !core.is_closing() && !core.is_reading() {
-            compio_sleep(Duration::from_millis(1)).await;
-        }
-        if core.is_closing() {
-            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
-            return;
-        }
-
-        if let Err(err) = poll_fd.read_ready().await {
-            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-                err.to_string(),
-            )));
-            return;
-        }
-
-        match reader.read(&mut buf) {
-            Ok(0) => {
-                core.enqueue_pending_read_event(PendingReadEvent::Eof);
-                return;
-            }
-            Ok(n) => core
-                .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-            Err(err) => {
-                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-                    err.to_string(),
-                )));
-                return;
-            }
-        }
-    }
-}
-
-#[cfg(windows)]
 pub(crate) async fn run_tcp_socket_reader_task(
     core: Arc<StreamTransportCore>,
     stream: StdTcpStream,
@@ -3893,7 +3768,7 @@ pub(crate) async fn run_tcp_socket_reader_task(
         }
 
         while !core.is_closing() && !core.is_reading() {
-            thread::sleep(Duration::from_millis(1));
+            vibeio::time::sleep(Duration::from_millis(1)).await;
         }
         if core.is_closing() {
             core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
@@ -3919,7 +3794,54 @@ pub(crate) async fn run_tcp_socket_reader_task(
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(unix)]
+pub(crate) async fn run_unix_socket_reader_task(
+    core: Arc<StreamTransportCore>,
+    stream: StdUnixStream,
+) {
+    profiling::scope!("stream.run_unix_socket_reader_task");
+    let mut reader = match VibePollUnixStream::from_std(stream) {
+        Ok(reader) => reader,
+        Err(err) => {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                err.to_string(),
+            )));
+            return;
+        }
+    };
+    let mut buf = vec![0_u8; STREAM_READ_BUFFER_SIZE];
+
+    loop {
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+        while !core.is_closing() && !core.is_reading() {
+            vibeio::time::sleep(Duration::from_millis(1)).await;
+        }
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+        match reader.read(&mut buf).await {
+            Ok(0) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                return;
+            }
+            Ok(n) => core
+                .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return;
+            }
+        }
+    }
+}
+
 pub(crate) fn run_socket_reader_blocking(
     core: Arc<StreamTransportCore>,
     reader: ReaderTarget,
@@ -4381,14 +4303,6 @@ fn wait_socket_ready_until(
     }
     thread::sleep(Duration::from_millis(10));
     Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn poll_fd_from_raw(fd: fd_ops::RawFd) -> io::Result<PollFd<OwnedFd>> {
-    let dup = fd_ops::dup_raw_fd(fd)?;
-    let owned = from_owned_raw_fd::<OwnedFd>(dup)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
-    PollFd::new(owned)
 }
 
 fn tls_io_error(err: rustls::Error) -> io::Error {
