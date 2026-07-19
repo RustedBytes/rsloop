@@ -1628,12 +1628,14 @@ impl StreamTransportCore {
             return;
         }
 
-        self.set_closing();
-        self.set_write_backpressure_active(false);
-        self.clear_write_buffer(false);
+        // Queue the write error before waking a paused reader. Otherwise the
+        // reader can observe `closing` and race this event with a clean loss.
         self.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
             err.map(|err| err.to_string()),
         ));
+        self.set_closing();
+        self.set_write_backpressure_active(false);
+        self.clear_write_buffer(false);
         let _ = self.writer_tx.send(WriterCommand::Stop);
     }
 
