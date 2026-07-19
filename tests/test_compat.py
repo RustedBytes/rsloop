@@ -223,6 +223,34 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(received, b"response-before-eof")
         self.assertEqual(events, ["data", "eof", "lost"])
 
+    def test_close_flushes_coalesced_server_writes(self) -> None:
+        first = b"a" * 128
+        second = b"b" * 128
+
+        async def main() -> bytes:
+            async def handle(
+                _reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                writer.write(first)
+                writer.write(second)
+                writer.close()
+                await writer.wait_closed()
+
+            server = await asyncio.start_server(handle, "127.0.0.1", 0)
+            try:
+                host, port = server.sockets[0].getsockname()[:2]
+                reader, writer = await asyncio.open_connection(host, port)
+                try:
+                    return await reader.read()
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        self.assertEqual(rsloop.run(main()), first + second)
+
     @unittest.skipUnless(sys.platform == "win32", "requires Winsock")
     def test_write_reports_reset_while_reading_is_paused(self) -> None:
         async def main() -> BaseException | None:

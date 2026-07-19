@@ -23,6 +23,7 @@ pub enum ReadyItem {
         value: Py<PyAny>,
     },
     StreamTransportRead(Arc<StreamTransportCore>),
+    StreamTransportWrite(Arc<StreamTransportCore>),
     ProcessTransport(Arc<ProcessTransportCore>),
     ServerAccepted {
         server: Arc<ServerCore>,
@@ -100,6 +101,7 @@ pub enum LoopFutureCommand {
 
 pub enum LoopTransportCommand {
     StreamRead(Arc<StreamTransportCore>),
+    StreamWrite(Arc<StreamTransportCore>),
     Process(Arc<ProcessTransportCore>),
     ServerAccepted {
         server: Arc<ServerCore>,

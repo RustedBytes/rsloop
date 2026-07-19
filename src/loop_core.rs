@@ -463,6 +463,10 @@ impl LoopCore {
                         profiling::scope!("ready.stream_transport_read");
                         core.drain_pending_read_events_with_py(py)?;
                     }
+                    ReadyItem::StreamTransportWrite(core) => {
+                        profiling::scope!("ready.stream_transport_write");
+                        core.flush_pending_direct_write();
+                    }
                     ReadyItem::ProcessTransport(core) => {
                         profiling::scope!("ready.process_transport");
                         core.drain_pending_events_with_py(py)?;
@@ -792,6 +796,9 @@ impl LoopCore {
                     ReadyItem::StreamTransportRead(core) => {
                         LoopCommand::Transport(LoopTransportCommand::StreamRead(core))
                     }
+                    ReadyItem::StreamTransportWrite(core) => {
+                        LoopCommand::Transport(LoopTransportCommand::StreamWrite(core))
+                    }
                     ReadyItem::ProcessTransport(core) => {
                         LoopCommand::Transport(LoopTransportCommand::Process(core))
                     }
@@ -840,6 +847,17 @@ impl LoopCore {
                     }
                     _ => {
                         unreachable!("local stream read enqueue preserves item kind")
+                    }
+                }),
+            LoopCommand::Transport(LoopTransportCommand::StreamWrite(core)) => self
+                .try_enqueue_local_ready(ReadyItem::StreamTransportWrite(core))
+                .or_else(|item| self.try_enqueue_active_ready(item))
+                .map_err(|item| match item {
+                    ReadyItem::StreamTransportWrite(core) => {
+                        LoopCommand::Transport(LoopTransportCommand::StreamWrite(core))
+                    }
+                    _ => {
+                        unreachable!("local stream write enqueue preserves item kind")
                     }
                 }),
             LoopCommand::Transport(LoopTransportCommand::Process(core)) => self

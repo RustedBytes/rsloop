@@ -243,6 +243,11 @@ impl RuntimeDispatcher {
                 self.ready_batch
                     .push_back(ReadyItem::StreamTransportRead(core));
             }
+            LoopCommand::Transport(LoopTransportCommand::StreamWrite(core)) => {
+                profiling::scope!("runtime.cmd.stream_transport_write");
+                self.ready_batch
+                    .push_back(ReadyItem::StreamTransportWrite(core));
+            }
             LoopCommand::Transport(LoopTransportCommand::Process(core)) => {
                 profiling::scope!("runtime.cmd.process_transport");
                 self.ready_batch

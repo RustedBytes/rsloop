@@ -59,6 +59,11 @@ enum PendingReadEvent {
 const DEFAULT_WRITE_BUFFER_HIGH_WATER: usize = 64 * 1024;
 const DEFAULT_WRITE_BUFFER_LOW_WATER: usize = DEFAULT_WRITE_BUFFER_HIGH_WATER / 4;
 const MAX_PENDING_READ_COALESCE_BYTES: usize = 256 * 1024;
+// Servers commonly emit a small protocol header followed immediately by a
+// body. Defer only that header-sized first write for one loop turn so adjacent
+// writes share a syscall; keep tiny control frames and larger payloads direct.
+const SMALL_WRITE_COALESCE_MIN_BYTES: usize = 64;
+const SMALL_WRITE_COALESCE_MAX_BYTES: usize = 512;
 const BLOCKING_POLL_INTERVAL_MS: i32 = 50;
 const STREAM_READ_BUFFER_SIZE: usize = 64 * 1024;
 
@@ -122,6 +127,14 @@ impl OwnedWriteBuffer {
     fn from_slice(data: &[u8]) -> Self {
         Self {
             bytes: Box::<[u8]>::from(data),
+            offset: 0,
+        }
+    }
+
+    #[inline]
+    fn from_vec(data: Vec<u8>) -> Self {
+        Self {
+            bytes: data.into_boxed_slice(),
             offset: 0,
         }
     }
@@ -521,8 +534,11 @@ pub struct StreamTransportCore {
     state: Mutex<StreamTransportState>,
     pending_read_events: Mutex<VecDeque<PendingReadEvent>>,
     read_events_scheduled: AtomicBool,
+    reading: AtomicBool,
     writer_tx: Sender<WriterCommand>,
     direct_writer: Option<Mutex<TaskedDirectWriter>>,
+    pending_direct_write: Mutex<Vec<u8>>,
+    direct_write_scheduled: AtomicBool,
     lazy_writer: Mutex<Option<LazyWriterConfig>>,
     workers: Mutex<Vec<WorkerThread>>,
     // Signaled whenever `read_paused` clears or the transport starts
@@ -532,6 +548,7 @@ pub struct StreamTransportCore {
     // The extra map is fixed at construction; cache the text-mode marker so
     // the per-write hot path avoids a state lock plus hash lookup.
     has_text_encoding: bool,
+    server_side: bool,
 }
 
 struct ServerState {
@@ -1156,6 +1173,7 @@ impl StreamTransportCore {
         pending_data: &mut Option<PendingReadBuffer>,
         fast_path: Option<&StreamReaderFastPath>,
     ) -> PyResult<()> {
+        profiling::scope!("StreamTransportCore::flush_pending_data_with_py");
         let Some(data) = pending_data.take() else {
             return Ok(());
         };
@@ -1447,6 +1465,7 @@ impl StreamTransportCore {
         state.reading = false;
         state.writable = false;
         drop(state);
+        self.reading.store(false, Ordering::Release);
         self.state_cv.notify_all();
     }
 
@@ -1477,6 +1496,7 @@ impl StreamTransportCore {
         let mut state = self.state.lock().expect("poisoned transport state");
         state.read_paused = true;
         state.reading = false;
+        self.reading.store(false, Ordering::Release);
     }
 
     fn resume_reading(&self) {
@@ -1484,11 +1504,12 @@ impl StreamTransportCore {
         state.read_paused = false;
         state.reading = true;
         drop(state);
+        self.reading.store(true, Ordering::Release);
         self.state_cv.notify_all();
     }
 
     fn is_reading(&self) -> bool {
-        self.state.lock().expect("poisoned transport state").reading
+        self.reading.load(Ordering::Acquire)
     }
 
     fn wait_until_readable(&self) {
@@ -1596,6 +1617,7 @@ impl StreamTransportCore {
     }
 
     fn try_direct_tasked_write(&self, data: &[u8]) -> io::Result<usize> {
+        profiling::scope!("StreamTransportCore::try_direct_tasked_write");
         let Some(writer) = &self.direct_writer else {
             return Err(io::Error::other("not direct-tasked"));
         };
@@ -1606,7 +1628,9 @@ impl StreamTransportCore {
                 // A paused reader does not consume Winsock's asynchronous reset
                 // notification. Surface it before another small write can appear
                 // to succeed from the local send buffer.
-                if let Some(err) = stream.take_error()? {
+                if !self.is_reading()
+                    && let Some(err) = stream.take_error()?
+                {
                     return Err(err);
                 }
 
@@ -1629,6 +1653,11 @@ impl StreamTransportCore {
         ));
         self.set_closing();
         self.set_write_backpressure_active(false);
+        self.pending_direct_write
+            .lock()
+            .expect("poisoned pending direct write")
+            .clear();
+        self.direct_write_scheduled.store(false, Ordering::Release);
         self.clear_write_buffer(false);
         let _ = self.writer_tx.send(WriterCommand::Stop);
     }
@@ -1646,8 +1675,107 @@ impl StreamTransportCore {
         Ok(())
     }
 
+    fn queue_recorded_write(self: &Arc<Self>, data: OwnedWriteBuffer) {
+        self.ensure_writer_worker();
+        if self.writer_tx.send(WriterCommand::Data(data)).is_err() {
+            self.clear_write_buffer(false);
+            self.fail_write(None);
+        }
+    }
+
+    fn stage_direct_write(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let should_pause = self.record_write_buffer_enqueued(data.len());
+        self.pending_direct_write
+            .lock()
+            .expect("poisoned pending direct write")
+            .extend_from_slice(data);
+        if should_pause {
+            self.notify_pause_writing();
+        }
+
+        if !self.direct_write_scheduled.swap(true, Ordering::AcqRel)
+            && self
+                .loop_core
+                .send_command(LoopCommand::Transport(LoopTransportCommand::StreamWrite(
+                    Arc::clone(self),
+                )))
+                .is_err()
+        {
+            self.direct_write_scheduled.store(false, Ordering::Release);
+            self.fail_write(None);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn flush_pending_direct_write(self: &Arc<Self>) {
+        profiling::scope!("StreamTransportCore::flush_pending_direct_write");
+        self.direct_write_scheduled.store(false, Ordering::Release);
+        let data = std::mem::take(
+            self.pending_direct_write
+                .lock()
+                .expect("poisoned pending direct write")
+                .deref_mut(),
+        );
+        if data.is_empty() {
+            return;
+        }
+        if self.is_closing() {
+            self.record_write_buffer_drained(data.len());
+            return;
+        }
+
+        match self.try_direct_tasked_write(&data) {
+            Ok(written) if written == data.len() => {
+                self.record_write_buffer_drained(written);
+            }
+            Ok(written) => {
+                self.record_write_buffer_drained(written);
+                let mut pending = OwnedWriteBuffer::from_vec(data);
+                pending.advance(written);
+                self.set_write_backpressure_active(true);
+                self.queue_recorded_write(pending);
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                self.set_write_backpressure_active(true);
+                self.queue_recorded_write(OwnedWriteBuffer::from_vec(data));
+            }
+            Err(err) => self.fail_write(Some(err)),
+        }
+    }
+
+    fn discard_pending_direct_write(self: &Arc<Self>) {
+        self.direct_write_scheduled.store(false, Ordering::Release);
+        let discarded = {
+            let mut pending = self
+                .pending_direct_write
+                .lock()
+                .expect("poisoned pending direct write");
+            let len = pending.len();
+            pending.clear();
+            len
+        };
+        self.record_write_buffer_drained(discarded);
+    }
+
     fn try_write_bytes(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
+        profiling::scope!("StreamTransportCore::try_write_bytes");
         if self.direct_writer.is_some() && !self.write_backpressure_active() {
+            if self.direct_write_scheduled.load(Ordering::Acquire)
+                || (self.server_side
+                    && data.len() > SMALL_WRITE_COALESCE_MIN_BYTES
+                    && data.len() <= SMALL_WRITE_COALESCE_MAX_BYTES)
+            {
+                return self.stage_direct_write(data);
+            }
             match self.try_direct_tasked_write(data) {
                 Ok(written) if written == data.len() => return Ok(()),
                 Ok(written) => {
@@ -1695,6 +1823,7 @@ impl StreamTransportCore {
         self: &Arc<Self>,
         py: Python<'_>,
     ) -> PyResult<(TransportSpawnContext, StreamKind)> {
+        self.flush_pending_direct_write();
         let protocol = self.get_protocol(py);
         let context = self
             .state
@@ -2006,6 +2135,7 @@ impl ServerCore {
 
 impl PyStreamTransport {
     pub(crate) fn write_data(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        profiling::scope!("PyStreamTransport::write_data");
         if self.core.is_closing() {
             return Ok(());
         }
@@ -2057,6 +2187,7 @@ impl PyStreamTransport {
     }
 
     fn close(&self) -> PyResult<()> {
+        self.core.flush_pending_direct_write();
         self.core.set_closing();
         if let Some(fd) = self.core.runtime_socket_fd() {
             let _ = self
@@ -2083,6 +2214,7 @@ impl PyStreamTransport {
     }
 
     fn abort(&self) -> PyResult<()> {
+        self.core.discard_pending_direct_write();
         self.core.set_closing();
         if let Some(fd) = self.core.runtime_socket_fd() {
             let _ = self
@@ -2117,6 +2249,7 @@ impl PyStreamTransport {
                 "transport does not support write_eof",
             ));
         }
+        self.core.flush_pending_direct_write();
         self.core.mark_write_eof();
         if self.core.direct_writer.is_some() && !self.core.write_backpressure_active() {
             if let Some(writer) = &self.core.direct_writer {
@@ -2596,18 +2729,24 @@ fn new_stream_transport_core(
     lazy_writer: Option<LazyWriterConfig>,
 ) -> Arc<StreamTransportCore> {
     let has_text_encoding = parts.state.extra.contains_key("text_encoding");
+    let server_side = parts.state.server.is_some();
+    let reading = parts.state.reading;
     Arc::new(StreamTransportCore {
         loop_core: parts.loop_core,
         loop_obj: parts.loop_obj,
         state: Mutex::new(parts.state),
         pending_read_events: Mutex::new(VecDeque::new()),
         read_events_scheduled: AtomicBool::new(false),
+        reading: AtomicBool::new(reading),
         writer_tx,
         direct_writer: direct_writer.map(Mutex::new),
+        pending_direct_write: Mutex::new(Vec::new()),
+        direct_write_scheduled: AtomicBool::new(false),
         lazy_writer: Mutex::new(lazy_writer),
         workers: Mutex::new(Vec::new()),
         state_cv: Condvar::new(),
         has_text_encoding,
+        server_side,
     })
 }
 
@@ -3966,7 +4105,6 @@ fn write_stream_data_batch(
             }
         }
     }
-
     if pending_command.is_none() {
         core.set_write_backpressure_active(false);
     }
