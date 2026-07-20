@@ -609,7 +609,18 @@ def run_with_loop(loop_name: str, awaitable: Awaitable[MatrixResult]) -> MatrixR
 
 
 def child_main(args: argparse.Namespace) -> int:
-    if args.loop == "rsloop" and not args.profile_label:
+    if args.profile_label:
+        if args.loop != "rsloop":
+            raise RuntimeError("Tracy profiling is only supported for rsloop")
+        import rsloop
+
+        if not rsloop.profiler_compiled():
+            raise RuntimeError(
+                "Tracy profiling was requested, but rsloop was built without profiler "
+                "support; rebuild with `uv run --with maturin maturin develop "
+                "--release --features profiler`"
+            )
+    elif args.loop == "rsloop":
         import rsloop
 
         if rsloop.profiler_compiled() and not args.allow_profiler_build:
@@ -617,16 +628,14 @@ def child_main(args: argparse.Namespace) -> int:
                 "refusing to measure a Tracy-enabled rsloop build; rebuild without "
                 "--features profiler or pass --allow-profiler-build explicitly"
             )
-    awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
-    if args.profile_label:
-        if args.loop != "rsloop":
-            raise RuntimeError("Tracy profiling is only supported for rsloop")
-        print(f"[profile] Tracy session label: {args.profile_label}", flush=True)
-        import rsloop
 
+    if args.profile_label:
+        print(f"[profile] Tracy session label: {args.profile_label}", flush=True)
         with rsloop.profile():
+            awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
             result = run_with_loop(args.loop, awaitable)
     else:
+        awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
         result = run_with_loop(args.loop, awaitable)
     result = MatrixResult(**{**asdict(result), "peak_rss_bytes": get_peak_rss_bytes()})
     print(json.dumps(asdict(result)))
@@ -767,6 +776,23 @@ def parent_main(args: argparse.Namespace) -> int:
             print(f"Skipping {loop_name}: {reason}")
     if not available:
         raise SystemExit("no benchmarkable loops are available")
+
+    if args.profile_rsloop_dir:
+        if "rsloop" not in available:
+            raise SystemExit("--profile-rsloop-dir requires rsloop in --loops")
+        import rsloop
+
+        if not rsloop.profiler_compiled():
+            raise SystemExit(
+                "--profile-rsloop-dir requires a Tracy-enabled rsloop build. Run:\n"
+                "  uv run --with maturin maturin develop --release --features profiler"
+            )
+        if not args.allow_profiler_build:
+            raise SystemExit(
+                "this invocation profiles and then measures the same Tracy-enabled build; "
+                "pass --allow-profiler-build to acknowledge that its measured results are "
+                "not comparable to a normal release build"
+            )
 
     output: list[dict[str, object]] = []
     for scenario in scenarios:

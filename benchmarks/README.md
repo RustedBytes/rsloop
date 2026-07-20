@@ -127,8 +127,14 @@ pass before each rsloop scenario:
 uv run --with maturin maturin develop --release --features profiler
 uv run --with uvloop python benchmarks/workload_matrix.py \
   --loops rsloop \
-  --profile-rsloop-dir benchmarks/profiles
+  --profile-rsloop-dir benchmarks/profiles \
+  --allow-profiler-build
 ```
+
+`--allow-profiler-build` is required because this invocation also reports
+measurements from the Tracy-enabled binary. Treat those measurements as
+profiling diagnostics, not as comparable release-build results. Rebuild without
+`--features profiler` before collecting the normal comparison matrix.
 
 On Windows, replace `--with uvloop` with `--with winloop` in the quick and
 profiling commands.
