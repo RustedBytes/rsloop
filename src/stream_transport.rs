@@ -65,7 +65,10 @@ const MAX_PENDING_READ_COALESCE_BYTES: usize = 256 * 1024;
 const SMALL_WRITE_COALESCE_MIN_BYTES: usize = 64;
 const SMALL_WRITE_COALESCE_MAX_BYTES: usize = 512;
 const BLOCKING_POLL_INTERVAL_MS: i32 = 50;
-const STREAM_READ_BUFFER_SIZE: usize = 64 * 1024;
+// Keep the per-connection allocation modest. Large reads are delivered in
+// several owned chunks, while the pending-event drain can still coalesce the
+// slow protocol path up to MAX_PENDING_READ_COALESCE_BYTES.
+const STREAM_READ_BUFFER_SIZE: usize = 16 * 1024;
 
 // After a successful read on a blocking reader worker, retry non-blocking
 // reads for this long before falling back to poll(). Request/response peers
@@ -887,6 +890,7 @@ impl io::Write for WriterTarget {
 
 struct WorkerThread {
     stop: Arc<AtomicBool>,
+    wake: Option<Box<dyn FnOnce() + Send>>,
     join: thread::JoinHandle<()>,
 }
 
@@ -898,11 +902,28 @@ impl WorkerThread {
             .name(name.to_owned())
             .spawn(move || task(thread_stop))
             .expect("failed to spawn stream worker");
-        Self { stop, join }
+        Self {
+            stop,
+            wake: None,
+            join,
+        }
     }
 
-    fn abort(self) {
+    fn spawn_interruptible(
+        name: &'static str,
+        wake: impl FnOnce() + Send + 'static,
+        task: impl FnOnce(Arc<AtomicBool>) + Send + 'static,
+    ) -> Self {
+        let mut worker = Self::spawn(name, task);
+        worker.wake = Some(Box::new(wake));
+        worker
+    }
+
+    fn abort(mut self) {
         self.stop.store(true, Ordering::Release);
+        if let Some(wake) = self.wake.take() {
+            wake();
+        }
         let _ = self.join.join();
     }
 }
@@ -1015,6 +1036,19 @@ impl StreamTransportCore {
                 match event {
                     PendingReadEvent::Data(data) => {
                         profiling::scope!("stream.pending.data");
+                        if let Some(fast_path) = fast_path.as_ref() {
+                            if let Err(err) = fast_path.feed_data(py, &data) {
+                                let _ = self.report_error_with_py(
+                                    py,
+                                    err,
+                                    "stream data_received callback failed",
+                                );
+                                let _ = self.connection_lost_with_py(py, None);
+                                self.read_events_scheduled.store(false, Ordering::Release);
+                                return Ok(());
+                            }
+                            continue;
+                        }
                         match &mut pending_data {
                             Some(buffer)
                                 if buffer.len() + data.len() <= MAX_PENDING_READ_COALESCE_BYTES =>
@@ -2098,15 +2132,38 @@ impl ServerCore {
                 let server = Arc::clone(self);
                 let task = match listener {
                     ServerListener::Tcp(listener) => {
-                        WorkerThread::spawn("rsloop-tcp-accept", move |stop| {
-                            run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-                        })
+                        let wake_addr = listener.local_addr().ok();
+                        WorkerThread::spawn_interruptible(
+                            "rsloop-tcp-accept",
+                            move || {
+                                if let Some(addr) = wake_addr {
+                                    let _ = StdTcpStream::connect(addr);
+                                }
+                            },
+                            move |stop| {
+                                run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
+                            },
+                        )
                     }
                     #[cfg(unix)]
                     ServerListener::Unix(listener) => {
-                        WorkerThread::spawn("rsloop-unix-accept", move |stop| {
-                            run_unix_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-                        })
+                        let wake_path = listener
+                            .local_addr()
+                            .ok()
+                            .and_then(|addr| addr.as_pathname().map(PathBuf::from));
+                        WorkerThread::spawn_interruptible(
+                            "rsloop-unix-accept",
+                            move || {
+                                if let Some(path) = wake_path {
+                                    let _ = StdUnixStream::connect(path);
+                                }
+                            },
+                            move |stop| {
+                                run_unix_accept_loop(BlockingAcceptLoop::new(
+                                    server, listener, stop,
+                                ))
+                            },
+                        )
                     }
                 };
                 tasks.push(task);
@@ -3371,6 +3428,10 @@ fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
             }
         }
 
+        if stop.load(Ordering::Acquire) || server.is_closed() {
+            return;
+        }
+
         loop {
             match listener.accept() {
                 Ok((stream, _addr)) => {
@@ -3469,6 +3530,10 @@ fn run_unix_accept_loop(params: BlockingAcceptLoop<StdUnixListener>) {
                 report_server_io_error(&server, err, "Unix server accept failed");
                 return;
             }
+        }
+
+        if stop.load(Ordering::Acquire) || server.is_closed() {
+            return;
         }
 
         loop {
@@ -3714,14 +3779,6 @@ fn read_tls_records(
 fn tls_socket_wait_target(tls_state: &SharedTlsIoState) -> (fd_ops::RawFd, bool) {
     let state = tls_state.lock().expect("poisoned tls state");
     (state.fd(), state.pollable())
-}
-
-fn write_tls_data(tls_state: &SharedTlsIoState, data: &[u8]) -> io::Result<()> {
-    let mut state = tls_state.lock().expect("poisoned tls state");
-    match state.connection.writer_write_all(data) {
-        Ok(()) => flush_tls_io_locked(&mut state),
-        Err(err) => Err(err),
-    }
 }
 
 fn close_tls_writer(tls_state: &SharedTlsIoState) -> io::Result<()> {
@@ -4214,16 +4271,23 @@ fn write_tls_data_batch(
     data: OwnedWriteBuffer,
     pending_command: &mut Option<WriterCommand>,
 ) -> bool {
-    if !write_one_tls_buffer(core, tls_state, &data) {
+    let mut buffered_len = 0;
+    let mut state = tls_state.lock().expect("poisoned tls state");
+    if let Err(err) = state.connection.writer_write_all(data.remaining()) {
+        drop(state);
+        report_writer_io_error(core, err);
         return false;
     }
-
+    buffered_len += data.remaining().len();
     loop {
         match writer_rx.try_recv() {
             Ok(WriterCommand::Data(next)) => {
-                if !write_one_tls_buffer(core, tls_state, &next) {
+                if let Err(err) = state.connection.writer_write_all(next.remaining()) {
+                    drop(state);
+                    report_writer_io_error(core, err);
                     return false;
                 }
+                buffered_len += next.remaining().len();
             }
             Ok(command) => {
                 *pending_command = Some(command);
@@ -4241,23 +4305,20 @@ fn write_tls_data_batch(
         }
     }
 
-    if pending_command.is_none() {
-        core.set_write_backpressure_active(false);
-    }
-    true
-}
-
-fn write_one_tls_buffer(
-    core: &Arc<StreamTransportCore>,
-    tls_state: &SharedTlsIoState,
-    data: &OwnedWriteBuffer,
-) -> bool {
-    let buffered_len = data.remaining().len();
-    if let Err(err) = write_tls_data(tls_state, data.remaining()) {
+    // Feed all immediately available plaintext into rustls before flushing
+    // encrypted records. This turns common header/body write pairs into one
+    // socket-flush pass and one TLS-state lock acquisition.
+    if let Err(err) = flush_tls_io_locked(&mut state) {
+        drop(state);
         report_writer_io_error(core, err);
         return false;
     }
+    drop(state);
     core.record_write_buffer_drained(buffered_len);
+
+    if pending_command.is_none() {
+        core.set_write_backpressure_active(false);
+    }
     true
 }
 

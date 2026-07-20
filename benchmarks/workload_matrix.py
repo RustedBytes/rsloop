@@ -74,10 +74,18 @@ class MatrixResult:
     bytes_transferred: int
     latency_ms: list[float]
     peak_rss_bytes: int = 0
+    connection_setup_seconds: float = 0.0
+    traffic_seconds: float = 0.0
+    teardown_seconds: float = 0.0
 
     @property
     def ops_per_sec(self) -> float:
         return self.operations / self.seconds if self.seconds else float("inf")
+
+    @property
+    def traffic_ops_per_sec(self) -> float:
+        denominator = self.traffic_seconds or self.seconds
+        return self.operations / denominator if denominator else float("inf")
 
     @property
     def mib_per_sec(self) -> float:
@@ -132,6 +140,11 @@ def parse_args() -> argparse.Namespace:
         "--profile-rsloop-dir",
         type=Path,
         help="Run one unmeasured Tracy pass per rsloop scenario before measurements.",
+    )
+    parser.add_argument(
+        "--allow-profiler-build",
+        action="store_true",
+        help="Allow measured rsloop runs from a Tracy-enabled build.",
     )
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--loop", choices=LOOP_CHOICES, help=argparse.SUPPRESS)
@@ -252,44 +265,58 @@ async def run_http(
     host, port = server.sockets[0].getsockname()[:2]
     latencies: list[float] = []
 
-    async def client() -> int:
-        reader, writer = await asyncio.open_connection(
+    async def open_client() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        connection = await asyncio.open_connection(
             host,
             port,
             ssl=client_ssl,
             server_hostname="localhost" if use_tls else None,
         )
+        clients.append(connection)
+        return connection
+
+    async def client(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> int:
         transferred = 0
-        try:
-            for _ in range(args.requests_per_connection):
-                started = time.perf_counter()
-                writer.write(HTTP_REQUEST)
-                await writer.drain()
-                await reader.readexactly(len(response_head))
-                await reader.readexactly(len(response_body))
-                latencies.append((time.perf_counter() - started) * 1000)
-                transferred += (
-                    len(HTTP_REQUEST) + len(response_head) + len(response_body)
-                )
-        finally:
-            await close_writer(writer)
+        for _ in range(args.requests_per_connection):
+            started = time.perf_counter()
+            writer.write(HTTP_REQUEST)
+            await writer.drain()
+            await reader.readexactly(len(response_head))
+            await reader.readexactly(len(response_body))
+            latencies.append((time.perf_counter() - started) * 1000)
+            transferred += len(HTTP_REQUEST) + len(response_head) + len(response_body)
         return transferred
 
     started = time.perf_counter()
+    clients: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+    setup_finished = traffic_finished = started
     try:
-        transferred = sum(
-            await asyncio.gather(*(client() for _ in range(args.concurrency)))
+        clients = list(
+            await asyncio.gather(*(open_client() for _ in range(args.concurrency)))
         )
+        setup_finished = time.perf_counter()
+        transferred = sum(await asyncio.gather(*(client(*pair) for pair in clients)))
+        traffic_finished = time.perf_counter()
     finally:
+        await asyncio.gather(
+            *(close_writer(writer) for _, writer in clients),
+            return_exceptions=True,
+        )
         await close_server(server)
+    finished = time.perf_counter()
     scenario = "tls_http" if use_tls else "http_keepalive"
     return MatrixResult(
         loop_name,
         scenario,
-        time.perf_counter() - started,
+        finished - started,
         args.concurrency * args.requests_per_connection,
         transferred,
         latencies,
+        connection_setup_seconds=setup_finished - started,
+        traffic_seconds=traffic_finished - setup_finished,
+        teardown_seconds=finished - traffic_finished,
     )
 
 
@@ -582,6 +609,14 @@ def run_with_loop(loop_name: str, awaitable: Awaitable[MatrixResult]) -> MatrixR
 
 
 def child_main(args: argparse.Namespace) -> int:
+    if args.loop == "rsloop" and not args.profile_label:
+        import rsloop
+
+        if rsloop.profiler_compiled() and not args.allow_profiler_build:
+            raise RuntimeError(
+                "refusing to measure a Tracy-enabled rsloop build; rebuild without "
+                "--features profiler or pass --allow-profiler-build explicitly"
+            )
     awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
     if args.profile_label:
         if args.loop != "rsloop":
@@ -637,6 +672,8 @@ def child_command(
     ]
     if profile_label:
         cmd.extend(("--profile-label", profile_label))
+    if args.allow_profiler_build:
+        cmd.append("--allow-profiler-build")
     return cmd
 
 
@@ -688,24 +725,31 @@ def summarize(scenario: str, runs: dict[str, list[MatrixResult]]) -> None:
                 loop_name,
                 median_seconds,
                 representative.operations / median_seconds,
+                representative.traffic_ops_per_sec,
                 representative.bytes_transferred / (1024 * 1024) / median_seconds,
                 percentile(representative.latency_ms, 0.50),
                 percentile(representative.latency_ms, 0.95),
                 percentile(representative.latency_ms, 0.99),
                 int(statistics.median(item.peak_rss_bytes for item in measured)),
+                statistics.median(item.connection_setup_seconds for item in measured),
+                statistics.median(item.traffic_seconds for item in measured),
+                statistics.median(item.teardown_seconds for item in measured),
             )
         )
     rows.sort(key=lambda row: row[1])
     print(f"\n{scenario}")
     print(
-        f"{'loop':<10} {'median_s':>10} {'ops/s':>12} {'MiB/s':>10} "
-        f"{'p50_ms':>10} {'p95_ms':>10} {'p99_ms':>10} {'peak_rss':>12}"
+        f"{'loop':<10} {'median_s':>10} {'total_ops/s':>12} {'traffic_ops/s':>14} "
+        f"{'MiB/s':>10} "
+        f"{'p50_ms':>10} {'p95_ms':>10} {'p99_ms':>10} {'peak_rss':>12} "
+        f"{'setup_s':>9} {'traffic_s':>10} {'close_s':>9}"
     )
     for row in rows:
         print(
-            f"{row[0]:<10} {row[1]:>10.4f} {row[2]:>12,.0f} {row[3]:>10.1f} "
-            f"{row[4]:>10.3f} {row[5]:>10.3f} {row[6]:>10.3f} "
-            f"{format_bytes(row[7]):>12}"
+            f"{row[0]:<10} {row[1]:>10.4f} {row[2]:>12,.0f} {row[3]:>14,.0f} "
+            f"{row[4]:>10.1f} {row[5]:>10.3f} {row[6]:>10.3f} {row[7]:>10.3f} "
+            f"{format_bytes(row[8]):>12} {row[9]:>9.4f} {row[10]:>10.4f} "
+            f"{row[11]:>9.4f}"
         )
 
 

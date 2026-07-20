@@ -21,6 +21,7 @@ fn loop_create_future(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<Py<PyAny
 struct ReadBuffer {
     bytes: Vec<u8>,
     start: usize,
+    retained_capacity: usize,
 }
 
 impl ReadBuffer {
@@ -28,6 +29,7 @@ impl ReadBuffer {
         Self {
             bytes: Vec::with_capacity(capacity),
             start: 0,
+            retained_capacity: capacity,
         }
     }
 
@@ -77,7 +79,11 @@ impl ReadBuffer {
             return;
         }
         if self.start == self.bytes.len() {
-            self.bytes.clear();
+            if self.bytes.capacity() > self.retained_capacity.saturating_mul(4) {
+                self.bytes = Vec::with_capacity(self.retained_capacity);
+            } else {
+                self.bytes.clear();
+            }
             self.start = 0;
             return;
         }
@@ -86,6 +92,23 @@ impl ReadBuffer {
             self.bytes.truncate(self.bytes.len() - self.start);
             self.start = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod read_buffer_tests {
+    use super::ReadBuffer;
+
+    #[test]
+    fn releases_oversized_allocation_after_consuming_all_data() {
+        let mut buffer = ReadBuffer::with_capacity(4096);
+        buffer.extend(&vec![0_u8; 2 * 1024 * 1024]);
+        assert!(buffer.bytes.capacity() >= 2 * 1024 * 1024);
+
+        buffer.consume_all();
+
+        assert_eq!(buffer.len(), 0);
+        assert!(buffer.bytes.capacity() <= 4096);
     }
 }
 

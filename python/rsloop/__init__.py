@@ -9,6 +9,7 @@ __bootstrap()
 from ._loop_compat import Loop
 from ._loop_compat import __version__
 from ._profile import profile
+from ._profile import profiler_compiled
 from ._profile import profiler_running
 from ._profile import start_profiler
 from ._profile import stop_profiler
@@ -25,6 +26,7 @@ __all__: tuple[str, ...] = (
     "install",
     "new_event_loop",
     "profile",
+    "profiler_compiled",
     "profiler_running",
     "run",
     "start_profiler",
