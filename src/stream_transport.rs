@@ -49,7 +49,7 @@ enum WriterCommand {
 }
 
 enum PendingReadEvent {
-    Data(Box<[u8]>),
+    Data(Vec<u8>),
     Eof,
     ConnectionLost(Option<String>),
     PauseWriting,
@@ -71,6 +71,8 @@ const BLOCKING_POLL_INTERVAL_MS: i32 = 50;
 // several owned chunks, while the pending-event drain can still coalesce the
 // slow protocol path up to MAX_PENDING_READ_COALESCE_BYTES.
 const STREAM_READ_BUFFER_SIZE: usize = 16 * 1024;
+const OWNED_READ_HANDOFF_MIN_BYTES: usize = STREAM_READ_BUFFER_SIZE / 2;
+const TLS_WORKER_STACK_SIZE: usize = 256 * 1024;
 
 // After a successful read on a blocking reader worker, retry non-blocking
 // reads for this long before falling back to poll(). Request/response peers
@@ -92,38 +94,21 @@ struct OwnedWriteBuffer {
     offset: usize,
 }
 
-enum PendingReadBuffer {
-    Boxed(Box<[u8]>),
-    Vec(Vec<u8>),
-}
+struct PendingReadBuffer(Vec<u8>);
 
 impl PendingReadBuffer {
     #[inline]
     fn len(&self) -> usize {
-        match self {
-            Self::Boxed(data) => data.len(),
-            Self::Vec(data) => data.len(),
-        }
+        self.0.len()
     }
 
     #[inline]
     fn as_slice(&self) -> &[u8] {
-        match self {
-            Self::Boxed(data) => data,
-            Self::Vec(data) => data,
-        }
+        &self.0
     }
 
-    fn extend(&mut self, data: Box<[u8]>) {
-        match self {
-            Self::Boxed(existing) => {
-                let mut combined = Vec::with_capacity(existing.len() + data.len());
-                combined.extend_from_slice(existing);
-                combined.extend_from_slice(&data);
-                *self = Self::Vec(combined);
-            }
-            Self::Vec(existing) => existing.extend_from_slice(&data),
-        }
+    fn extend(&mut self, data: Vec<u8>) {
+        self.0.extend_from_slice(&data);
     }
 }
 
@@ -390,7 +375,7 @@ impl StreamReaderFastPath {
         }
     }
 
-    fn feed_owned_data(&self, py: Python<'_>, data: Box<[u8]>) -> PyResult<()> {
+    fn feed_owned_data(&self, py: Python<'_>, data: Vec<u8>) -> PyResult<()> {
         match self {
             Self::Native { reader, .. } => reader.borrow_mut(py).feed_owned_data_internal(py, data),
             Self::Generic { .. } => self.feed_data(py, &data),
@@ -930,10 +915,21 @@ struct WorkerThread {
 
 impl WorkerThread {
     fn spawn(name: &'static str, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
+        Self::spawn_with_stack(name, None, task)
+    }
+
+    fn spawn_with_stack(
+        name: &'static str,
+        stack_size: Option<usize>,
+        task: impl FnOnce(Arc<AtomicBool>) + Send + 'static,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
-        let join = thread::Builder::new()
-            .name(name.to_owned())
+        let mut builder = thread::Builder::new().name(name.to_owned());
+        if let Some(stack_size) = stack_size {
+            builder = builder.stack_size(stack_size);
+        }
+        let join = builder
             .spawn(move || task(thread_stop))
             .expect("failed to spawn stream worker");
         Self {
@@ -1114,9 +1110,9 @@ impl StreamTransportCore {
                                         self.read_events_scheduled.store(false, Ordering::Release);
                                         return Ok(());
                                     }
-                                    pending_data = Some(PendingReadBuffer::Boxed(data));
+                                    pending_data = Some(PendingReadBuffer(data));
                                 }
-                                None => pending_data = Some(PendingReadBuffer::Boxed(data)),
+                                None => pending_data = Some(PendingReadBuffer(data)),
                             }
                         }
 
@@ -3490,12 +3486,15 @@ pub(crate) fn spawn_accepted_transport_with_py(
 
 fn schedule_accepted_transport(server: &Arc<ServerCore>, stream: AcceptedStream, message: &str) {
     if server.tls.is_some() {
-        let result = Python::try_attach(|py| spawn_accepted_transport_with_py(py, server, stream));
-        match result {
-            Some(Ok(_)) => {}
-            Some(Err(err)) => server.report_error(err, message),
-            None => {}
-        }
+        let server = Arc::clone(server);
+        let message = message.to_owned();
+        drop(async_std::task::spawn_blocking(move || {
+            let result =
+                Python::try_attach(|py| spawn_accepted_transport_with_py(py, &server, stream));
+            if let Some(Err(err)) = result {
+                server.report_error(err, &message);
+            }
+        }));
         return;
     }
 
@@ -3713,9 +3712,11 @@ fn spawn_reader_worker(core: Arc<StreamTransportCore>, reader: ReaderTarget) {
 
 fn spawn_tls_reader_worker(core: Arc<StreamTransportCore>, tls_state: SharedTlsIoState) {
     let thread_core = Arc::clone(&core);
-    let worker = WorkerThread::spawn("rsloop-tls-reader", move |stop| {
-        run_tls_reader(thread_core, tls_state, stop)
-    });
+    let worker = WorkerThread::spawn_with_stack(
+        "rsloop-tls-reader",
+        Some(TLS_WORKER_STACK_SIZE),
+        move |stop| run_tls_reader(thread_core, tls_state, stop),
+    );
     core.register_worker(worker);
 }
 
@@ -3738,9 +3739,11 @@ fn spawn_tls_writer_worker(
     writer_rx: Receiver<WriterCommand>,
 ) {
     let thread_core = Arc::clone(&core);
-    let worker = WorkerThread::spawn("rsloop-tls-writer", move |stop| {
-        run_tls_writer(thread_core, tls_state, writer_rx, stop)
-    });
+    let worker = WorkerThread::spawn_with_stack(
+        "rsloop-tls-writer",
+        Some(TLS_WORKER_STACK_SIZE),
+        move |stop| run_tls_writer(thread_core, tls_state, writer_rx, stop),
+    );
     core.register_worker(worker);
 }
 
@@ -3815,9 +3818,7 @@ fn drain_tls_plaintext_locked(
             Ok(0) => break,
             Ok(n) => {
                 saw_data = true;
-                core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
-                    &plaintext[..n],
-                )));
+                core.enqueue_pending_read_event(PendingReadEvent::Data(plaintext[..n].to_vec()));
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
             Err(err) => return Err(err.to_string()),
@@ -3940,9 +3941,7 @@ fn run_stream_reader(
                 return;
             }
             Ok(n) => {
-                core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
-                    &buf[..n],
-                )));
+                core.enqueue_pending_read_event(PendingReadEvent::Data(buf[..n].to_vec()));
                 if !spin_window.is_zero()
                     && !spin_read_stream(&core, &mut reader, &stop, &mut buf, spin_window)
                 {
@@ -3986,9 +3985,7 @@ fn spin_read_stream(
                 return false;
             }
             Ok(n) => {
-                core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
-                    &buf[..n],
-                )));
+                core.enqueue_pending_read_event(PendingReadEvent::Data(buf[..n].to_vec()));
                 if core.is_closing() || !core.is_reading() {
                     return true;
                 }
@@ -4049,8 +4046,10 @@ pub(crate) async fn run_tcp_socket_reader_task(
                 core.enqueue_pending_read_event(PendingReadEvent::Eof);
                 return;
             }
-            Ok(n) => core
-                .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
+            Ok(_) => {
+                let data = take_async_read_data(&mut buf);
+                core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+            }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => {
@@ -4098,8 +4097,10 @@ pub(crate) async fn run_unix_socket_reader_task(
                 core.enqueue_pending_read_event(PendingReadEvent::Eof);
                 return;
             }
-            Ok(n) => core
-                .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
+            Ok(_) => {
+                let data = take_async_read_data(&mut buf);
+                core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+            }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => {
@@ -4110,6 +4111,13 @@ pub(crate) async fn run_unix_socket_reader_task(
             }
         }
     }
+}
+
+fn take_async_read_data(buf: &mut Vec<u8>) -> Vec<u8> {
+    if buf.len() < OWNED_READ_HANDOFF_MIN_BYTES {
+        return buf.clone();
+    }
+    std::mem::replace(buf, Vec::with_capacity(STREAM_READ_BUFFER_SIZE))
 }
 
 pub(crate) fn run_socket_reader_blocking(

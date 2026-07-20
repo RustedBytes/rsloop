@@ -1,4 +1,5 @@
 use pyo3::exceptions::PyValueError;
+use pyo3::ffi;
 use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyTuple};
@@ -67,12 +68,12 @@ impl ReadBuffer {
         self.bytes.extend_from_slice(data);
     }
 
-    fn extend_owned(&mut self, data: Box<[u8]>) {
+    fn extend_owned(&mut self, data: Vec<u8>) {
         if data.is_empty() {
             return;
         }
         if self.is_empty() {
-            self.bytes = data.into_vec();
+            self.bytes = data;
             self.start = 0;
         } else {
             self.extend(&data);
@@ -136,7 +137,7 @@ mod read_buffer_tests {
     #[test]
     fn adopts_owned_data_without_copying_when_empty() {
         let mut buffer = ReadBuffer::with_capacity(4096);
-        let data = vec![7_u8; 1024].into_boxed_slice();
+        let data = vec![7_u8; 1024];
         let data_ptr = data.as_ptr();
 
         buffer.extend_owned(data);
@@ -156,6 +157,64 @@ enum ReadWaitKind {
 struct ReadWaiter {
     future: Py<PyAny>,
     kind: ReadWaitKind,
+    exact: Option<ExactReadAccumulator>,
+}
+
+struct ExactReadAccumulator {
+    value: Py<PyBytes>,
+    filled: usize,
+    expected: usize,
+}
+
+impl ExactReadAccumulator {
+    fn new(py: Python<'_>, expected: usize) -> PyResult<Self> {
+        // SAFETY: The object is retained only inside this waiter and is not
+        // exposed to Python until all `expected` bytes have been initialized.
+        let ptr = unsafe {
+            ffi::PyBytes_FromStringAndSize(core::ptr::null(), expected as ffi::Py_ssize_t)
+        };
+        if ptr.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+        let value = unsafe {
+            Bound::<PyAny>::from_owned_ptr(py, ptr)
+                .cast_into_unchecked::<PyBytes>()
+                .unbind()
+        };
+        Ok(Self {
+            value,
+            filled: 0,
+            expected,
+        })
+    }
+
+    fn fill_from(&mut self, buffer: &mut ReadBuffer) {
+        let amount = buffer.len().min(self.expected - self.filled);
+        if amount == 0 {
+            return;
+        }
+        // SAFETY: `value` has exactly `expected` bytes, remains private to
+        // this accumulator, and the destination range is disjoint/in-bounds.
+        unsafe {
+            let destination = ffi::PyBytes_AsString(self.value.as_ptr())
+                .cast::<u8>()
+                .add(self.filled);
+            core::ptr::copy_nonoverlapping(buffer.unread().as_ptr(), destination, amount);
+        }
+        self.filled += amount;
+        buffer.consume(amount);
+    }
+
+    fn partial(&self) -> &[u8] {
+        // SAFETY: The first `filled` bytes were initialized by `fill_from` and
+        // the returned slice is consumed immediately while `self` is alive.
+        unsafe {
+            core::slice::from_raw_parts(
+                ffi::PyBytes_AsString(self.value.as_ptr()).cast::<u8>(),
+                self.filled,
+            )
+        }
+    }
 }
 
 #[pyclass(module = "rsloop._loop")]
@@ -345,6 +404,14 @@ impl PyFastStreamReader {
             return Ok(());
         }
 
+        if let Some(exact) = self
+            .waiter
+            .as_mut()
+            .and_then(|waiter| waiter.exact.as_mut())
+        {
+            exact.fill_from(&mut self.buffer);
+        }
+
         match kind {
             ReadWaitKind::Any(n) => {
                 if self.buffer.is_empty() && !self.eof {
@@ -356,9 +423,14 @@ impl PyFastStreamReader {
                 Self::set_future_result_or_ignore_cancelled(py, &future, data)?;
             }
             ReadWaitKind::Exact(n) => {
-                if self.buffer.len() >= n {
+                let exact = self
+                    .waiter
+                    .as_ref()
+                    .and_then(|waiter| waiter.exact.as_ref())
+                    .expect("exact read waiter missing accumulator");
+                if exact.filled >= n {
+                    let data = exact.value.clone_ref(py).into_any();
                     self.waiter = None;
-                    let data = self.unread_bytes_object(py, n);
                     self.maybe_resume_transport(py)?;
                     Self::set_future_result_or_ignore_cancelled(py, &future, data)?;
                     return Ok(());
@@ -366,8 +438,7 @@ impl PyFastStreamReader {
                 if !self.eof {
                     return Ok(());
                 }
-                let err = Self::incomplete_read_error(py, self.buffer.unread(), n)?;
-                self.buffer.consume_all();
+                let err = Self::incomplete_read_error(py, exact.partial(), n)?;
                 self.waiter = None;
                 Self::set_future_exception_or_ignore_cancelled(py, &future, err)?;
             }
@@ -404,10 +475,22 @@ impl PyFastStreamReader {
             )?;
         }
         let future = self.create_future(py)?;
+        let exact = match &kind {
+            ReadWaitKind::Exact(expected) => Some(ExactReadAccumulator::new(py, *expected)?),
+            _ => None,
+        };
         self.waiter = Some(ReadWaiter {
             future: future.clone_ref(py),
             kind,
+            exact,
         });
+        if let Some(exact) = self
+            .waiter
+            .as_mut()
+            .and_then(|waiter| waiter.exact.as_mut())
+        {
+            exact.fill_from(&mut self.buffer);
+        }
         Ok(future)
     }
 
@@ -432,7 +515,7 @@ impl PyFastStreamReader {
     pub(crate) fn feed_owned_data_internal(
         &mut self,
         py: Python<'_>,
-        data: Box<[u8]>,
+        data: Vec<u8>,
     ) -> PyResult<()> {
         if self.eof {
             return Err(PyValueError::new_err("feed_data after feed_eof"));

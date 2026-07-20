@@ -461,41 +461,60 @@ async def run_mixed_streams(loop_name: str, args: argparse.Namespace) -> MatrixR
     host, port = server.sockets[0].getsockname()[:2]
     latencies: list[float] = []
 
-    async def client(client_id: int) -> int:
+    connections: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+
+    async def open_client(
+        client_id: int,
+    ) -> tuple[int, asyncio.StreamReader, asyncio.StreamWriter]:
         reader, writer = await asyncio.open_connection(host, port)
+        connections.append((reader, writer))
+        return client_id, reader, writer
+
+    async def client(
+        client_id: int, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> int:
         transferred = 0
-        try:
-            for index in range(args.requests_per_connection):
-                size = args.mixed_payload_sizes[
-                    (client_id + index) % len(args.mixed_payload_sizes)
-                ]
-                payload = bytes([(client_id + index) % 251]) * size
-                started = time.perf_counter()
-                writer.write(payload)
-                await writer.drain()
-                response = await reader.readexactly(size)
-                if response != payload:
-                    raise RuntimeError("mixed stream echo mismatch")
-                latencies.append((time.perf_counter() - started) * 1000)
-                transferred += size * 2
-        finally:
-            await close_writer(writer)
+        for index in range(args.requests_per_connection):
+            size = args.mixed_payload_sizes[
+                (client_id + index) % len(args.mixed_payload_sizes)
+            ]
+            payload = bytes([(client_id + index) % 251]) * size
+            started = time.perf_counter()
+            writer.write(payload)
+            await writer.drain()
+            response = await reader.readexactly(size)
+            if response != payload:
+                raise RuntimeError("mixed stream echo mismatch")
+            latencies.append((time.perf_counter() - started) * 1000)
+            transferred += size * 2
         return transferred
 
     started = time.perf_counter()
+    setup_finished = traffic_finished = started
     try:
-        transferred = sum(
-            await asyncio.gather(*(client(index) for index in range(args.concurrency)))
+        opened = await asyncio.gather(
+            *(open_client(index) for index in range(args.concurrency))
         )
+        setup_finished = time.perf_counter()
+        transferred = sum(await asyncio.gather(*(client(*item) for item in opened)))
+        traffic_finished = time.perf_counter()
     finally:
+        await asyncio.gather(
+            *(close_writer(writer) for _, writer in connections),
+            return_exceptions=True,
+        )
         await close_server(server)
+    finished = time.perf_counter()
     return MatrixResult(
         loop_name,
         "mixed_streams",
-        time.perf_counter() - started,
+        finished - started,
         args.concurrency * args.requests_per_connection,
         transferred,
         latencies,
+        connection_setup_seconds=setup_finished - started,
+        traffic_seconds=traffic_finished - setup_finished,
+        teardown_seconds=finished - traffic_finished,
     )
 
 
@@ -520,32 +539,47 @@ async def run_bulk_transfer(loop_name: str, args: argparse.Namespace) -> MatrixR
     host, port = server.sockets[0].getsockname()[:2]
     latencies: list[float] = []
 
-    async def client() -> int:
+    connections: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+
+    async def open_client() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
         reader, writer = await asyncio.open_connection(host, port)
+        connections.append((reader, writer))
+        return reader, writer
+
+    async def client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> int:
         started = time.perf_counter()
-        try:
-            writer.write(b"!")
-            await writer.drain()
-            await reader.readexactly(args.bulk_bytes)
-            latencies.append((time.perf_counter() - started) * 1000)
-        finally:
-            await close_writer(writer)
+        writer.write(b"!")
+        await writer.drain()
+        await reader.readexactly(args.bulk_bytes)
+        latencies.append((time.perf_counter() - started) * 1000)
         return args.bulk_bytes + 1
 
     started = time.perf_counter()
+    setup_finished = traffic_finished = started
     try:
+        opened = await asyncio.gather(*(open_client() for _ in range(args.concurrency)))
+        setup_finished = time.perf_counter()
         transferred = sum(
-            await asyncio.gather(*(client() for _ in range(args.concurrency)))
+            await asyncio.gather(*(client(*connection) for connection in opened))
         )
+        traffic_finished = time.perf_counter()
     finally:
+        await asyncio.gather(
+            *(close_writer(writer) for _, writer in connections),
+            return_exceptions=True,
+        )
         await close_server(server)
+    finished = time.perf_counter()
     return MatrixResult(
         loop_name,
         "bulk_transfer",
-        time.perf_counter() - started,
+        finished - started,
         args.concurrency,
         transferred,
         latencies,
+        connection_setup_seconds=setup_finished - started,
+        traffic_seconds=traffic_finished - setup_finished,
+        teardown_seconds=finished - traffic_finished,
     )
 
 

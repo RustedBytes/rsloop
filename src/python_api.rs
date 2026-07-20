@@ -1973,8 +1973,8 @@ impl PyLoop {
                 })?
             };
 
-            let transport = Python::attach(|py| {
-                if let Some(ssl) = ssl.as_ref() {
+            let transport = if let Some(ssl) = ssl.as_ref() {
+                let (spawn_context, tls) = Python::attach(|py| {
                     let tls = client_tls_settings(
                         py,
                         ssl.bind(py),
@@ -1982,8 +1982,7 @@ impl PyLoop {
                         ssl_handshake_timeout,
                         ssl_shutdown_timeout,
                     )?;
-                    transport_from_socket_tls(
-                        py,
+                    Ok::<_, PyErr>((
                         stream_spawn_context(
                             py,
                             &core,
@@ -1992,10 +1991,17 @@ impl PyLoop {
                             &context,
                             context_needs_run,
                         ),
-                        socket_obj,
                         tls,
-                    )
-                } else {
+                    ))
+                })?;
+                async_std::task::spawn_blocking(move || {
+                    Python::attach(|py| {
+                        transport_from_socket_tls(py, spawn_context, socket_obj, tls)
+                    })
+                })
+                .await?
+            } else {
+                Python::attach(|py| {
                     transport_from_socket(
                         py,
                         stream_spawn_context(
@@ -2008,8 +2014,8 @@ impl PyLoop {
                         ),
                         socket_obj,
                     )
-                }
-            })?;
+                })?
+            };
 
             Python::attach(|py| {
                 let result = PyTuple::new(py, [transport.into_any(), protocol.clone_ref(py)])?;
@@ -2270,8 +2276,8 @@ impl PyLoop {
                 socket_obj
             };
 
-            let transport = Python::attach(|py| {
-                if let Some(ssl) = ssl.as_ref() {
+            let transport = if let Some(ssl) = ssl.as_ref() {
+                let (spawn_context, tls) = Python::attach(|py| {
                     let tls = client_tls_settings(
                         py,
                         ssl.bind(py),
@@ -2279,8 +2285,7 @@ impl PyLoop {
                         ssl_handshake_timeout,
                         ssl_shutdown_timeout,
                     )?;
-                    transport_from_socket_tls(
-                        py,
+                    Ok::<_, PyErr>((
                         stream_spawn_context(
                             py,
                             &core,
@@ -2289,10 +2294,17 @@ impl PyLoop {
                             &context,
                             context_needs_run,
                         ),
-                        socket_obj,
                         tls,
-                    )
-                } else {
+                    ))
+                })?;
+                async_std::task::spawn_blocking(move || {
+                    Python::attach(|py| {
+                        transport_from_socket_tls(py, spawn_context, socket_obj, tls)
+                    })
+                })
+                .await?
+            } else {
+                Python::attach(|py| {
                     transport_from_socket(
                         py,
                         stream_spawn_context(
@@ -2305,8 +2317,8 @@ impl PyLoop {
                         ),
                         socket_obj,
                     )
-                }
-            })?;
+                })?
+            };
 
             Python::attach(|py| {
                 let result = PyTuple::new(py, [transport.into_any(), protocol.clone_ref(py)])?;
