@@ -476,6 +476,30 @@ impl RuntimeDispatcher {
                     cancel_watch_task(task);
                 }
             }
+            #[cfg(unix)]
+            LoopCommand::Io(LoopIoCommand::WatchConnect { fd, future }) => {
+                profiling::scope!("runtime.cmd.watch_connect");
+                // Detached: the task self-reports via ConnectCompleted, and a
+                // vibeio JoinHandle has no Drop, so dropping it detaches (does
+                // not cancel) the running task.
+                let core = Arc::clone(&self.core);
+                let _ = vibeio::spawn(crate::stream_transport::run_connect_watch_task(
+                    core, fd, future,
+                ));
+            }
+            #[cfg(unix)]
+            LoopCommand::ConnectCompleted {
+                future,
+                fd,
+                wait_errno,
+            } => {
+                profiling::scope!("runtime.cmd.connect_completed");
+                self.ready_batch.push_back(ReadyItem::ConnectCompleted {
+                    future,
+                    fd,
+                    wait_errno,
+                });
+            }
             LoopCommand::RequestStop => {
                 profiling::scope!("runtime.cmd.request_stop");
                 self.ready_batch.push_back(ReadyItem::Stop);

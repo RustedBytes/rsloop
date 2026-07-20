@@ -29,6 +29,17 @@ pub enum ReadyItem {
         server: Arc<ServerCore>,
         stream: AcceptedStream,
     },
+    // A non-blocking TCP connect finished its writability wait on the vibeio
+    // reactor. The Python-object work (SO_ERROR check, set_result /
+    // set_exception) is deferred to the loop thread so the vibeio side never
+    // touches the GIL — many concurrent connects then drain in one GIL-held
+    // batch instead of one contended handoff per completion.
+    #[cfg(unix)]
+    ConnectCompleted {
+        future: Py<PyAny>,
+        fd: RawFd,
+        wait_errno: i32,
+    },
     Stop,
 }
 
@@ -44,6 +55,12 @@ pub enum LoopCommand {
     Io(LoopIoCommand),
     Future(LoopFutureCommand),
     Transport(LoopTransportCommand),
+    #[cfg(unix)]
+    ConnectCompleted {
+        future: Py<PyAny>,
+        fd: RawFd,
+        wait_errno: i32,
+    },
     RequestStop,
     Close,
 }
@@ -92,6 +109,13 @@ pub enum LoopIoCommand {
         listener: ServerListener,
     },
     StopServerAccept(RawFd),
+    // Watch a connecting TCP socket for writability on the vibeio reactor, then
+    // report completion back to the loop thread via `ReadyItem::ConnectCompleted`.
+    #[cfg(unix)]
+    WatchConnect {
+        fd: RawFd,
+        future: Py<PyAny>,
+    },
 }
 
 pub enum LoopFutureCommand {

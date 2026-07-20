@@ -810,6 +810,63 @@ fn is_connect_in_progress_errno(errno: i32) -> bool {
     errno == libc::EINPROGRESS || errno == libc::EALREADY || errno == libc::EWOULDBLOCK
 }
 
+/// True for an AF_INET/AF_INET6 SOCK_STREAM socket, the sockets the vibeio
+/// connect fast path handles. A type carrying extra flag bits declines the fast
+/// path (falls back), which is never a correctness problem.
+#[cfg(unix)]
+fn socket_is_inet_stream(py: Python<'_>, sock: &Py<PyAny>) -> PyResult<bool> {
+    let socket_mod = py.import("socket")?;
+    let family: i32 = sock.getattr(py, "family")?.extract(py)?;
+    let af_inet: i32 = socket_mod.getattr("AF_INET")?.extract()?;
+    let af_inet6: i32 = socket_mod.getattr("AF_INET6")?.extract()?;
+    if family != af_inet && family != af_inet6 {
+        return Ok(false);
+    }
+    let sock_type: i32 = sock.getattr(py, "type")?.extract(py)?;
+    let sock_stream: i32 = socket_mod.getattr("SOCK_STREAM")?.extract()?;
+    Ok(sock_type == sock_stream)
+}
+
+/// Initiates a non-blocking connect on the loop thread and, when it does not
+/// complete synchronously, hands the writability wait to the vibeio reactor via
+/// `WatchConnect`. Returns the loop Future the caller awaits.
+#[cfg(unix)]
+fn fast_sock_connect<'py>(
+    slf: &Py<PyLoop>,
+    py: Python<'py>,
+    sock: Py<PyAny>,
+    address: Py<PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let future = slf.call_method0(py, "create_future")?;
+    let future_bound = future.bind(py).clone();
+    let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
+
+    match sock.call_method1(py, "connect", (address.bind(py),)) {
+        Ok(_) => {
+            future_bound.call_method1("set_result", (py.None(),))?;
+            return Ok(future_bound);
+        }
+        Err(err) => {
+            if is_already_connected_socket_error(py, &err)? {
+                future_bound.call_method1("set_result", (py.None(),))?;
+                return Ok(future_bound);
+            }
+            if !fd_ops::is_retryable_socket_error(py, &err)? {
+                future_bound.call_method1("set_exception", (err.into_value(py),))?;
+                return Ok(future_bound);
+            }
+        }
+    }
+
+    let core = slf.borrow(py).core.clone();
+    core.send_command(LoopCommand::Io(LoopIoCommand::WatchConnect {
+        fd,
+        future: future.clone_ref(py),
+    }))
+    .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    Ok(future_bound)
+}
+
 fn listener_sources_from_sockets(
     py: Python<'_>,
     sockets: &[Py<PyAny>],
@@ -2803,6 +2860,32 @@ impl PyLoop {
         sock: Py<PyAny>,
         address: Py<PyAny>,
     ) -> PyResult<Bound<'_, PyAny>> {
+        let locals = Self::task_locals(py, &slf)?;
+        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+            connect_socket_to_address(sock, address).await?;
+            Ok(Python::attach(|py| py.None()))
+        })
+    }
+
+    /// Connects an INET/INET6 stream socket, returning a loop-native Future
+    /// (not a coroutine — awaited directly, never `create_task`ed). On Unix the
+    /// writability wait runs on the vibeio reactor and its completion is
+    /// delivered through the loop's batched, GIL-free ready queue, so many
+    /// concurrent connections drain in one loop iteration instead of paying a
+    /// per-connection async-runtime handoff. Non-Unix and non-INET sockets fall
+    /// back to the general `sock_connect` path.
+    fn _sock_connect_fast<'py>(
+        slf: Py<Self>,
+        py: Python<'py>,
+        sock: Py<PyAny>,
+        address: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        #[cfg(unix)]
+        {
+            if socket_is_inet_stream(py, &sock)? {
+                return fast_sock_connect(&slf, py, sock, address);
+            }
+        }
         let locals = Self::task_locals(py, &slf)?;
         pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
             connect_socket_to_address(sock, address).await?;

@@ -479,6 +479,15 @@ impl LoopCore {
                             server.report_error(err, "failed to accept connection");
                         }
                     }
+                    #[cfg(unix)]
+                    ReadyItem::ConnectCompleted {
+                        future,
+                        fd,
+                        wait_errno,
+                    } => {
+                        profiling::scope!("ready.connect_completed");
+                        self.resolve_connect_completed(py, future, fd, wait_errno)?;
+                    }
                 }
 
                 processed_since_refill += 1;
@@ -777,6 +786,58 @@ impl LoopCore {
         ACTIVE_LOOP_TLS.with(|tls| std::ptr::eq(tls.core.get(), self))
     }
 
+    /// Resolves a TCP connect whose writability wait finished on the vibeio
+    /// reactor. Runs on the loop thread so the SO_ERROR check and the
+    /// set_result / set_exception happen with the GIL already held for the
+    /// whole ready batch — no per-completion GIL handoff.
+    #[cfg(unix)]
+    fn resolve_connect_completed(
+        &self,
+        py: Python<'_>,
+        future: Py<PyAny>,
+        fd: RawFd,
+        wait_errno: i32,
+    ) -> PyResult<()> {
+        let future = future.bind(py);
+        let done = crate::python_names::call_method0(py, future, crate::python_names::done(py))?
+            .bind(py)
+            .extract::<bool>()?;
+        if done {
+            return Ok(());
+        }
+
+        // SO_ERROR is authoritative for the connect outcome; the wait error is
+        // only a fallback for the rare case where SO_ERROR is already cleared.
+        let so_error = crate::fd_ops::socket_so_error(fd)
+            .unwrap_or_else(|err| err.raw_os_error().unwrap_or(libc::EBADF));
+        let errno = if so_error != 0 { so_error } else { wait_errno };
+
+        if errno == 0 || crate::fd_ops::is_already_connected_errno(errno) {
+            crate::python_names::call_method1(
+                py,
+                future,
+                crate::python_names::set_result(py),
+                py.None().bind(py),
+            )?;
+        } else if crate::fd_ops::is_connect_in_progress_errno(errno) {
+            // Spurious writability wakeup while still connecting; re-arm.
+            let _ = self.send_command(LoopCommand::Io(LoopIoCommand::WatchConnect {
+                fd,
+                future: future.clone().unbind(),
+            }));
+        } else {
+            let message = std::io::Error::from_raw_os_error(errno).to_string();
+            let oserror = pyo3::exceptions::PyOSError::new_err((errno, message)).into_value(py);
+            crate::python_names::call_method1(
+                py,
+                future,
+                crate::python_names::set_exception(py),
+                oserror.bind(py).as_any(),
+            )?;
+        }
+        Ok(())
+    }
+
     #[inline]
     fn try_handle_local_command(&self, command: LoopCommand) -> Result<(), LoopCommand> {
         match command {
@@ -808,6 +869,16 @@ impl LoopCore {
                             stream,
                         })
                     }
+                    #[cfg(unix)]
+                    ReadyItem::ConnectCompleted {
+                        future,
+                        fd,
+                        wait_errno,
+                    } => LoopCommand::ConnectCompleted {
+                        future,
+                        fd,
+                        wait_errno,
+                    },
                 }),
             LoopCommand::ScheduleReadyHandle(handle) => self
                 .try_enqueue_local_ready(ReadyItem::HandleCallback(handle))
@@ -884,6 +955,30 @@ impl LoopCore {
                     _ => {
                         unreachable!("local accepted transport enqueue preserves item kind")
                     }
+                }),
+            #[cfg(unix)]
+            LoopCommand::ConnectCompleted {
+                future,
+                fd,
+                wait_errno,
+            } => self
+                .try_enqueue_local_ready(ReadyItem::ConnectCompleted {
+                    future,
+                    fd,
+                    wait_errno,
+                })
+                .or_else(|item| self.try_enqueue_active_ready(item))
+                .map_err(|item| match item {
+                    ReadyItem::ConnectCompleted {
+                        future,
+                        fd,
+                        wait_errno,
+                    } => LoopCommand::ConnectCompleted {
+                        future,
+                        fd,
+                        wait_errno,
+                    },
+                    _ => unreachable!("local connect completion enqueue preserves item kind"),
                 }),
             LoopCommand::RequestStop => self
                 .try_enqueue_local_ready(ReadyItem::Stop)

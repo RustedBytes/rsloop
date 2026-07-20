@@ -193,3 +193,42 @@ fn raw_fd_to_c_int(fd: RawFd) -> io::Result<libc::c_int> {
     fd.try_into()
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "descriptor out of range"))
 }
+
+/// A connect() attempt that is still completing in the background.
+#[cfg(unix)]
+pub fn is_connect_in_progress_errno(errno: i32) -> bool {
+    errno == libc::EINPROGRESS || errno == libc::EALREADY || errno == libc::EWOULDBLOCK
+}
+
+/// The socket is already connected (a benign outcome for connect()).
+#[cfg(unix)]
+pub fn is_already_connected_errno(errno: i32) -> bool {
+    errno == libc::EISCONN
+}
+
+/// Reads the pending `SO_ERROR` for a socket via a direct `getsockopt`, so the
+/// connect-completion path resolves without acquiring the GIL.
+#[cfg(unix)]
+pub fn socket_so_error(fd: RawFd) -> io::Result<i32> {
+    let fd = raw_fd_to_c_int(fd)?;
+    let mut value: libc::c_int = 0;
+    let mut len: libc::socklen_t = std::mem::size_of::<libc::c_int>()
+        .try_into()
+        .expect("socklen_t can represent c_int size");
+    // SAFETY: `fd` is a socket descriptor and `value`/`len` describe a correctly
+    // sized `c_int`/`socklen_t` that `getsockopt` fills in.
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            (&mut value as *mut libc::c_int).cast(),
+            &mut len,
+        )
+    };
+    if result == 0 {
+        Ok(value)
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}

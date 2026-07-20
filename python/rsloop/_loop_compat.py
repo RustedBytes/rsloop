@@ -1429,7 +1429,10 @@ async def __loop_create_connection(
                     connection_exceptions.append(attempt_exceptions)
                     continue
                 try:
-                    await self.sock_connect(created_sock, address)
+                    # Awaited directly (never wrapped in a task), so a bare
+                    # Future is fine here; on Unix this keeps the connect
+                    # writability wait on the loop's own reactor.
+                    await self._sock_connect_fast(created_sock, address)
                     break
                 except OSError as exc:
                     attempt_exceptions.append(exc)

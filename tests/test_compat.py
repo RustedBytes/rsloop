@@ -97,9 +97,12 @@ class CompatibilityTests(unittest.TestCase):
                 calls.append(address[1])
                 raise OSError(errno.ECONNREFUSED, "boom")
 
+            # create_connection() drives the connect through _sock_connect_fast
+            # (the loop-thread/vibeio fast path), mirroring how uvloop's
+            # create_connection bypasses the public sock_connect().
             with mock.patch("socket.getaddrinfo", new=fake_getaddrinfo):
                 with mock.patch.object(
-                    rsloop.Loop, "sock_connect", new=fake_sock_connect
+                    rsloop.Loop, "_sock_connect_fast", new=fake_sock_connect
                 ):
                     with self.assertRaises(OSError):
                         await loop.create_connection(
