@@ -68,8 +68,6 @@ pub enum LoopCommand {
 pub enum LoopRunCommand {
     EnterRun {
         pending_ready: Arc<Mutex<VecDeque<ReadyItem>>>,
-        wake_tx: std::sync::mpsc::Sender<()>,
-        wake_pending: Arc<std::sync::atomic::AtomicBool>,
     },
     FinishRun {
         done_tx: std::sync::mpsc::Sender<()>,

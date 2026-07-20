@@ -37,8 +37,6 @@ struct RuntimeDispatcher {
 
 struct ActiveRun {
     pending_ready: Arc<std::sync::Mutex<VecDeque<ReadyItem>>>,
-    wake_tx: std::sync::mpsc::Sender<()>,
-    wake_pending: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(unix)]
@@ -268,17 +266,9 @@ impl RuntimeDispatcher {
                     callback,
                 });
             }
-            LoopCommand::Run(LoopRunCommand::EnterRun {
-                pending_ready,
-                wake_tx,
-                wake_pending,
-            }) => {
+            LoopCommand::Run(LoopRunCommand::EnterRun { pending_ready }) => {
                 profiling::scope!("runtime.cmd.enter_run");
-                self.active_run = Some(ActiveRun {
-                    pending_ready,
-                    wake_tx,
-                    wake_pending,
-                });
+                self.active_run = Some(ActiveRun { pending_ready });
                 self.dispatch_ready_batch();
             }
             LoopCommand::Run(LoopRunCommand::FinishRun { done_tx }) => {
@@ -532,15 +522,9 @@ impl RuntimeDispatcher {
             .expect("poisoned pending ready queue");
         pending.extend(self.ready_batch.drain(..));
         drop(pending);
-        // Mirror the wake protocol used by try_enqueue_active_ready so the
-        // loop thread's spin-wait observes runtime-dispatched work (timers,
-        // fd watchers) too, and redundant wake tokens are not queued.
-        if !active_run
-            .wake_pending
-            .swap(true, std::sync::atomic::Ordering::AcqRel)
-        {
-            let _ = active_run.wake_tx.send(());
-        }
+        // Wake the parked loop thread so runtime-dispatched work (timers, fd
+        // watchers) is observed; `signal_ready` coalesces redundant wakes.
+        self.core.signal_ready();
     }
 
     fn finish_run(&mut self) {

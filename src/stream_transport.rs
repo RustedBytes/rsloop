@@ -1976,9 +1976,7 @@ impl StreamTransportCore {
         self.detach_underlying_stream(py);
         let _ = self.writer_tx.send(WriterCommand::Stop);
         if let Some(fd) = self.runtime_socket_fd() {
-            let _ = self
-                .loop_core
-                .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
+            stop_socket_reader(self, fd);
         }
         for worker in self
             .workers
@@ -2201,9 +2199,13 @@ impl ServerCore {
             .expect("poisoned accept fds")
             .drain(..)
         {
-            let _ = self
-                .loop_core
-                .send_command(LoopCommand::Io(LoopIoCommand::StopServerAccept(fd)));
+            if self.loop_core.on_runtime_thread() {
+                self.loop_core.stop_io_task(fd);
+            } else {
+                let _ = self
+                    .loop_core
+                    .send_command(LoopCommand::Io(LoopIoCommand::StopServerAccept(fd)));
+            }
         }
 
         if let Some(path) = &self.cleanup_path {
@@ -2276,13 +2278,23 @@ impl ServerCore {
                 ServerListener::Unix(listener) => unix_raw_fd(listener.as_raw_fd()),
             };
             accept_fds.push(fd);
-            let _ =
+            let server = Arc::clone(self);
+            // On the loop thread, host the accept loop directly on the loop's
+            // own runtime so accepted connections are delivered without a
+            // cross-thread hop. Off-thread callers fall back to the transitional
+            // runtime-thread command path.
+            if self.loop_core.on_runtime_thread() {
                 self.loop_core
-                    .send_command(LoopCommand::Io(LoopIoCommand::StartServerAccept {
+                    .spawn_io_tracked(fd, run_server_accept_task(server, listener));
+            } else {
+                let _ = self.loop_core.send_command(LoopCommand::Io(
+                    LoopIoCommand::StartServerAccept {
                         fd,
-                        server: Arc::clone(self),
+                        server,
                         listener,
-                    }));
+                    },
+                ));
+            }
         }
     }
 }
@@ -2344,10 +2356,7 @@ impl PyStreamTransport {
         self.core.flush_pending_direct_write();
         self.core.set_closing();
         if let Some(fd) = self.core.runtime_socket_fd() {
-            let _ = self
-                .core
-                .loop_core
-                .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
+            stop_socket_reader(&self.core, fd);
         }
         if self.core.direct_writer.is_none() {
             let _ = self.core.writer_tx.send(WriterCommand::Close);
@@ -2371,10 +2380,7 @@ impl PyStreamTransport {
         self.core.discard_pending_direct_write();
         self.core.set_closing();
         if let Some(fd) = self.core.runtime_socket_fd() {
-            let _ = self
-                .core
-                .loop_core
-                .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
+            stop_socket_reader(&self.core, fd);
         }
         if self.core.direct_writer.is_none() {
             let _ = self.core.writer_tx.send(WriterCommand::Abort);
@@ -3088,12 +3094,7 @@ pub fn spawn_tcp_transport(
         server.connection_opened();
     }
 
-    core.loop_core
-        .send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader {
-            fd: raw_fd,
-            core: Arc::clone(&core),
-            reader: ReaderTarget::Tcp(stream),
-        }))
+    spawn_socket_reader(raw_fd, Arc::clone(&core), ReaderTarget::Tcp(stream))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     Ok(transport)
 }
@@ -3142,12 +3143,7 @@ pub fn spawn_unix_transport(
         server.connection_opened();
     }
 
-    core.loop_core
-        .send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader {
-            fd: raw_fd,
-            core: Arc::clone(&core),
-            reader: ReaderTarget::Unix(stream),
-        }))
+    spawn_socket_reader(raw_fd, Arc::clone(&core), ReaderTarget::Unix(stream))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     Ok(transport)
 }
@@ -4049,6 +4045,32 @@ fn spin_read_stream(
             }
         }
     }
+}
+
+/// Starts the socket reader for a stream transport.
+///
+/// Readers stay on the transitional runtime thread. Hosting them on the loop
+/// runtime was attempted but reverted: it segfaults for AF_UNIX socketpair
+/// sockets and races `start_tls`, which reclaims the fd for a blocking handshake
+/// while the reader still holds a non-blocking registration (EAGAIN). Reader
+/// migration only benefits the traffic path (already ahead of uvloop), so the
+/// risk is not worth it; accept loops — which are setup-relevant and terminate
+/// cleanly on socket close — remain on the loop runtime.
+fn spawn_socket_reader(
+    fd: fd_ops::RawFd,
+    core: Arc<StreamTransportCore>,
+    reader: ReaderTarget,
+) -> Result<(), crate::loop_core::LoopCoreError> {
+    let loop_core = Arc::clone(&core.loop_core);
+    loop_core.send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader { fd, core, reader }))
+}
+
+/// Stops the socket reader for `fd` via the runtime-thread command path (readers
+/// are hosted there; see `spawn_socket_reader`).
+fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) {
+    let _ = core
+        .loop_core
+        .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
 }
 
 pub(crate) async fn run_tcp_socket_reader_task(

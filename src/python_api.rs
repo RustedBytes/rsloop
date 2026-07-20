@@ -810,26 +810,46 @@ fn is_connect_in_progress_errno(errno: i32) -> bool {
     errno == libc::EINPROGRESS || errno == libc::EALREADY || errno == libc::EWOULDBLOCK
 }
 
-/// True for an AF_INET/AF_INET6 SOCK_STREAM socket, the sockets the vibeio
-/// connect fast path handles. A type carrying extra flag bits declines the fast
-/// path (falls back), which is never a correctness problem.
+/// Attempts to initiate the connect via a direct `libc::connect` for a numeric
+/// address, skipping Python's `socket.connect` (its dispatch, address parsing,
+/// and — the expensive part — raising a `BlockingIOError` for EINPROGRESS on
+/// every non-blocking connect). Returns `Some(errno)` when the libc path ran
+/// (0 = connected immediately), or `None` when the address is not a plain
+/// numeric literal and the caller must fall back to `socket.connect`.
 #[cfg(unix)]
-fn socket_is_inet_stream(py: Python<'_>, sock: &Py<PyAny>) -> PyResult<bool> {
-    let socket_mod = py.import("socket")?;
-    let family: i32 = sock.getattr(py, "family")?.extract(py)?;
-    let af_inet: i32 = socket_mod.getattr("AF_INET")?.extract()?;
-    let af_inet6: i32 = socket_mod.getattr("AF_INET6")?.extract()?;
-    if family != af_inet && family != af_inet6 {
-        return Ok(false);
+fn libc_connect_numeric(fd: fd_ops::RawFd, address: &Bound<'_, PyAny>) -> PyResult<Option<i32>> {
+    let Ok(host_obj) = address.get_item(0) else {
+        return Ok(None);
+    };
+    let Ok(host) = host_obj.extract::<std::borrow::Cow<'_, str>>() else {
+        return Ok(None);
+    };
+    let Ok(ip) = host.parse::<std::net::IpAddr>() else {
+        // Hostname, or scoped IPv6 ("fe80::1%eth0") std can't parse — fall back.
+        return Ok(None);
+    };
+    let Ok(port) = address.get_item(1).and_then(|value| value.extract::<u16>()) else {
+        return Ok(None);
+    };
+    let fd: libc::c_int = fd
+        .try_into()
+        .map_err(|_| PyRuntimeError::new_err("socket file descriptor out of range"))?;
+    let sockaddr = socket2::SockAddr::from(std::net::SocketAddr::new(ip, port));
+    // SAFETY: `sockaddr` owns a valid `sockaddr` of the reported length; `fd` is
+    // the non-blocking socket the caller just built for this address family.
+    let rc = unsafe { libc::connect(fd, sockaddr.as_ptr().cast(), sockaddr.len()) };
+    if rc == 0 {
+        Ok(Some(0))
+    } else {
+        Ok(Some(
+            std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
+        ))
     }
-    let sock_type: i32 = sock.getattr(py, "type")?.extract(py)?;
-    let sock_stream: i32 = socket_mod.getattr("SOCK_STREAM")?.extract()?;
-    Ok(sock_type == sock_stream)
 }
 
 /// Initiates a non-blocking connect on the loop thread and, when it does not
-/// complete synchronously, hands the writability wait to the vibeio reactor via
-/// `WatchConnect`. Returns the loop Future the caller awaits.
+/// complete synchronously, hands the writability wait to the vibeio reactor on
+/// this loop's own runtime. Returns the loop Future the caller awaits.
 #[cfg(unix)]
 fn fast_sock_connect<'py>(
     slf: &Py<PyLoop>,
@@ -837,33 +857,52 @@ fn fast_sock_connect<'py>(
     sock: Py<PyAny>,
     address: Py<PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let future = slf.call_method0(py, "create_future")?;
+    let future = crate::python_names::call_method0(
+        py,
+        slf.bind(py).as_any(),
+        crate::python_names::create_future(py),
+    )?;
     let future_bound = future.bind(py).clone();
     let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
 
-    match sock.call_method1(py, "connect", (address.bind(py),)) {
-        Ok(_) => {
-            future_bound.call_method1("set_result", (py.None(),))?;
-            return Ok(future_bound);
-        }
-        Err(err) => {
-            if is_already_connected_socket_error(py, &err)? {
-                future_bound.call_method1("set_result", (py.None(),))?;
-                return Ok(future_bound);
-            }
-            if !fd_ops::is_retryable_socket_error(py, &err)? {
-                future_bound.call_method1("set_exception", (err.into_value(py),))?;
-                return Ok(future_bound);
-            }
-        }
+    // Prefer a direct libc connect (numeric address); otherwise fall back to
+    // Python's socket.connect for hostnames / scoped IPv6.
+    let errno = match libc_connect_numeric(fd, address.bind(py))? {
+        Some(errno) => errno,
+        None => match sock.call_method1(py, "connect", (address.bind(py),)) {
+            Ok(_) => 0,
+            Err(err) => err
+                .value(py)
+                .getattr(crate::python_names::errno(py))
+                .ok()
+                .and_then(|value| value.extract::<i32>().ok())
+                .unwrap_or(0),
+        },
+    };
+
+    if errno == 0 || is_already_connected_errno(errno) {
+        future_bound.call_method1("set_result", (py.None(),))?;
+        return Ok(future_bound);
+    }
+    if !is_connect_in_progress_errno(errno) {
+        let message = std::io::Error::from_raw_os_error(errno).to_string();
+        let oserror = pyo3::exceptions::PyOSError::new_err((errno, message)).into_value(py);
+        future_bound.call_method1("set_exception", (oserror,))?;
+        return Ok(future_bound);
     }
 
+    // Connect is in progress: watch for writability on this loop's own reactor
+    // (loop thread), so the completion is delivered without a cross-thread wake.
     let core = slf.borrow(py).core.clone();
-    core.send_command(LoopCommand::Io(LoopIoCommand::WatchConnect {
+    if !core.spawn_io(crate::stream_transport::run_connect_watch_task(
+        Arc::clone(&core),
         fd,
-        future: future.clone_ref(py),
-    }))
-    .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+        future.clone_ref(py),
+    )) {
+        return Err(PyRuntimeError::new_err(
+            "event loop is not running; cannot start connect watch",
+        ));
+    }
     Ok(future_bound)
 }
 
@@ -2880,17 +2919,22 @@ impl PyLoop {
         sock: Py<PyAny>,
         address: Py<PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        // Only `__loop_create_connection` calls this, and only with an
+        // INET/INET6 SOCK_STREAM socket it just built, so the family/type check
+        // (a `socket` import plus IntEnum property reads on every connection) is
+        // pure overhead — skip straight to the loop-thread connect on Unix.
         #[cfg(unix)]
         {
-            if socket_is_inet_stream(py, &sock)? {
-                return fast_sock_connect(&slf, py, sock, address);
-            }
+            return fast_sock_connect(&slf, py, sock, address);
         }
-        let locals = Self::task_locals(py, &slf)?;
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
-            connect_socket_to_address(sock, address).await?;
-            Ok(Python::attach(|py| py.None()))
-        })
+        #[cfg(not(unix))]
+        {
+            let locals = Self::task_locals(py, &slf)?;
+            pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+                connect_socket_to_address(sock, address).await?;
+                Ok(Python::attach(|py| py.None()))
+            })
+        }
     }
 
     #[pyo3(signature=(host, port, *, family=0, r#type=0, proto=0, flags=0))]

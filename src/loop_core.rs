@@ -1,11 +1,13 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::future::Future;
 use std::ops::DerefMut;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::task::Waker;
+use std::task::{Context, Poll, Waker};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -15,8 +17,127 @@ use crate::errors::handle_callback_error;
 use crate::fd_ops::RawFd;
 use crate::runtime::run_runtime_thread;
 use crossbeam_channel::Sender;
+use futures::task::AtomicWaker;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PySet, PyTuple};
+
+thread_local! {
+    /// Per-loop vibeio runtime hosted on the loop thread. Keyed by `LoopCore`
+    /// pointer so a thread that runs several loops sequentially keeps each
+    /// loop's spawned I/O tasks alive across `run_until_complete` calls. The
+    /// runtime is `!Send`, which is why it lives in thread-local storage rather
+    /// than on `LoopCore`; asyncio's contract that a loop only runs on one
+    /// thread makes that safe.
+    /// `ManuallyDrop` so a runtime is only ever dropped explicitly in
+    /// `LoopCore::close` (on the loop thread, while vibeio's own thread-locals
+    /// are still alive). If a loop is never closed, its runtime is leaked at
+    /// thread exit rather than dropped — dropping during TLS destruction trips
+    /// an AccessError panic inside vibeio's `Runtime::drop`.
+    static LOOP_RUNTIMES: RefCell<HashMap<usize, std::mem::ManuallyDrop<vibeio::Runtime>>> =
+        RefCell::new(HashMap::new());
+
+    /// Handles for cancellable I/O tasks (accept loops, socket readers) spawned
+    /// on the loop runtime, keyed by loop pointer then by fd. A separate
+    /// thread-local from `LOOP_RUNTIMES` so registering a task (`borrow_mut`
+    /// here) never conflicts with the park holding an immutable `LOOP_RUNTIMES`
+    /// borrow across `block_on`. `JoinHandle` is `!Send`, so this must live in
+    /// TLS on the loop thread.
+    static IO_TASKS: RefCell<HashMap<usize, HashMap<RawFd, vibeio::JoinHandle<()>>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Cross-thread wake state for the loop thread, kept separate from `LoopCore`
+/// so it stays `Ungil` (contains no Python objects) and can therefore be held
+/// by a future driven under `py.detach`. `ready_pending` is the "ready queue
+/// non-empty" flag the park future polls; `ready_waker` holds the loop thread's
+/// task waker while it is parked. Replaces the old mpsc wake channel.
+pub struct LoopWake {
+    ready_pending: AtomicBool,
+    ready_waker: AtomicWaker,
+}
+
+impl LoopWake {
+    fn new() -> Self {
+        Self {
+            ready_pending: AtomicBool::new(false),
+            ready_waker: AtomicWaker::new(),
+        }
+    }
+
+    /// Marks the ready queue non-empty and wakes the parked loop thread. Cheap
+    /// and idempotent while a wake is already pending.
+    #[inline]
+    pub fn signal(&self) {
+        if !self.ready_pending.swap(true, Ordering::AcqRel) {
+            self.ready_waker.wake();
+        }
+    }
+}
+
+/// The park primitive for the loop thread. `run_forever` drives this to
+/// completion via `runtime.block_on` with the GIL released, so vibeio's reactor
+/// (`driver.wait`) runs on the loop thread instead of a separate one. It
+/// resolves when a ready item is enqueued (`LoopWake::signal`) or the
+/// signal-poll timeout elapses, at which point `run_forever` re-acquires the
+/// GIL and drains.
+struct WaitForWake {
+    wake: Arc<LoopWake>,
+    sleep: Pin<Box<vibeio::time::Sleep>>,
+}
+
+impl WaitForWake {
+    fn new(wake: Arc<LoopWake>, timeout: Duration) -> Self {
+        Self {
+            wake,
+            sleep: Box::pin(vibeio::time::Sleep::new(timeout)),
+        }
+    }
+}
+
+/// Releases the GIL for the lifetime of the guard, re-acquiring it on drop
+/// (including on unwind). This is the raw-FFI equivalent of
+/// `Py_BEGIN_ALLOW_THREADS`/`Py_END_ALLOW_THREADS`. We use it instead of
+/// `Python::detach` because that requires the closure to be `Ungil` (which is
+/// `Send` on this build), and vibeio's runtime and timer futures are `!Send`.
+/// Safe here because the GIL is released and re-acquired on the same thread and
+/// no `Python`/`Py` token is moved across the boundary.
+struct GilSuspend(*mut pyo3::ffi::PyThreadState);
+
+impl GilSuspend {
+    #[inline]
+    fn new() -> Self {
+        // SAFETY: called while the GIL is held; detaches this thread's state.
+        Self(unsafe { pyo3::ffi::PyEval_SaveThread() })
+    }
+}
+
+impl Drop for GilSuspend {
+    #[inline]
+    fn drop(&mut self) {
+        // SAFETY: re-attaches the thread state saved in `new` on the same thread.
+        unsafe { pyo3::ffi::PyEval_RestoreThread(self.0) };
+    }
+}
+
+impl Future for WaitForWake {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        if self.wake.ready_pending.load(Ordering::Acquire) {
+            return Poll::Ready(());
+        }
+        // Register before the second check so a wake that races with
+        // registration is never lost.
+        self.wake.ready_waker.register(cx.waker());
+        if self.wake.ready_pending.load(Ordering::Acquire) {
+            return Poll::Ready(());
+        }
+        if self.sleep.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(());
+        }
+        Poll::Pending
+    }
+}
 
 mod commands;
 pub use commands::{
@@ -44,20 +165,6 @@ thread_local! {
             drain_active: Cell::new(false),
         }
     };
-}
-
-// Bounded busy-wait before parking on the wake channel. Cross-thread wakeups
-// (transport reader workers, the runtime thread) otherwise pay a full condvar
-// sleep/wake cycle, which dominates ping-pong style I/O latency.
-fn wake_spin_window() -> Duration {
-    static WINDOW: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
-    *WINDOW.get_or_init(|| {
-        let micros = std::env::var("RSLOOP_WAKE_SPIN_US")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(40);
-        Duration::from_micros(micros.min(1_000))
-    })
 }
 
 #[derive(Debug)]
@@ -102,8 +209,6 @@ pub struct FdWatch {
 
 struct ActiveReadyDispatch {
     pending_ready: Arc<Mutex<VecDeque<ReadyItem>>>,
-    wake_tx: std::sync::mpsc::Sender<()>,
-    wake_pending: Arc<AtomicBool>,
 }
 
 pub struct LoopState {
@@ -154,6 +259,9 @@ pub struct LoopCore {
     runtime_thread: Mutex<Option<JoinHandle<()>>>,
     runtime_waker: Mutex<Option<Waker>>,
     active_ready_dispatch: Mutex<Option<ActiveReadyDispatch>>,
+    // Wakes the loop thread when a producer enqueues a ready item. Held in an
+    // Arc so the park future (`WaitForWake`) can own a clone under `py.detach`.
+    wake: Arc<LoopWake>,
 }
 
 impl LoopCore {
@@ -169,6 +277,7 @@ impl LoopCore {
             runtime_thread: Mutex::new(None),
             runtime_waker: Mutex::new(None),
             active_ready_dispatch: Mutex::new(None),
+            wake: Arc::new(LoopWake::new()),
         });
 
         let thread_core = Arc::clone(&core);
@@ -300,7 +409,7 @@ impl LoopCore {
     }
 
     #[profiling::function]
-    pub fn run_forever(&self, py: Python<'_>, loop_obj: Py<PyAny>) -> PyResult<()> {
+    pub fn run_forever(self: &Arc<Self>, py: Python<'_>, loop_obj: Py<PyAny>) -> PyResult<()> {
         const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
         {
@@ -319,10 +428,8 @@ impl LoopCore {
             state.stopping = false;
         }
 
-        let (wake_tx, wake_rx) = std::sync::mpsc::channel();
-        let wake_rx = Arc::new(Mutex::new(wake_rx));
         let pending_ready = Arc::new(Mutex::new(VecDeque::new()));
-        let wake_pending = Arc::new(AtomicBool::new(false));
+        self.wake.ready_pending.store(false, Ordering::Release);
         {
             let mut active_dispatch = self
                 .active_ready_dispatch
@@ -330,16 +437,30 @@ impl LoopCore {
                 .expect("poisoned active ready dispatch");
             *active_dispatch = Some(ActiveReadyDispatch {
                 pending_ready: Arc::clone(&pending_ready),
-                wake_tx: wake_tx.clone(),
-                wake_pending: Arc::clone(&wake_pending),
             });
         }
         self.send_command(LoopCommand::Run(LoopRunCommand::EnterRun {
             pending_ready: Arc::clone(&pending_ready),
-            wake_tx,
-            wake_pending: Arc::clone(&wake_pending),
         }))
         .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
+
+        // The vibeio runtime that drives I/O for this loop lives on this (the
+        // loop) thread. Parking below runs its reactor via `block_on`, so I/O
+        // readiness and Python callbacks share one thread.
+        let loop_runtime_key = Arc::as_ptr(self) as usize;
+        LOOP_RUNTIMES.with(|runtimes| {
+            runtimes
+                .borrow_mut()
+                .entry(loop_runtime_key)
+                .or_insert_with(|| {
+                    std::mem::ManuallyDrop::new(
+                        vibeio::RuntimeBuilder::new()
+                            .enable_timer(true)
+                            .build()
+                            .expect("failed to initialize loop-thread vibeio runtime"),
+                    )
+                });
+        });
 
         ensure_running_loop(py, &loop_obj)?;
         self.mark_runtime_thread();
@@ -348,7 +469,6 @@ impl LoopCore {
 
         let mut pending_signal_error: Option<PyErr> = None;
         let mut ready_batch = VecDeque::new();
-        let mut spin_next_wait = false;
         let run_result = loop {
             self.set_ready_drain_active(true);
 
@@ -360,7 +480,7 @@ impl LoopCore {
                     // pushing, so the pending queue only needs to be locked
                     // when the flag is set; a hot chain of locally scheduled
                     // callbacks otherwise skips the mutex entirely.
-                    if wake_pending.load(Ordering::Acquire) {
+                    if self.wake.ready_pending.load(Ordering::Acquire) {
                         let mut pending =
                             pending_ready.lock().expect("poisoned pending ready queue");
                         if !pending.is_empty() {
@@ -372,7 +492,7 @@ impl LoopCore {
                             }
                         }
                         if pending.is_empty() {
-                            wake_pending.store(false, Ordering::Release);
+                            self.wake.ready_pending.store(false, Ordering::Release);
                         }
                     }
 
@@ -397,7 +517,6 @@ impl LoopCore {
                 let item = ready_batch
                     .pop_front()
                     .expect("ready batch was checked as non-empty");
-                spin_next_wait = true;
                 match item {
                     ReadyItem::Stop => {
                         profiling::scope!("ready.stop");
@@ -514,51 +633,22 @@ impl LoopCore {
                 continue;
             }
 
-            let wake_rx = Arc::clone(&wake_rx);
-            let spin_window = if std::mem::take(&mut spin_next_wait) {
-                wake_spin_window()
-            } else {
-                Duration::ZERO
-            };
-            let spin_wake_pending = Arc::clone(&wake_pending);
-            match py.detach(move || {
-                // Busy-wait briefly for the next wakeup while work is flowing;
-                // this skips the condvar round trip that dominates request/
-                // response latency. If nothing shows up, park as before.
-                if !spin_window.is_zero() {
-                    let spin_deadline = Instant::now() + spin_window;
-                    'spin: loop {
-                        for _ in 0..64 {
-                            if spin_wake_pending.load(Ordering::Acquire) {
-                                // Consume at most one queued wake token so
-                                // tokens for wakeups observed via the spin
-                                // path cannot accumulate. Missing a token here
-                                // is fine: the drain loop re-reads the pending
-                                // queue directly.
-                                let _ = wake_rx.lock().expect("poisoned wake receiver").try_recv();
-                                return Ok(());
-                            }
-                            std::hint::spin_loop();
-                        }
-                        if Instant::now() >= spin_deadline {
-                            break 'spin;
-                        }
-                    }
-                }
-
-                wake_rx
-                    .lock()
-                    .expect("poisoned wake receiver")
-                    .recv_timeout(SIGNAL_POLL_INTERVAL)
-            }) {
-                Ok(()) => {}
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    break Err(pyo3::exceptions::PyRuntimeError::new_err(
-                        "event loop runtime terminated unexpectedly",
-                    ));
-                }
+            // Park by driving this loop's vibeio runtime with the GIL released,
+            // so the reactor's `driver.wait` runs on the loop thread. Resolves
+            // when a ready item is enqueued (cross-thread or same-thread) or the
+            // signal-poll timeout elapses; either way we loop back and drain.
+            let wait = WaitForWake::new(Arc::clone(&self.wake), SIGNAL_POLL_INTERVAL);
+            {
+                let _gil = GilSuspend::new();
+                LOOP_RUNTIMES.with(|runtimes| {
+                    let runtimes = runtimes.borrow();
+                    let runtime = runtimes
+                        .get(&loop_runtime_key)
+                        .expect("loop runtime missing");
+                    runtime.block_on(wait);
+                });
             }
+            let _ = py;
         };
 
         self.set_ready_drain_active(false);
@@ -623,6 +713,24 @@ impl LoopCore {
             }
             state.closed = true;
         }
+
+        // Drop this loop's on-thread vibeio runtime now, while the loop thread
+        // (and vibeio's own thread-locals) are still alive. Letting it drop
+        // during thread destruction trips a TLS-access panic. `close()` runs on
+        // the loop thread with the loop stopped, so no `block_on` is active and
+        // the runtime holds no in-flight tasks yet (I/O still on the runtime
+        // thread in this phase).
+        let runtime_key = self as *const LoopCore as usize;
+        // Drop tracked task handles first (detaches them), then the runtime,
+        // whose drop tears down any still-registered tasks.
+        IO_TASKS.with(|tasks| {
+            tasks.borrow_mut().remove(&runtime_key);
+        });
+        LOOP_RUNTIMES.with(|runtimes| {
+            if let Some(runtime) = runtimes.borrow_mut().remove(&runtime_key) {
+                drop(std::mem::ManuallyDrop::into_inner(runtime));
+            }
+        });
 
         self.send_command(LoopCommand::Close)?;
         if let Some(handle) = self
@@ -758,6 +866,75 @@ impl LoopCore {
 
     pub(crate) fn set_runtime_waker(&self, waker: Option<Waker>) {
         *self.runtime_waker.lock().expect("poisoned runtime waker") = waker;
+    }
+
+    /// Marks the ready queue non-empty and wakes the parked loop thread. Used by
+    /// cross-thread ready producers (the transitional runtime thread, signal and
+    /// transport workers).
+    #[inline]
+    pub(crate) fn signal_ready(&self) {
+        self.wake.signal();
+    }
+
+    /// Spawns a detached I/O task on this loop's on-thread vibeio runtime. Must
+    /// be called on the loop thread (asyncio contract). The task begins running
+    /// the next time the loop parks in `block_on`; its completions push ready
+    /// items and wake the loop **on the same thread**, with no cross-thread hop.
+    /// Returns `false` if the loop has no runtime yet (spawned before first run).
+    pub(crate) fn spawn_io<F>(&self, future: F) -> bool
+    where
+        F: Future<Output = ()> + 'static,
+    {
+        let key = self as *const LoopCore as usize;
+        LOOP_RUNTIMES.with(|runtimes| {
+            let runtimes = runtimes.borrow();
+            match runtimes.get(&key) {
+                // Detach the JoinHandle: the task manages its own lifetime.
+                Some(runtime) => {
+                    std::mem::drop(runtime.spawn(future));
+                    true
+                }
+                None => false,
+            }
+        })
+    }
+
+    /// Spawns a cancellable I/O task (accept loop / socket reader) on this loop's
+    /// runtime, tracked by `fd` so `stop_io_task` can cancel it. Any existing
+    /// task registered for `fd` is cancelled first. Must run on the loop thread.
+    /// Returns `false` if the loop has no runtime yet.
+    pub(crate) fn spawn_io_tracked<F>(&self, fd: RawFd, future: F) -> bool
+    where
+        F: Future<Output = ()> + 'static,
+    {
+        let key = self as *const LoopCore as usize;
+        let handle =
+            LOOP_RUNTIMES.with(|runtimes| runtimes.borrow().get(&key).map(|rt| rt.spawn(future)));
+        match handle {
+            Some(handle) => {
+                IO_TASKS.with(|tasks| {
+                    if let Some(old) = tasks.borrow_mut().entry(key).or_default().insert(fd, handle)
+                    {
+                        old.cancel();
+                    }
+                });
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Cancels the tracked I/O task registered for `fd`, if any. Must run on the
+    /// loop thread.
+    pub(crate) fn stop_io_task(&self, fd: RawFd) {
+        let key = self as *const LoopCore as usize;
+        IO_TASKS.with(|tasks| {
+            if let Some(map) = tasks.borrow_mut().get_mut(&key)
+                && let Some(handle) = map.remove(&fd)
+            {
+                handle.cancel();
+            }
+        });
     }
 
     #[inline]
@@ -1021,9 +1198,7 @@ impl LoopCore {
             .lock()
             .expect("poisoned pending ready queue")
             .push_back(item);
-        if !dispatch.wake_pending.swap(true, Ordering::AcqRel) {
-            let _ = dispatch.wake_tx.send(());
-        }
+        self.wake.signal();
         Ok(())
     }
 }
