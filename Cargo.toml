@@ -18,6 +18,7 @@ default = []
 profiler = ["dep:tracy-client", "profiling/profile-with-tracy"]
 
 [dependencies]
+async-io = "2"
 async-std = "1"
 crossbeam-channel = "0.5"
 futures = { version = "0.3", default-features = false, features = ["std"] }

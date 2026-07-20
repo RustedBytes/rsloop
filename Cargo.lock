@@ -853,6 +853,7 @@ dependencies = [
 name = "rsloop"
 version = "0.1.26"
 dependencies = [
+ "async-io",
  "async-std",
  "crossbeam-channel",
  "futures",

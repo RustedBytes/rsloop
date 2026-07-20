@@ -1,9 +1,5 @@
 use std::io;
-#[cfg(not(windows))]
-use std::thread;
 
-#[cfg(not(windows))]
-use futures::channel::oneshot;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 #[cfg(windows)]
@@ -15,6 +11,7 @@ pub use self::windows::{
 
 pub type RawFd = i64;
 
+#[cfg(windows)]
 const FD_POLL_INTERVAL_MS: i32 = 50;
 
 pub fn fileobj_to_fd(_py: Python<'_>, fileobj: &Bound<'_, PyAny>) -> PyResult<RawFd> {
@@ -159,25 +156,29 @@ async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
 
     #[cfg(not(windows))]
     {
-        let (tx, rx) = oneshot::channel();
-        thread::Builder::new()
-            .name(format!("rsloop-fd-wait-{fd}"))
-            .spawn(move || {
-                let result = loop {
-                    match poll_fd(fd, read, write, FD_POLL_INTERVAL_MS) {
-                        Ok((true, _)) if read => break Ok(()),
-                        Ok((_, true)) if write => break Ok(()),
-                        Ok(_) => continue,
-                        Err(err) => break Err(err),
-                    }
-                };
-                let _ = tx.send(result);
-            })
+        use std::os::fd::BorrowedFd;
+
+        // Register the descriptor with async-io's shared, process-wide reactor
+        // thread instead of spawning a fresh OS thread per wait. The previous
+        // thread-per-wait approach dominated connection-setup latency: a burst
+        // of N concurrent connects spawned N `poll()` threads. async-io drives
+        // the same epoll/kqueue reactor smol/async-std already run, so this adds
+        // no extra threads and deregisters as soon as the wait resolves.
+        let raw = raw_fd_to_c_int(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+        // SAFETY: the caller keeps `fd` open for the duration of this await
+        // (the owning Python socket outlives the connect/recv/send operation).
+        let borrowed = unsafe { BorrowedFd::borrow_raw(raw) };
+        let async_fd = async_io::Async::new_nonblocking(borrowed)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
 
-        rx.await
-            .map_err(|_| PyRuntimeError::new_err("fd wait worker dropped"))?
-            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+        let result = if write {
+            futures::future::poll_fn(|cx| async_fd.poll_writable(cx)).await
+        } else if read {
+            futures::future::poll_fn(|cx| async_fd.poll_readable(cx)).await
+        } else {
+            Ok(())
+        };
+        result.map_err(|err| PyRuntimeError::new_err(err.to_string()))
     }
 }
 

@@ -683,26 +683,36 @@ fn set_socket_bool_option_unix(
 }
 
 async fn connect_socket_to_address(sock: Py<PyAny>, address: Py<PyAny>) -> PyResult<()> {
-    let fd = Python::attach(|py| fd_ops::fileobj_to_fd(py, sock.bind(py)))?;
-    match Python::attach(|py| -> PyResult<()> {
-        sock.call_method1(py, "connect", (address.clone_ref(py),))?;
-        Ok(())
-    }) {
-        Ok(()) => return Ok(()),
-        Err(err) => {
-            let retry = Python::attach(|py| fd_ops::is_retryable_socket_error(py, &err))?;
-            if !retry {
-                if Python::attach(|py| is_already_connected_socket_error(py, &err))? {
-                    return Ok(());
+    // Initiate the connect and look up the descriptor in a single GIL
+    // acquisition. Every `Python::attach` here runs on the async runtime's
+    // worker thread and contends for the GIL held by the main loop thread, so
+    // collapsing the fd lookup, the connect() call, and its error
+    // classification into one attach removes several contended handoffs per
+    // connection. On a non-blocking socket, connect() to a reachable peer
+    // returns EINPROGRESS (retryable); anything else is an immediate success or
+    // a hard error.
+    let fd = match Python::attach(|py| -> PyResult<Option<fd_ops::RawFd>> {
+        let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
+        match sock.call_method1(py, "connect", (address.bind(py),)) {
+            Ok(_) => Ok(None),
+            Err(err) => {
+                if fd_ops::is_retryable_socket_error(py, &err)? {
+                    Ok(Some(fd))
+                } else if is_already_connected_socket_error(py, &err)? {
+                    Ok(None)
+                } else {
+                    Err(err)
                 }
-                return Err(err);
             }
         }
-    }
+    })? {
+        Some(fd) => fd,
+        None => return Ok(()),
+    };
 
     loop {
         fd_ops::wait_writable(fd).await?;
-        let so_error = Python::attach(|py| socket_so_error(py, &sock))?;
+        let so_error = connect_so_error(fd, &sock)?;
         if so_error == 0 {
             return Ok(());
         }
@@ -716,6 +726,46 @@ async fn connect_socket_to_address(sock: Py<PyAny>, address: Py<PyAny>) -> PyRes
     }
 }
 
+/// Reads `SO_ERROR` for a connecting socket. On Unix this uses a direct
+/// `getsockopt` so the hot connect-completion path never re-acquires the GIL
+/// (or re-imports the `socket` module); Windows keeps the Python fallback.
+fn connect_so_error(fd: fd_ops::RawFd, sock: &Py<PyAny>) -> PyResult<i32> {
+    #[cfg(unix)]
+    {
+        let _ = sock;
+        let fd: libc::c_int = fd
+            .try_into()
+            .map_err(|_| PyRuntimeError::new_err("socket file descriptor out of range"))?;
+        let mut value: libc::c_int = 0;
+        let mut len: libc::socklen_t = std::mem::size_of::<libc::c_int>()
+            .try_into()
+            .expect("socklen_t can represent c_int size");
+        // SAFETY: `fd` is a live socket descriptor and `value`/`len` point to a
+        // correctly sized `c_int`/`socklen_t` that `getsockopt` fills in.
+        let result = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_ERROR,
+                (&mut value as *mut libc::c_int).cast(),
+                &mut len,
+            )
+        };
+        if result == 0 {
+            Ok(value)
+        } else {
+            Err(PyErr::from(std::io::Error::last_os_error()))
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = fd;
+        Python::attach(|py| socket_so_error(py, sock))
+    }
+}
+
+#[cfg(windows)]
 fn socket_so_error(py: Python<'_>, sock: &Py<PyAny>) -> PyResult<i32> {
     let socket_mod = py.import("socket")?;
     sock.call_method1(
