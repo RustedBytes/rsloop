@@ -77,6 +77,7 @@ class MatrixResult:
     connection_setup_seconds: float = 0.0
     traffic_seconds: float = 0.0
     teardown_seconds: float = 0.0
+    idle_residency_seconds: float = 0.0
 
     @property
     def ops_per_sec(self) -> float:
@@ -383,48 +384,67 @@ async def run_websocket_messages(
     host, port = server.sockets[0].getsockname()[:2]
     latencies: list[float] = []
 
-    async def client(client_id: int) -> int:
+    connections: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
+
+    async def open_client(
+        client_id: int,
+    ) -> tuple[int, asyncio.StreamReader, asyncio.StreamWriter]:
         reader, writer = await asyncio.open_connection(host, port)
+        connections.append((reader, writer))
+        writer.write(WEBSOCKET_REQUEST)
+        await writer.drain()
+        response = await reader.readexactly(len(WEBSOCKET_RESPONSE))
+        if response != WEBSOCKET_RESPONSE:
+            raise RuntimeError("WebSocket upgrade failed")
+        return client_id, reader, writer
+
+    async def client(
+        client_id: int, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> int:
         transferred = len(WEBSOCKET_REQUEST) + len(WEBSOCKET_RESPONSE)
-        try:
-            writer.write(WEBSOCKET_REQUEST)
+        for index in range(args.requests_per_connection):
+            size = args.websocket_payload_sizes[
+                (client_id + index) % len(args.websocket_payload_sizes)
+            ]
+            payload = bytes([(client_id + index) % 251]) * size
+            mask_key = struct.pack("!I", (client_id << 16) ^ index ^ 0xA5A55A5A)
+            outbound = websocket_frame(payload, mask_key)
+            started = time.perf_counter()
+            writer.write(outbound)
             await writer.drain()
-            response = await reader.readexactly(len(WEBSOCKET_RESPONSE))
-            if response != WEBSOCKET_RESPONSE:
-                raise RuntimeError("WebSocket upgrade failed")
-            for index in range(args.requests_per_connection):
-                size = args.websocket_payload_sizes[
-                    (client_id + index) % len(args.websocket_payload_sizes)
-                ]
-                payload = bytes([(client_id + index) % 251]) * size
-                mask_key = struct.pack("!I", (client_id << 16) ^ index ^ 0xA5A55A5A)
-                outbound = websocket_frame(payload, mask_key)
-                started = time.perf_counter()
-                writer.write(outbound)
-                await writer.drain()
-                response_payload = await read_websocket_frame(reader)
-                if response_payload != payload:
-                    raise RuntimeError("WebSocket echo mismatch")
-                latencies.append((time.perf_counter() - started) * 1000)
-                transferred += len(outbound) + len(websocket_frame(payload))
-        finally:
-            await close_writer(writer)
+            response_payload = await read_websocket_frame(reader)
+            if response_payload != payload:
+                raise RuntimeError("WebSocket echo mismatch")
+            latencies.append((time.perf_counter() - started) * 1000)
+            transferred += len(outbound) + len(websocket_frame(payload))
         return transferred
 
     started = time.perf_counter()
+    setup_finished = traffic_finished = started
     try:
-        transferred = sum(
-            await asyncio.gather(*(client(index) for index in range(args.concurrency)))
+        opened = await asyncio.gather(
+            *(open_client(index) for index in range(args.concurrency))
         )
+        setup_finished = time.perf_counter()
+        transferred = sum(await asyncio.gather(*(client(*item) for item in opened)))
+        traffic_finished = time.perf_counter()
     finally:
+        await asyncio.gather(
+            *(close_writer(writer) for _, writer in connections),
+            return_exceptions=True,
+        )
         await close_server(server)
+    finished = time.perf_counter()
     return MatrixResult(
         loop_name,
         "websocket_messages",
-        time.perf_counter() - started,
+        finished - started,
         args.concurrency * args.requests_per_connection,
         transferred,
         latencies,
+        connection_setup_seconds=setup_finished - started,
+        traffic_seconds=traffic_finished - setup_finished,
+        teardown_seconds=finished - traffic_finished,
     )
 
 
@@ -547,10 +567,13 @@ async def run_idle_connections(
         backlog=max(100, args.idle_connections),
     )
     host, port = server.sockets[0].getsockname()[:2]
+    started = time.perf_counter()
     connections = await asyncio.gather(
         *(asyncio.open_connection(host, port) for _ in range(args.idle_connections))
     )
+    setup_finished = time.perf_counter()
     await asyncio.sleep(args.idle_seconds)
+    idle_finished = time.perf_counter()
     latencies: list[float] = []
 
     async def activate(
@@ -565,21 +588,29 @@ async def run_idle_connections(
         latencies.append((time.perf_counter() - started) * 1000)
         return 2
 
-    started = time.perf_counter()
     try:
         transferred = sum(
             await asyncio.gather(*(activate(item) for item in connections))
         )
+        traffic_finished = time.perf_counter()
     finally:
         await asyncio.gather(*(close_writer(writer) for _, writer in connections))
         await close_server(server)
+    finished = time.perf_counter()
+    setup_seconds = setup_finished - started
+    traffic_seconds = traffic_finished - idle_finished
+    teardown_seconds = finished - traffic_finished
     return MatrixResult(
         loop_name,
         "idle_connections",
-        time.perf_counter() - started,
+        setup_seconds + traffic_seconds + teardown_seconds,
         args.idle_connections,
         transferred,
         latencies,
+        connection_setup_seconds=setup_seconds,
+        traffic_seconds=traffic_seconds,
+        teardown_seconds=teardown_seconds,
+        idle_residency_seconds=idle_finished - setup_finished,
     )
 
 
@@ -743,6 +774,7 @@ def summarize(scenario: str, runs: dict[str, list[MatrixResult]]) -> None:
                 statistics.median(item.connection_setup_seconds for item in measured),
                 statistics.median(item.traffic_seconds for item in measured),
                 statistics.median(item.teardown_seconds for item in measured),
+                statistics.median(item.idle_residency_seconds for item in measured),
             )
         )
     rows.sort(key=lambda row: row[1])
@@ -751,14 +783,14 @@ def summarize(scenario: str, runs: dict[str, list[MatrixResult]]) -> None:
         f"{'loop':<10} {'median_s':>10} {'total_ops/s':>12} {'traffic_ops/s':>14} "
         f"{'MiB/s':>10} "
         f"{'p50_ms':>10} {'p95_ms':>10} {'p99_ms':>10} {'peak_rss':>12} "
-        f"{'setup_s':>9} {'traffic_s':>10} {'close_s':>9}"
+        f"{'setup_s':>9} {'traffic_s':>10} {'close_s':>9} {'idle_s':>8}"
     )
     for row in rows:
         print(
             f"{row[0]:<10} {row[1]:>10.4f} {row[2]:>12,.0f} {row[3]:>14,.0f} "
             f"{row[4]:>10.1f} {row[5]:>10.3f} {row[6]:>10.3f} {row[7]:>10.3f} "
             f"{format_bytes(row[8]):>12} {row[9]:>9.4f} {row[10]:>10.4f} "
-            f"{row[11]:>9.4f}"
+            f"{row[11]:>9.4f} {row[12]:>8.4f}"
         )
 
 

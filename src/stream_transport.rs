@@ -59,6 +59,8 @@ enum PendingReadEvent {
 const DEFAULT_WRITE_BUFFER_HIGH_WATER: usize = 64 * 1024;
 const DEFAULT_WRITE_BUFFER_LOW_WATER: usize = DEFAULT_WRITE_BUFFER_HIGH_WATER / 4;
 const MAX_PENDING_READ_COALESCE_BYTES: usize = 256 * 1024;
+const MAX_READ_EVENTS_PER_DRAIN: usize = 32;
+const MAX_READ_BYTES_PER_DRAIN: usize = 256 * 1024;
 // Servers commonly emit a small protocol header followed immediately by a
 // body. Defer only that header-sized first write for one loop turn so adjacent
 // writes share a syscall; keep tiny control frames and larger payloads direct.
@@ -388,6 +390,13 @@ impl StreamReaderFastPath {
         }
     }
 
+    fn feed_owned_data(&self, py: Python<'_>, data: Box<[u8]>) -> PyResult<()> {
+        match self {
+            Self::Native { reader, .. } => reader.borrow_mut(py).feed_owned_data_internal(py, data),
+            Self::Generic { .. } => self.feed_data(py, &data),
+        }
+    }
+
     fn feed_eof(&self, py: Python<'_>) -> PyResult<()> {
         match self {
             Self::Native { reader, .. } => reader.borrow_mut(py).feed_eof_internal(py),
@@ -499,6 +508,7 @@ struct StreamTransportState {
     context: Py<PyAny>,
     context_needs_run: bool,
     extra: HashMap<String, Py<PyAny>>,
+    lazy_socket_family: Option<i32>,
     closing: bool,
     read_paused: bool,
     reading: bool,
@@ -593,6 +603,14 @@ enum TaskedDirectWriter {
 }
 
 impl TaskedDirectWriter {
+    fn fd(&self) -> fd_ops::RawFd {
+        match self {
+            Self::Tcp(stream) => tcp_stream_raw_fd(stream),
+            #[cfg(unix)]
+            Self::Unix(stream) => unix_raw_fd(stream.as_raw_fd()),
+        }
+    }
+
     fn shutdown_close(&self) -> io::Result<()> {
         match self {
             Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Both),
@@ -650,8 +668,24 @@ enum WriterTarget {
 }
 
 struct LazyWriterConfig {
-    target: WriterTarget,
+    target: LazyWriterTarget,
     writer_rx: Receiver<WriterCommand>,
+}
+
+enum LazyWriterTarget {
+    Tcp(fd_ops::RawFd),
+    #[cfg(unix)]
+    Unix(fd_ops::RawFd),
+}
+
+impl LazyWriterTarget {
+    fn materialize(self) -> PyResult<WriterTarget> {
+        match self {
+            Self::Tcp(fd) => duplicate_configured_tcp_stream(fd).map(WriterTarget::Tcp),
+            #[cfg(unix)]
+            Self::Unix(fd) => duplicate_unix_direct_writer(fd).map(WriterTarget::Unix),
+        }
+    }
 }
 
 impl WriterTarget {
@@ -959,7 +993,10 @@ impl StreamTransportCore {
         let Some(LazyWriterConfig { target, writer_rx }) = lazy else {
             return;
         };
-        spawn_writer_worker(Arc::clone(self), target, writer_rx);
+        match target.materialize() {
+            Ok(target) => spawn_writer_worker(Arc::clone(self), target, writer_rx),
+            Err(err) => self.fail_write(Some(io::Error::other(err.to_string()))),
+        }
     }
 
     #[inline]
@@ -1003,7 +1040,10 @@ impl StreamTransportCore {
         }
     }
 
-    pub(crate) fn drain_pending_read_events_with_py(&self, py: Python<'_>) -> PyResult<()> {
+    pub(crate) fn drain_pending_read_events_with_py(
+        self: &Arc<Self>,
+        py: Python<'_>,
+    ) -> PyResult<()> {
         profiling::scope!("StreamTransportCore::drain_pending_read_events_with_py");
         // Snapshot the reader fast path once per drain instead of re-locking
         // transport state for every data event.
@@ -1018,6 +1058,8 @@ impl StreamTransportCore {
         let fast_path = fast_path.as_ref();
         let mut pending_data: Option<PendingReadBuffer> = None;
         let mut drained = VecDeque::new();
+        let mut drained_events = 0;
+        let mut drained_bytes = 0;
         loop {
             {
                 let mut queue = self
@@ -1036,8 +1078,10 @@ impl StreamTransportCore {
                 match event {
                     PendingReadEvent::Data(data) => {
                         profiling::scope!("stream.pending.data");
+                        drained_events += 1;
+                        drained_bytes += data.len();
                         if let Some(fast_path) = fast_path.as_ref() {
-                            if let Err(err) = fast_path.feed_data(py, &data) {
+                            if let Err(err) = fast_path.feed_owned_data(py, data) {
                                 let _ = self.report_error_with_py(
                                     py,
                                     err,
@@ -1047,32 +1091,41 @@ impl StreamTransportCore {
                                 self.read_events_scheduled.store(false, Ordering::Release);
                                 return Ok(());
                             }
-                            continue;
-                        }
-                        match &mut pending_data {
-                            Some(buffer)
-                                if buffer.len() + data.len() <= MAX_PENDING_READ_COALESCE_BYTES =>
-                            {
-                                buffer.extend(data);
-                            }
-                            Some(_) => {
-                                if let Err(err) = self.flush_pending_data_with_py(
-                                    py,
-                                    &mut pending_data,
-                                    fast_path,
-                                ) {
-                                    let _ = self.report_error_with_py(
-                                        py,
-                                        err,
-                                        "stream data_received callback failed",
-                                    );
-                                    let _ = self.connection_lost_with_py(py, None);
-                                    self.read_events_scheduled.store(false, Ordering::Release);
-                                    return Ok(());
+                        } else {
+                            match &mut pending_data {
+                                Some(buffer)
+                                    if buffer.len() + data.len()
+                                        <= MAX_PENDING_READ_COALESCE_BYTES =>
+                                {
+                                    buffer.extend(data);
                                 }
-                                pending_data = Some(PendingReadBuffer::Boxed(data));
+                                Some(_) => {
+                                    if let Err(err) = self.flush_pending_data_with_py(
+                                        py,
+                                        &mut pending_data,
+                                        fast_path,
+                                    ) {
+                                        let _ = self.report_error_with_py(
+                                            py,
+                                            err,
+                                            "stream data_received callback failed",
+                                        );
+                                        let _ = self.connection_lost_with_py(py, None);
+                                        self.read_events_scheduled.store(false, Ordering::Release);
+                                        return Ok(());
+                                    }
+                                    pending_data = Some(PendingReadBuffer::Boxed(data));
+                                }
+                                None => pending_data = Some(PendingReadBuffer::Boxed(data)),
                             }
-                            None => pending_data = Some(PendingReadBuffer::Boxed(data)),
+                        }
+
+                        if (drained_events >= MAX_READ_EVENTS_PER_DRAIN
+                            || drained_bytes >= MAX_READ_BYTES_PER_DRAIN)
+                            && self.reschedule_pending_read_events(&mut drained)
+                        {
+                            self.flush_pending_data_with_py(py, &mut pending_data, fast_path)?;
+                            return Ok(());
                         }
                     }
                     PendingReadEvent::Eof => {
@@ -1174,6 +1227,29 @@ impl StreamTransportCore {
                 return Ok(());
             }
         }
+    }
+
+    fn reschedule_pending_read_events(
+        self: &Arc<Self>,
+        drained: &mut VecDeque<PendingReadEvent>,
+    ) -> bool {
+        let mut queue = self
+            .pending_read_events
+            .lock()
+            .expect("poisoned pending read queue");
+        if drained.is_empty() && queue.is_empty() {
+            return false;
+        }
+
+        drained.append(&mut queue);
+        std::mem::swap(drained, queue.deref_mut());
+        drop(queue);
+        let _ =
+            self.loop_core
+                .send_command(LoopCommand::Transport(LoopTransportCommand::StreamRead(
+                    Arc::clone(self),
+                )));
+        true
     }
 }
 
@@ -1468,12 +1544,37 @@ impl StreamTransportCore {
     }
 
     fn get_extra(&self, py: Python<'_>, name: &str) -> Option<Py<PyAny>> {
-        self.state
-            .lock()
-            .expect("poisoned transport state")
-            .extra
-            .get(name)
-            .map(|value| value.clone_ref(py))
+        let (cached, lazy_socket_family, transport_closed) = {
+            let state = self.state.lock().expect("poisoned transport state");
+            (
+                state.extra.get(name).map(|value| value.clone_ref(py)),
+                state.lazy_socket_family,
+                state.closing || state.lost_called,
+            )
+        };
+        if let Some(value) = cached {
+            if name == "socket" && transport_closed {
+                let _ = value.bind(py).call_method0("close");
+            }
+            return Some(value);
+        }
+        if lazy_socket_family.is_none() || !matches!(name, "socket" | "sockname" | "peername") {
+            return None;
+        }
+
+        let family = lazy_socket_family?;
+        let fd = self
+            .direct_writer
+            .as_ref()
+            .map(|writer| writer.lock().expect("poisoned direct tasked writer").fd())?;
+        let extra = make_stream_extra(py, fd, family).ok()?;
+        if transport_closed && let Some(socket) = extra.get("socket") {
+            let _ = socket.bind(py).call_method0("close");
+        }
+        let mut state = self.state.lock().expect("poisoned transport state");
+        state.extra.extend(extra);
+        state.lazy_socket_family = None;
+        state.extra.get(name).map(|value| value.clone_ref(py))
     }
 
     #[inline]
@@ -2726,6 +2827,7 @@ struct StreamTransportStateConfig {
     io_fd: Option<fd_ops::RawFd>,
     runtime_socket_io: bool,
     extra: HashMap<String, Py<PyAny>>,
+    lazy_socket_family: Option<i32>,
     reading: bool,
     writable: bool,
     can_write_eof: bool,
@@ -2763,6 +2865,7 @@ fn stream_transport_state_parts(
             context,
             context_needs_run,
             extra: config.extra,
+            lazy_socket_family: config.lazy_socket_family,
             closing: false,
             read_paused: false,
             reading: config.reading,
@@ -2840,6 +2943,7 @@ fn pipe_transport_core(
             io_fd: None,
             runtime_socket_io: false,
             extra,
+            lazy_socket_family: None,
             reading,
             writable,
             can_write_eof: writable,
@@ -2951,13 +3055,11 @@ pub fn spawn_tcp_transport(
     server: Option<Weak<ServerCore>>,
 ) -> PyResult<Py<PyStreamTransport>> {
     let raw_fd = tcp_stream_raw_fd(&stream);
-    let extra = make_stream_extra(py, raw_fd, tcp_family(&stream))?;
+    let family = tcp_family(&stream);
+    let extra = HashMap::new();
     let callbacks = build_protocol_callbacks(py, &spawn_context.protocol)?;
     spawn_context.context_needs_run &= callbacks.stream_reader_fast_path.is_none();
     let direct_writer = duplicate_configured_tcp_stream(raw_fd)?;
-    let writer = stream
-        .try_clone()
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let (writer_tx, writer_rx) = mpsc::channel();
     let parts = stream_transport_state_parts(
         spawn_context,
@@ -2966,6 +3068,7 @@ pub fn spawn_tcp_transport(
             io_fd: Some(raw_fd),
             runtime_socket_io: true,
             extra,
+            lazy_socket_family: Some(family),
             reading: true,
             writable: true,
             can_write_eof: true,
@@ -2978,7 +3081,7 @@ pub fn spawn_tcp_transport(
         writer_tx,
         Some(TaskedDirectWriter::Tcp(direct_writer)),
         Some(LazyWriterConfig {
-            target: WriterTarget::Tcp(writer),
+            target: LazyWriterTarget::Tcp(raw_fd),
             writer_rx,
         }),
     );
@@ -3007,13 +3110,10 @@ pub fn spawn_unix_transport(
     server: Option<Weak<ServerCore>>,
 ) -> PyResult<Py<PyStreamTransport>> {
     let raw_fd = unix_raw_fd(stream.as_raw_fd());
-    let extra = make_stream_extra(py, raw_fd, libc::AF_UNIX)?;
+    let extra = HashMap::new();
     let callbacks = build_protocol_callbacks(py, &spawn_context.protocol)?;
     spawn_context.context_needs_run &= callbacks.stream_reader_fast_path.is_none();
     let direct_writer = duplicate_unix_direct_writer(raw_fd)?;
-    let writer = stream
-        .try_clone()
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let (writer_tx, writer_rx) = mpsc::channel();
     let parts = stream_transport_state_parts(
         spawn_context,
@@ -3022,6 +3122,7 @@ pub fn spawn_unix_transport(
             io_fd: Some(raw_fd),
             runtime_socket_io: true,
             extra,
+            lazy_socket_family: Some(libc::AF_UNIX),
             reading: true,
             writable: true,
             can_write_eof: true,
@@ -3034,7 +3135,7 @@ pub fn spawn_unix_transport(
         writer_tx,
         Some(TaskedDirectWriter::Unix(direct_writer)),
         Some(LazyWriterConfig {
-            target: WriterTarget::Unix(writer),
+            target: LazyWriterTarget::Unix(raw_fd),
             writer_rx,
         }),
     );
@@ -3183,6 +3284,7 @@ fn spawn_tls_transport(
             io_fd: Some(stream_fd),
             runtime_socket_io: true,
             extra,
+            lazy_socket_family: None,
             reading: true,
             writable: true,
             can_write_eof: false,
@@ -3923,7 +4025,9 @@ pub(crate) async fn run_tcp_socket_reader_task(
             return;
         }
     };
-    let mut buf = vec![0_u8; STREAM_READ_BUFFER_SIZE];
+    // `read_buf` writes into spare capacity, so idle transports reserve this
+    // address space without eagerly zero-filling and faulting in every page.
+    let mut buf = Vec::with_capacity(STREAM_READ_BUFFER_SIZE);
 
     loop {
         if core.is_closing() {
@@ -3939,7 +4043,8 @@ pub(crate) async fn run_tcp_socket_reader_task(
             return;
         }
 
-        match reader.read(&mut buf).await {
+        buf.clear();
+        match reader.read_buf(&mut buf).await {
             Ok(0) => {
                 core.enqueue_pending_read_event(PendingReadEvent::Eof);
                 return;
@@ -3973,7 +4078,7 @@ pub(crate) async fn run_unix_socket_reader_task(
             return;
         }
     };
-    let mut buf = vec![0_u8; STREAM_READ_BUFFER_SIZE];
+    let mut buf = Vec::with_capacity(STREAM_READ_BUFFER_SIZE);
 
     loop {
         if core.is_closing() {
@@ -3987,7 +4092,8 @@ pub(crate) async fn run_unix_socket_reader_task(
             core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
             return;
         }
-        match reader.read(&mut buf).await {
+        buf.clear();
+        match reader.read_buf(&mut buf).await {
             Ok(0) => {
                 core.enqueue_pending_read_event(PendingReadEvent::Eof);
                 return;
@@ -4509,6 +4615,25 @@ fn shutdown_unix_stream(stream: &StdUnixStream, how: Shutdown) -> io::Result<()>
 
 fn build_protocol_callbacks(py: Python<'_>, protocol: &Py<PyAny>) -> PyResult<ProtocolCallbacks> {
     let bound = protocol.bind(py);
+    let stream_reader_fast_path = stream_reader_fast_path(py, bound)?;
+    if matches!(
+        &stream_reader_fast_path,
+        Some(StreamReaderFastPath::Native { .. })
+    ) {
+        // Native streams handle these lifecycle and read callbacks directly
+        // in Rust. Only bind callbacks that remain reachable.
+        return Ok(ProtocolCallbacks {
+            connection_made: protocol.clone_ref(py),
+            data_received: None,
+            eof_received: None,
+            connection_lost: protocol.clone_ref(py),
+            pause_writing: bound.getattr(python_names::pause_writing(py))?.unbind(),
+            resume_writing: bound.getattr(python_names::resume_writing(py))?.unbind(),
+            get_buffer: None,
+            buffer_updated: None,
+            stream_reader_fast_path,
+        });
+    }
     let data_received = match bound.getattr("data_received") {
         Ok(callback) => Some(callback.unbind()),
         Err(_) => None,
@@ -4525,8 +4650,6 @@ fn build_protocol_callbacks(py: Python<'_>, protocol: &Py<PyAny>) -> PyResult<Pr
         Ok(callback) => Some(callback.unbind()),
         Err(_) => None,
     };
-    let stream_reader_fast_path = stream_reader_fast_path(py, bound)?;
-
     Ok(ProtocolCallbacks {
         connection_made: bound.getattr("connection_made")?.unbind(),
         data_received,

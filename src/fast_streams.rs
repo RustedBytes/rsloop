@@ -1,5 +1,6 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
 
@@ -8,6 +9,15 @@ use crate::python_names;
 use crate::stream_transport::{PyStreamTransport, task_locals_for_loop};
 
 const DEFAULT_STREAM_LIMIT: usize = 65_536;
+
+fn asyncio_iscoroutine(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
+    static ISCOROUTINE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    Ok(ISCOROUTINE
+        .get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+            Ok(py.import("asyncio")?.getattr("iscoroutine")?.unbind())
+        })?
+        .bind(py))
+}
 
 /// Create a future on `loop_obj`, skipping the Python-level method dispatch
 /// when the loop is a native rsloop instance running on this thread.
@@ -55,6 +65,18 @@ impl ReadBuffer {
         self.compact_if_needed();
         self.bytes.reserve(data.len());
         self.bytes.extend_from_slice(data);
+    }
+
+    fn extend_owned(&mut self, data: Box<[u8]>) {
+        if data.is_empty() {
+            return;
+        }
+        if self.is_empty() {
+            self.bytes = data.into_vec();
+            self.start = 0;
+        } else {
+            self.extend(&data);
+        }
     }
 
     fn consume(&mut self, n: usize) {
@@ -109,6 +131,18 @@ mod read_buffer_tests {
 
         assert_eq!(buffer.len(), 0);
         assert!(buffer.bytes.capacity() <= 4096);
+    }
+
+    #[test]
+    fn adopts_owned_data_without_copying_when_empty() {
+        let mut buffer = ReadBuffer::with_capacity(4096);
+        let data = vec![7_u8; 1024].into_boxed_slice();
+        let data_ptr = data.as_ptr();
+
+        buffer.extend_owned(data);
+
+        assert_eq!(buffer.unread().as_ptr(), data_ptr);
+        assert_eq!(buffer.unread(), &[7_u8; 1024]);
     }
 }
 
@@ -188,7 +222,9 @@ impl PyFastStreamReader {
         Ok(Self {
             loop_obj,
             limit,
-            buffer: ReadBuffer::with_capacity(limit.max(4096)),
+            // The flow-control limit is not an allocation target. Idle
+            // streams should retain only a small baseline and grow on data.
+            buffer: ReadBuffer::with_capacity(limit.min(4096)),
             waiter: None,
             transport: py.None(),
             paused: false,
@@ -389,6 +425,19 @@ impl PyFastStreamReader {
             return Err(PyValueError::new_err("feed_data after feed_eof"));
         }
         self.buffer.extend(data);
+        self.maybe_complete_waiter(py)?;
+        self.maybe_pause_transport(py)
+    }
+
+    pub(crate) fn feed_owned_data_internal(
+        &mut self,
+        py: Python<'_>,
+        data: Box<[u8]>,
+    ) -> PyResult<()> {
+        if self.eof {
+            return Err(PyValueError::new_err("feed_data after feed_eof"));
+        }
+        self.buffer.extend_owned(data);
         self.maybe_complete_waiter(py)?;
         self.maybe_pause_transport(py)
     }
@@ -719,15 +768,18 @@ impl PyFastStreamProtocol {
             },
         )?;
         let result = callback.call1(py, (reader.clone_ref(py), writer))?;
-        let asyncio = py.import("asyncio")?;
-        if !asyncio
-            .call_method1("iscoroutine", (result.clone_ref(py),))?
+        if !asyncio_iscoroutine(py)?
+            .call1((result.clone_ref(py),))?
             .extract::<bool>()?
         {
             return Ok(());
         }
 
-        let task = loop_obj.call_method1(py, "create_task", (result,))?;
+        let task =
+            match crate::python_api::try_fast_create_task(py, &loop_obj, result.clone_ref(py))? {
+                Some(task) => task,
+                None => loop_obj.call_method1(py, "create_task", (result,))?,
+            };
         slf.borrow_mut(py).task = task.clone_ref(py);
         let done_cb = Py::new(
             py,

@@ -452,6 +452,21 @@ pub(crate) fn try_fast_create_future(
     create_asyncio_future_for_running_loop(py).map(Some)
 }
 
+pub(crate) fn try_fast_create_task(
+    py: Python<'_>,
+    loop_obj: &Py<PyAny>,
+    coro: Py<PyAny>,
+) -> PyResult<Option<Py<PyAny>>> {
+    let Ok(pyloop) = loop_obj.bind(py).cast_exact::<PyLoop>() else {
+        return Ok(None);
+    };
+    let core = &pyloop.borrow().core;
+    if !core.on_runtime_thread() || core.has_task_factory() {
+        return Ok(None);
+    }
+    create_asyncio_task_for_running_loop(py, coro).map(Some)
+}
+
 fn create_asyncio_task_for_loop(
     py: Python<'_>,
     loop_obj: &Py<PyAny>,
