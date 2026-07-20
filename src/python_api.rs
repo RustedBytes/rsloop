@@ -336,6 +336,7 @@ fn call_callable_noargs(py: Python<'_>, callable: &Py<PyAny>) -> PyResult<Py<PyA
 }
 
 #[inline]
+#[cfg(Py_3_10)]
 fn call_callable_onearg(
     py: Python<'_>,
     callable: &Py<PyAny>,
@@ -464,7 +465,7 @@ pub(crate) fn try_fast_create_task(
     if !core.on_runtime_thread() || core.has_task_factory() {
         return Ok(None);
     }
-    create_asyncio_task_for_running_loop(py, coro).map(Some)
+    create_asyncio_task_for_running_loop(py, loop_obj.bind(py), coro).map(Some)
 }
 
 fn create_asyncio_task_for_loop(
@@ -507,8 +508,29 @@ fn create_asyncio_task_for_loop(
     }
 }
 
-fn create_asyncio_task_for_running_loop(py: Python<'_>, coro: Py<PyAny>) -> PyResult<Py<PyAny>> {
-    call_callable_onearg(py, asyncio_task_cls(py)?, coro.bind(py))
+#[inline]
+fn create_asyncio_task_for_running_loop(
+    py: Python<'_>,
+    loop_obj: &Bound<'_, PyAny>,
+    coro: Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let task_cls = asyncio_task_cls(py)?;
+    #[cfg(not(Py_3_10))]
+    {
+        // On Python 3.8/3.9, `Task.__init__` resolves the loop via the slower
+        // `get_event_loop()` when none is passed; supplying the running loop
+        // (accepted there without a deprecation warning) skips that per-task
+        // lookup — ~10% of create_task. 3.10+ resolves the running loop cheaply,
+        // so the extra kwarg would only add overhead there and is skipped.
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("loop", loop_obj)?;
+        task_cls.call(py, (coro,), Some(&kwargs))
+    }
+    #[cfg(Py_3_10)]
+    {
+        let _ = loop_obj;
+        call_callable_onearg(py, task_cls, coro.bind(py))
+    }
 }
 
 fn create_asyncio_task_with_kwargs(
@@ -1721,6 +1743,22 @@ impl PyLoop {
         eager_start: Option<bool>,
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Py<PyAny>> {
+        // Hot path: a bare `create_task(coro)` with no name/context/eager_start/
+        // kwargs — what asyncio.Task step scheduling and gather() always hit.
+        // Skip the Arc clone and the (cached) kwarg-support probe those extras
+        // would need, and go straight to constructing the Task.
+        let bare = name.is_none()
+            && context.is_none()
+            && eager_start.is_none()
+            && kwargs.as_ref().is_none_or(|kwargs| kwargs.bind(py).is_empty());
+        if bare {
+            let loop_ref = slf.borrow(py);
+            if !loop_ref.core.has_task_factory() && loop_ref.core.on_runtime_thread() {
+                drop(loop_ref);
+                return create_asyncio_task_for_running_loop(py, slf.bind(py).as_any(), coro);
+            }
+        }
+
         let core = Arc::clone(&slf.borrow(py).core);
         let task_kwarg_support = asyncio_task_kwarg_support(py)?;
         let extra_kwargs = kwargs
@@ -1732,7 +1770,7 @@ impl PyLoop {
             || (eager_start.is_some() && task_kwarg_support.eager_start);
 
         if !core.has_task_factory() && !has_kwargs && core.on_runtime_thread() {
-            return create_asyncio_task_for_running_loop(py, coro);
+            return create_asyncio_task_for_running_loop(py, slf.bind(py).as_any(), coro);
         }
 
         let loop_obj = Self::as_py_any(py, &slf);
@@ -1800,7 +1838,7 @@ impl PyLoop {
         let trim_source_traceback = core.get_debug();
         if is_current_running_loop(py, &loop_obj)? {
             let created = if !has_kwargs {
-                create_asyncio_task_for_running_loop(py, coro)?
+                create_asyncio_task_for_running_loop(py, loop_obj.bind(py), coro)?
             } else {
                 create_asyncio_task_with_kwargs(
                     py,

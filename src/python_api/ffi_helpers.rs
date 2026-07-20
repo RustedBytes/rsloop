@@ -11,6 +11,7 @@ pub(super) fn call_noargs(py: Python<'_>, callable: &Py<PyAny>) -> PyResult<Py<P
     result.map(Bound::unbind)
 }
 
+#[cfg(Py_3_10)]
 pub(super) fn call_onearg(
     py: Python<'_>,
     callable: &Py<PyAny>,
