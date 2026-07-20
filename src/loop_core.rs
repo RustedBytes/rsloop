@@ -119,6 +119,27 @@ impl Drop for GilSuspend {
     }
 }
 
+/// Bounded busy-wait before parking in `block_on`. Cross-thread wakeups (reader
+/// worker threads, the transitional runtime thread) otherwise pay the full
+/// `driver.wait` park + interrupt round-trip, which dominates request/response
+/// ping-pong latency and inflates its variance. Env-tunable via
+/// `RSLOOP_WAKE_SPIN_US` (0 disables).
+fn wake_spin_window() -> Duration {
+    static WINDOW: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *WINDOW.get_or_init(|| {
+        let micros = std::env::var("RSLOOP_WAKE_SPIN_US")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(50);
+        Duration::from_micros(micros.min(1_000))
+    })
+}
+
+// After this many consecutive spin-caught wakeups, park in `block_on` anyway so
+// this loop's own runtime tasks (accept loops, connect watches) and io_uring
+// completions are still serviced under sustained same-connection traffic.
+const MAX_CONSECUTIVE_SPINS: u32 = 64;
+
 impl Future for WaitForWake {
     type Output = ();
 
@@ -469,6 +490,8 @@ impl LoopCore {
 
         let mut pending_signal_error: Option<PyErr> = None;
         let mut ready_batch = VecDeque::new();
+        let spin_window = wake_spin_window();
+        let mut consecutive_spins: u32 = 0;
         let run_result = loop {
             self.set_ready_drain_active(true);
 
@@ -633,20 +656,45 @@ impl LoopCore {
                 continue;
             }
 
-            // Park by driving this loop's vibeio runtime with the GIL released,
-            // so the reactor's `driver.wait` runs on the loop thread. Resolves
-            // when a ready item is enqueued (cross-thread or same-thread) or the
-            // signal-poll timeout elapses; either way we loop back and drain.
-            let wait = WaitForWake::new(Arc::clone(&self.wake), SIGNAL_POLL_INTERVAL);
+            // Wait for the next wakeup with the GIL released. First spin briefly
+            // to catch an imminent cross-thread wake (reader worker / runtime
+            // thread) in user space — this keeps request/response ping-pong
+            // latency low and tight. On spin timeout (or after too many
+            // consecutive catches, to avoid starving this loop's own runtime
+            // tasks) park by driving the runtime: its `driver.wait` runs here on
+            // the loop thread and is interrupted by a cross-thread wake.
             {
                 let _gil = GilSuspend::new();
-                LOOP_RUNTIMES.with(|runtimes| {
-                    let runtimes = runtimes.borrow();
-                    let runtime = runtimes
-                        .get(&loop_runtime_key)
-                        .expect("loop runtime missing");
-                    runtime.block_on(wait);
-                });
+                let mut caught = false;
+                if !spin_window.is_zero() {
+                    let spin_deadline = Instant::now() + spin_window;
+                    'spin: loop {
+                        for _ in 0..64 {
+                            if self.wake.ready_pending.load(Ordering::Acquire) {
+                                caught = true;
+                                break 'spin;
+                            }
+                            std::hint::spin_loop();
+                        }
+                        if Instant::now() >= spin_deadline {
+                            break 'spin;
+                        }
+                    }
+                }
+
+                if caught && consecutive_spins < MAX_CONSECUTIVE_SPINS {
+                    consecutive_spins += 1;
+                } else {
+                    consecutive_spins = 0;
+                    let wait = WaitForWake::new(Arc::clone(&self.wake), SIGNAL_POLL_INTERVAL);
+                    LOOP_RUNTIMES.with(|runtimes| {
+                        let runtimes = runtimes.borrow();
+                        let runtime = runtimes
+                            .get(&loop_runtime_key)
+                            .expect("loop runtime missing");
+                        runtime.block_on(wait);
+                    });
+                }
             }
             let _ = py;
         };
