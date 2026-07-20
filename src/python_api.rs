@@ -802,10 +802,12 @@ fn is_already_connected_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bo
         .is_some_and(is_already_connected_errno))
 }
 
+#[inline]
 fn is_already_connected_errno(errno: i32) -> bool {
     errno == libc::EISCONN || errno == WSAEISCONN
 }
 
+#[inline]
 fn is_connect_in_progress_errno(errno: i32) -> bool {
     errno == libc::EINPROGRESS || errno == libc::EALREADY || errno == libc::EWOULDBLOCK
 }

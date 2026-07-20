@@ -143,6 +143,7 @@ const MAX_CONSECUTIVE_SPINS: u32 = 64;
 impl Future for WaitForWake {
     type Output = ();
 
+    #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         if self.wake.ready_pending.load(Ordering::Acquire) {
             return Poll::Ready(());
