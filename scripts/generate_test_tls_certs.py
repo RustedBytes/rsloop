@@ -39,6 +39,14 @@ basicConstraints = CA:false
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
 
+[v3_cert]
+subjectAltName = @alt_names
+basicConstraints = CA:false
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+
 [alt_names]
 DNS.1 = localhost
 IP.1 = 127.0.0.1
@@ -170,7 +178,7 @@ def generate(outdir: pathlib.Path) -> None:
             "-extfile",
             str(generated["cert.cnf"]),
             "-extensions",
-            "v3_req",
+            "v3_cert",
         )
     finally:
         for name in ("cert.csr", "cert.cnf", "ca.cnf", "ca-cert.srl"):

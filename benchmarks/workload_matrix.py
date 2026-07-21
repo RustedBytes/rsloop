@@ -207,6 +207,38 @@ def application_digest(iterations: int) -> bytes:
     return digest
 
 
+def ensure_idle_connection_capacity(connection_count: int) -> None:
+    if os.name == "nt":
+        return
+
+    try:
+        import resource
+    except ImportError:
+        return
+
+    # The client and server live in the same process. Account for both steady-
+    # state sockets and descriptors held transiently while the runtime registers
+    # each endpoint, then leave room for the listener and interpreter runtime.
+    required = connection_count * 4 + 64
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft >= required:
+        return
+    if hard < required:
+        raise RuntimeError(
+            f"--idle-connections {connection_count} requires a file-descriptor "
+            f"limit of at least {required}, but the hard limit is {hard}; lower "
+            "--idle-connections or raise the hard limit"
+        )
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (required, hard))
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(
+            f"could not raise the file-descriptor soft limit from {soft} to "
+            f"{required}; lower --idle-connections or run with `ulimit -n "
+            f"{required}`"
+        ) from exc
+
+
 def tls_contexts(tls_dir: Path) -> tuple[ssl.SSLContext, ssl.SSLContext]:
     cert = tls_dir / "cert.pem"
     key = tls_dir / "key.pem"
@@ -674,6 +706,9 @@ def run_with_loop(loop_name: str, awaitable: Awaitable[MatrixResult]) -> MatrixR
 
 
 def child_main(args: argparse.Namespace) -> int:
+    if args.scenario == "idle_connections":
+        ensure_idle_connection_capacity(args.idle_connections)
+
     if args.profile_label:
         if args.loop != "rsloop":
             raise RuntimeError("Tracy profiling is only supported for rsloop")
