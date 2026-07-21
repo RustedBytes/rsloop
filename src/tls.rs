@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use pyo3::ffi::c_str;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
+use pyo3::ffi::c_str;
 use pyo3::prelude::*;
 use pyo3::types::{PyCapsule, PyCapsuleMethods, PyDict};
 use rustls::client::ClientConfig;
@@ -65,10 +65,7 @@ pub fn client_tls_settings(
     })
 }
 
-fn cached_client_config(
-    py: Python<'_>,
-    ssl_context: &Py<PyAny>,
-) -> PyResult<Arc<ClientConfig>> {
+fn cached_client_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<Arc<ClientConfig>> {
     let context_dict = ssl_context.bind(py).getattr("__dict__")?;
     let context_dict = context_dict.cast::<PyDict>()?;
     let generation = context_dict
@@ -79,9 +76,8 @@ fn cached_client_config(
 
     if let Some(value) = context_dict.get_item(CLIENT_CONFIG_CACHE_KEY)?
         && let Ok(capsule) = value.cast::<PyCapsule>()
-        && let Ok(pointer) = capsule.pointer_checked(Some(c_str!(
-            "rsloop._loop.client_config_cache"
-        )))
+        && let Ok(pointer) =
+            capsule.pointer_checked(Some(c_str!("rsloop._loop.client_config_cache")))
     {
         // SAFETY: capsules stored under CLIENT_CONFIG_CACHE_KEY are created below
         // with a boxed CachedClientConfig and remain owned by the SSLContext for

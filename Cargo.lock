@@ -1183,8 +1183,6 @@ checksum = "7ba6f5989077681266825251a52748b8c1d8a4ad098cc37e440103d0ea717fc0"
 [[package]]
 name = "vibeio"
 version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63b968e30d91bc5c14d23f9af184f26ea7f0d886ab309d11b37148b244d7dfa4"
 dependencies = [
  "crossbeam-queue",
  "futures-util",

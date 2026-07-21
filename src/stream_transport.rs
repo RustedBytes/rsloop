@@ -26,6 +26,10 @@ use pyo3_async_runtimes::TaskLocals;
 use rustls::{ClientConnection, ServerConnection};
 use socket2::Socket;
 use tokio::io::AsyncReadExt;
+#[cfg(windows)]
+use vibeio::io::AsyncRead as VibeAsyncRead;
+#[cfg(windows)]
+use vibeio::net::TcpStream as VibeTcpStream;
 use vibeio::net::{PollTcpStream as VibePollTcpStream, TcpListener as VibeTcpListener};
 #[cfg(unix)]
 use vibeio::net::{PollUnixStream as VibePollUnixStream, UnixListener as VibeUnixListener};
@@ -4066,7 +4070,11 @@ fn spawn_socket_reader(
     reader: ReaderTarget,
 ) -> Result<(), crate::loop_core::LoopCoreError> {
     let loop_core = Arc::clone(&core.loop_core);
-    loop_core.send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader { fd, core, reader }))
+    loop_core.send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader {
+        fd,
+        core,
+        reader,
+    }))
 }
 
 /// Stops the socket reader for `fd` via the runtime-thread command path (readers
@@ -4077,6 +4085,7 @@ fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) {
         .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
 }
 
+#[cfg(not(windows))]
 pub(crate) async fn run_tcp_socket_reader_task(
     core: Arc<StreamTransportCore>,
     stream: StdTcpStream,
@@ -4101,6 +4110,140 @@ pub(crate) async fn run_tcp_socket_reader_task(
             return;
         }
 
+        while !core.is_closing() && !core.is_reading() {
+            vibeio::time::sleep(Duration::from_millis(1)).await;
+        }
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        buf.clear();
+        match reader.read_buf(&mut buf).await {
+            Ok(0) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                return;
+            }
+            Ok(_) => {
+                let data = take_async_read_data(&mut buf);
+                core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+pub(crate) async fn run_tcp_socket_reader_task(
+    core: Arc<StreamTransportCore>,
+    stream: StdTcpStream,
+) {
+    profiling::scope!("stream.run_tcp_socket_reader_task");
+
+    // Server-side sockets retain the readiness reader. A server transport can
+    // duplicate its socket for direct bulk writes, and an outstanding IOCP read
+    // on the original socket materially slows that path. Client-side sockets
+    // use completion reads, avoiding one AFD poll per request/response turn.
+    if core.server_side {
+        match VibePollTcpStream::from_std(stream) {
+            Ok(reader) => {
+                run_windows_poll_tcp_reader(
+                    core,
+                    reader,
+                    Vec::with_capacity(STREAM_READ_BUFFER_SIZE),
+                )
+                .await;
+            }
+            Err(err) => core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                err.to_string(),
+            ))),
+        }
+        return;
+    }
+
+    let mut reader = match VibeTcpStream::from_std(stream) {
+        Ok(reader) => reader,
+        Err(err) => {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                err.to_string(),
+            )));
+            return;
+        }
+    };
+    let mut buf = Vec::with_capacity(STREAM_READ_BUFFER_SIZE);
+
+    loop {
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+        while !core.is_closing() && !core.is_reading() {
+            vibeio::time::sleep(Duration::from_millis(1)).await;
+        }
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        buf.clear();
+        let (result, returned_buf) = VibeAsyncRead::read(&mut reader, buf).await;
+        buf = returned_buf;
+        match result {
+            Ok(0) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                return;
+            }
+            Ok(read) => {
+                let saturated = read == buf.capacity();
+                let data = take_async_read_data(&mut buf);
+                core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+
+                // Completion reads win on small request/response traffic. Once
+                // a buffer fills, switch this connection to readiness mode so
+                // sustained bulk transfer does not keep an overlapped receive
+                // outstanding alongside the direct writer socket.
+                if saturated {
+                    match reader.into_poll() {
+                        Ok(poll_reader) => {
+                            run_windows_poll_tcp_reader(core, poll_reader, buf).await;
+                        }
+                        Err(err) => core.enqueue_pending_read_event(
+                            PendingReadEvent::ConnectionLost(Some(err.to_string())),
+                        ),
+                    }
+                    return;
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn run_windows_poll_tcp_reader(
+    core: Arc<StreamTransportCore>,
+    mut reader: VibePollTcpStream,
+    mut buf: Vec<u8>,
+) {
+    loop {
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
         while !core.is_closing() && !core.is_reading() {
             vibeio::time::sleep(Duration::from_millis(1)).await;
         }

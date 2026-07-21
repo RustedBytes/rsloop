@@ -770,10 +770,14 @@ impl LoopCore {
         // the runtime holds no in-flight tasks yet (I/O still on the runtime
         // thread in this phase).
         let runtime_key = self as *const LoopCore as usize;
-        // Drop tracked task handles first (detaches them), then the runtime,
-        // whose drop tears down any still-registered tasks.
+        // Cancel tracked tasks while the runtime and its driver are alive, then
+        // drop the runtime after cancellation has released pending operations.
         IO_TASKS.with(|tasks| {
-            tasks.borrow_mut().remove(&runtime_key);
+            if let Some(handles) = tasks.borrow_mut().remove(&runtime_key) {
+                for (_, handle) in handles {
+                    handle.cancel();
+                }
+            }
         });
         LOOP_RUNTIMES.with(|runtimes| {
             if let Some(runtime) = runtimes.borrow_mut().remove(&runtime_key) {
@@ -962,7 +966,11 @@ impl LoopCore {
         match handle {
             Some(handle) => {
                 IO_TASKS.with(|tasks| {
-                    if let Some(old) = tasks.borrow_mut().entry(key).or_default().insert(fd, handle)
+                    if let Some(old) = tasks
+                        .borrow_mut()
+                        .entry(key)
+                        .or_default()
+                        .insert(fd, handle)
                     {
                         old.cancel();
                     }

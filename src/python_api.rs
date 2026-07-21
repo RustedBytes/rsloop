@@ -1750,7 +1750,9 @@ impl PyLoop {
         let bare = name.is_none()
             && context.is_none()
             && eager_start.is_none()
-            && kwargs.as_ref().is_none_or(|kwargs| kwargs.bind(py).is_empty());
+            && kwargs
+                .as_ref()
+                .is_none_or(|kwargs| kwargs.bind(py).is_empty());
         if bare {
             let loop_ref = slf.borrow(py);
             if !loop_ref.core.has_task_factory() && loop_ref.core.on_runtime_thread() {
