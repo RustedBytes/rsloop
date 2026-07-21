@@ -441,10 +441,11 @@ impl RuntimeDispatcher {
 
                 self.reader_tasks.insert(fd, task);
             }
-            LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)) => {
+            LoopCommand::Io(LoopIoCommand::StopSocketReader { fd, done_tx }) => {
                 if let Some(task) = self.reader_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
+                let _ = done_tx.send(());
             }
             LoopCommand::Io(LoopIoCommand::StartServerAccept {
                 fd,

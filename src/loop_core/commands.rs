@@ -100,7 +100,10 @@ pub enum LoopIoCommand {
         core: Arc<StreamTransportCore>,
         reader: ReaderTarget,
     },
-    StopSocketReader(RawFd),
+    StopSocketReader {
+        fd: RawFd,
+        done_tx: std::sync::mpsc::Sender<()>,
+    },
     StartServerAccept {
         fd: RawFd,
         server: Arc<ServerCore>,

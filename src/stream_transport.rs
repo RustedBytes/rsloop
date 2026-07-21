@@ -33,6 +33,11 @@ use vibeio::net::TcpStream as VibeTcpStream;
 use vibeio::net::{PollTcpStream as VibePollTcpStream, TcpListener as VibeTcpListener};
 #[cfg(unix)]
 use vibeio::net::{PollUnixStream as VibePollUnixStream, UnixListener as VibeUnixListener};
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{ERROR_OPERATION_ABORTED, HANDLE},
+    System::IO::CancelIoEx,
+};
 
 use crate::async_event::AsyncEvent;
 use crate::context::{
@@ -75,6 +80,10 @@ const BLOCKING_POLL_INTERVAL_MS: i32 = 50;
 // several owned chunks, while the pending-event drain can still coalesce the
 // slow protocol path up to MAX_PENDING_READ_COALESCE_BYTES.
 const STREAM_READ_BUFFER_SIZE: usize = 16 * 1024;
+#[cfg(windows)]
+const SERVER_POLL_READER_WRITE_THRESHOLD: usize = STREAM_READ_BUFFER_SIZE;
+#[cfg(windows)]
+const SERVER_POLL_READER_TINY_TRIGGER_MAX_BYTES: usize = 16;
 const OWNED_READ_HANDOFF_MIN_BYTES: usize = STREAM_READ_BUFFER_SIZE / 2;
 const TLS_WORKER_STACK_SIZE: usize = 256 * 1024;
 
@@ -541,6 +550,10 @@ pub struct StreamTransportCore {
     direct_writer: Option<Mutex<TaskedDirectWriter>>,
     pending_direct_write: Mutex<Vec<u8>>,
     direct_write_scheduled: AtomicBool,
+    #[cfg(windows)]
+    server_poll_reader_requested: AtomicBool,
+    #[cfg(windows)]
+    server_poll_reader_ready: AtomicBool,
     lazy_writer: Mutex<Option<LazyWriterConfig>>,
     workers: Mutex<Vec<WorkerThread>>,
     // Signaled whenever `read_paused` clears or the transport starts
@@ -551,6 +564,7 @@ pub struct StreamTransportCore {
     // the per-write hot path avoids a state lock plus hash lookup.
     has_text_encoding: bool,
     server_side: bool,
+    native_stream_reader: bool,
 }
 
 struct ServerState {
@@ -963,6 +977,48 @@ impl WorkerThread {
 }
 
 impl StreamTransportCore {
+    #[cfg(windows)]
+    #[inline]
+    fn server_poll_reader_requested(&self) -> bool {
+        self.server_side && self.server_poll_reader_requested.load(Ordering::Acquire)
+    }
+
+    #[cfg(windows)]
+    fn request_server_poll_reader(&self) {
+        if !self.server_side
+            || !self.native_stream_reader
+            || self
+                .server_poll_reader_requested
+                .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+
+        let fd = self.state.lock().expect("poisoned transport state").io_fd;
+        if let Some(fd) = fd {
+            // Wake a server reader currently blocked in WSARecv. The operation
+            // still completes through vibeio's IOCP driver with
+            // ERROR_OPERATION_ABORTED; the reader handles that result by
+            // rebinding the same socket to readiness mode. Cancel before the
+            // direct write so a pending receive cannot throttle the duplicate
+            // writer socket during a bulk response.
+            let _ = unsafe { CancelIoEx(fd as HANDLE, std::ptr::null()) };
+        }
+    }
+
+    #[cfg(windows)]
+    fn mark_server_poll_reader_ready(self: &Arc<Self>) {
+        if !self.server_side {
+            return;
+        }
+        self.server_poll_reader_ready.store(true, Ordering::Release);
+        if self.direct_write_scheduled.load(Ordering::Acquire) {
+            let _ = self.loop_core.send_command(LoopCommand::Transport(
+                LoopTransportCommand::StreamWrite(Arc::clone(self)),
+            ));
+        }
+    }
+
     fn close_extra_socket_with_py(&self, py: Python<'_>) {
         let socket = self
             .state
@@ -1848,6 +1904,12 @@ impl StreamTransportCore {
 
     pub(crate) fn flush_pending_direct_write(self: &Arc<Self>) {
         profiling::scope!("StreamTransportCore::flush_pending_direct_write");
+        #[cfg(windows)]
+        if self.server_poll_reader_requested()
+            && !self.server_poll_reader_ready.load(Ordering::Acquire)
+        {
+            return;
+        }
         self.direct_write_scheduled.store(false, Ordering::Release);
         let data = std::mem::take(
             self.pending_direct_write
@@ -1903,6 +1965,16 @@ impl StreamTransportCore {
 
     fn try_write_bytes(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
         profiling::scope!("StreamTransportCore::try_write_bytes");
+        #[cfg(windows)]
+        if data.len() >= SERVER_POLL_READER_WRITE_THRESHOLD {
+            self.request_server_poll_reader();
+            if self.server_poll_reader_requested()
+                && !self.server_poll_reader_ready.load(Ordering::Acquire)
+            {
+                return self.stage_direct_write(data);
+            }
+        }
+
         if self.direct_writer.is_some() && !self.write_backpressure_active() {
             if self.direct_write_scheduled.load(Ordering::Acquire)
                 || (self.server_side
@@ -2900,6 +2972,10 @@ fn new_stream_transport_core(
 ) -> Arc<StreamTransportCore> {
     let has_text_encoding = parts.state.extra.contains_key("text_encoding");
     let server_side = parts.state.server.is_some();
+    let native_stream_reader = matches!(
+        &parts.state.callbacks.stream_reader_fast_path,
+        Some(StreamReaderFastPath::Native { .. })
+    );
     let reading = parts.state.reading;
     Arc::new(StreamTransportCore {
         loop_core: parts.loop_core,
@@ -2912,11 +2988,16 @@ fn new_stream_transport_core(
         direct_writer: direct_writer.map(Mutex::new),
         pending_direct_write: Mutex::new(Vec::new()),
         direct_write_scheduled: AtomicBool::new(false),
+        #[cfg(windows)]
+        server_poll_reader_requested: AtomicBool::new(false),
+        #[cfg(windows)]
+        server_poll_reader_ready: AtomicBool::new(false),
         lazy_writer: Mutex::new(lazy_writer),
         workers: Mutex::new(Vec::new()),
         state_cv: Condvar::new(),
         has_text_encoding,
         server_side,
+        native_stream_reader,
     })
 }
 
@@ -4080,9 +4161,20 @@ fn spawn_socket_reader(
 /// Stops the socket reader for `fd` via the runtime-thread command path (readers
 /// are hosted there; see `spawn_socket_reader`).
 fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) {
-    let _ = core
+    let (done_tx, done_rx) = mpsc::channel();
+    if core
         .loop_core
-        .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
+        .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader {
+            fd,
+            done_tx,
+        }))
+        .is_ok()
+    {
+        // start_tls duplicates the socket before reaching this point. Do not
+        // let the TLS handshake use that duplicate until the runtime-thread
+        // reader has been dropped, otherwise it can consume handshake bytes.
+        let _ = done_rx.recv();
+    }
 }
 
 #[cfg(not(windows))]
@@ -4147,11 +4239,11 @@ pub(crate) async fn run_tcp_socket_reader_task(
 ) {
     profiling::scope!("stream.run_tcp_socket_reader_task");
 
-    // Server-side sockets retain the readiness reader. A server transport can
-    // duplicate its socket for direct bulk writes, and an outstanding IOCP read
-    // on the original socket materially slows that path. Client-side sockets
-    // use completion reads, avoiding one AFD poll per request/response turn.
-    if core.server_side {
+    // Native fast streams start in completion mode for low-latency
+    // request/response traffic. Custom protocols retain readiness mode because
+    // either endpoint may call start_tls(), which reclaims the socket
+    // synchronously.
+    if !core.native_stream_reader {
         match VibePollTcpStream::from_std(stream) {
             Ok(reader) => {
                 run_windows_poll_tcp_reader(
@@ -4168,6 +4260,8 @@ pub(crate) async fn run_tcp_socket_reader_task(
         return;
     }
 
+    // Native fast-stream readers use completion mode. A native server switches
+    // to readiness mode when a large response begins.
     let mut reader = match VibeTcpStream::from_std(stream) {
         Ok(reader) => reader,
         Err(err) => {
@@ -4192,6 +4286,19 @@ pub(crate) async fn run_tcp_socket_reader_task(
             return;
         }
 
+        if core.server_poll_reader_requested() {
+            match reader.into_poll() {
+                Ok(poll_reader) => {
+                    core.mark_server_poll_reader_ready();
+                    run_windows_poll_tcp_reader(core, poll_reader, buf).await;
+                }
+                Err(err) => core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+                    Some(err.to_string()),
+                )),
+            }
+            return;
+        }
+
         buf.clear();
         let (result, returned_buf) = VibeAsyncRead::read(&mut reader, buf).await;
         buf = returned_buf;
@@ -4203,26 +4310,54 @@ pub(crate) async fn run_tcp_socket_reader_task(
             Ok(read) => {
                 let saturated = read == buf.capacity();
                 let data = take_async_read_data(&mut buf);
-                core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+                let tiny_server_trigger =
+                    core.server_side && read <= SERVER_POLL_READER_TINY_TRIGGER_MAX_BYTES;
 
-                // Completion reads win on small request/response traffic. Once
-                // a buffer fills, switch this connection to readiness mode so
-                // sustained bulk transfer does not keep an overlapped receive
-                // outstanding alongside the direct writer socket.
-                if saturated {
+                // Completion reads win on normal request/response traffic. A
+                // full inbound buffer indicates sustained transfer; a tiny
+                // server command commonly triggers a large outbound response.
+                // Rebind before delivering either event so the protocol cannot
+                // begin bulk writes while an overlapped receive is outstanding.
+                if saturated || tiny_server_trigger {
+                    if core.server_side {
+                        core.server_poll_reader_requested
+                            .store(true, Ordering::Release);
+                    }
                     match reader.into_poll() {
                         Ok(poll_reader) => {
+                            core.mark_server_poll_reader_ready();
+                            core.enqueue_pending_read_event(PendingReadEvent::Data(data));
                             run_windows_poll_tcp_reader(core, poll_reader, buf).await;
                         }
-                        Err(err) => core.enqueue_pending_read_event(
-                            PendingReadEvent::ConnectionLost(Some(err.to_string())),
-                        ),
+                        Err(err) => {
+                            core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+                            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+                                Some(err.to_string()),
+                            ));
+                        }
                     }
                     return;
                 }
+
+                core.enqueue_pending_read_event(PendingReadEvent::Data(data));
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err)
+                if core.server_poll_reader_requested()
+                    && err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as i32) =>
+            {
+                match reader.into_poll() {
+                    Ok(poll_reader) => {
+                        core.mark_server_poll_reader_ready();
+                        run_windows_poll_tcp_reader(core, poll_reader, buf).await;
+                    }
+                    Err(err) => core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+                        Some(err.to_string()),
+                    )),
+                }
+                return;
+            }
             Err(err) => {
                 core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
                     err.to_string(),
