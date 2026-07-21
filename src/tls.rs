@@ -1,8 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use pyo3::ffi::c_str;
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyCapsule, PyCapsuleMethods, PyDict};
 use rustls::client::ClientConfig;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
@@ -17,6 +19,13 @@ use material::{
 
 const DEFAULT_HANDSHAKE_TIMEOUT_SECS: f64 = 60.0;
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: f64 = 30.0;
+const CLIENT_CONFIG_CACHE_KEY: &str = "_rsloop_client_config_cache";
+
+struct CachedClientConfig {
+    generation: u64,
+    verify_mode: i32,
+    config: Arc<ClientConfig>,
+}
 
 pub struct ClientTlsSettings {
     pub config: Arc<ClientConfig>,
@@ -42,18 +51,59 @@ pub fn client_tls_settings(
 ) -> PyResult<ClientTlsSettings> {
     let ssl_context = normalize_client_ssl_context(py, ssl)?;
     let hostname = resolve_server_hostname(py, &ssl_context, server_hostname)?;
-    let config = build_client_config(py, &ssl_context)?;
+    let config = cached_client_config(py, &ssl_context)?;
     let handshake_timeout = handshake_timeout(ssl_handshake_timeout)?;
     let shutdown_timeout = shutdown_timeout(ssl_shutdown_timeout)?;
 
     Ok(ClientTlsSettings {
-        config: Arc::new(config),
+        config,
         server_name: ServerName::try_from(hostname.clone())
             .map_err(|_| PyValueError::new_err(format!("invalid server_hostname: {hostname}")))?,
         handshake_timeout,
         shutdown_timeout,
         ssl_context,
     })
+}
+
+fn cached_client_config(
+    py: Python<'_>,
+    ssl_context: &Py<PyAny>,
+) -> PyResult<Arc<ClientConfig>> {
+    let context_dict = ssl_context.bind(py).getattr("__dict__")?;
+    let context_dict = context_dict.cast::<PyDict>()?;
+    let generation = context_dict
+        .get_item("_rsloop_tls_generation")?
+        .and_then(|value| value.extract::<u64>().ok())
+        .unwrap_or(0);
+    let verify_mode = verify_mode_value(py, ssl_context)?;
+
+    if let Some(value) = context_dict.get_item(CLIENT_CONFIG_CACHE_KEY)?
+        && let Ok(capsule) = value.cast::<PyCapsule>()
+        && let Ok(pointer) = capsule.pointer_checked(Some(c_str!(
+            "rsloop._loop.client_config_cache"
+        )))
+    {
+        // SAFETY: capsules stored under CLIENT_CONFIG_CACHE_KEY are created below
+        // with a boxed CachedClientConfig and remain owned by the SSLContext for
+        // the duration of this borrow under the GIL.
+        let cached = unsafe { pointer.cast::<CachedClientConfig>().as_ref() };
+        if cached.generation == generation && cached.verify_mode == verify_mode {
+            return Ok(Arc::clone(&cached.config));
+        }
+    }
+
+    let config = Arc::new(build_client_config(py, ssl_context)?);
+    let cache = PyCapsule::new_with_value(
+        py,
+        CachedClientConfig {
+            generation,
+            verify_mode,
+            config: Arc::clone(&config),
+        },
+        c_str!("rsloop._loop.client_config_cache"),
+    )?;
+    context_dict.set_item(CLIENT_CONFIG_CACHE_KEY, cache)?;
+    Ok(config)
 }
 
 pub fn server_tls_settings(
