@@ -2183,8 +2183,10 @@ impl ServerCore {
             state.listeners.clear();
         }
 
-        self.close_python_sockets();
-
+        // Blocking TLS accept workers are woken by connecting to their listening
+        // address.  Keep the exposed Python socket alive until after that wake:
+        // on Windows duplicated sockets share listener state, so closing the
+        // Python handle first makes the wake connect pay the TCP failure timeout.
         for task in self
             .accept_tasks
             .lock()
@@ -2207,6 +2209,8 @@ impl ServerCore {
                     .send_command(LoopCommand::Io(LoopIoCommand::StopServerAccept(fd)));
             }
         }
+
+        self.close_python_sockets();
 
         if let Some(path) = &self.cleanup_path {
             let _ = fs::remove_file(path);
