@@ -497,6 +497,7 @@ impl LoopCore {
             self.set_ready_drain_active(true);
 
             let mut ready_error = None;
+            let mut deferred_fd_rearms = Vec::new();
             let mut processed_since_refill = 0_usize;
             loop {
                 if ready_batch.is_empty() || processed_since_refill >= READY_DRAIN_SLICE {
@@ -548,9 +549,16 @@ impl LoopCore {
                     }
                     ReadyItem::Callback(callback) => {
                         profiling::scope!("ready.callback");
-                        if let Some(err) =
-                            self.execute_ready(py, Some(&loop_obj), callback.as_ref())?
-                        {
+                        let should_rearm = matches!(
+                            callback.kind(),
+                            CallbackKind::Reader(_) | CallbackKind::Writer(_)
+                        );
+                        let callback_error =
+                            self.execute_ready(py, Some(&loop_obj), callback.as_ref())?;
+                        if should_rearm {
+                            deferred_fd_rearms.push(callback);
+                        }
+                        if let Some(err) = callback_error {
                             ready_error = Some(err);
                             break;
                         }
@@ -637,6 +645,9 @@ impl LoopCore {
             }
 
             self.set_ready_drain_active(false);
+            for ready in deferred_fd_rearms {
+                self.rearm_fd_watch_if_needed(ready.as_ref());
+            }
 
             if let Some(err) = ready_error {
                 break Err(err);
@@ -869,11 +880,16 @@ impl LoopCore {
             ),
         };
 
-        self.rearm_fd_watch_if_needed(ready);
         result
     }
 
     fn rearm_fd_watch_if_needed(&self, ready: &ReadyCallback) {
+        // Readiness callbacks are one-shot at the runtime layer. Re-arm them
+        // only after the current ready batch has drained so callbacks queued
+        // by Future.set_result() can remove the registration first. This
+        // matches asyncio's selector-cycle ordering and prevents a still-
+        // readable fd from resolving the same Future twice.
+        //
         // Only re-arm when this callback is still the current registration
         // for the fd: a stale fire that outlived remove_reader()/add_reader()
         // must not restart a watcher for the superseded callback.

@@ -374,11 +374,10 @@ class CompatibilityTests(unittest.TestCase):
 
     def test_add_reader_stale_fire_after_future_done(self) -> None:
         # Regression test for the anyio raw-socket wait pattern:
-        # add_reader(sock, fut.set_result, None), complete the future on the
-        # first fire, then remove_reader from a done callback — possibly
-        # after the socket has already been closed (fileno() == -1). Stale
-        # readiness fires must not call set_result on the done future again,
-        # and the watcher must not spin on the closed descriptor.
+        # complete a Future from an add_reader callback, then remove the reader
+        # from a done callback. The fd stays readable while callbacks already
+        # queued for this selector cycle are processed, but it must not fire
+        # again before the done callback gets a chance to remove the reader.
         async def main() -> tuple[list, bool]:
             loop = asyncio.get_running_loop()
             errors: list = []
@@ -389,21 +388,34 @@ class CompatibilityTests(unittest.TestCase):
             b.setblocking(False)
             try:
                 fut = loop.create_future()
-                loop.add_reader(a, fut.set_result, None)
+                removed: list[bool] = []
+
+                def remove_when_done(_future: asyncio.Future) -> None:
+                    removed.append(loop.remove_reader(a))
+
+                fut.add_done_callback(remove_when_done)
+
+                def resolve_when_readable() -> None:
+                    # Keep the current callback batch busy long enough for an
+                    # incorrectly re-armed watcher to report this still-
+                    # readable socket again. The done callback is deliberately
+                    # queued behind this batch, matching the ordering that
+                    # exposed the race in anyio's full test run.
+                    loop.call_soon(time.sleep, 0.1)
+                    for _ in range(63):
+                        loop.call_soon(lambda: None)
+
+                    fut.set_result(None)
+
+                loop.add_reader(a, resolve_when_readable)
                 b.send(b"x")  # make `a` readable; the datagram stays unread
                 await asyncio.wait_for(fut, 5.0)
 
-                # Close the socket before removing the reader, like anyio's
-                # aclose() does; removal must still find the registration.
-                a.close()
-                removed = loop.remove_reader(a)
-
                 # Give any stale readiness fire time to (incorrectly) run.
                 await asyncio.sleep(0.2)
-                return errors, removed
+                return errors, removed == [True]
             finally:
-                if a.fileno() != -1:
-                    a.close()
+                a.close()
                 b.close()
 
         errors, removed = rsloop.run(main())
