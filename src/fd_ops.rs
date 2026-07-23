@@ -1,9 +1,5 @@
 use std::io;
-#[cfg(not(windows))]
-use std::thread;
 
-#[cfg(not(windows))]
-use futures::channel::oneshot;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 #[cfg(windows)]
@@ -15,6 +11,7 @@ pub use self::windows::{
 
 pub type RawFd = i64;
 
+#[cfg(windows)]
 const FD_POLL_INTERVAL_MS: i32 = 50;
 
 pub fn fileobj_to_fd(_py: Python<'_>, fileobj: &Bound<'_, PyAny>) -> PyResult<RawFd> {
@@ -159,25 +156,29 @@ async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
 
     #[cfg(not(windows))]
     {
-        let (tx, rx) = oneshot::channel();
-        thread::Builder::new()
-            .name(format!("rsloop-fd-wait-{fd}"))
-            .spawn(move || {
-                let result = loop {
-                    match poll_fd(fd, read, write, FD_POLL_INTERVAL_MS) {
-                        Ok((true, _)) if read => break Ok(()),
-                        Ok((_, true)) if write => break Ok(()),
-                        Ok(_) => continue,
-                        Err(err) => break Err(err),
-                    }
-                };
-                let _ = tx.send(result);
-            })
+        use std::os::fd::BorrowedFd;
+
+        // Register the descriptor with async-io's shared, process-wide reactor
+        // thread instead of spawning a fresh OS thread per wait. The previous
+        // thread-per-wait approach dominated connection-setup latency: a burst
+        // of N concurrent connects spawned N `poll()` threads. async-io drives
+        // the same epoll/kqueue reactor smol/async-std already run, so this adds
+        // no extra threads and deregisters as soon as the wait resolves.
+        let raw = raw_fd_to_c_int(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+        // SAFETY: the caller keeps `fd` open for the duration of this await
+        // (the owning Python socket outlives the connect/recv/send operation).
+        let borrowed = unsafe { BorrowedFd::borrow_raw(raw) };
+        let async_fd = async_io::Async::new_nonblocking(borrowed)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
 
-        rx.await
-            .map_err(|_| PyRuntimeError::new_err("fd wait worker dropped"))?
-            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
+        let result = if write {
+            futures::future::poll_fn(|cx| async_fd.poll_writable(cx)).await
+        } else if read {
+            futures::future::poll_fn(|cx| async_fd.poll_readable(cx)).await
+        } else {
+            Ok(())
+        };
+        result.map_err(|err| PyRuntimeError::new_err(err.to_string()))
     }
 }
 
@@ -191,4 +192,46 @@ pub fn is_retryable_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bool> 
 fn raw_fd_to_c_int(fd: RawFd) -> io::Result<libc::c_int> {
     fd.try_into()
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "descriptor out of range"))
+}
+
+/// A connect() attempt that is still completing in the background.
+#[cfg(unix)]
+#[inline]
+pub fn is_connect_in_progress_errno(errno: i32) -> bool {
+    errno == libc::EINPROGRESS || errno == libc::EALREADY || errno == libc::EWOULDBLOCK
+}
+
+/// The socket is already connected (a benign outcome for connect()).
+#[cfg(unix)]
+#[inline]
+pub fn is_already_connected_errno(errno: i32) -> bool {
+    errno == libc::EISCONN
+}
+
+/// Reads the pending `SO_ERROR` for a socket via a direct `getsockopt`, so the
+/// connect-completion path resolves without acquiring the GIL.
+#[cfg(unix)]
+#[inline]
+pub fn socket_so_error(fd: RawFd) -> io::Result<i32> {
+    let fd = raw_fd_to_c_int(fd)?;
+    let mut value: libc::c_int = 0;
+    let mut len: libc::socklen_t = std::mem::size_of::<libc::c_int>()
+        .try_into()
+        .expect("socklen_t can represent c_int size");
+    // SAFETY: `fd` is a socket descriptor and `value`/`len` describe a correctly
+    // sized `c_int`/`socklen_t` that `getsockopt` fills in.
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            (&mut value as *mut libc::c_int).cast(),
+            &mut len,
+        )
+    };
+    if result == 0 {
+        Ok(value)
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }

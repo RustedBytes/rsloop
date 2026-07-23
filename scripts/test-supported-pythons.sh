@@ -66,7 +66,7 @@ cd "$ROOT_DIR"
 
 if (( GENERATE_TLS_CERTS )); then
   echo "Generating TLS test certificates"
-  "${ROOT_DIR}/scripts/generate-test-tls-certs.sh"
+  uv run --no-project python "${ROOT_DIR}/scripts/generate_test_tls_certs.py"
 fi
 
 if (( INSTALL_PYTHONS )); then

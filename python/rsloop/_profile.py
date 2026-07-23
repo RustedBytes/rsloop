@@ -3,9 +3,15 @@ from __future__ import annotations
 import contextlib as __contextlib
 import typing as __typing
 
+from ._loop import profiler_compiled as __profiler_compiled
 from ._loop import profiler_running as __profiler_running
 from ._loop import start_profiler as __start_profiler
 from ._loop import stop_profiler as __stop_profiler
+
+
+def profiler_compiled() -> bool:
+    """Return whether this installation was built with Tracy support."""
+    return __profiler_compiled()
 
 
 def profiler_running() -> bool:

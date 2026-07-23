@@ -1149,6 +1149,62 @@ if __asyncio.create_subprocess_shell is __ORIG_CREATE_SUBPROCESS_SHELL:
     __asyncio.create_subprocess_shell = __create_text_subprocess_shell
 
 
+__HAS_INET_PTON = hasattr(__socket, "inet_pton")
+__HAS_IPv6 = hasattr(__socket, "AF_INET6")
+
+
+def __ipaddr_info(host, port, family, socktype, proto):
+    # Mirror asyncio.base_events._ipaddr_info: when the host is already a
+    # numeric IP literal there is nothing to resolve, so build the addrinfo
+    # inline instead of dispatching socket.getaddrinfo() to a thread-pool
+    # executor. rsloop's getaddrinfo() goes through run_in_executor(), so the
+    # old unconditional call paid a full executor round-trip (queue hop + a
+    # worker thread + a future callback back to the loop) on every connection,
+    # even for "127.0.0.1". stdlib asyncio and uvloop both take this shortcut.
+    if not __HAS_INET_PTON:
+        return None
+    if proto not in (0, __socket.IPPROTO_TCP, __socket.IPPROTO_UDP) or host is None:
+        return None
+    if socktype == __socket.SOCK_STREAM:
+        proto = __socket.IPPROTO_TCP
+    elif socktype == __socket.SOCK_DGRAM:
+        proto = __socket.IPPROTO_UDP
+    else:
+        return None
+    if port is None:
+        port = 0
+    elif isinstance(port, bytes) and port == b"":
+        port = 0
+    elif isinstance(port, str) and port == "":
+        port = 0
+    else:
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            return None
+    if family == __socket.AF_UNSPEC:
+        afs = [__socket.AF_INET]
+        if __HAS_IPv6:
+            afs.append(__socket.AF_INET6)
+    else:
+        afs = [family]
+    if isinstance(host, bytes):
+        try:
+            host = host.decode("idna")
+        except UnicodeError:
+            return None
+    if "%" in host:
+        # Scoped IPv6 addresses need getaddrinfo() to resolve the scope id.
+        return None
+    for af in afs:
+        try:
+            __socket.inet_pton(af, host)
+            return af, socktype, proto, "", (host, port)
+        except OSError:
+            pass
+    return None
+
+
 def __interleave_addrinfos(addrinfos, first_address_family_count=1):
     import collections as __collections
     import itertools as __itertools
@@ -1173,21 +1229,29 @@ def __flatten_connection_exceptions(exceptions):
 
 
 def __raise_connection_error(exceptions, *, all_errors):
-    if all_errors:
-        try:
-            exc_group = ExceptionGroup
-        except NameError:
-            exc_group = None
-        if exc_group is not None:
-            raise exc_group("create_connection failed", exceptions)
-    if len(exceptions) == 1:
-        raise exceptions[0]
+    try:
+        if all_errors:
+            try:
+                exc_group = ExceptionGroup
+            except NameError:
+                exc_group = None
+            if exc_group is not None:
+                raise exc_group("create_connection failed", exceptions)
+        if len(exceptions) == 1:
+            raise exceptions[0]
 
-    model = str(exceptions[0])
-    if all(str(exc) == model for exc in exceptions):
-        raise exceptions[0]
+        model = str(exceptions[0])
+        if all(str(exc) == model for exc in exceptions):
+            raise exceptions[0]
 
-    raise OSError("Multiple exceptions: " + ", ".join(str(exc) for exc in exceptions))
+        raise OSError(
+            "Multiple exceptions: " + ", ".join(str(exc) for exc in exceptions)
+        )
+    finally:
+        # The raised exception retains this frame through its traceback. Do not
+        # let the frame retain the exception list in return (CPython's
+        # BaseEventLoop.create_connection() performs the same cleanup).
+        exceptions = None
 
 
 def __bind_error(address, exc):
@@ -1332,16 +1396,20 @@ async def __loop_create_connection(
         if sock is not None:
             raise ValueError("host/port and sock can not be specified at the same time")
 
-        addrinfos = await self.getaddrinfo(
-            host,
-            port,
-            family=family,
-            type=__socket.SOCK_STREAM,
-            proto=proto,
-            flags=flags,
-        )
-        if not addrinfos:
-            raise OSError("getaddrinfo() returned empty list")
+        info = __ipaddr_info(host, port, family, __socket.SOCK_STREAM, proto)
+        if info is not None:
+            addrinfos = [info]
+        else:
+            addrinfos = await self.getaddrinfo(
+                host,
+                port,
+                family=family,
+                type=__socket.SOCK_STREAM,
+                proto=proto,
+                flags=flags,
+            )
+            if not addrinfos:
+                raise OSError("getaddrinfo() returned empty list")
 
         if local_addr is not None:
             local_addrinfos = await self.getaddrinfo(
@@ -1369,7 +1437,10 @@ async def __loop_create_connection(
                     connection_exceptions.append(attempt_exceptions)
                     continue
                 try:
-                    await self.sock_connect(created_sock, address)
+                    # Awaited directly (never wrapped in a task), so a bare
+                    # Future is fine here; on Unix this keeps the connect
+                    # writability wait on the loop's own reactor.
+                    await self._sock_connect_fast(created_sock, address)
                     break
                 except OSError as exc:
                     attempt_exceptions.append(exc)
@@ -1380,10 +1451,21 @@ async def __loop_create_connection(
                     created_sock.close()
                     raise
             if created_sock is None:
-                __raise_connection_error(
-                    __flatten_connection_exceptions(connection_exceptions),
-                    all_errors=all_errors,
+                flattened_exceptions = __flatten_connection_exceptions(
+                    connection_exceptions
                 )
+                try:
+                    __raise_connection_error(
+                        flattened_exceptions,
+                        all_errors=all_errors,
+                    )
+                finally:
+                    # The create_connection coroutine is itself retained by
+                    # the exception traceback. Break references from its frame
+                    # back to that exception.
+                    flattened_exceptions = None
+                    connection_exceptions = None
+                    attempt_exceptions = None
         else:
             (
                 created_sock,
@@ -1401,10 +1483,17 @@ async def __loop_create_connection(
             if pending:
                 await __asyncio.gather(*pending, return_exceptions=True)
             if created_sock is None:
-                __raise_connection_error(
-                    __flatten_connection_exceptions(connection_exceptions),
-                    all_errors=all_errors,
+                flattened_exceptions = __flatten_connection_exceptions(
+                    connection_exceptions
                 )
+                try:
+                    __raise_connection_error(
+                        flattened_exceptions,
+                        all_errors=all_errors,
+                    )
+                finally:
+                    flattened_exceptions = None
+                    connection_exceptions = None
 
         sock = created_sock
     elif sock is None:

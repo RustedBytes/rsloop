@@ -63,14 +63,15 @@ You do not need to understand every file before using the project. For a first p
 
 ## Runtime model
 
-The project currently uses a hybrid runtime model.
+Each loop owns a `vibeio` runtime on its dedicated Rust coordination thread.
 
 The simple explanation is:
 
 - there is a dedicated Rust runtime thread for loop coordination
 - Python tasks and callbacks still execute on the Python side
-- some I/O paths are already handled directly by the runtime thread
-- some paths still use helper threads, especially around TLS and older transport code
+- plain TCP / Unix reads and non-TLS accepts run directly on `vibeio`
+- generic descriptor watches and some TLS, write, and older transport paths
+  still use helper threads
 
 That is important because it explains why the project is fast in some areas while still being a work in progress in others.
 

@@ -9,11 +9,11 @@
 `rsloop` is a PyO3-based `asyncio` event loop implemented in Rust.
 
 Each `rsloop.Loop` owns a dedicated Rust runtime thread for loop coordination
-and I/O work. On Linux, low-level fd watchers plus plain TCP / Unix socket
-readiness, socket reads, and non-TLS server accepts are driven from that thread
-through `compio` with `io_uring` support enabled. Python callbacks, tasks, and
-coroutines still run on the thread that calls `run_forever()` or
-`run_until_complete()` (usually the main Python thread).
+and I/O work. That thread runs a `vibeio` runtime, using io_uring on Linux,
+IOCP on Windows, and mio-backed readiness on other supported platforms. Plain
+TCP / Unix socket reads and non-TLS server accepts run on that runtime. Python
+callbacks, tasks, and coroutines still run on the thread that calls
+`run_forever()` or `run_until_complete()` (usually the main Python thread).
 
 The package exposes:
 
@@ -207,16 +207,18 @@ is backed by the lower level transport code in
 
 ## Runtime Model
 
-Today the runtime is hybrid rather than fully single-threaded:
+The runtime is centered on one `vibeio` runtime per loop:
 
 - the loop coordination thread is always the central scheduler
-- on Linux, `add_reader` / `add_writer`, plain socket reads, and non-TLS socket
-  accept loops use the `compio` runtime on that thread
+- plain TCP / Unix socket reads and non-TLS accept loops use `vibeio` on that
+  thread across supported platforms
+- generic `add_reader` / `add_writer` descriptors use cancellable OS-poll
+  workers because `vibeio` does not expose arbitrary raw-descriptor registration
 - some transport paths still fall back to helper threads, especially TLS I/O,
   TLS server accept, and parts of the legacy transport write path
 
-That means the codebase has started the move toward a single-runtime-thread I/O
-model, but has not finished eliminating every helper thread yet.
+The runtime dependency is now unified, but the codebase has not finished
+eliminating every helper thread yet.
 
 ## Current Limitations
 
@@ -226,7 +228,7 @@ These gaps are visible in the current implementation.
   CPython's OpenSSL-backed `ssl` module. In particular, encrypted private keys
   are not supported yet, and the fast-stream monkeypatch still falls back to
   stdlib helpers whenever `ssl` is enabled. TLS transport internals also still
-  use helper-thread paths instead of the newer runtime-thread `compio` socket
+  use helper-thread paths instead of the runtime-thread `vibeio` socket
   path.
 - Subprocess support still has one notable gap:
   `preexec_fn` remains unsupported because running arbitrary Python between
@@ -240,8 +242,9 @@ These gaps are visible in the current implementation.
   still specific to Unix process spawning.
 - The transport runtime model is still in transition:
   plain socket reads and non-TLS accepts now run on the loop runtime thread on
-  Linux, but writes and TLS-heavy paths are not fully collapsed onto that same
-  single-threaded I/O path yet.
+  all supported platforms, but generic descriptor watches, writes, and
+  TLS-heavy paths are not fully collapsed onto that same single-threaded I/O
+  path yet.
 
 ## Build
 
@@ -376,10 +379,7 @@ comparison demo.
 ## Acknowledgements
 
 `rsloop` builds on the Python `asyncio` model and is implemented with
-[PyO3](https://pyo3.rs/) on the Rust side. The runtime and I/O work in the
-current implementation rely in part on
-[compio](https://github.com/compio-rs/compio). On Windows, parts of the
-runtime also rely on
+[PyO3](https://pyo3.rs/) on the Rust side. Runtime and socket I/O are powered by
 [vibeio](https://crates.io/crates/vibeio).
 
 ## License

@@ -4,9 +4,11 @@ import asyncio
 import importlib.util
 import os
 import pathlib
+import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -18,8 +20,9 @@ TLS_GENERATOR = (
     pathlib.Path(__file__)
     .resolve()
     .parents[1]
-    .joinpath("scripts", "generate-test-tls-certs.sh")
+    .joinpath("scripts", "generate_test_tls_certs.py")
 )
+UV = shutil.which("uv") or "uv"
 
 
 def ensure_tls_fixtures() -> None:
@@ -29,7 +32,19 @@ def ensure_tls_fixtures() -> None:
     ):
         return
 
-    subprocess.run([str(TLS_GENERATOR), str(TLS_FIXTURES_DIR)], check=True)
+    subprocess.run(
+        [
+            UV,
+            "run",
+            "--no-project",
+            "--python",
+            sys.executable,
+            "python",
+            str(TLS_GENERATOR),
+            str(TLS_FIXTURES_DIR),
+        ],
+        check=True,
+    )
 
 
 ensure_tls_fixtures()
@@ -69,6 +84,57 @@ class TlsTests(unittest.TestCase):
     def test_create_default_context_marks_default_verify_paths(self) -> None:
         context = ssl.create_default_context()
         self.assertTrue(context.__dict__.get("_rsloop_use_default_verify_paths"))
+
+    def test_client_config_cache_reuses_and_invalidates(self) -> None:
+        async def main() -> tuple[bool, bool]:
+            async def echo(
+                reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                try:
+                    writer.write(await reader.readexactly(1))
+                    await writer.drain()
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                ca_cert_path, _, _ = make_cert_files(tmpdir)
+                server_ctx, client_ctx = make_ssl_contexts(tmpdir)
+                server = await asyncio.start_server(
+                    echo, "127.0.0.1", 0, ssl=server_ctx
+                )
+                port = server.sockets[0].getsockname()[1]
+
+                async def connect_once() -> None:
+                    reader, writer = await asyncio.open_connection(
+                        "127.0.0.1",
+                        port,
+                        ssl=client_ctx,
+                        server_hostname="localhost",
+                    )
+                    writer.write(b"x")
+                    await writer.drain()
+                    self.assertEqual(await reader.readexactly(1), b"x")
+                    writer.close()
+                    await writer.wait_closed()
+
+                try:
+                    await connect_once()
+                    first = client_ctx.__dict__["_rsloop_client_config_cache"]
+                    await connect_once()
+                    reused = client_ctx.__dict__["_rsloop_client_config_cache"] is first
+
+                    client_ctx.load_verify_locations(cafile=ca_cert_path)
+                    await connect_once()
+                    invalidated = (
+                        client_ctx.__dict__["_rsloop_client_config_cache"] is not first
+                    )
+                    return reused, invalidated
+                finally:
+                    server.close()
+                    await server.wait_closed()
+
+        self.assertEqual(rsloop.run(main()), (True, True))
 
     def test_create_connection_and_server_tls_round_trip(self) -> None:
         async def main() -> tuple[str, tuple[int, ...]]:

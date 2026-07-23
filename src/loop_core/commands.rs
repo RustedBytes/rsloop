@@ -23,10 +23,22 @@ pub enum ReadyItem {
         value: Py<PyAny>,
     },
     StreamTransportRead(Arc<StreamTransportCore>),
+    StreamTransportWrite(Arc<StreamTransportCore>),
     ProcessTransport(Arc<ProcessTransportCore>),
     ServerAccepted {
         server: Arc<ServerCore>,
         stream: AcceptedStream,
+    },
+    // A non-blocking TCP connect finished its writability wait on the vibeio
+    // reactor. The Python-object work (SO_ERROR check, set_result /
+    // set_exception) is deferred to the loop thread so the vibeio side never
+    // touches the GIL — many concurrent connects then drain in one GIL-held
+    // batch instead of one contended handoff per completion.
+    #[cfg(unix)]
+    ConnectCompleted {
+        future: Py<PyAny>,
+        fd: RawFd,
+        wait_errno: i32,
     },
     Stop,
 }
@@ -43,6 +55,12 @@ pub enum LoopCommand {
     Io(LoopIoCommand),
     Future(LoopFutureCommand),
     Transport(LoopTransportCommand),
+    #[cfg(unix)]
+    ConnectCompleted {
+        future: Py<PyAny>,
+        fd: RawFd,
+        wait_errno: i32,
+    },
     RequestStop,
     Close,
 }
@@ -50,8 +68,6 @@ pub enum LoopCommand {
 pub enum LoopRunCommand {
     EnterRun {
         pending_ready: Arc<Mutex<VecDeque<ReadyItem>>>,
-        wake_tx: std::sync::mpsc::Sender<()>,
-        wake_pending: Arc<std::sync::atomic::AtomicBool>,
     },
     FinishRun {
         done_tx: std::sync::mpsc::Sender<()>,
@@ -84,13 +100,23 @@ pub enum LoopIoCommand {
         core: Arc<StreamTransportCore>,
         reader: ReaderTarget,
     },
-    StopSocketReader(RawFd),
+    StopSocketReader {
+        fd: RawFd,
+        done_tx: std::sync::mpsc::Sender<()>,
+    },
     StartServerAccept {
         fd: RawFd,
         server: Arc<ServerCore>,
         listener: ServerListener,
     },
     StopServerAccept(RawFd),
+    // Watch a connecting TCP socket for writability on the vibeio reactor, then
+    // report completion back to the loop thread via `ReadyItem::ConnectCompleted`.
+    #[cfg(unix)]
+    WatchConnect {
+        fd: RawFd,
+        future: Py<PyAny>,
+    },
 }
 
 pub enum LoopFutureCommand {
@@ -100,6 +126,7 @@ pub enum LoopFutureCommand {
 
 pub enum LoopTransportCommand {
     StreamRead(Arc<StreamTransportCore>),
+    StreamWrite(Arc<StreamTransportCore>),
     Process(Arc<ProcessTransportCore>),
     ServerAccepted {
         server: Arc<ServerCore>,

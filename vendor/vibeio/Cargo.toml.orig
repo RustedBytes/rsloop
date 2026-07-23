@@ -1,0 +1,61 @@
+[package]
+name = "vibeio"
+version = "0.2.15"
+edition = "2021"
+authors = ["Dorian Niemiec <dorian@ferron.sh>"]
+description = "A high-performance, cross-platform asynchronous runtime for Rust"
+license = "MIT"
+readme = "../README.md"
+keywords = ["async", "io"]
+categories = ["network-programming", "asynchronous"]
+documentation = "https://docs.rs/vibeio"
+repository = "https://github.com/ferronweb/vibeio"
+
+[dependencies]
+futures-util = "0.3.32"
+mio = "1.1.1"
+slab = "0.4.12"
+tokio = { version = "1.49.0", features = ["io-util"] }
+crossbeam-queue = "0.3"
+oneshot = { version = "0.2.1", features = ["async", "std"] }
+rusty_pool = { version = "0.7.0", optional = true }
+once_cell = { version = "1.21.3", optional = true }
+async-channel = { version = "2.5.0", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+mio = { version = "1.1.1", features = ["os-poll", "os-ext"] }
+libc = "0.2.176"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Wdk_System_IO",
+    "Win32_Networking_WinSock",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.6"
+
+[dev-dependencies]
+
+[features]
+default = ["fs", "splice", "time", "pipe", "stdio", "signal", "process", "blocking-default"]
+fs = []
+splice = []
+pipe = []
+stdio = []
+process = ["async-channel"]
+signal = ["once_cell"]
+time = []
+blocking-default = ["rusty_pool"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

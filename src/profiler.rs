@@ -1,3 +1,5 @@
+use pyo3::prelude::*;
+
 #[cfg(feature = "profiler")]
 mod imp {
     use std::cell::RefCell;
@@ -94,3 +96,8 @@ mod imp {
 }
 
 pub use imp::{profiler_running, start_profiler, stop_profiler};
+
+#[pyfunction]
+pub const fn profiler_compiled() -> bool {
+    cfg!(feature = "profiler")
+}

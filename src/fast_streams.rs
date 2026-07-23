@@ -1,5 +1,7 @@
 use pyo3::exceptions::PyValueError;
+use pyo3::ffi;
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
 
@@ -8,6 +10,15 @@ use crate::python_names;
 use crate::stream_transport::{PyStreamTransport, task_locals_for_loop};
 
 const DEFAULT_STREAM_LIMIT: usize = 65_536;
+
+fn asyncio_iscoroutine(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
+    static ISCOROUTINE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+    Ok(ISCOROUTINE
+        .get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+            Ok(py.import("asyncio")?.getattr("iscoroutine")?.unbind())
+        })?
+        .bind(py))
+}
 
 /// Create a future on `loop_obj`, skipping the Python-level method dispatch
 /// when the loop is a native rsloop instance running on this thread.
@@ -21,6 +32,7 @@ fn loop_create_future(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<Py<PyAny
 struct ReadBuffer {
     bytes: Vec<u8>,
     start: usize,
+    retained_capacity: usize,
 }
 
 impl ReadBuffer {
@@ -28,6 +40,7 @@ impl ReadBuffer {
         Self {
             bytes: Vec::with_capacity(capacity),
             start: 0,
+            retained_capacity: capacity,
         }
     }
 
@@ -55,6 +68,18 @@ impl ReadBuffer {
         self.bytes.extend_from_slice(data);
     }
 
+    fn extend_owned(&mut self, data: Vec<u8>) {
+        if data.is_empty() {
+            return;
+        }
+        if self.is_empty() {
+            self.bytes = data;
+            self.start = 0;
+        } else {
+            self.extend(&data);
+        }
+    }
+
     fn consume(&mut self, n: usize) {
         self.start = (self.start + n).min(self.bytes.len());
         self.compact_if_needed();
@@ -77,7 +102,11 @@ impl ReadBuffer {
             return;
         }
         if self.start == self.bytes.len() {
-            self.bytes.clear();
+            if self.bytes.capacity() > self.retained_capacity.saturating_mul(4) {
+                self.bytes = Vec::with_capacity(self.retained_capacity);
+            } else {
+                self.bytes.clear();
+            }
             self.start = 0;
             return;
         }
@@ -86,6 +115,35 @@ impl ReadBuffer {
             self.bytes.truncate(self.bytes.len() - self.start);
             self.start = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod read_buffer_tests {
+    use super::ReadBuffer;
+
+    #[test]
+    fn releases_oversized_allocation_after_consuming_all_data() {
+        let mut buffer = ReadBuffer::with_capacity(4096);
+        buffer.extend(&vec![0_u8; 2 * 1024 * 1024]);
+        assert!(buffer.bytes.capacity() >= 2 * 1024 * 1024);
+
+        buffer.consume_all();
+
+        assert_eq!(buffer.len(), 0);
+        assert!(buffer.bytes.capacity() <= 4096);
+    }
+
+    #[test]
+    fn adopts_owned_data_without_copying_when_empty() {
+        let mut buffer = ReadBuffer::with_capacity(4096);
+        let data = vec![7_u8; 1024];
+        let data_ptr = data.as_ptr();
+
+        buffer.extend_owned(data);
+
+        assert_eq!(buffer.unread().as_ptr(), data_ptr);
+        assert_eq!(buffer.unread(), &[7_u8; 1024]);
     }
 }
 
@@ -99,6 +157,64 @@ enum ReadWaitKind {
 struct ReadWaiter {
     future: Py<PyAny>,
     kind: ReadWaitKind,
+    exact: Option<ExactReadAccumulator>,
+}
+
+struct ExactReadAccumulator {
+    value: Py<PyBytes>,
+    filled: usize,
+    expected: usize,
+}
+
+impl ExactReadAccumulator {
+    fn new(py: Python<'_>, expected: usize) -> PyResult<Self> {
+        // SAFETY: The object is retained only inside this waiter and is not
+        // exposed to Python until all `expected` bytes have been initialized.
+        let ptr = unsafe {
+            ffi::PyBytes_FromStringAndSize(core::ptr::null(), expected as ffi::Py_ssize_t)
+        };
+        if ptr.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+        let value = unsafe {
+            Bound::<PyAny>::from_owned_ptr(py, ptr)
+                .cast_into_unchecked::<PyBytes>()
+                .unbind()
+        };
+        Ok(Self {
+            value,
+            filled: 0,
+            expected,
+        })
+    }
+
+    fn fill_from(&mut self, buffer: &mut ReadBuffer) {
+        let amount = buffer.len().min(self.expected - self.filled);
+        if amount == 0 {
+            return;
+        }
+        // SAFETY: `value` has exactly `expected` bytes, remains private to
+        // this accumulator, and the destination range is disjoint/in-bounds.
+        unsafe {
+            let destination = ffi::PyBytes_AsString(self.value.as_ptr())
+                .cast::<u8>()
+                .add(self.filled);
+            core::ptr::copy_nonoverlapping(buffer.unread().as_ptr(), destination, amount);
+        }
+        self.filled += amount;
+        buffer.consume(amount);
+    }
+
+    fn partial(&self) -> &[u8] {
+        // SAFETY: The first `filled` bytes were initialized by `fill_from` and
+        // the returned slice is consumed immediately while `self` is alive.
+        unsafe {
+            core::slice::from_raw_parts(
+                ffi::PyBytes_AsString(self.value.as_ptr()).cast::<u8>(),
+                self.filled,
+            )
+        }
+    }
 }
 
 #[pyclass(module = "rsloop._loop")]
@@ -165,7 +281,9 @@ impl PyFastStreamReader {
         Ok(Self {
             loop_obj,
             limit,
-            buffer: ReadBuffer::with_capacity(limit.max(4096)),
+            // The flow-control limit is not an allocation target. Idle
+            // streams should retain only a small baseline and grow on data.
+            buffer: ReadBuffer::with_capacity(limit.min(4096)),
             waiter: None,
             transport: py.None(),
             paused: false,
@@ -286,6 +404,14 @@ impl PyFastStreamReader {
             return Ok(());
         }
 
+        if let Some(exact) = self
+            .waiter
+            .as_mut()
+            .and_then(|waiter| waiter.exact.as_mut())
+        {
+            exact.fill_from(&mut self.buffer);
+        }
+
         match kind {
             ReadWaitKind::Any(n) => {
                 if self.buffer.is_empty() && !self.eof {
@@ -297,9 +423,14 @@ impl PyFastStreamReader {
                 Self::set_future_result_or_ignore_cancelled(py, &future, data)?;
             }
             ReadWaitKind::Exact(n) => {
-                if self.buffer.len() >= n {
+                let exact = self
+                    .waiter
+                    .as_ref()
+                    .and_then(|waiter| waiter.exact.as_ref())
+                    .expect("exact read waiter missing accumulator");
+                if exact.filled >= n {
+                    let data = exact.value.clone_ref(py).into_any();
                     self.waiter = None;
-                    let data = self.unread_bytes_object(py, n);
                     self.maybe_resume_transport(py)?;
                     Self::set_future_result_or_ignore_cancelled(py, &future, data)?;
                     return Ok(());
@@ -307,8 +438,7 @@ impl PyFastStreamReader {
                 if !self.eof {
                     return Ok(());
                 }
-                let err = Self::incomplete_read_error(py, self.buffer.unread(), n)?;
-                self.buffer.consume_all();
+                let err = Self::incomplete_read_error(py, exact.partial(), n)?;
                 self.waiter = None;
                 Self::set_future_exception_or_ignore_cancelled(py, &future, err)?;
             }
@@ -345,10 +475,22 @@ impl PyFastStreamReader {
             )?;
         }
         let future = self.create_future(py)?;
+        let exact = match &kind {
+            ReadWaitKind::Exact(expected) => Some(ExactReadAccumulator::new(py, *expected)?),
+            _ => None,
+        };
         self.waiter = Some(ReadWaiter {
             future: future.clone_ref(py),
             kind,
+            exact,
         });
+        if let Some(exact) = self
+            .waiter
+            .as_mut()
+            .and_then(|waiter| waiter.exact.as_mut())
+        {
+            exact.fill_from(&mut self.buffer);
+        }
         Ok(future)
     }
 
@@ -366,6 +508,19 @@ impl PyFastStreamReader {
             return Err(PyValueError::new_err("feed_data after feed_eof"));
         }
         self.buffer.extend(data);
+        self.maybe_complete_waiter(py)?;
+        self.maybe_pause_transport(py)
+    }
+
+    pub(crate) fn feed_owned_data_internal(
+        &mut self,
+        py: Python<'_>,
+        data: Vec<u8>,
+    ) -> PyResult<()> {
+        if self.eof {
+            return Err(PyValueError::new_err("feed_data after feed_eof"));
+        }
+        self.buffer.extend_owned(data);
         self.maybe_complete_waiter(py)?;
         self.maybe_pause_transport(py)
     }
@@ -696,15 +851,18 @@ impl PyFastStreamProtocol {
             },
         )?;
         let result = callback.call1(py, (reader.clone_ref(py), writer))?;
-        let asyncio = py.import("asyncio")?;
-        if !asyncio
-            .call_method1("iscoroutine", (result.clone_ref(py),))?
+        if !asyncio_iscoroutine(py)?
+            .call1((result.clone_ref(py),))?
             .extract::<bool>()?
         {
             return Ok(());
         }
 
-        let task = loop_obj.call_method1(py, "create_task", (result,))?;
+        let task =
+            match crate::python_api::try_fast_create_task(py, &loop_obj, result.clone_ref(py))? {
+                Some(task) => task,
+                None => loop_obj.call_method1(py, "create_task", (result,))?,
+            };
         slf.borrow_mut(py).task = task.clone_ref(py);
         let done_cb = Py::new(
             py,

@@ -3,10 +3,8 @@ use std::fs;
 use std::io::{self, Read, Write as _};
 use std::net::{Shutdown, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
 use std::ops::DerefMut;
-#[cfg(target_os = "linux")]
-use std::os::fd::OwnedFd;
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 use std::os::raw::c_int;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
@@ -21,20 +19,25 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
-#[cfg(target_os = "linux")]
-use compio::runtime::fd::PollFd;
-#[cfg(target_os = "linux")]
-use compio::time::sleep as compio_sleep;
 use pyo3::exceptions::{PyRuntimeError, PyTimeoutError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyByteArrayMethods, PyBytes, PyDict, PySlice, PyString, PyTuple};
 use pyo3_async_runtimes::TaskLocals;
 use rustls::{ClientConnection, ServerConnection};
 use socket2::Socket;
-#[cfg(windows)]
 use tokio::io::AsyncReadExt;
 #[cfg(windows)]
+use vibeio::io::AsyncRead as VibeAsyncRead;
+#[cfg(windows)]
+use vibeio::net::TcpStream as VibeTcpStream;
 use vibeio::net::{PollTcpStream as VibePollTcpStream, TcpListener as VibeTcpListener};
+#[cfg(unix)]
+use vibeio::net::{PollUnixStream as VibePollUnixStream, UnixListener as VibeUnixListener};
+#[cfg(windows)]
+use windows_sys::Win32::{
+    Foundation::{ERROR_OPERATION_ABORTED, HANDLE},
+    System::IO::CancelIoEx,
+};
 
 use crate::async_event::AsyncEvent;
 use crate::context::{
@@ -55,7 +58,7 @@ enum WriterCommand {
 }
 
 enum PendingReadEvent {
-    Data(Box<[u8]>),
+    Data(Vec<u8>),
     Eof,
     ConnectionLost(Option<String>),
     PauseWriting,
@@ -65,8 +68,24 @@ enum PendingReadEvent {
 const DEFAULT_WRITE_BUFFER_HIGH_WATER: usize = 64 * 1024;
 const DEFAULT_WRITE_BUFFER_LOW_WATER: usize = DEFAULT_WRITE_BUFFER_HIGH_WATER / 4;
 const MAX_PENDING_READ_COALESCE_BYTES: usize = 256 * 1024;
+const MAX_READ_EVENTS_PER_DRAIN: usize = 32;
+const MAX_READ_BYTES_PER_DRAIN: usize = 256 * 1024;
+// Servers commonly emit a small protocol header followed immediately by a
+// body. Defer only that header-sized first write for one loop turn so adjacent
+// writes share a syscall; keep tiny control frames and larger payloads direct.
+const SMALL_WRITE_COALESCE_MIN_BYTES: usize = 64;
+const SMALL_WRITE_COALESCE_MAX_BYTES: usize = 512;
 const BLOCKING_POLL_INTERVAL_MS: i32 = 50;
-const STREAM_READ_BUFFER_SIZE: usize = 64 * 1024;
+// Keep the per-connection allocation modest. Large reads are delivered in
+// several owned chunks, while the pending-event drain can still coalesce the
+// slow protocol path up to MAX_PENDING_READ_COALESCE_BYTES.
+const STREAM_READ_BUFFER_SIZE: usize = 16 * 1024;
+#[cfg(windows)]
+const SERVER_POLL_READER_WRITE_THRESHOLD: usize = STREAM_READ_BUFFER_SIZE;
+#[cfg(windows)]
+const SERVER_POLL_READER_TINY_TRIGGER_MAX_BYTES: usize = 16;
+const OWNED_READ_HANDOFF_MIN_BYTES: usize = STREAM_READ_BUFFER_SIZE / 2;
+const TLS_WORKER_STACK_SIZE: usize = 256 * 1024;
 
 // After a successful read on a blocking reader worker, retry non-blocking
 // reads for this long before falling back to poll(). Request/response peers
@@ -88,38 +107,21 @@ struct OwnedWriteBuffer {
     offset: usize,
 }
 
-enum PendingReadBuffer {
-    Boxed(Box<[u8]>),
-    Vec(Vec<u8>),
-}
+struct PendingReadBuffer(Vec<u8>);
 
 impl PendingReadBuffer {
     #[inline]
     fn len(&self) -> usize {
-        match self {
-            Self::Boxed(data) => data.len(),
-            Self::Vec(data) => data.len(),
-        }
+        self.0.len()
     }
 
     #[inline]
     fn as_slice(&self) -> &[u8] {
-        match self {
-            Self::Boxed(data) => data,
-            Self::Vec(data) => data,
-        }
+        &self.0
     }
 
-    fn extend(&mut self, data: Box<[u8]>) {
-        match self {
-            Self::Boxed(existing) => {
-                let mut combined = Vec::with_capacity(existing.len() + data.len());
-                combined.extend_from_slice(existing);
-                combined.extend_from_slice(&data);
-                *self = Self::Vec(combined);
-            }
-            Self::Vec(existing) => existing.extend_from_slice(&data),
-        }
+    fn extend(&mut self, data: Vec<u8>) {
+        self.0.extend_from_slice(&data);
     }
 }
 
@@ -128,6 +130,14 @@ impl OwnedWriteBuffer {
     fn from_slice(data: &[u8]) -> Self {
         Self {
             bytes: Box::<[u8]>::from(data),
+            offset: 0,
+        }
+    }
+
+    #[inline]
+    fn from_vec(data: Vec<u8>) -> Self {
+        Self {
+            bytes: data.into_boxed_slice(),
             offset: 0,
         }
     }
@@ -378,6 +388,13 @@ impl StreamReaderFastPath {
         }
     }
 
+    fn feed_owned_data(&self, py: Python<'_>, data: Vec<u8>) -> PyResult<()> {
+        match self {
+            Self::Native { reader, .. } => reader.borrow_mut(py).feed_owned_data_internal(py, data),
+            Self::Generic { .. } => self.feed_data(py, &data),
+        }
+    }
+
     fn feed_eof(&self, py: Python<'_>) -> PyResult<()> {
         match self {
             Self::Native { reader, .. } => reader.borrow_mut(py).feed_eof_internal(py),
@@ -489,6 +506,7 @@ struct StreamTransportState {
     context: Py<PyAny>,
     context_needs_run: bool,
     extra: HashMap<String, Py<PyAny>>,
+    lazy_socket_family: Option<i32>,
     closing: bool,
     read_paused: bool,
     reading: bool,
@@ -527,8 +545,15 @@ pub struct StreamTransportCore {
     state: Mutex<StreamTransportState>,
     pending_read_events: Mutex<VecDeque<PendingReadEvent>>,
     read_events_scheduled: AtomicBool,
+    reading: AtomicBool,
     writer_tx: Sender<WriterCommand>,
     direct_writer: Option<Mutex<TaskedDirectWriter>>,
+    pending_direct_write: Mutex<Vec<u8>>,
+    direct_write_scheduled: AtomicBool,
+    #[cfg(windows)]
+    server_poll_reader_requested: AtomicBool,
+    #[cfg(windows)]
+    server_poll_reader_ready: AtomicBool,
     lazy_writer: Mutex<Option<LazyWriterConfig>>,
     workers: Mutex<Vec<WorkerThread>>,
     // Signaled whenever `read_paused` clears or the transport starts
@@ -538,6 +563,8 @@ pub struct StreamTransportCore {
     // The extra map is fixed at construction; cache the text-mode marker so
     // the per-write hot path avoids a state lock plus hash lookup.
     has_text_encoding: bool,
+    server_side: bool,
+    native_stream_reader: bool,
 }
 
 struct ServerState {
@@ -579,6 +606,14 @@ enum TaskedDirectWriter {
 }
 
 impl TaskedDirectWriter {
+    fn fd(&self) -> fd_ops::RawFd {
+        match self {
+            Self::Tcp(stream) => tcp_stream_raw_fd(stream),
+            #[cfg(unix)]
+            Self::Unix(stream) => unix_raw_fd(stream.as_raw_fd()),
+        }
+    }
+
     fn shutdown_close(&self) -> io::Result<()> {
         match self {
             Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Both),
@@ -636,8 +671,24 @@ enum WriterTarget {
 }
 
 struct LazyWriterConfig {
-    target: WriterTarget,
+    target: LazyWriterTarget,
     writer_rx: Receiver<WriterCommand>,
+}
+
+enum LazyWriterTarget {
+    Tcp(fd_ops::RawFd),
+    #[cfg(unix)]
+    Unix(fd_ops::RawFd),
+}
+
+impl LazyWriterTarget {
+    fn materialize(self) -> PyResult<WriterTarget> {
+        match self {
+            Self::Tcp(fd) => duplicate_configured_tcp_stream(fd).map(WriterTarget::Tcp),
+            #[cfg(unix)]
+            Self::Unix(fd) => duplicate_unix_direct_writer(fd).map(WriterTarget::Unix),
+        }
+    }
 }
 
 impl WriterTarget {
@@ -876,27 +927,98 @@ impl io::Write for WriterTarget {
 
 struct WorkerThread {
     stop: Arc<AtomicBool>,
+    wake: Option<Box<dyn FnOnce() + Send>>,
     join: thread::JoinHandle<()>,
 }
 
 impl WorkerThread {
     fn spawn(name: &'static str, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let thread_stop = Arc::clone(&stop);
-        let join = thread::Builder::new()
-            .name(name.to_owned())
-            .spawn(move || task(thread_stop))
-            .expect("failed to spawn stream worker");
-        Self { stop, join }
+        Self::spawn_with_stack(name, None, task)
     }
 
-    fn abort(self) {
+    fn spawn_with_stack(
+        name: &'static str,
+        stack_size: Option<usize>,
+        task: impl FnOnce(Arc<AtomicBool>) + Send + 'static,
+    ) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let mut builder = thread::Builder::new().name(name.to_owned());
+        if let Some(stack_size) = stack_size {
+            builder = builder.stack_size(stack_size);
+        }
+        let join = builder
+            .spawn(move || task(thread_stop))
+            .expect("failed to spawn stream worker");
+        Self {
+            stop,
+            wake: None,
+            join,
+        }
+    }
+
+    fn spawn_interruptible(
+        name: &'static str,
+        wake: impl FnOnce() + Send + 'static,
+        task: impl FnOnce(Arc<AtomicBool>) + Send + 'static,
+    ) -> Self {
+        let mut worker = Self::spawn(name, task);
+        worker.wake = Some(Box::new(wake));
+        worker
+    }
+
+    fn abort(mut self) {
         self.stop.store(true, Ordering::Release);
+        if let Some(wake) = self.wake.take() {
+            wake();
+        }
         let _ = self.join.join();
     }
 }
 
 impl StreamTransportCore {
+    #[cfg(windows)]
+    #[inline]
+    fn server_poll_reader_requested(&self) -> bool {
+        self.server_side && self.server_poll_reader_requested.load(Ordering::Acquire)
+    }
+
+    #[cfg(windows)]
+    fn request_server_poll_reader(&self) {
+        if !self.server_side
+            || !self.native_stream_reader
+            || self
+                .server_poll_reader_requested
+                .swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+
+        let fd = self.state.lock().expect("poisoned transport state").io_fd;
+        if let Some(fd) = fd {
+            // Wake a server reader currently blocked in WSARecv. The operation
+            // still completes through vibeio's IOCP driver with
+            // ERROR_OPERATION_ABORTED; the reader handles that result by
+            // rebinding the same socket to readiness mode. Cancel before the
+            // direct write so a pending receive cannot throttle the duplicate
+            // writer socket during a bulk response.
+            let _ = unsafe { CancelIoEx(fd as HANDLE, std::ptr::null()) };
+        }
+    }
+
+    #[cfg(windows)]
+    fn mark_server_poll_reader_ready(self: &Arc<Self>) {
+        if !self.server_side {
+            return;
+        }
+        self.server_poll_reader_ready.store(true, Ordering::Release);
+        if self.direct_write_scheduled.load(Ordering::Acquire) {
+            let _ = self.loop_core.send_command(LoopCommand::Transport(
+                LoopTransportCommand::StreamWrite(Arc::clone(self)),
+            ));
+        }
+    }
+
     fn close_extra_socket_with_py(&self, py: Python<'_>) {
         let socket = self
             .state
@@ -927,7 +1049,10 @@ impl StreamTransportCore {
         let Some(LazyWriterConfig { target, writer_rx }) = lazy else {
             return;
         };
-        spawn_writer_worker(Arc::clone(self), target, writer_rx);
+        match target.materialize() {
+            Ok(target) => spawn_writer_worker(Arc::clone(self), target, writer_rx),
+            Err(err) => self.fail_write(Some(io::Error::other(err.to_string()))),
+        }
     }
 
     #[inline]
@@ -971,7 +1096,10 @@ impl StreamTransportCore {
         }
     }
 
-    pub(crate) fn drain_pending_read_events_with_py(&self, py: Python<'_>) -> PyResult<()> {
+    pub(crate) fn drain_pending_read_events_with_py(
+        self: &Arc<Self>,
+        py: Python<'_>,
+    ) -> PyResult<()> {
         profiling::scope!("StreamTransportCore::drain_pending_read_events_with_py");
         // Snapshot the reader fast path once per drain instead of re-locking
         // transport state for every data event.
@@ -986,6 +1114,8 @@ impl StreamTransportCore {
         let fast_path = fast_path.as_ref();
         let mut pending_data: Option<PendingReadBuffer> = None;
         let mut drained = VecDeque::new();
+        let mut drained_events = 0;
+        let mut drained_bytes = 0;
         loop {
             {
                 let mut queue = self
@@ -1004,30 +1134,54 @@ impl StreamTransportCore {
                 match event {
                     PendingReadEvent::Data(data) => {
                         profiling::scope!("stream.pending.data");
-                        match &mut pending_data {
-                            Some(buffer)
-                                if buffer.len() + data.len() <= MAX_PENDING_READ_COALESCE_BYTES =>
-                            {
-                                buffer.extend(data);
-                            }
-                            Some(_) => {
-                                if let Err(err) = self.flush_pending_data_with_py(
+                        drained_events += 1;
+                        drained_bytes += data.len();
+                        if let Some(fast_path) = fast_path.as_ref() {
+                            if let Err(err) = fast_path.feed_owned_data(py, data) {
+                                let _ = self.report_error_with_py(
                                     py,
-                                    &mut pending_data,
-                                    fast_path,
-                                ) {
-                                    let _ = self.report_error_with_py(
-                                        py,
-                                        err,
-                                        "stream data_received callback failed",
-                                    );
-                                    let _ = self.connection_lost_with_py(py, None);
-                                    self.read_events_scheduled.store(false, Ordering::Release);
-                                    return Ok(());
-                                }
-                                pending_data = Some(PendingReadBuffer::Boxed(data));
+                                    err,
+                                    "stream data_received callback failed",
+                                );
+                                let _ = self.connection_lost_with_py(py, None);
+                                self.read_events_scheduled.store(false, Ordering::Release);
+                                return Ok(());
                             }
-                            None => pending_data = Some(PendingReadBuffer::Boxed(data)),
+                        } else {
+                            match &mut pending_data {
+                                Some(buffer)
+                                    if buffer.len() + data.len()
+                                        <= MAX_PENDING_READ_COALESCE_BYTES =>
+                                {
+                                    buffer.extend(data);
+                                }
+                                Some(_) => {
+                                    if let Err(err) = self.flush_pending_data_with_py(
+                                        py,
+                                        &mut pending_data,
+                                        fast_path,
+                                    ) {
+                                        let _ = self.report_error_with_py(
+                                            py,
+                                            err,
+                                            "stream data_received callback failed",
+                                        );
+                                        let _ = self.connection_lost_with_py(py, None);
+                                        self.read_events_scheduled.store(false, Ordering::Release);
+                                        return Ok(());
+                                    }
+                                    pending_data = Some(PendingReadBuffer(data));
+                                }
+                                None => pending_data = Some(PendingReadBuffer(data)),
+                            }
+                        }
+
+                        if (drained_events >= MAX_READ_EVENTS_PER_DRAIN
+                            || drained_bytes >= MAX_READ_BYTES_PER_DRAIN)
+                            && self.reschedule_pending_read_events(&mut drained)
+                        {
+                            self.flush_pending_data_with_py(py, &mut pending_data, fast_path)?;
+                            return Ok(());
                         }
                     }
                     PendingReadEvent::Eof => {
@@ -1130,6 +1284,29 @@ impl StreamTransportCore {
             }
         }
     }
+
+    fn reschedule_pending_read_events(
+        self: &Arc<Self>,
+        drained: &mut VecDeque<PendingReadEvent>,
+    ) -> bool {
+        let mut queue = self
+            .pending_read_events
+            .lock()
+            .expect("poisoned pending read queue");
+        if drained.is_empty() && queue.is_empty() {
+            return false;
+        }
+
+        drained.append(&mut queue);
+        std::mem::swap(drained, queue.deref_mut());
+        drop(queue);
+        let _ =
+            self.loop_core
+                .send_command(LoopCommand::Transport(LoopTransportCommand::StreamRead(
+                    Arc::clone(self),
+                )));
+        true
+    }
 }
 
 impl StreamTransportCore {
@@ -1162,6 +1339,7 @@ impl StreamTransportCore {
         pending_data: &mut Option<PendingReadBuffer>,
         fast_path: Option<&StreamReaderFastPath>,
     ) -> PyResult<()> {
+        profiling::scope!("StreamTransportCore::flush_pending_data_with_py");
         let Some(data) = pending_data.take() else {
             return Ok(());
         };
@@ -1422,12 +1600,37 @@ impl StreamTransportCore {
     }
 
     fn get_extra(&self, py: Python<'_>, name: &str) -> Option<Py<PyAny>> {
-        self.state
-            .lock()
-            .expect("poisoned transport state")
-            .extra
-            .get(name)
-            .map(|value| value.clone_ref(py))
+        let (cached, lazy_socket_family, transport_closed) = {
+            let state = self.state.lock().expect("poisoned transport state");
+            (
+                state.extra.get(name).map(|value| value.clone_ref(py)),
+                state.lazy_socket_family,
+                state.closing || state.lost_called,
+            )
+        };
+        if let Some(value) = cached {
+            if name == "socket" && transport_closed {
+                let _ = value.bind(py).call_method0("close");
+            }
+            return Some(value);
+        }
+        if lazy_socket_family.is_none() || !matches!(name, "socket" | "sockname" | "peername") {
+            return None;
+        }
+
+        let family = lazy_socket_family?;
+        let fd = self
+            .direct_writer
+            .as_ref()
+            .map(|writer| writer.lock().expect("poisoned direct tasked writer").fd())?;
+        let extra = make_stream_extra(py, fd, family).ok()?;
+        if transport_closed && let Some(socket) = extra.get("socket") {
+            let _ = socket.bind(py).call_method0("close");
+        }
+        let mut state = self.state.lock().expect("poisoned transport state");
+        state.extra.extend(extra);
+        state.lazy_socket_family = None;
+        state.extra.get(name).map(|value| value.clone_ref(py))
     }
 
     #[inline]
@@ -1453,6 +1656,7 @@ impl StreamTransportCore {
         state.reading = false;
         state.writable = false;
         drop(state);
+        self.reading.store(false, Ordering::Release);
         self.state_cv.notify_all();
     }
 
@@ -1483,6 +1687,7 @@ impl StreamTransportCore {
         let mut state = self.state.lock().expect("poisoned transport state");
         state.read_paused = true;
         state.reading = false;
+        self.reading.store(false, Ordering::Release);
     }
 
     fn resume_reading(&self) {
@@ -1490,11 +1695,12 @@ impl StreamTransportCore {
         state.read_paused = false;
         state.reading = true;
         drop(state);
+        self.reading.store(true, Ordering::Release);
         self.state_cv.notify_all();
     }
 
     fn is_reading(&self) -> bool {
-        self.state.lock().expect("poisoned transport state").reading
+        self.reading.load(Ordering::Acquire)
     }
 
     fn wait_until_readable(&self) {
@@ -1602,6 +1808,7 @@ impl StreamTransportCore {
     }
 
     fn try_direct_tasked_write(&self, data: &[u8]) -> io::Result<usize> {
+        profiling::scope!("StreamTransportCore::try_direct_tasked_write");
         let Some(writer) = &self.direct_writer else {
             return Err(io::Error::other("not direct-tasked"));
         };
@@ -1612,7 +1819,9 @@ impl StreamTransportCore {
                 // A paused reader does not consume Winsock's asynchronous reset
                 // notification. Surface it before another small write can appear
                 // to succeed from the local send buffer.
-                if let Some(err) = stream.take_error()? {
+                if !self.is_reading()
+                    && let Some(err) = stream.take_error()?
+                {
                     return Err(err);
                 }
 
@@ -1635,6 +1844,11 @@ impl StreamTransportCore {
         ));
         self.set_closing();
         self.set_write_backpressure_active(false);
+        self.pending_direct_write
+            .lock()
+            .expect("poisoned pending direct write")
+            .clear();
+        self.direct_write_scheduled.store(false, Ordering::Release);
         self.clear_write_buffer(false);
         let _ = self.writer_tx.send(WriterCommand::Stop);
     }
@@ -1652,8 +1866,123 @@ impl StreamTransportCore {
         Ok(())
     }
 
+    fn queue_recorded_write(self: &Arc<Self>, data: OwnedWriteBuffer) {
+        self.ensure_writer_worker();
+        if self.writer_tx.send(WriterCommand::Data(data)).is_err() {
+            self.clear_write_buffer(false);
+            self.fail_write(None);
+        }
+    }
+
+    fn stage_direct_write(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let should_pause = self.record_write_buffer_enqueued(data.len());
+        self.pending_direct_write
+            .lock()
+            .expect("poisoned pending direct write")
+            .extend_from_slice(data);
+        if should_pause {
+            self.notify_pause_writing();
+        }
+
+        if !self.direct_write_scheduled.swap(true, Ordering::AcqRel)
+            && self
+                .loop_core
+                .send_command(LoopCommand::Transport(LoopTransportCommand::StreamWrite(
+                    Arc::clone(self),
+                )))
+                .is_err()
+        {
+            self.direct_write_scheduled.store(false, Ordering::Release);
+            self.fail_write(None);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn flush_pending_direct_write(self: &Arc<Self>) {
+        profiling::scope!("StreamTransportCore::flush_pending_direct_write");
+        #[cfg(windows)]
+        if self.server_poll_reader_requested()
+            && !self.server_poll_reader_ready.load(Ordering::Acquire)
+        {
+            return;
+        }
+        self.direct_write_scheduled.store(false, Ordering::Release);
+        let data = std::mem::take(
+            self.pending_direct_write
+                .lock()
+                .expect("poisoned pending direct write")
+                .deref_mut(),
+        );
+        if data.is_empty() {
+            return;
+        }
+        if self.is_closing() {
+            self.record_write_buffer_drained(data.len());
+            return;
+        }
+
+        match self.try_direct_tasked_write(&data) {
+            Ok(written) if written == data.len() => {
+                self.record_write_buffer_drained(written);
+            }
+            Ok(written) => {
+                self.record_write_buffer_drained(written);
+                let mut pending = OwnedWriteBuffer::from_vec(data);
+                pending.advance(written);
+                self.set_write_backpressure_active(true);
+                self.queue_recorded_write(pending);
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                self.set_write_backpressure_active(true);
+                self.queue_recorded_write(OwnedWriteBuffer::from_vec(data));
+            }
+            Err(err) => self.fail_write(Some(err)),
+        }
+    }
+
+    fn discard_pending_direct_write(self: &Arc<Self>) {
+        self.direct_write_scheduled.store(false, Ordering::Release);
+        let discarded = {
+            let mut pending = self
+                .pending_direct_write
+                .lock()
+                .expect("poisoned pending direct write");
+            let len = pending.len();
+            pending.clear();
+            len
+        };
+        self.record_write_buffer_drained(discarded);
+    }
+
     fn try_write_bytes(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
+        profiling::scope!("StreamTransportCore::try_write_bytes");
+        #[cfg(windows)]
+        if data.len() >= SERVER_POLL_READER_WRITE_THRESHOLD {
+            self.request_server_poll_reader();
+            if self.server_poll_reader_requested()
+                && !self.server_poll_reader_ready.load(Ordering::Acquire)
+            {
+                return self.stage_direct_write(data);
+            }
+        }
+
         if self.direct_writer.is_some() && !self.write_backpressure_active() {
+            if self.direct_write_scheduled.load(Ordering::Acquire)
+                || (self.server_side
+                    && data.len() > SMALL_WRITE_COALESCE_MIN_BYTES
+                    && data.len() <= SMALL_WRITE_COALESCE_MAX_BYTES)
+            {
+                return self.stage_direct_write(data);
+            }
             match self.try_direct_tasked_write(data) {
                 Ok(written) if written == data.len() => return Ok(()),
                 Ok(written) => {
@@ -1701,6 +2030,7 @@ impl StreamTransportCore {
         self: &Arc<Self>,
         py: Python<'_>,
     ) -> PyResult<(TransportSpawnContext, StreamKind)> {
+        self.flush_pending_direct_write();
         let protocol = self.get_protocol(py);
         let context = self
             .state
@@ -1722,9 +2052,7 @@ impl StreamTransportCore {
         self.detach_underlying_stream(py);
         let _ = self.writer_tx.send(WriterCommand::Stop);
         if let Some(fd) = self.runtime_socket_fd() {
-            let _ = self
-                .loop_core
-                .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
+            stop_socket_reader(self, fd);
         }
         for worker in self
             .workers
@@ -1931,8 +2259,10 @@ impl ServerCore {
             state.listeners.clear();
         }
 
-        self.close_python_sockets();
-
+        // Blocking TLS accept workers are woken by connecting to their listening
+        // address.  Keep the exposed Python socket alive until after that wake:
+        // on Windows duplicated sockets share listener state, so closing the
+        // Python handle first makes the wake connect pay the TCP failure timeout.
         for task in self
             .accept_tasks
             .lock()
@@ -1947,10 +2277,16 @@ impl ServerCore {
             .expect("poisoned accept fds")
             .drain(..)
         {
-            let _ = self
-                .loop_core
-                .send_command(LoopCommand::Io(LoopIoCommand::StopServerAccept(fd)));
+            if self.loop_core.on_runtime_thread() {
+                self.loop_core.stop_io_task(fd);
+            } else {
+                let _ = self
+                    .loop_core
+                    .send_command(LoopCommand::Io(LoopIoCommand::StopServerAccept(fd)));
+            }
         }
+
+        self.close_python_sockets();
 
         if let Some(path) = &self.cleanup_path {
             let _ = fs::remove_file(path);
@@ -1969,75 +2305,83 @@ impl ServerCore {
             std::mem::take(&mut state.listeners)
         };
 
-        #[cfg(target_os = "linux")]
-        {
-            if self.tls.is_some() {
-                let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
-                for listener in listeners {
-                    let server = Arc::clone(self);
-                    let task = match listener {
-                        ServerListener::Tcp(listener) => {
-                            WorkerThread::spawn("rsloop-tcp-accept", move |stop| {
+        if self.tls.is_some() {
+            let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
+            for listener in listeners {
+                let server = Arc::clone(self);
+                let task = match listener {
+                    ServerListener::Tcp(listener) => {
+                        let wake_addr = listener.local_addr().ok();
+                        WorkerThread::spawn_interruptible(
+                            "rsloop-tcp-accept",
+                            move || {
+                                if let Some(addr) = wake_addr {
+                                    let _ = StdTcpStream::connect(addr);
+                                }
+                            },
+                            move |stop| {
                                 run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-                            })
-                        }
-                        #[cfg(unix)]
-                        ServerListener::Unix(listener) => {
-                            WorkerThread::spawn("rsloop-unix-accept", move |stop| {
+                            },
+                        )
+                    }
+                    #[cfg(unix)]
+                    ServerListener::Unix(listener) => {
+                        let wake_path = listener
+                            .local_addr()
+                            .ok()
+                            .and_then(|addr| addr.as_pathname().map(PathBuf::from));
+                        WorkerThread::spawn_interruptible(
+                            "rsloop-unix-accept",
+                            move || {
+                                if let Some(path) = wake_path {
+                                    let _ = StdUnixStream::connect(path);
+                                }
+                            },
+                            move |stop| {
                                 run_unix_accept_loop(BlockingAcceptLoop::new(
                                     server, listener, stop,
                                 ))
-                            })
-                        }
-                    };
-                    tasks.push(task);
-                }
-                return;
-            }
-
-            let mut accept_fds = self.accept_fds.lock().expect("poisoned accept fds");
-            for listener in listeners {
-                let fd = match &listener {
-                    ServerListener::Tcp(listener) => tcp_listener_raw_fd(listener),
-                    #[cfg(unix)]
-                    ServerListener::Unix(listener) => unix_raw_fd(listener.as_raw_fd()),
+                            },
+                        )
+                    }
                 };
-                accept_fds.push(fd);
+                tasks.push(task);
+            }
+            return;
+        }
+
+        let mut accept_fds = self.accept_fds.lock().expect("poisoned accept fds");
+        for listener in listeners {
+            let fd = match &listener {
+                ServerListener::Tcp(listener) => tcp_listener_raw_fd(listener),
+                #[cfg(unix)]
+                ServerListener::Unix(listener) => unix_raw_fd(listener.as_raw_fd()),
+            };
+            accept_fds.push(fd);
+            let server = Arc::clone(self);
+            // On the loop thread, host the accept loop directly on the loop's
+            // own runtime so accepted connections are delivered without a
+            // cross-thread hop. Off-thread callers fall back to the transitional
+            // runtime-thread command path.
+            if self.loop_core.on_runtime_thread() {
+                self.loop_core
+                    .spawn_io_tracked(fd, run_server_accept_task(server, listener));
+            } else {
                 let _ = self.loop_core.send_command(LoopCommand::Io(
                     LoopIoCommand::StartServerAccept {
                         fd,
-                        server: Arc::clone(self),
+                        server,
                         listener,
                     },
                 ));
             }
-        }
-
-        #[cfg(not(target_os = "linux"))]
-        let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
-        #[cfg(not(target_os = "linux"))]
-        for listener in listeners {
-            let server = Arc::clone(self);
-            let task = match listener {
-                ServerListener::Tcp(listener) => {
-                    WorkerThread::spawn("rsloop-tcp-accept", move |stop| {
-                        run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-                    })
-                }
-                #[cfg(unix)]
-                ServerListener::Unix(listener) => {
-                    WorkerThread::spawn("rsloop-unix-accept", move |stop| {
-                        run_unix_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-                    })
-                }
-            };
-            tasks.push(task);
         }
     }
 }
 
 impl PyStreamTransport {
     pub(crate) fn write_data(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        profiling::scope!("PyStreamTransport::write_data");
         if self.core.is_closing() {
             return Ok(());
         }
@@ -2089,12 +2433,10 @@ impl PyStreamTransport {
     }
 
     fn close(&self) -> PyResult<()> {
+        self.core.flush_pending_direct_write();
         self.core.set_closing();
         if let Some(fd) = self.core.runtime_socket_fd() {
-            let _ = self
-                .core
-                .loop_core
-                .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
+            stop_socket_reader(&self.core, fd);
         }
         if self.core.direct_writer.is_none() {
             let _ = self.core.writer_tx.send(WriterCommand::Close);
@@ -2115,12 +2457,10 @@ impl PyStreamTransport {
     }
 
     fn abort(&self) -> PyResult<()> {
+        self.core.discard_pending_direct_write();
         self.core.set_closing();
         if let Some(fd) = self.core.runtime_socket_fd() {
-            let _ = self
-                .core
-                .loop_core
-                .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader(fd)));
+            stop_socket_reader(&self.core, fd);
         }
         if self.core.direct_writer.is_none() {
             let _ = self.core.writer_tx.send(WriterCommand::Abort);
@@ -2149,6 +2489,7 @@ impl PyStreamTransport {
                 "transport does not support write_eof",
             ));
         }
+        self.core.flush_pending_direct_write();
         self.core.mark_write_eof();
         if self.core.direct_writer.is_some() && !self.core.write_backpressure_active() {
             if let Some(writer) = &self.core.direct_writer {
@@ -2568,6 +2909,7 @@ struct StreamTransportStateConfig {
     io_fd: Option<fd_ops::RawFd>,
     runtime_socket_io: bool,
     extra: HashMap<String, Py<PyAny>>,
+    lazy_socket_family: Option<i32>,
     reading: bool,
     writable: bool,
     can_write_eof: bool,
@@ -2605,6 +2947,7 @@ fn stream_transport_state_parts(
             context,
             context_needs_run,
             extra: config.extra,
+            lazy_socket_family: config.lazy_socket_family,
             closing: false,
             read_paused: false,
             reading: config.reading,
@@ -2628,18 +2971,33 @@ fn new_stream_transport_core(
     lazy_writer: Option<LazyWriterConfig>,
 ) -> Arc<StreamTransportCore> {
     let has_text_encoding = parts.state.extra.contains_key("text_encoding");
+    let server_side = parts.state.server.is_some();
+    let native_stream_reader = matches!(
+        &parts.state.callbacks.stream_reader_fast_path,
+        Some(StreamReaderFastPath::Native { .. })
+    );
+    let reading = parts.state.reading;
     Arc::new(StreamTransportCore {
         loop_core: parts.loop_core,
         loop_obj: parts.loop_obj,
         state: Mutex::new(parts.state),
         pending_read_events: Mutex::new(VecDeque::new()),
         read_events_scheduled: AtomicBool::new(false),
+        reading: AtomicBool::new(reading),
         writer_tx,
         direct_writer: direct_writer.map(Mutex::new),
+        pending_direct_write: Mutex::new(Vec::new()),
+        direct_write_scheduled: AtomicBool::new(false),
+        #[cfg(windows)]
+        server_poll_reader_requested: AtomicBool::new(false),
+        #[cfg(windows)]
+        server_poll_reader_ready: AtomicBool::new(false),
         lazy_writer: Mutex::new(lazy_writer),
         workers: Mutex::new(Vec::new()),
         state_cv: Condvar::new(),
         has_text_encoding,
+        server_side,
+        native_stream_reader,
     })
 }
 
@@ -2676,6 +3034,7 @@ fn pipe_transport_core(
             io_fd: None,
             runtime_socket_io: false,
             extra,
+            lazy_socket_family: None,
             reading,
             writable,
             can_write_eof: writable,
@@ -2787,13 +3146,11 @@ pub fn spawn_tcp_transport(
     server: Option<Weak<ServerCore>>,
 ) -> PyResult<Py<PyStreamTransport>> {
     let raw_fd = tcp_stream_raw_fd(&stream);
-    let extra = make_stream_extra(py, raw_fd, tcp_family(&stream))?;
+    let family = tcp_family(&stream);
+    let extra = HashMap::new();
     let callbacks = build_protocol_callbacks(py, &spawn_context.protocol)?;
     spawn_context.context_needs_run &= callbacks.stream_reader_fast_path.is_none();
     let direct_writer = duplicate_configured_tcp_stream(raw_fd)?;
-    let writer = stream
-        .try_clone()
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let (writer_tx, writer_rx) = mpsc::channel();
     let parts = stream_transport_state_parts(
         spawn_context,
@@ -2802,6 +3159,7 @@ pub fn spawn_tcp_transport(
             io_fd: Some(raw_fd),
             runtime_socket_io: true,
             extra,
+            lazy_socket_family: Some(family),
             reading: true,
             writable: true,
             can_write_eof: true,
@@ -2814,7 +3172,7 @@ pub fn spawn_tcp_transport(
         writer_tx,
         Some(TaskedDirectWriter::Tcp(direct_writer)),
         Some(LazyWriterConfig {
-            target: WriterTarget::Tcp(writer),
+            target: LazyWriterTarget::Tcp(raw_fd),
             writer_rx,
         }),
     );
@@ -2825,16 +3183,8 @@ pub fn spawn_tcp_transport(
         server.connection_opened();
     }
 
-    #[cfg(target_os = "linux")]
-    core.loop_core
-        .send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader {
-            fd: raw_fd,
-            core: Arc::clone(&core),
-            reader: ReaderTarget::Tcp(stream),
-        }))
+    spawn_socket_reader(raw_fd, Arc::clone(&core), ReaderTarget::Tcp(stream))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    #[cfg(not(target_os = "linux"))]
-    spawn_reader_worker(Arc::clone(&core), ReaderTarget::Tcp(stream));
     Ok(transport)
 }
 
@@ -2846,13 +3196,10 @@ pub fn spawn_unix_transport(
     server: Option<Weak<ServerCore>>,
 ) -> PyResult<Py<PyStreamTransport>> {
     let raw_fd = unix_raw_fd(stream.as_raw_fd());
-    let extra = make_stream_extra(py, raw_fd, libc::AF_UNIX)?;
+    let extra = HashMap::new();
     let callbacks = build_protocol_callbacks(py, &spawn_context.protocol)?;
     spawn_context.context_needs_run &= callbacks.stream_reader_fast_path.is_none();
     let direct_writer = duplicate_unix_direct_writer(raw_fd)?;
-    let writer = stream
-        .try_clone()
-        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let (writer_tx, writer_rx) = mpsc::channel();
     let parts = stream_transport_state_parts(
         spawn_context,
@@ -2861,6 +3208,7 @@ pub fn spawn_unix_transport(
             io_fd: Some(raw_fd),
             runtime_socket_io: true,
             extra,
+            lazy_socket_family: Some(libc::AF_UNIX),
             reading: true,
             writable: true,
             can_write_eof: true,
@@ -2873,7 +3221,7 @@ pub fn spawn_unix_transport(
         writer_tx,
         Some(TaskedDirectWriter::Unix(direct_writer)),
         Some(LazyWriterConfig {
-            target: WriterTarget::Unix(writer),
+            target: LazyWriterTarget::Unix(raw_fd),
             writer_rx,
         }),
     );
@@ -2884,16 +3232,8 @@ pub fn spawn_unix_transport(
         server.connection_opened();
     }
 
-    #[cfg(target_os = "linux")]
-    core.loop_core
-        .send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader {
-            fd: raw_fd,
-            core: Arc::clone(&core),
-            reader: ReaderTarget::Unix(stream),
-        }))
+    spawn_socket_reader(raw_fd, Arc::clone(&core), ReaderTarget::Unix(stream))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-    #[cfg(not(target_os = "linux"))]
-    spawn_reader_worker(Arc::clone(&core), ReaderTarget::Unix(stream));
     Ok(transport)
 }
 
@@ -3025,6 +3365,7 @@ fn spawn_tls_transport(
             io_fd: Some(stream_fd),
             runtime_socket_io: true,
             extra,
+            lazy_socket_family: None,
             reading: true,
             writable: true,
             can_write_eof: false,
@@ -3230,12 +3571,15 @@ pub(crate) fn spawn_accepted_transport_with_py(
 
 fn schedule_accepted_transport(server: &Arc<ServerCore>, stream: AcceptedStream, message: &str) {
     if server.tls.is_some() {
-        let result = Python::try_attach(|py| spawn_accepted_transport_with_py(py, server, stream));
-        match result {
-            Some(Ok(_)) => {}
-            Some(Err(err)) => server.report_error(err, message),
-            None => {}
-        }
+        let server = Arc::clone(server);
+        let message = message.to_owned();
+        drop(async_std::task::spawn_blocking(move || {
+            let result =
+                Python::try_attach(|py| spawn_accepted_transport_with_py(py, &server, stream));
+            if let Some(Err(err)) = result {
+                server.report_error(err, &message);
+            }
+        }));
         return;
     }
 
@@ -3270,6 +3614,10 @@ fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
             }
         }
 
+        if stop.load(Ordering::Acquire) || server.is_closed() {
+            return;
+        }
+
         loop {
             match listener.accept() {
                 Ok((stream, _addr)) => {
@@ -3296,7 +3644,49 @@ fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
     }
 }
 
-#[cfg(target_os = "linux")]
+/// Waits for a connecting TCP socket to become writable on the vibeio reactor,
+/// then hands the outcome back to the loop thread via `ConnectCompleted`. The
+/// descriptor is duplicated so the vibeio stream owns (and closes) only the
+/// dup; the connecting socket stays owned by its Python object. The dup shares
+/// the same underlying socket, so its POLLOUT readiness reflects the connect
+/// completing.
+#[cfg(unix)]
+pub(crate) async fn run_connect_watch_task(
+    core: Arc<LoopCore>,
+    fd: fd_ops::RawFd,
+    future: Py<PyAny>,
+) {
+    use vibeio::io::AsyncWritePoll;
+
+    let wait_errno = 'wait: {
+        let Ok(raw) = c_int::try_from(fd) else {
+            break 'wait libc::EBADF;
+        };
+        // SAFETY: `raw` is a live socket descriptor owned by the Python socket.
+        let dup = unsafe { libc::dup(raw) };
+        if dup < 0 {
+            break 'wait io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EBADF);
+        }
+        // SAFETY: `dup` is a freshly duplicated, owned socket descriptor.
+        let std_stream = unsafe { StdTcpStream::from_raw_fd(dup) };
+        match VibePollTcpStream::from_std(std_stream) {
+            Ok(stream) => match stream.writable().await {
+                Ok(()) => 0,
+                Err(err) => err.raw_os_error().unwrap_or(0),
+            },
+            Err(err) => err.raw_os_error().unwrap_or(libc::EBADF),
+        }
+    };
+
+    let _ = core.send_command(LoopCommand::ConnectCompleted {
+        future,
+        fd,
+        wait_errno,
+    });
+}
+
 pub(crate) async fn run_server_accept_task(server: Arc<ServerCore>, listener: ServerListener) {
     profiling::scope!("stream.run_server_accept_task");
     match listener {
@@ -3306,72 +3696,8 @@ pub(crate) async fn run_server_accept_task(server: Arc<ServerCore>, listener: Se
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn run_server_accept_blocking(params: BlockingAcceptLoop<ServerListener>) {
-    let BlockingAcceptLoop {
-        server,
-        listener,
-        stop,
-    } = params;
-    match listener {
-        ServerListener::Tcp(listener) => {
-            run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-        }
-        #[cfg(unix)]
-        ServerListener::Unix(listener) => {
-            run_unix_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
 async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
     profiling::scope!("stream.run_tcp_accept_task");
-    let poll_fd = listener.try_clone().and_then(PollFd::new);
-
-    let Ok(poll_fd) = poll_fd else {
-        return;
-    };
-
-    loop {
-        if server.is_closed() {
-            return;
-        }
-
-        if let Err(err) = poll_fd.accept_ready().await {
-            report_server_io_error(&server, err, "TCP server accept failed");
-            return;
-        }
-
-        loop {
-            let accept_result = listener.accept();
-            match accept_result {
-                Ok((stream, _addr)) => {
-                    if !configure_accepted_tcp_stream(
-                        &server,
-                        &stream,
-                        "failed to configure TCP connection",
-                    ) {
-                        continue;
-                    }
-                    schedule_accepted_transport(
-                        &server,
-                        AcceptedStream::Tcp(stream),
-                        "failed to accept TCP connection",
-                    );
-                }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                Err(err) => {
-                    report_server_io_error(&server, err, "TCP server accept failed");
-                    return;
-                }
-            }
-        }
-    }
-}
-
-#[cfg(windows)]
-pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
     let listener = match VibeTcpListener::from_std(listener) {
         Ok(listener) => listener,
         Err(err) => {
@@ -3387,7 +3713,11 @@ pub(crate) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTc
 
         match listener.accept().await {
             Ok((stream, _addr)) => {
+                #[cfg(unix)]
+                let stream = unsafe { StdTcpStream::from_raw_fd(stream.into_raw_fd()) };
+                #[cfg(windows)]
                 let raw = stream.into_raw_socket();
+                #[cfg(windows)]
                 let stream = from_owned_raw_socket::<StdTcpStream>(raw);
                 if !configure_accepted_tcp_stream(
                     &server,
@@ -3431,6 +3761,10 @@ fn run_unix_accept_loop(params: BlockingAcceptLoop<StdUnixListener>) {
             }
         }
 
+        if stop.load(Ordering::Acquire) || server.is_closed() {
+            return;
+        }
+
         loop {
             match listener.accept() {
                 Ok((stream, _addr)) => {
@@ -3457,10 +3791,14 @@ fn run_unix_accept_loop(params: BlockingAcceptLoop<StdUnixListener>) {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener) {
-    let Ok(poll_fd) = listener.try_clone().and_then(PollFd::new) else {
-        return;
+    let listener = match VibeUnixListener::from_std(listener) {
+        Ok(listener) => listener,
+        Err(err) => {
+            report_server_io_error(&server, err, "Unix server accept failed");
+            return;
+        }
     };
 
     loop {
@@ -3468,32 +3806,25 @@ async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener
             return;
         }
 
-        if let Err(err) = poll_fd.accept_ready().await {
-            report_server_io_error(&server, err, "Unix server accept failed");
-            return;
-        }
-
-        loop {
-            match listener.accept() {
-                Ok((stream, _addr)) => {
-                    if !configure_accepted_unix_stream(
-                        &server,
-                        &stream,
-                        "failed to configure Unix connection",
-                    ) {
-                        continue;
-                    }
-                    schedule_accepted_transport(
-                        &server,
-                        AcceptedStream::Unix(stream),
-                        "failed to accept Unix connection",
-                    );
+        match listener.accept().await {
+            Ok((stream, _addr)) => {
+                let stream = unsafe { StdUnixStream::from_raw_fd(stream.into_raw_fd()) };
+                if !configure_accepted_unix_stream(
+                    &server,
+                    &stream,
+                    "failed to configure Unix connection",
+                ) {
+                    continue;
                 }
-                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
-                Err(err) => {
-                    report_server_io_error(&server, err, "Unix server accept failed");
-                    return;
-                }
+                schedule_accepted_transport(
+                    &server,
+                    AcceptedStream::Unix(stream),
+                    "failed to accept Unix connection",
+                );
+            }
+            Err(err) => {
+                report_server_io_error(&server, err, "Unix server accept failed");
+                return;
             }
         }
     }
@@ -3509,9 +3840,11 @@ fn spawn_reader_worker(core: Arc<StreamTransportCore>, reader: ReaderTarget) {
 
 fn spawn_tls_reader_worker(core: Arc<StreamTransportCore>, tls_state: SharedTlsIoState) {
     let thread_core = Arc::clone(&core);
-    let worker = WorkerThread::spawn("rsloop-tls-reader", move |stop| {
-        run_tls_reader(thread_core, tls_state, stop)
-    });
+    let worker = WorkerThread::spawn_with_stack(
+        "rsloop-tls-reader",
+        Some(TLS_WORKER_STACK_SIZE),
+        move |stop| run_tls_reader(thread_core, tls_state, stop),
+    );
     core.register_worker(worker);
 }
 
@@ -3534,9 +3867,11 @@ fn spawn_tls_writer_worker(
     writer_rx: Receiver<WriterCommand>,
 ) {
     let thread_core = Arc::clone(&core);
-    let worker = WorkerThread::spawn("rsloop-tls-writer", move |stop| {
-        run_tls_writer(thread_core, tls_state, writer_rx, stop)
-    });
+    let worker = WorkerThread::spawn_with_stack(
+        "rsloop-tls-writer",
+        Some(TLS_WORKER_STACK_SIZE),
+        move |stop| run_tls_writer(thread_core, tls_state, writer_rx, stop),
+    );
     core.register_worker(worker);
 }
 
@@ -3611,9 +3946,7 @@ fn drain_tls_plaintext_locked(
             Ok(0) => break,
             Ok(n) => {
                 saw_data = true;
-                core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
-                    &plaintext[..n],
-                )));
+                core.enqueue_pending_read_event(PendingReadEvent::Data(plaintext[..n].to_vec()));
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
             Err(err) => return Err(err.to_string()),
@@ -3679,14 +4012,6 @@ fn tls_socket_wait_target(tls_state: &SharedTlsIoState) -> (fd_ops::RawFd, bool)
     (state.fd(), state.pollable())
 }
 
-fn write_tls_data(tls_state: &SharedTlsIoState, data: &[u8]) -> io::Result<()> {
-    let mut state = tls_state.lock().expect("poisoned tls state");
-    match state.connection.writer_write_all(data) {
-        Ok(()) => flush_tls_io_locked(&mut state),
-        Err(err) => Err(err),
-    }
-}
-
 fn close_tls_writer(tls_state: &SharedTlsIoState) -> io::Result<()> {
     let mut state = tls_state.lock().expect("poisoned tls state");
     let shutdown_timeout = state.shutdown_timeout;
@@ -3744,9 +4069,7 @@ fn run_stream_reader(
                 return;
             }
             Ok(n) => {
-                core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
-                    &buf[..n],
-                )));
+                core.enqueue_pending_read_event(PendingReadEvent::Data(buf[..n].to_vec()));
                 if !spin_window.is_zero()
                     && !spin_read_stream(&core, &mut reader, &stop, &mut buf, spin_window)
                 {
@@ -3790,9 +4113,7 @@ fn spin_read_stream(
                 return false;
             }
             Ok(n) => {
-                core.enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(
-                    &buf[..n],
-                )));
+                core.enqueue_pending_read_event(PendingReadEvent::Data(buf[..n].to_vec()));
                 if core.is_closing() || !core.is_reading() {
                     return true;
                 }
@@ -3815,19 +4136,65 @@ fn spin_read_stream(
     }
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) async fn run_socket_reader_task(
+/// Starts the socket reader for a stream transport.
+///
+/// Readers stay on the transitional runtime thread. Hosting them on the loop
+/// runtime was attempted but reverted: it segfaults for AF_UNIX socketpair
+/// sockets and races `start_tls`, which reclaims the fd for a blocking handshake
+/// while the reader still holds a non-blocking registration (EAGAIN). Reader
+/// migration only benefits the traffic path (already ahead of uvloop), so the
+/// risk is not worth it; accept loops — which are setup-relevant and terminate
+/// cleanly on socket close — remain on the loop runtime.
+fn spawn_socket_reader(
+    fd: fd_ops::RawFd,
     core: Arc<StreamTransportCore>,
-    mut reader: ReaderTarget,
+    reader: ReaderTarget,
+) -> Result<(), crate::loop_core::LoopCoreError> {
+    let loop_core = Arc::clone(&core.loop_core);
+    loop_core.send_command(LoopCommand::Io(LoopIoCommand::StartSocketReader {
+        fd,
+        core,
+        reader,
+    }))
+}
+
+/// Stops the socket reader for `fd` via the runtime-thread command path (readers
+/// are hosted there; see `spawn_socket_reader`).
+fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) {
+    let (done_tx, done_rx) = mpsc::channel();
+    if core
+        .loop_core
+        .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader {
+            fd,
+            done_tx,
+        }))
+        .is_ok()
+    {
+        // start_tls duplicates the socket before reaching this point. Do not
+        // let the TLS handshake use that duplicate until the runtime-thread
+        // reader has been dropped, otherwise it can consume handshake bytes.
+        let _ = done_rx.recv();
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) async fn run_tcp_socket_reader_task(
+    core: Arc<StreamTransportCore>,
+    stream: StdTcpStream,
 ) {
-    profiling::scope!("stream.run_socket_reader_task");
-    let Ok(poll_fd) = poll_fd_from_raw(reader.fd()) else {
-        core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-            "failed to attach socket reader".to_owned(),
-        )));
-        return;
+    profiling::scope!("stream.run_tcp_socket_reader_task");
+    let mut reader = match VibePollTcpStream::from_std(stream) {
+        Ok(reader) => reader,
+        Err(err) => {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                err.to_string(),
+            )));
+            return;
+        }
     };
-    let mut buf = [0_u8; STREAM_READ_BUFFER_SIZE];
+    // `read_buf` writes into spare capacity, so idle transports reserve this
+    // address space without eagerly zero-filling and faulting in every page.
+    let mut buf = Vec::with_capacity(STREAM_READ_BUFFER_SIZE);
 
     loop {
         if core.is_closing() {
@@ -3836,27 +4203,23 @@ pub(crate) async fn run_socket_reader_task(
         }
 
         while !core.is_closing() && !core.is_reading() {
-            compio_sleep(Duration::from_millis(1)).await;
+            vibeio::time::sleep(Duration::from_millis(1)).await;
         }
         if core.is_closing() {
             core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
             return;
         }
 
-        if let Err(err) = poll_fd.read_ready().await {
-            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
-                err.to_string(),
-            )));
-            return;
-        }
-
-        match reader.read(&mut buf) {
+        buf.clear();
+        match reader.read_buf(&mut buf).await {
             Ok(0) => {
                 core.enqueue_pending_read_event(PendingReadEvent::Eof);
                 return;
             }
-            Ok(n) => core
-                .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
+            Ok(_) => {
+                let data = take_async_read_data(&mut buf);
+                core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+            }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => {
@@ -3875,7 +4238,31 @@ pub(crate) async fn run_tcp_socket_reader_task(
     stream: StdTcpStream,
 ) {
     profiling::scope!("stream.run_tcp_socket_reader_task");
-    let mut reader = match VibePollTcpStream::from_std(stream) {
+
+    // Native fast streams start in completion mode for low-latency
+    // request/response traffic. Custom protocols retain readiness mode because
+    // either endpoint may call start_tls(), which reclaims the socket
+    // synchronously.
+    if !core.native_stream_reader {
+        match VibePollTcpStream::from_std(stream) {
+            Ok(reader) => {
+                run_windows_poll_tcp_reader(
+                    core,
+                    reader,
+                    Vec::with_capacity(STREAM_READ_BUFFER_SIZE),
+                )
+                .await;
+            }
+            Err(err) => core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                err.to_string(),
+            ))),
+        }
+        return;
+    }
+
+    // Native fast-stream readers use completion mode. A native server switches
+    // to readiness mode when a large response begins.
+    let mut reader = match VibeTcpStream::from_std(stream) {
         Ok(reader) => reader,
         Err(err) => {
             core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
@@ -3884,29 +4271,132 @@ pub(crate) async fn run_tcp_socket_reader_task(
             return;
         }
     };
-    let mut buf = vec![0_u8; STREAM_READ_BUFFER_SIZE];
+    let mut buf = Vec::with_capacity(STREAM_READ_BUFFER_SIZE);
 
     loop {
         if core.is_closing() {
             core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
             return;
         }
-
         while !core.is_closing() && !core.is_reading() {
-            thread::sleep(Duration::from_millis(1));
+            vibeio::time::sleep(Duration::from_millis(1)).await;
         }
         if core.is_closing() {
             core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
             return;
         }
 
-        match reader.read(&mut buf).await {
+        if core.server_poll_reader_requested() {
+            match reader.into_poll() {
+                Ok(poll_reader) => {
+                    core.mark_server_poll_reader_ready();
+                    run_windows_poll_tcp_reader(core, poll_reader, buf).await;
+                }
+                Err(err) => core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+                    Some(err.to_string()),
+                )),
+            }
+            return;
+        }
+
+        buf.clear();
+        let (result, returned_buf) = VibeAsyncRead::read(&mut reader, buf).await;
+        buf = returned_buf;
+        match result {
             Ok(0) => {
                 core.enqueue_pending_read_event(PendingReadEvent::Eof);
                 return;
             }
-            Ok(n) => core
-                .enqueue_pending_read_event(PendingReadEvent::Data(Box::<[u8]>::from(&buf[..n]))),
+            Ok(read) => {
+                let saturated = read == buf.capacity();
+                let data = take_async_read_data(&mut buf);
+                let tiny_server_trigger =
+                    core.server_side && read <= SERVER_POLL_READER_TINY_TRIGGER_MAX_BYTES;
+
+                // Completion reads win on normal request/response traffic. A
+                // full inbound buffer indicates sustained transfer; a tiny
+                // server command commonly triggers a large outbound response.
+                // Rebind before delivering either event so the protocol cannot
+                // begin bulk writes while an overlapped receive is outstanding.
+                if saturated || tiny_server_trigger {
+                    if core.server_side {
+                        core.server_poll_reader_requested
+                            .store(true, Ordering::Release);
+                    }
+                    match reader.into_poll() {
+                        Ok(poll_reader) => {
+                            core.mark_server_poll_reader_ready();
+                            core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+                            run_windows_poll_tcp_reader(core, poll_reader, buf).await;
+                        }
+                        Err(err) => {
+                            core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+                            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+                                Some(err.to_string()),
+                            ));
+                        }
+                    }
+                    return;
+                }
+
+                core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err)
+                if core.server_poll_reader_requested()
+                    && err.raw_os_error() == Some(ERROR_OPERATION_ABORTED as i32) =>
+            {
+                match reader.into_poll() {
+                    Ok(poll_reader) => {
+                        core.mark_server_poll_reader_ready();
+                        run_windows_poll_tcp_reader(core, poll_reader, buf).await;
+                    }
+                    Err(err) => core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(
+                        Some(err.to_string()),
+                    )),
+                }
+                return;
+            }
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn run_windows_poll_tcp_reader(
+    core: Arc<StreamTransportCore>,
+    mut reader: VibePollTcpStream,
+    mut buf: Vec<u8>,
+) {
+    loop {
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+        while !core.is_closing() && !core.is_reading() {
+            vibeio::time::sleep(Duration::from_millis(1)).await;
+        }
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+
+        buf.clear();
+        match reader.read_buf(&mut buf).await {
+            Ok(0) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                return;
+            }
+            Ok(_) => {
+                let data = take_async_read_data(&mut buf);
+                core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+            }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => {
@@ -3919,7 +4409,64 @@ pub(crate) async fn run_tcp_socket_reader_task(
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(unix)]
+pub(crate) async fn run_unix_socket_reader_task(
+    core: Arc<StreamTransportCore>,
+    stream: StdUnixStream,
+) {
+    profiling::scope!("stream.run_unix_socket_reader_task");
+    let mut reader = match VibePollUnixStream::from_std(stream) {
+        Ok(reader) => reader,
+        Err(err) => {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                err.to_string(),
+            )));
+            return;
+        }
+    };
+    let mut buf = Vec::with_capacity(STREAM_READ_BUFFER_SIZE);
+
+    loop {
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+        while !core.is_closing() && !core.is_reading() {
+            vibeio::time::sleep(Duration::from_millis(1)).await;
+        }
+        if core.is_closing() {
+            core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(None));
+            return;
+        }
+        buf.clear();
+        match reader.read_buf(&mut buf).await {
+            Ok(0) => {
+                core.enqueue_pending_read_event(PendingReadEvent::Eof);
+                return;
+            }
+            Ok(_) => {
+                let data = take_async_read_data(&mut buf);
+                core.enqueue_pending_read_event(PendingReadEvent::Data(data));
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => {
+                core.enqueue_pending_read_event(PendingReadEvent::ConnectionLost(Some(
+                    err.to_string(),
+                )));
+                return;
+            }
+        }
+    }
+}
+
+fn take_async_read_data(buf: &mut Vec<u8>) -> Vec<u8> {
+    if buf.len() < OWNED_READ_HANDOFF_MIN_BYTES {
+        return buf.clone();
+    }
+    std::mem::replace(buf, Vec::with_capacity(STREAM_READ_BUFFER_SIZE))
+}
+
 pub(crate) fn run_socket_reader_blocking(
     core: Arc<StreamTransportCore>,
     reader: ReaderTarget,
@@ -4076,7 +4623,6 @@ fn write_stream_data_batch(
             }
         }
     }
-
     if pending_command.is_none() {
         core.set_write_backpressure_active(false);
     }
@@ -4186,16 +4732,23 @@ fn write_tls_data_batch(
     data: OwnedWriteBuffer,
     pending_command: &mut Option<WriterCommand>,
 ) -> bool {
-    if !write_one_tls_buffer(core, tls_state, &data) {
+    let mut buffered_len = 0;
+    let mut state = tls_state.lock().expect("poisoned tls state");
+    if let Err(err) = state.connection.writer_write_all(data.remaining()) {
+        drop(state);
+        report_writer_io_error(core, err);
         return false;
     }
-
+    buffered_len += data.remaining().len();
     loop {
         match writer_rx.try_recv() {
             Ok(WriterCommand::Data(next)) => {
-                if !write_one_tls_buffer(core, tls_state, &next) {
+                if let Err(err) = state.connection.writer_write_all(next.remaining()) {
+                    drop(state);
+                    report_writer_io_error(core, err);
                     return false;
                 }
+                buffered_len += next.remaining().len();
             }
             Ok(command) => {
                 *pending_command = Some(command);
@@ -4213,23 +4766,20 @@ fn write_tls_data_batch(
         }
     }
 
-    if pending_command.is_none() {
-        core.set_write_backpressure_active(false);
-    }
-    true
-}
-
-fn write_one_tls_buffer(
-    core: &Arc<StreamTransportCore>,
-    tls_state: &SharedTlsIoState,
-    data: &OwnedWriteBuffer,
-) -> bool {
-    let buffered_len = data.remaining().len();
-    if let Err(err) = write_tls_data(tls_state, data.remaining()) {
+    // Feed all immediately available plaintext into rustls before flushing
+    // encrypted records. This turns common header/body write pairs into one
+    // socket-flush pass and one TLS-state lock acquisition.
+    if let Err(err) = flush_tls_io_locked(&mut state) {
+        drop(state);
         report_writer_io_error(core, err);
         return false;
     }
+    drop(state);
     core.record_write_buffer_drained(buffered_len);
+
+    if pending_command.is_none() {
+        core.set_write_backpressure_active(false);
+    }
     true
 }
 
@@ -4383,14 +4933,6 @@ fn wait_socket_ready_until(
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-fn poll_fd_from_raw(fd: fd_ops::RawFd) -> io::Result<PollFd<OwnedFd>> {
-    let dup = fd_ops::dup_raw_fd(fd)?;
-    let owned = from_owned_raw_fd::<OwnedFd>(dup)
-        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
-    PollFd::new(owned)
-}
-
 fn tls_io_error(err: rustls::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, err.to_string())
 }
@@ -4428,6 +4970,25 @@ fn shutdown_unix_stream(stream: &StdUnixStream, how: Shutdown) -> io::Result<()>
 
 fn build_protocol_callbacks(py: Python<'_>, protocol: &Py<PyAny>) -> PyResult<ProtocolCallbacks> {
     let bound = protocol.bind(py);
+    let stream_reader_fast_path = stream_reader_fast_path(py, bound)?;
+    if matches!(
+        &stream_reader_fast_path,
+        Some(StreamReaderFastPath::Native { .. })
+    ) {
+        // Native streams handle these lifecycle and read callbacks directly
+        // in Rust. Only bind callbacks that remain reachable.
+        return Ok(ProtocolCallbacks {
+            connection_made: protocol.clone_ref(py),
+            data_received: None,
+            eof_received: None,
+            connection_lost: protocol.clone_ref(py),
+            pause_writing: bound.getattr(python_names::pause_writing(py))?.unbind(),
+            resume_writing: bound.getattr(python_names::resume_writing(py))?.unbind(),
+            get_buffer: None,
+            buffer_updated: None,
+            stream_reader_fast_path,
+        });
+    }
     let data_received = match bound.getattr("data_received") {
         Ok(callback) => Some(callback.unbind()),
         Err(_) => None,
@@ -4444,8 +5005,6 @@ fn build_protocol_callbacks(py: Python<'_>, protocol: &Py<PyAny>) -> PyResult<Pr
         Ok(callback) => Some(callback.unbind()),
         Err(_) => None,
     };
-    let stream_reader_fast_path = stream_reader_fast_path(py, bound)?;
-
     Ok(ProtocolCallbacks {
         connection_made: bound.getattr("connection_made")?.unbind(),
         data_received,

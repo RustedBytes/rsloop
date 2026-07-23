@@ -3,8 +3,8 @@ use pyo3::prelude::*;
 use crate::{
     PyFastStreamReader, PyFastStreamWriter, PyHandle, PyLoop, PyProcessPipeTransport,
     PyProcessTransport, PyServer, PyStreamTransport, PyTimerHandle, asyncgen_finalizer_hook,
-    asyncgen_firstiter_hook, future_done_stop, new_event_loop, open_connection, profiler_running,
-    signal_bridge, start_profiler, start_server, stop_profiler,
+    asyncgen_firstiter_hook, future_done_stop, new_event_loop, open_connection, profiler_compiled,
+    profiler_running, signal_bridge, start_profiler, start_server, stop_profiler,
 };
 
 pub(crate) fn add_module_contents(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -45,6 +45,7 @@ fn add_stream_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 fn add_profiler_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(profiler_compiled, m)?)?;
     m.add_function(wrap_pyfunction!(profiler_running, m)?)?;
     m.add_function(wrap_pyfunction!(start_profiler, m)?)?;
     m.add_function(wrap_pyfunction!(stop_profiler, m)?)?;

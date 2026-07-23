@@ -336,6 +336,7 @@ fn call_callable_noargs(py: Python<'_>, callable: &Py<PyAny>) -> PyResult<Py<PyA
 }
 
 #[inline]
+#[cfg(Py_3_10)]
 fn call_callable_onearg(
     py: Python<'_>,
     callable: &Py<PyAny>,
@@ -452,6 +453,21 @@ pub(crate) fn try_fast_create_future(
     create_asyncio_future_for_running_loop(py).map(Some)
 }
 
+pub(crate) fn try_fast_create_task(
+    py: Python<'_>,
+    loop_obj: &Py<PyAny>,
+    coro: Py<PyAny>,
+) -> PyResult<Option<Py<PyAny>>> {
+    let Ok(pyloop) = loop_obj.bind(py).cast_exact::<PyLoop>() else {
+        return Ok(None);
+    };
+    let core = &pyloop.borrow().core;
+    if !core.on_runtime_thread() || core.has_task_factory() {
+        return Ok(None);
+    }
+    create_asyncio_task_for_running_loop(py, loop_obj.bind(py), coro).map(Some)
+}
+
 fn create_asyncio_task_for_loop(
     py: Python<'_>,
     loop_obj: &Py<PyAny>,
@@ -492,8 +508,29 @@ fn create_asyncio_task_for_loop(
     }
 }
 
-fn create_asyncio_task_for_running_loop(py: Python<'_>, coro: Py<PyAny>) -> PyResult<Py<PyAny>> {
-    call_callable_onearg(py, asyncio_task_cls(py)?, coro.bind(py))
+#[inline]
+fn create_asyncio_task_for_running_loop(
+    py: Python<'_>,
+    loop_obj: &Bound<'_, PyAny>,
+    coro: Py<PyAny>,
+) -> PyResult<Py<PyAny>> {
+    let task_cls = asyncio_task_cls(py)?;
+    #[cfg(not(Py_3_10))]
+    {
+        // On Python 3.8/3.9, `Task.__init__` resolves the loop via the slower
+        // `get_event_loop()` when none is passed; supplying the running loop
+        // (accepted there without a deprecation warning) skips that per-task
+        // lookup — ~10% of create_task. 3.10+ resolves the running loop cheaply,
+        // so the extra kwarg would only add overhead there and is skipped.
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("loop", loop_obj)?;
+        task_cls.call(py, (coro,), Some(&kwargs))
+    }
+    #[cfg(Py_3_10)]
+    {
+        let _ = loop_obj;
+        call_callable_onearg(py, task_cls, coro.bind(py))
+    }
 }
 
 fn create_asyncio_task_with_kwargs(
@@ -668,26 +705,36 @@ fn set_socket_bool_option_unix(
 }
 
 async fn connect_socket_to_address(sock: Py<PyAny>, address: Py<PyAny>) -> PyResult<()> {
-    let fd = Python::attach(|py| fd_ops::fileobj_to_fd(py, sock.bind(py)))?;
-    match Python::attach(|py| -> PyResult<()> {
-        sock.call_method1(py, "connect", (address.clone_ref(py),))?;
-        Ok(())
-    }) {
-        Ok(()) => return Ok(()),
-        Err(err) => {
-            let retry = Python::attach(|py| fd_ops::is_retryable_socket_error(py, &err))?;
-            if !retry {
-                if Python::attach(|py| is_already_connected_socket_error(py, &err))? {
-                    return Ok(());
+    // Initiate the connect and look up the descriptor in a single GIL
+    // acquisition. Every `Python::attach` here runs on the async runtime's
+    // worker thread and contends for the GIL held by the main loop thread, so
+    // collapsing the fd lookup, the connect() call, and its error
+    // classification into one attach removes several contended handoffs per
+    // connection. On a non-blocking socket, connect() to a reachable peer
+    // returns EINPROGRESS (retryable); anything else is an immediate success or
+    // a hard error.
+    let fd = match Python::attach(|py| -> PyResult<Option<fd_ops::RawFd>> {
+        let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
+        match sock.call_method1(py, "connect", (address.bind(py),)) {
+            Ok(_) => Ok(None),
+            Err(err) => {
+                if fd_ops::is_retryable_socket_error(py, &err)? {
+                    Ok(Some(fd))
+                } else if is_already_connected_socket_error(py, &err)? {
+                    Ok(None)
+                } else {
+                    Err(err)
                 }
-                return Err(err);
             }
         }
-    }
+    })? {
+        Some(fd) => fd,
+        None => return Ok(()),
+    };
 
     loop {
         fd_ops::wait_writable(fd).await?;
-        let so_error = Python::attach(|py| socket_so_error(py, &sock))?;
+        let so_error = connect_so_error(fd, &sock)?;
         if so_error == 0 {
             return Ok(());
         }
@@ -701,6 +748,46 @@ async fn connect_socket_to_address(sock: Py<PyAny>, address: Py<PyAny>) -> PyRes
     }
 }
 
+/// Reads `SO_ERROR` for a connecting socket. On Unix this uses a direct
+/// `getsockopt` so the hot connect-completion path never re-acquires the GIL
+/// (or re-imports the `socket` module); Windows keeps the Python fallback.
+fn connect_so_error(fd: fd_ops::RawFd, sock: &Py<PyAny>) -> PyResult<i32> {
+    #[cfg(unix)]
+    {
+        let _ = sock;
+        let fd: libc::c_int = fd
+            .try_into()
+            .map_err(|_| PyRuntimeError::new_err("socket file descriptor out of range"))?;
+        let mut value: libc::c_int = 0;
+        let mut len: libc::socklen_t = std::mem::size_of::<libc::c_int>()
+            .try_into()
+            .expect("socklen_t can represent c_int size");
+        // SAFETY: `fd` is a live socket descriptor and `value`/`len` point to a
+        // correctly sized `c_int`/`socklen_t` that `getsockopt` fills in.
+        let result = unsafe {
+            libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_ERROR,
+                (&mut value as *mut libc::c_int).cast(),
+                &mut len,
+            )
+        };
+        if result == 0 {
+            Ok(value)
+        } else {
+            Err(PyErr::from(std::io::Error::last_os_error()))
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = fd;
+        Python::attach(|py| socket_so_error(py, sock))
+    }
+}
+
+#[cfg(windows)]
 fn socket_so_error(py: Python<'_>, sock: &Py<PyAny>) -> PyResult<i32> {
     let socket_mod = py.import("socket")?;
     sock.call_method1(
@@ -737,12 +824,110 @@ fn is_already_connected_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bo
         .is_some_and(is_already_connected_errno))
 }
 
+#[inline]
 fn is_already_connected_errno(errno: i32) -> bool {
     errno == libc::EISCONN || errno == WSAEISCONN
 }
 
+#[inline]
 fn is_connect_in_progress_errno(errno: i32) -> bool {
     errno == libc::EINPROGRESS || errno == libc::EALREADY || errno == libc::EWOULDBLOCK
+}
+
+/// Attempts to initiate the connect via a direct `libc::connect` for a numeric
+/// address, skipping Python's `socket.connect` (its dispatch, address parsing,
+/// and — the expensive part — raising a `BlockingIOError` for EINPROGRESS on
+/// every non-blocking connect). Returns `Some(errno)` when the libc path ran
+/// (0 = connected immediately), or `None` when the address is not a plain
+/// numeric literal and the caller must fall back to `socket.connect`.
+#[cfg(unix)]
+fn libc_connect_numeric(fd: fd_ops::RawFd, address: &Bound<'_, PyAny>) -> PyResult<Option<i32>> {
+    let Ok(host_obj) = address.get_item(0) else {
+        return Ok(None);
+    };
+    let Ok(host) = host_obj.extract::<std::borrow::Cow<'_, str>>() else {
+        return Ok(None);
+    };
+    let Ok(ip) = host.parse::<std::net::IpAddr>() else {
+        // Hostname, or scoped IPv6 ("fe80::1%eth0") std can't parse — fall back.
+        return Ok(None);
+    };
+    let Ok(port) = address.get_item(1).and_then(|value| value.extract::<u16>()) else {
+        return Ok(None);
+    };
+    let fd: libc::c_int = fd
+        .try_into()
+        .map_err(|_| PyRuntimeError::new_err("socket file descriptor out of range"))?;
+    let sockaddr = socket2::SockAddr::from(std::net::SocketAddr::new(ip, port));
+    // SAFETY: `sockaddr` owns a valid `sockaddr` of the reported length; `fd` is
+    // the non-blocking socket the caller just built for this address family.
+    let rc = unsafe { libc::connect(fd, sockaddr.as_ptr().cast(), sockaddr.len()) };
+    if rc == 0 {
+        Ok(Some(0))
+    } else {
+        Ok(Some(
+            std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
+        ))
+    }
+}
+
+/// Initiates a non-blocking connect on the loop thread and, when it does not
+/// complete synchronously, hands the writability wait to the vibeio reactor on
+/// this loop's own runtime. Returns the loop Future the caller awaits.
+#[cfg(unix)]
+fn fast_sock_connect<'py>(
+    slf: &Py<PyLoop>,
+    py: Python<'py>,
+    sock: Py<PyAny>,
+    address: Py<PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let future = crate::python_names::call_method0(
+        py,
+        slf.bind(py).as_any(),
+        crate::python_names::create_future(py),
+    )?;
+    let future_bound = future.bind(py).clone();
+    let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
+
+    // Prefer a direct libc connect (numeric address); otherwise fall back to
+    // Python's socket.connect for hostnames / scoped IPv6.
+    let errno = match libc_connect_numeric(fd, address.bind(py))? {
+        Some(errno) => errno,
+        None => match sock.call_method1(py, "connect", (address.bind(py),)) {
+            Ok(_) => 0,
+            Err(err) => err
+                .value(py)
+                .getattr(crate::python_names::errno(py))
+                .ok()
+                .and_then(|value| value.extract::<i32>().ok())
+                .unwrap_or(0),
+        },
+    };
+
+    if errno == 0 || is_already_connected_errno(errno) {
+        future_bound.call_method1("set_result", (py.None(),))?;
+        return Ok(future_bound);
+    }
+    if !is_connect_in_progress_errno(errno) {
+        let message = std::io::Error::from_raw_os_error(errno).to_string();
+        let oserror = pyo3::exceptions::PyOSError::new_err((errno, message)).into_value(py);
+        future_bound.call_method1("set_exception", (oserror,))?;
+        return Ok(future_bound);
+    }
+
+    // Connect is in progress: watch for writability on this loop's own reactor
+    // (loop thread), so the completion is delivered without a cross-thread wake.
+    let core = slf.borrow(py).core.clone();
+    if !core.spawn_io(crate::stream_transport::run_connect_watch_task(
+        Arc::clone(&core),
+        fd,
+        future.clone_ref(py),
+    )) {
+        return Err(PyRuntimeError::new_err(
+            "event loop is not running; cannot start connect watch",
+        ));
+    }
+    Ok(future_bound)
 }
 
 fn listener_sources_from_sockets(
@@ -1558,6 +1743,24 @@ impl PyLoop {
         eager_start: Option<bool>,
         kwargs: Option<Py<PyDict>>,
     ) -> PyResult<Py<PyAny>> {
+        // Hot path: a bare `create_task(coro)` with no name/context/eager_start/
+        // kwargs — what asyncio.Task step scheduling and gather() always hit.
+        // Skip the Arc clone and the (cached) kwarg-support probe those extras
+        // would need, and go straight to constructing the Task.
+        let bare = name.is_none()
+            && context.is_none()
+            && eager_start.is_none()
+            && kwargs
+                .as_ref()
+                .is_none_or(|kwargs| kwargs.bind(py).is_empty());
+        if bare {
+            let loop_ref = slf.borrow(py);
+            if !loop_ref.core.has_task_factory() && loop_ref.core.on_runtime_thread() {
+                drop(loop_ref);
+                return create_asyncio_task_for_running_loop(py, slf.bind(py).as_any(), coro);
+            }
+        }
+
         let core = Arc::clone(&slf.borrow(py).core);
         let task_kwarg_support = asyncio_task_kwarg_support(py)?;
         let extra_kwargs = kwargs
@@ -1569,7 +1772,7 @@ impl PyLoop {
             || (eager_start.is_some() && task_kwarg_support.eager_start);
 
         if !core.has_task_factory() && !has_kwargs && core.on_runtime_thread() {
-            return create_asyncio_task_for_running_loop(py, coro);
+            return create_asyncio_task_for_running_loop(py, slf.bind(py).as_any(), coro);
         }
 
         let loop_obj = Self::as_py_any(py, &slf);
@@ -1637,7 +1840,7 @@ impl PyLoop {
         let trim_source_traceback = core.get_debug();
         if is_current_running_loop(py, &loop_obj)? {
             let created = if !has_kwargs {
-                create_asyncio_task_for_running_loop(py, coro)?
+                create_asyncio_task_for_running_loop(py, loop_obj.bind(py), coro)?
             } else {
                 create_asyncio_task_with_kwargs(
                     py,
@@ -1958,8 +2161,8 @@ impl PyLoop {
                 })?
             };
 
-            let transport = Python::attach(|py| {
-                if let Some(ssl) = ssl.as_ref() {
+            let transport = if let Some(ssl) = ssl.as_ref() {
+                let (spawn_context, tls) = Python::attach(|py| {
                     let tls = client_tls_settings(
                         py,
                         ssl.bind(py),
@@ -1967,8 +2170,7 @@ impl PyLoop {
                         ssl_handshake_timeout,
                         ssl_shutdown_timeout,
                     )?;
-                    transport_from_socket_tls(
-                        py,
+                    Ok::<_, PyErr>((
                         stream_spawn_context(
                             py,
                             &core,
@@ -1977,10 +2179,17 @@ impl PyLoop {
                             &context,
                             context_needs_run,
                         ),
-                        socket_obj,
                         tls,
-                    )
-                } else {
+                    ))
+                })?;
+                async_std::task::spawn_blocking(move || {
+                    Python::attach(|py| {
+                        transport_from_socket_tls(py, spawn_context, socket_obj, tls)
+                    })
+                })
+                .await?
+            } else {
+                Python::attach(|py| {
                     transport_from_socket(
                         py,
                         stream_spawn_context(
@@ -1993,8 +2202,8 @@ impl PyLoop {
                         ),
                         socket_obj,
                     )
-                }
-            })?;
+                })?
+            };
 
             Python::attach(|py| {
                 let result = PyTuple::new(py, [transport.into_any(), protocol.clone_ref(py)])?;
@@ -2255,8 +2464,8 @@ impl PyLoop {
                 socket_obj
             };
 
-            let transport = Python::attach(|py| {
-                if let Some(ssl) = ssl.as_ref() {
+            let transport = if let Some(ssl) = ssl.as_ref() {
+                let (spawn_context, tls) = Python::attach(|py| {
                     let tls = client_tls_settings(
                         py,
                         ssl.bind(py),
@@ -2264,8 +2473,7 @@ impl PyLoop {
                         ssl_handshake_timeout,
                         ssl_shutdown_timeout,
                     )?;
-                    transport_from_socket_tls(
-                        py,
+                    Ok::<_, PyErr>((
                         stream_spawn_context(
                             py,
                             &core,
@@ -2274,10 +2482,17 @@ impl PyLoop {
                             &context,
                             context_needs_run,
                         ),
-                        socket_obj,
                         tls,
-                    )
-                } else {
+                    ))
+                })?;
+                async_std::task::spawn_blocking(move || {
+                    Python::attach(|py| {
+                        transport_from_socket_tls(py, spawn_context, socket_obj, tls)
+                    })
+                })
+                .await?
+            } else {
+                Python::attach(|py| {
                     transport_from_socket(
                         py,
                         stream_spawn_context(
@@ -2290,8 +2505,8 @@ impl PyLoop {
                         ),
                         socket_obj,
                     )
-                }
-            })?;
+                })?
+            };
 
             Python::attach(|py| {
                 let result = PyTuple::new(py, [transport.into_any(), protocol.clone_ref(py)])?;
@@ -2731,6 +2946,37 @@ impl PyLoop {
             connect_socket_to_address(sock, address).await?;
             Ok(Python::attach(|py| py.None()))
         })
+    }
+
+    /// Connects an INET/INET6 stream socket, returning a loop-native Future
+    /// (not a coroutine — awaited directly, never `create_task`ed). On Unix the
+    /// writability wait runs on the vibeio reactor and its completion is
+    /// delivered through the loop's batched, GIL-free ready queue, so many
+    /// concurrent connections drain in one loop iteration instead of paying a
+    /// per-connection async-runtime handoff. Non-Unix and non-INET sockets fall
+    /// back to the general `sock_connect` path.
+    fn _sock_connect_fast<'py>(
+        slf: Py<Self>,
+        py: Python<'py>,
+        sock: Py<PyAny>,
+        address: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // Only `__loop_create_connection` calls this, and only with an
+        // INET/INET6 SOCK_STREAM socket it just built, so the family/type check
+        // (a `socket` import plus IntEnum property reads on every connection) is
+        // pure overhead — skip straight to the loop-thread connect on Unix.
+        #[cfg(unix)]
+        {
+            return fast_sock_connect(&slf, py, sock, address);
+        }
+        #[cfg(not(unix))]
+        {
+            let locals = Self::task_locals(py, &slf)?;
+            pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+                connect_socket_to_address(sock, address).await?;
+                Ok(Python::attach(|py| py.None()))
+            })
+        }
     }
 
     #[pyo3(signature=(host, port, *, family=0, r#type=0, proto=0, flags=0))]

@@ -25,7 +25,7 @@ pub use loop_core::{
     LoopTransportCommand,
 };
 pub use process_transport::{PyProcessPipeTransport, PyProcessTransport};
-pub use profiler::{profiler_running, start_profiler, stop_profiler};
+pub use profiler::{profiler_compiled, profiler_running, start_profiler, stop_profiler};
 pub use python_api::{
     PyLoop, asyncgen_finalizer_hook, asyncgen_firstiter_hook, future_done_stop, new_event_loop,
     signal_bridge,

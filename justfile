@@ -1,7 +1,10 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
+
+benchmark-backend := if os() == "windows" { "winloop" } else { "uvloop" }
 
 tls-test-certs outdir="tests/fixtures/tls":
-    ./scripts/generate-test-tls-certs.sh {{outdir}}
+    uv run --no-project python scripts/generate_test_tls_certs.py {{outdir}}
 
 fmt:
     uv run ruff format .
@@ -21,3 +24,6 @@ test-frameworks:
     uv run --with falcon --with uvicorn python tests/packages/falcon_test.py
     uv run --with quart --with hypercorn python tests/packages/quart_test.py
     uv run --with 'faststream[nats]' python tests/packages/faststream_test.py
+
+bench-real-world:
+    uv run --with {{benchmark-backend}} python benchmarks/workload_matrix.py

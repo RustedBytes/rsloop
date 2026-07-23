@@ -25,9 +25,9 @@ RSLOOP_PROFILE_ENV = "RSLOOP_TRACY"
 def default_loops_csv() -> str:
     loops = ["asyncio", "rsloop"]
     if sys.platform == "win32":
-        loops.insert(2, "winloop")
+        loops.insert(1, "winloop")
     else:
-        loops.insert(2, "uvloop")
+        loops.insert(1, "uvloop")
     return ",".join(loops)
 
 

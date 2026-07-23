@@ -48,6 +48,44 @@ class CompatibilityTests(unittest.TestCase):
 
         rsloop.run(main())
 
+    def test_create_connection_error_does_not_retain_exception(self) -> None:
+        async def connect() -> None:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+            probe.close()
+
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.create_connection(
+                    asyncio.Protocol,
+                    host="127.0.0.1",
+                    port=port,
+                )
+            except OSError as exc:
+                raise OSError("connection attempt failed") from exc
+
+        async def main() -> None:
+            error = None
+            try:
+                await asyncio.create_task(connect())
+            except OSError as exc:
+                error = exc.__cause__
+
+            await asyncio.sleep(0)
+            self.assertIsNotNone(error)
+            referrers = gc.get_referrers(error)
+            self.assertFalse(any(isinstance(referrer, list) for referrer in referrers))
+            self.assertFalse(
+                any(
+                    inspect.iscoroutine(referrer)
+                    and referrer.cr_code.co_name == "__loop_create_connection"
+                    for referrer in referrers
+                )
+            )
+
+        rsloop.run(main())
+
     @unittest.skipUnless(EXCEPTION_GROUP is not None, "requires ExceptionGroup")
     def test_create_connection_all_errors_returns_exception_group(self) -> None:
         async def main() -> int:
@@ -97,9 +135,12 @@ class CompatibilityTests(unittest.TestCase):
                 calls.append(address[1])
                 raise OSError(errno.ECONNREFUSED, "boom")
 
+            # create_connection() drives the connect through _sock_connect_fast
+            # (the loop-thread/vibeio fast path), mirroring how uvloop's
+            # create_connection bypasses the public sock_connect().
             with mock.patch("socket.getaddrinfo", new=fake_getaddrinfo):
                 with mock.patch.object(
-                    rsloop.Loop, "sock_connect", new=fake_sock_connect
+                    rsloop.Loop, "_sock_connect_fast", new=fake_sock_connect
                 ):
                     with self.assertRaises(OSError):
                         await loop.create_connection(
@@ -222,6 +263,34 @@ class CompatibilityTests(unittest.TestCase):
         received, events = rsloop.run(main())
         self.assertEqual(received, b"response-before-eof")
         self.assertEqual(events, ["data", "eof", "lost"])
+
+    def test_close_flushes_coalesced_server_writes(self) -> None:
+        first = b"a" * 128
+        second = b"b" * 128
+
+        async def main() -> bytes:
+            async def handle(
+                _reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            ) -> None:
+                writer.write(first)
+                writer.write(second)
+                writer.close()
+                await writer.wait_closed()
+
+            server = await asyncio.start_server(handle, "127.0.0.1", 0)
+            try:
+                host, port = server.sockets[0].getsockname()[:2]
+                reader, writer = await asyncio.open_connection(host, port)
+                try:
+                    return await reader.read()
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        self.assertEqual(rsloop.run(main()), first + second)
 
     @unittest.skipUnless(sys.platform == "win32", "requires Winsock")
     def test_write_reports_reset_while_reading_is_paused(self) -> None:
