@@ -134,6 +134,24 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(rsloop.run(main()), "ok")
 
+    def test_run_waits_for_runtime_finish_acknowledgement(self) -> None:
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            reader, writer = socket.socketpair()
+            try:
+                # Replacing an FD watcher queues work for the runtime thread.
+                # Finishing the run must wait for that queue instead of using
+                # the much shorter signal-polling interval as a deadline.
+                for _ in range(10_000):
+                    loop.add_reader(reader, lambda: None)
+
+                loop.remove_reader(reader)
+            finally:
+                reader.close()
+                writer.close()
+
+        rsloop.run(main())
+
     def test_baseexception_does_not_leak_wakeups(self) -> None:
         # A callback that completes the awaited future (queuing the suspended
         # task's __wakeup) and then raises a BaseException unwinds run_forever

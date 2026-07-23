@@ -168,6 +168,8 @@ pub use commands::{
 };
 
 const READY_DRAIN_SLICE: usize = 64;
+const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const RUN_FINISH_TIMEOUT: Duration = Duration::from_secs(5);
 
 // One combined thread-local record instead of three separate `thread_local!`
 // cells: each cell access costs a dynamic TLS lookup (`_tlv_get_addr` on
@@ -432,8 +434,6 @@ impl LoopCore {
 
     #[profiling::function]
     pub fn run_forever(self: &Arc<Self>, py: Python<'_>, loop_obj: Py<PyAny>) -> PyResult<()> {
-        const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(50);
-
         {
             let mut state = self.state.lock().expect("poisoned loop state");
             if state.closed {
@@ -735,16 +735,27 @@ impl LoopCore {
             .take();
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
-        self.send_command(LoopCommand::Run(LoopRunCommand::FinishRun { done_tx }))
-            .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
-        match py.detach(move || done_rx.recv_timeout(SIGNAL_POLL_INTERVAL)) {
+        if let Err(err) = self.send_command(LoopCommand::Run(LoopRunCommand::FinishRun { done_tx }))
+        {
+            self.reset_run_state_after_finish_error();
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(err.to_string()));
+        }
+
+        // SIGNAL_POLL_INTERVAL is only the cadence for checking Python signals
+        // while the loop is parked. Finishing a run requires a round trip
+        // through the runtime command queue, which can legitimately take
+        // longer when watcher commands are pending or the OS delays the
+        // runtime thread.
+        match py.detach(move || done_rx.recv_timeout(RUN_FINISH_TIMEOUT)) {
             Ok(()) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.reset_run_state_after_finish_error();
                 return Err(pyo3::exceptions::PyRuntimeError::new_err(
                     "timed out while finishing event loop run",
                 ));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.reset_run_state_after_finish_error();
                 return Err(pyo3::exceptions::PyRuntimeError::new_err(
                     "event loop runtime terminated unexpectedly",
                 ));
@@ -756,6 +767,12 @@ impl LoopCore {
 }
 
 impl LoopCore {
+    fn reset_run_state_after_finish_error(&self) {
+        let mut state = self.state.lock().expect("poisoned loop state");
+        state.running = false;
+        state.stopping = false;
+    }
+
     pub fn schedule_stop(&self) -> Result<(), LoopCoreError> {
         profiling::scope!("LoopCore::schedule_stop");
         self.send_command(LoopCommand::RequestStop)
