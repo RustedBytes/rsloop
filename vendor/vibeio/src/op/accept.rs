@@ -490,8 +490,6 @@ impl Op for AcceptOp<'_> {
 
         #[cfg(windows)]
         {
-            use windows_sys::Win32::Storage::FileSystem::ACCESS_DELETE;
-
             let RawOsHandle::Socket(listener_socket) = self.handle.handle else {
                 return Poll::Ready(Err(io::Error::new(
                     io::ErrorKind::InvalidInput,

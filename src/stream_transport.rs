@@ -564,6 +564,7 @@ pub struct StreamTransportCore {
     // the per-write hot path avoids a state lock plus hash lookup.
     has_text_encoding: bool,
     server_side: bool,
+    #[cfg(windows)]
     native_stream_reader: bool,
 }
 
@@ -2972,6 +2973,7 @@ fn new_stream_transport_core(
 ) -> Arc<StreamTransportCore> {
     let has_text_encoding = parts.state.extra.contains_key("text_encoding");
     let server_side = parts.state.server.is_some();
+    #[cfg(windows)]
     let native_stream_reader = matches!(
         &parts.state.callbacks.stream_reader_fast_path,
         Some(StreamReaderFastPath::Native { .. })
@@ -2997,6 +2999,7 @@ fn new_stream_transport_core(
         state_cv: Condvar::new(),
         has_text_encoding,
         server_side,
+        #[cfg(windows)]
         native_stream_reader,
     })
 }

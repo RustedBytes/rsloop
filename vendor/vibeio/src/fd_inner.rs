@@ -16,6 +16,7 @@ pub type RawOsHandle = std::os::fd::RawFd;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum RawOsHandle {
     Socket(std::os::windows::io::RawSocket),
+    #[allow(dead_code)]
     Handle(std::os::windows::io::RawHandle),
 }
 
@@ -82,6 +83,7 @@ impl InnerRawHandle {
         Ok(inner)
     }
 
+    #[cfg(unix)]
     #[inline]
     pub(crate) fn token(&self) -> Token {
         self.token
