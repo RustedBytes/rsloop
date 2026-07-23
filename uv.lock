@@ -4119,8 +4119,7 @@ dev = [
     { name = "quart", version = "0.20.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "ruff" },
     { name = "rust-just" },
-    { name = "sanic", version = "23.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
-    { name = "sanic", version = "25.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
+    { name = "sanic", version = "23.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "sanic", version = "25.12.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "starlette", version = "0.44.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "starlette", version = "0.49.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
@@ -4152,8 +4151,7 @@ test = [
     { name = "litestar" },
     { name = "quart", version = "0.19.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "quart", version = "0.20.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
-    { name = "sanic", version = "23.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
-    { name = "sanic", version = "25.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
+    { name = "sanic", version = "23.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "sanic", version = "25.12.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "starlette", version = "0.44.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "starlette", version = "0.49.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
@@ -4181,8 +4179,8 @@ dev = [
     { name = "quart", specifier = ">=0.19.9" },
     { name = "ruff", specifier = ">=0.15.19" },
     { name = "rust-just", specifier = ">=1.54.0" },
-    { name = "sanic", marker = "python_full_version < '3.9'", specifier = ">=23.12.1,<24" },
-    { name = "sanic", marker = "python_full_version >= '3.9'", specifier = ">=25.3.0" },
+    { name = "sanic", marker = "python_full_version < '3.10'", specifier = ">=23.12.1,<24" },
+    { name = "sanic", marker = "python_full_version >= '3.10'", specifier = ">=25.3.0" },
     { name = "starlette", specifier = ">=0.44.0" },
     { name = "tracerite", marker = "python_full_version < '3.9'", specifier = "<1.1" },
     { name = "uvicorn", specifier = ">=0.33.0" },
@@ -4197,8 +4195,8 @@ test = [
     { name = "hypercorn", specifier = ">=0.17.3" },
     { name = "litestar", specifier = ">=2.24.0" },
     { name = "quart", specifier = ">=0.19.9" },
-    { name = "sanic", marker = "python_full_version < '3.9'", specifier = ">=23.12.1,<24" },
-    { name = "sanic", marker = "python_full_version >= '3.9'", specifier = ">=25.3.0" },
+    { name = "sanic", marker = "python_full_version < '3.10'", specifier = ">=23.12.1,<24" },
+    { name = "sanic", marker = "python_full_version >= '3.10'", specifier = ">=25.3.0" },
     { name = "starlette", specifier = ">=0.44.0" },
     { name = "tracerite", marker = "python_full_version < '3.9'", specifier = "<1.1" },
     { name = "uvicorn", specifier = ">=0.33.0" },
@@ -4258,50 +4256,33 @@ name = "sanic"
 version = "23.12.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
+    "python_full_version == '3.9.*'",
     "python_full_version >= '3.8.1' and python_full_version < '3.9'",
     "python_full_version < '3.8.1'",
 ]
 dependencies = [
     { name = "aiofiles", version = "24.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
-    { name = "html5tagger", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "aiofiles", version = "25.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
+    { name = "html5tagger", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "httptools", version = "0.6.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "httptools", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
     { name = "multidict", version = "6.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
-    { name = "sanic-routing", marker = "python_full_version < '3.9'" },
+    { name = "multidict", version = "6.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
+    { name = "sanic-routing", marker = "python_full_version < '3.10'" },
     { name = "tracerite", version = "1.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "tracerite", version = "2.3.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
     { name = "typing-extensions", version = "4.13.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "typing-extensions", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
     { name = "ujson", version = "5.10.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9' and implementation_name == 'cpython' and sys_platform != 'win32'" },
+    { name = "ujson", version = "5.11.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*' and implementation_name == 'cpython' and sys_platform != 'win32'" },
     { name = "uvloop", version = "0.21.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.8.1' and implementation_name == 'cpython' and sys_platform != 'win32'" },
-    { name = "uvloop", version = "0.22.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.8.1' and python_full_version < '3.9' and implementation_name == 'cpython' and sys_platform != 'win32'" },
+    { name = "uvloop", version = "0.22.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.8.1' and python_full_version < '3.10' and implementation_name == 'cpython' and sys_platform != 'win32'" },
     { name = "websockets", version = "13.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a4/5b/e43fab98d4a1fd883a2a48644be27c5f24fec56b4b1c58404f8def5e5c1f/sanic-23.12.2.tar.gz", hash = "sha256:4d909aa8a1cb39b0c42a5ec9fe6eb128013cc822bcf4c554326304b9ac427117", size = 345711, upload-time = "2024-06-30T12:20:01.079Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9c/e6/5adc2ca570f165d6027a775a655c1c09b9b8432a6c4a6fcb4c43a08eac7e/sanic-23.12.2-py3-none-any.whl", hash = "sha256:b65a13ff8c06f3fb5790a132d9b7740cde1d5f70c0fd25c44a587552eeb3dbab", size = 237468, upload-time = "2024-06-30T12:19:57.597Z" },
-]
-
-[[package]]
-name = "sanic"
-version = "25.3.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version == '3.9.*'",
-]
-dependencies = [
-    { name = "aiofiles", version = "25.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
-    { name = "html5tagger", version = "1.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
-    { name = "httptools", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
-    { name = "multidict", version = "6.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
-    { name = "sanic-routing", marker = "python_full_version == '3.9.*'" },
-    { name = "setuptools", version = "82.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
-    { name = "tracerite", version = "2.3.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
-    { name = "typing-extensions", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
-    { name = "ujson", version = "5.11.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*' and implementation_name == 'cpython' and sys_platform != 'win32'" },
-    { name = "uvloop", version = "0.22.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*' and implementation_name == 'cpython' and sys_platform != 'win32'" },
-    { name = "websockets", version = "15.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.9.*'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/df/8b/08dc376390fe854ef32984973883b646ee68c6727da72ffcc65340d8f192/sanic-25.3.0.tar.gz", hash = "sha256:775d522001ec81f034ec8e4d7599e2175bfc097b8d57884f5e4c9322f5e369bb", size = 353027, upload-time = "2025-03-31T21:22:29.718Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a6/e1/b36ddc16862d63d22986ae21b04a79c8fb7ec48d5d664acdfd1c2acf78ac/sanic-25.3.0-py3-none-any.whl", hash = "sha256:fb519b38b4c220569b0e2e868583ffeaffaab96a78b2e42ae78bc56a644a4cd7", size = 246416, upload-time = "2025-03-31T21:22:27.946Z" },
 ]
 
 [[package]]
@@ -4318,7 +4299,7 @@ dependencies = [
     { name = "httptools", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "multidict", version = "6.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "sanic-routing", marker = "python_full_version >= '3.10'" },
-    { name = "setuptools", version = "83.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "setuptools", marker = "python_full_version >= '3.10'" },
     { name = "tracerite", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "typing-extensions", version = "4.16.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "ujson", version = "5.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10' and implementation_name == 'cpython' and sys_platform != 'win32'" },
@@ -4341,24 +4322,8 @@ wheels = [
 
 [[package]]
 name = "setuptools"
-version = "82.0.1"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version == '3.9.*'",
-]
-sdist = { url = "https://files.pythonhosted.org/packages/4f/db/cfac1baf10650ab4d1c111714410d2fbb77ac5a616db26775db562c8fab2/setuptools-82.0.1.tar.gz", hash = "sha256:7d872682c5d01cfde07da7bccc7b65469d3dca203318515ada1de5eda35efbf9", size = 1152316, upload-time = "2026-03-09T12:47:17.221Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9d/76/f789f7a86709c6b087c5a2f52f911838cad707cc613162401badc665acfe/setuptools-82.0.1-py3-none-any.whl", hash = "sha256:a59e362652f08dcd477c78bb6e7bd9d80a7995bc73ce773050228a348ce2e5bb", size = 1006223, upload-time = "2026-03-09T12:47:15.026Z" },
-]
-
-[[package]]
-name = "setuptools"
 version = "83.0.0"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.12'",
-    "python_full_version >= '3.10' and python_full_version < '3.12'",
-]
 sdist = { url = "https://files.pythonhosted.org/packages/34/26/f5d29e25ffdb535afef2d35cdb55b325298f96debd670da4c325e08d70f4/setuptools-83.0.0.tar.gz", hash = "sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef", size = 1154254, upload-time = "2026-07-04T15:31:22.699Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5d/40/e1e72872c6354b306daef1703549e8e83b4d43cfea356311bf722a043752/setuptools-83.0.0-py3-none-any.whl", hash = "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3", size = 1008090, upload-time = "2026-07-04T15:31:20.885Z" },
