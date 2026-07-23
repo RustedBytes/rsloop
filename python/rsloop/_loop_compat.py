@@ -1229,21 +1229,29 @@ def __flatten_connection_exceptions(exceptions):
 
 
 def __raise_connection_error(exceptions, *, all_errors):
-    if all_errors:
-        try:
-            exc_group = ExceptionGroup
-        except NameError:
-            exc_group = None
-        if exc_group is not None:
-            raise exc_group("create_connection failed", exceptions)
-    if len(exceptions) == 1:
-        raise exceptions[0]
+    try:
+        if all_errors:
+            try:
+                exc_group = ExceptionGroup
+            except NameError:
+                exc_group = None
+            if exc_group is not None:
+                raise exc_group("create_connection failed", exceptions)
+        if len(exceptions) == 1:
+            raise exceptions[0]
 
-    model = str(exceptions[0])
-    if all(str(exc) == model for exc in exceptions):
-        raise exceptions[0]
+        model = str(exceptions[0])
+        if all(str(exc) == model for exc in exceptions):
+            raise exceptions[0]
 
-    raise OSError("Multiple exceptions: " + ", ".join(str(exc) for exc in exceptions))
+        raise OSError(
+            "Multiple exceptions: " + ", ".join(str(exc) for exc in exceptions)
+        )
+    finally:
+        # The raised exception retains this frame through its traceback. Do not
+        # let the frame retain the exception list in return (CPython's
+        # BaseEventLoop.create_connection() performs the same cleanup).
+        exceptions = None
 
 
 def __bind_error(address, exc):
@@ -1443,10 +1451,21 @@ async def __loop_create_connection(
                     created_sock.close()
                     raise
             if created_sock is None:
-                __raise_connection_error(
-                    __flatten_connection_exceptions(connection_exceptions),
-                    all_errors=all_errors,
+                flattened_exceptions = __flatten_connection_exceptions(
+                    connection_exceptions
                 )
+                try:
+                    __raise_connection_error(
+                        flattened_exceptions,
+                        all_errors=all_errors,
+                    )
+                finally:
+                    # The create_connection coroutine is itself retained by
+                    # the exception traceback. Break references from its frame
+                    # back to that exception.
+                    flattened_exceptions = None
+                    connection_exceptions = None
+                    attempt_exceptions = None
         else:
             (
                 created_sock,
@@ -1464,10 +1483,17 @@ async def __loop_create_connection(
             if pending:
                 await __asyncio.gather(*pending, return_exceptions=True)
             if created_sock is None:
-                __raise_connection_error(
-                    __flatten_connection_exceptions(connection_exceptions),
-                    all_errors=all_errors,
+                flattened_exceptions = __flatten_connection_exceptions(
+                    connection_exceptions
                 )
+                try:
+                    __raise_connection_error(
+                        flattened_exceptions,
+                        all_errors=all_errors,
+                    )
+                finally:
+                    flattened_exceptions = None
+                    connection_exceptions = None
 
         sock = created_sock
     elif sock is None:

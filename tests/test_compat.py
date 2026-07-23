@@ -48,6 +48,44 @@ class CompatibilityTests(unittest.TestCase):
 
         rsloop.run(main())
 
+    def test_create_connection_error_does_not_retain_exception(self) -> None:
+        async def connect() -> None:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+            probe.close()
+
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.create_connection(
+                    asyncio.Protocol,
+                    host="127.0.0.1",
+                    port=port,
+                )
+            except OSError as exc:
+                raise OSError("connection attempt failed") from exc
+
+        async def main() -> None:
+            error = None
+            try:
+                await asyncio.create_task(connect())
+            except OSError as exc:
+                error = exc.__cause__
+
+            await asyncio.sleep(0)
+            self.assertIsNotNone(error)
+            referrers = gc.get_referrers(error)
+            self.assertFalse(any(isinstance(referrer, list) for referrer in referrers))
+            self.assertFalse(
+                any(
+                    inspect.iscoroutine(referrer)
+                    and referrer.cr_code.co_name == "__loop_create_connection"
+                    for referrer in referrers
+                )
+            )
+
+        rsloop.run(main())
+
     @unittest.skipUnless(EXCEPTION_GROUP is not None, "requires ExceptionGroup")
     def test_create_connection_all_errors_returns_exception_group(self) -> None:
         async def main() -> int:
