@@ -11,6 +11,18 @@ use slab::Slab;
 use crate::driver::Interruptor;
 use crate::{driver::Driver, fd_inner::InnerRawHandle};
 
+// Keep one selector wait within the same one-day bound used by asyncio.
+// Darwin's kqueue rejects very large timespec values with EINVAL, while
+// asyncio APIs legitimately use infinite delays for cancellable sleeps.
+// Re-polling once per day preserves those far-future deadlines without
+// passing an invalid timeout to the operating system.
+const MAX_POLL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+
+#[inline]
+fn bounded_poll_timeout(timeout: Option<Duration>) -> Option<Duration> {
+    timeout.map(|timeout| timeout.min(MAX_POLL_TIMEOUT))
+}
+
 pub struct MioInterruptor {
     waker: std::sync::Weak<MioWaker>,
 }
@@ -74,7 +86,7 @@ impl MioDriver {
     pub(crate) fn wait_timeout(&self, timeout: Option<Duration>) {
         let mut poll = self.poll.borrow_mut();
         let mut events = self.events.borrow_mut();
-        match poll.poll(&mut events, timeout) {
+        match poll.poll(&mut events, bounded_poll_timeout(timeout)) {
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {} // strace edge case
             Err(e) => panic!("mio poll failed while waiting for I/O events: {}", e),
@@ -231,7 +243,22 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use super::MioDriver;
+    use super::{bounded_poll_timeout, MioDriver, MAX_POLL_TIMEOUT};
+
+    #[test]
+    fn poll_timeout_is_bounded_for_platform_selectors() {
+        use std::time::Duration;
+
+        assert_eq!(bounded_poll_timeout(None), None);
+        assert_eq!(
+            bounded_poll_timeout(Some(Duration::from_secs(1))),
+            Some(Duration::from_secs(1))
+        );
+        assert_eq!(
+            bounded_poll_timeout(Some(Duration::MAX)),
+            Some(MAX_POLL_TIMEOUT)
+        );
+    }
 
     struct TestWake {
         count: AtomicUsize,
