@@ -134,6 +134,28 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(rsloop.run(main()), "ok")
 
+    def test_repeated_command_dispatch_across_runs(self) -> None:
+        loop = rsloop.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            for expected in range(10_000):
+                future = loop.create_future()
+                loop.call_soon(future.set_result, expected)
+                self.assertEqual(loop.run_until_complete(future), expected)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+    def test_repeated_command_dispatch_across_loop_lifecycles(self) -> None:
+        for expected in range(1_000):
+            loop = rsloop.new_event_loop()
+            try:
+                future = loop.create_future()
+                loop.call_soon(future.set_result, expected)
+                self.assertEqual(loop.run_until_complete(future), expected)
+            finally:
+                loop.close()
+
     def test_run_waits_for_runtime_finish_acknowledgement(self) -> None:
         async def main() -> None:
             loop = asyncio.get_running_loop()

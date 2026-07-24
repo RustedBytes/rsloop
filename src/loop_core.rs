@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -281,7 +281,7 @@ pub struct LoopCore {
     next_callback_id: AtomicU64,
     command_tx: Sender<LoopCommand>,
     runtime_thread: Mutex<Option<JoinHandle<()>>>,
-    runtime_waker: Mutex<Option<Waker>>,
+    runtime_waker: AtomicWaker,
     active_ready_dispatch: Mutex<Option<ActiveReadyDispatch>>,
     // Wakes the loop thread when a producer enqueues a ready item. Held in an
     // Arc so the park future (`WaitForWake`) can own a clone under `py.detach`.
@@ -299,7 +299,7 @@ impl LoopCore {
             next_callback_id: AtomicU64::new(1),
             command_tx,
             runtime_thread: Mutex::new(None),
-            runtime_waker: Mutex::new(None),
+            runtime_waker: AtomicWaker::new(),
             active_ready_dispatch: Mutex::new(None),
             wake: Arc::new(LoopWake::new()),
         });
@@ -326,14 +326,7 @@ impl LoopCore {
         self.command_tx
             .send(command)
             .map_err(|_| LoopCoreError::ChannelClosed)?;
-        if let Some(waker) = self
-            .runtime_waker
-            .lock()
-            .expect("poisoned runtime waker")
-            .as_ref()
-        {
-            waker.wake_by_ref();
-        }
+        self.runtime_waker.wake();
         Ok(())
     }
 
@@ -950,8 +943,8 @@ impl LoopCore {
         ACTIVE_LOOP_TLS.with(|tls| tls.core.set(self as *const Self));
     }
 
-    pub(crate) fn set_runtime_waker(&self, waker: Option<Waker>) {
-        *self.runtime_waker.lock().expect("poisoned runtime waker") = waker;
+    pub(crate) fn register_runtime_waker(&self, waker: &std::task::Waker) {
+        self.runtime_waker.register(waker);
     }
 
     /// Marks the ready queue non-empty and wakes the parked loop thread. Used by
