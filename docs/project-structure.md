@@ -73,7 +73,8 @@ The tests tell you what behavior the project promises today.
 - `test_tls.py`: TLS-related behavior
 - `test_public_api.py`: static type checks for the exported Python API
 - `packages/`: smoke tests against supported frameworks, ASGI servers, and async
-  database libraries
+  database libraries. The Beanie smoke test requires MongoDB and is run
+  separately with `just test-beanie`.
 
 When you are unsure whether a feature is expected to work, check the tests.
 

@@ -39,7 +39,7 @@ kani-coverage-core:
 test: tls-test-certs test-rust
     uv run python -u scripts/run_python_tests.py
 
-test-frameworks:
+test-frameworks: test-databases
     uv run --with uvicorn python tests/packages/uvicorn_test.py
     uv run --with daphne python tests/packages/daphne_test.py
     uv run --with hypercorn python tests/packages/hypercorn_test.py
@@ -55,8 +55,19 @@ test-frameworks:
     uv run --with quart --with hypercorn python tests/packages/quart_test.py
     uv run --with 'faststream[nats]' python tests/packages/faststream_test.py
     uv run --with anyio python tests/packages/anyio_test.py
-    uv run --with 'sqlalchemy[asyncio]' --with aiosqlite python tests/packages/sqlalchemy_test.py
+
+test-databases:
+    uv run --with django python tests/packages/django_orm_test.py
+    uv run --with edgy python tests/packages/edgy_test.py
+    uv run --with ormar python tests/packages/ormar_test.py
     uv run --with piccolo python tests/packages/piccolo_test.py
+    uv run --with 'sqlalchemy[asyncio]' --with aiosqlite python tests/packages/sqlalchemy_test.py
+    uv run --with sqlmodel --with aiosqlite python tests/packages/sqlmodel_test.py
+    uv run --with tortoise-orm python tests/packages/tortoise_orm_test.py
+
+# Beanie needs a MongoDB server. Override RSLOOP_MONGODB_URL when it isn't local.
+test-beanie:
+    uv run --with beanie python tests/packages/beanie_test.py
 
 # Just the AnyIO checks, which is what CI runs as its own job.
 test-anyio:

@@ -359,6 +359,45 @@ class CompatibilityTests(unittest.TestCase):
         self.assertEqual(received, b"response-before-eof")
         self.assertEqual(events, ["data", "eof", "lost"])
 
+    def test_buffered_protocol_accepts_reads_larger_than_its_buffer(self) -> None:
+        async def main() -> bytes:
+            loop = asyncio.get_running_loop()
+            done = loop.create_future()
+            payload = bytes(range(128))
+
+            class ServerProtocol(asyncio.Protocol):
+                def connection_made(self, transport):
+                    transport.write(payload)
+                    transport.close()
+
+            class ClientProtocol(asyncio.BufferedProtocol):
+                def __init__(self) -> None:
+                    self.buffer = bytearray(16)
+                    self.received = bytearray()
+
+                def get_buffer(self, sizehint):
+                    return self.buffer
+
+                def buffer_updated(self, nbytes):
+                    self.received.extend(self.buffer[:nbytes])
+
+                def connection_lost(self, exc):
+                    if not done.done():
+                        done.set_result(None)
+
+            protocol = ClientProtocol()
+            server = await loop.create_server(ServerProtocol, "127.0.0.1", 0)
+            try:
+                port = server.sockets[0].getsockname()[1]
+                await loop.create_connection(lambda: protocol, "127.0.0.1", port)
+                await asyncio.wait_for(done, 1.0)
+                return bytes(protocol.received)
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        self.assertEqual(rsloop.run(main()), bytes(range(128)))
+
     def test_close_flushes_coalesced_server_writes(self) -> None:
         first = b"a" * 128
         second = b"b" * 128

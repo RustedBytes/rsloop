@@ -10,6 +10,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PySlice, PyTuple};
 
@@ -218,27 +219,46 @@ impl StreamTransportCore {
         if let (Some(get_buffer), Some(buffer_updated)) =
             (get_buffer.as_ref(), buffer_updated.as_ref())
         {
-            let args = PyTuple::new(py, [data.len()])?.unbind();
-            let buffer_obj = run_in_context(py, &context, context_needs_run, get_buffer, &args)?;
-            // SAFETY: `buffer_obj` is a live Python object under the GIL. CPython returns a new
-            // memoryview reference or null with an exception set; PyO3 wraps both cases correctly.
-            let memoryview = unsafe {
-                Bound::from_owned_ptr_or_err(
+            let mut offset = 0;
+            while offset < data.len() {
+                let remaining = data.len() - offset;
+                let args = PyTuple::new(py, [remaining])?.unbind();
+                let buffer_obj =
+                    run_in_context(py, &context, context_needs_run, get_buffer, &args)?;
+                // SAFETY: `buffer_obj` is a live Python object under the GIL. CPython returns a
+                // new memoryview reference or null with an exception set; PyO3 wraps both cases.
+                let memoryview = unsafe {
+                    Bound::from_owned_ptr_or_err(
+                        py,
+                        pyo3::ffi::PyMemoryView_FromObject(buffer_obj.bind(py).as_ptr()),
+                    )
+                }?;
+                // Cast to bytes so writable contiguous buffers with a non-byte element format
+                // receive raw socket data with the same semantics as socket.recv_into().
+                let byte_view = memoryview.call_method1("cast", ("B",))?;
+                let buffer_len = byte_view.len()?;
+                if buffer_len == 0 {
+                    return Err(PyRuntimeError::new_err(
+                        "get_buffer() returned an empty buffer",
+                    ));
+                }
+                let chunk_len = remaining.min(buffer_len);
+                let chunk_len_isize =
+                    isize::try_from(chunk_len).expect("Python buffer length fits in Py_ssize_t");
+                byte_view.set_item(
+                    PySlice::new(py, 0, chunk_len_isize, 1),
+                    PyBytes::new(py, &data[offset..offset + chunk_len]),
+                )?;
+                let updated_args = PyTuple::new(py, [chunk_len])?.unbind();
+                run_in_context(
                     py,
-                    pyo3::ffi::PyMemoryView_FromObject(buffer_obj.bind(py).as_ptr()),
-                )
-            }?;
-            let data_len =
-                isize::try_from(data.len()).expect("Python buffer length fits in Py_ssize_t");
-            memoryview.set_item(PySlice::new(py, 0, data_len, 1), PyBytes::new(py, data))?;
-            let updated_args = PyTuple::new(py, [data.len()])?.unbind();
-            run_in_context(
-                py,
-                &context,
-                context_needs_run,
-                buffer_updated,
-                &updated_args,
-            )?;
+                    &context,
+                    context_needs_run,
+                    buffer_updated,
+                    &updated_args,
+                )?;
+                offset += chunk_len;
+            }
             return Ok(());
         }
 
