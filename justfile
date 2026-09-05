@@ -55,6 +55,8 @@ test-frameworks:
     uv run --with quart --with hypercorn python tests/packages/quart_test.py
     uv run --with 'faststream[nats]' python tests/packages/faststream_test.py
     uv run --with anyio python tests/packages/anyio_test.py
+    uv run --with 'sqlalchemy[asyncio]' --with aiosqlite python tests/packages/sqlalchemy_test.py
+    uv run --with piccolo python tests/packages/piccolo_test.py
 
 # Just the AnyIO checks, which is what CI runs as its own job.
 test-anyio:
