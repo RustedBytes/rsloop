@@ -37,7 +37,7 @@ signal-hook = "0.4"
 slab = "0.4"
 socket2 = "0.6"
 tokio = { version = "1", default-features = false, features = ["io-util"] }
-tracy-client = { version = "0.18", default-features = false, features = ["enable", "only-localhost", "sampling"], optional = true }
+tracy-client = { version = "0.19", default-features = false, features = ["enable", "only-localhost", "sampling"], optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.7"
 
