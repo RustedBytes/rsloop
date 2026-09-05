@@ -404,14 +404,12 @@ impl StreamTransportCore {
         self.queue_write(data)
     }
 
-    #[allow(clippy::unused_async_trait_impl)]
     pub async fn wait_readable(self: &Arc<Self>) -> io::Result<()> {
         Err(io::Error::other(
             "transport readiness is not used in std transport mode",
         ))
     }
 
-    #[allow(clippy::unused_async_trait_impl)]
     pub async fn wait_writable(self: &Arc<Self>) -> io::Result<()> {
         Err(io::Error::other(
             "transport readiness is not used in std transport mode",

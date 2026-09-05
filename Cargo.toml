@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
-profiler = ["dep:tracy-client"]
+profiler = ["dep:tracy-client", "dep:tracy-client-sys"]
 
 [dependencies]
 async-io = "2"
@@ -38,6 +38,9 @@ slab = "0.4"
 socket2 = "0.6"
 tokio = { version = "1", default-features = false, features = ["io-util"] }
 tracy-client = { version = "0.19", default-features = false, features = ["enable", "only-localhost", "sampling"], optional = true }
+# tracy-client 0.19 accepts older sys releases whose generated API is
+# incompatible with the wrapper. Keep the matching bindings selected.
+tracy-client-sys = { version = "=0.30.0", default-features = false, optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.7"
 

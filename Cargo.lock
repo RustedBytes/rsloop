@@ -315,7 +315,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -939,6 +939,7 @@ dependencies = [
  "socket2",
  "tokio",
  "tracy-client",
+ "tracy-client-sys",
  "windows-sys 0.61.2",
 ]
 
@@ -952,7 +953,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1217,9 +1218,9 @@ dependencies = [
 
 [[package]]
 name = "tracy-client-sys"
-version = "0.28.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5f7c95348f20c1c913d72157b3c6dee6ea3e30b3d19502c5a7f6d3f160dacbf"
+checksum = "eef8a023d2b19f44e430da334f7dfb5e5db219bb83e2b4f56a09c1cb12abe915"
 dependencies = [
  "cc",
  "windows-targets",
