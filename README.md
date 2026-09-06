@@ -480,33 +480,44 @@ TLS, mixed message sizes, backpressure, and connection lifecycle behavior:
 uv run --with uvloop python benches/workload_matrix.py \
   --loops rsloop,uvloop \
   --warmups 1 \
-  --repeat 5
+  --repeat 5 \
+  --json-output target/workload-matrix-2026-09-06.json
 ```
 
-Representative output from the same macOS arm64 (Apple M2) / CPython 3.14
-release build on August 18, 2026 is below, as the per-scenario median of five
-runs of that command on an otherwise quiet machine. Throughput is traffic-only
-operations per second, except for `bulk_transfer`, which reports traffic MiB/s.
+Measured on September 6, 2026 with an Intel Core i9-9900K, Linux
+7.0.0-31-generic (x86_64), CPython 3.14.0, rsloop 0.1.47 (release build), and
+uvloop 0.22.1. Each row reports the median of five measured runs after one
+warmup, using the default 16 concurrent connections and 50 requests per
+connection. Throughput is traffic-only operations per second, except for
+`bulk_transfer`, which reports traffic MiB/s. The p95 columns are the medians
+of each run's p95 latency; the difference is `(rsloop / uvloop - 1) × 100%`.
+
+WebSocket library versions were websockets 17.0.1, aiohttp 3.14.3, Starlette
+1.6.0, and uvicorn 0.52.3. The run used unrestricted CPU affinity, with other
+host services running but no concurrent builds or tests. These measurements
+are from a different host than the macOS microbenchmark example above.
 
 | Scenario | rsloop | uvloop | rsloop difference | rsloop p95 | uvloop p95 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| HTTP keep-alive | 88,616 | 68,040 | +30.2% | 0.186 ms | 0.283 ms |
-| TLS HTTP | 72,530 | 36,772 | +97.2% | 0.273 ms | 0.498 ms |
-| Raw WebSocket | 6,242 | 6,458 | -3.3% | 4.271 ms | 3.075 ms |
-| Raw WebSocket over TLS | 6,026 | 6,054 | -0.5% | 2.951 ms | 3.403 ms |
-| `websockets` | 40,232 | 40,210 | +0.1% | 0.494 ms | 0.452 ms |
-| `websockets` over TLS | 41,436 | 26,895 | +54.1% | 0.445 ms | 0.693 ms |
-| aiohttp WebSocket | 51,484 | 51,128 | +0.7% | 0.397 ms | 0.367 ms |
-| aiohttp WebSocket over TLS | 53,765 | 32,035 | +67.8% | 0.357 ms | 0.568 ms |
-| Starlette WebSocket | 29,711 | 20,412 | +45.6% | 0.700 ms | 1.059 ms |
-| Starlette WebSocket over TLS | 34,421 | 21,290 | +61.7% | 0.539 ms | 0.856 ms |
-| Mixed streams | 79,411 | 48,551 | +63.6% | 0.253 ms | 0.456 ms |
-| Bulk transfer (MiB/s) | 4,993.6 | 2,823.6 | +76.9% | 6.347 ms | 11.291 ms |
-| Idle activation | 21,189 | 21,275 | -0.4% | 7.843 ms | 7.835 ms |
+| HTTP keep-alive | 53,001 | 45,187 | +17.3% | 0.341 ms | 0.442 ms |
+| TLS HTTP | 66,364 | 23,138 | +186.8% | 0.269 ms | 0.791 ms |
+| Raw WebSocket | 5,027 | 4,928 | +2.0% | 4.547 ms | 3.707 ms |
+| Raw WebSocket over TLS | 5,361 | 4,876 | +9.9% | 3.794 ms | 3.788 ms |
+| `websockets` | 20,719 | 25,121 | -17.5% | 0.971 ms | 0.686 ms |
+| `websockets` over TLS | 27,299 | 15,076 | +81.1% | 0.649 ms | 1.166 ms |
+| aiohttp WebSocket | 25,195 | 32,667 | -22.9% | 0.804 ms | 0.515 ms |
+| aiohttp WebSocket over TLS | 32,897 | 18,961 | +73.5% | 0.548 ms | 0.912 ms |
+| Starlette WebSocket | 15,485 | 20,128 | -23.1% | 1.228 ms | 0.841 ms |
+| Starlette WebSocket over TLS | 18,116 | 13,480 | +34.4% | 0.992 ms | 1.274 ms |
+| Mixed streams | 39,998 | 34,714 | +15.2% | 0.495 ms | 0.504 ms |
+| Bulk transfer (MiB/s) | 2,018.6 | 1,177.2 | +71.5% | 14.488 ms | 27.112 ms |
+| Idle activation | 23,248 | 8,876 | +161.9% | 6.711 ms | 19.657 ms |
 
-Read the idle-activation row as a tie rather than a measurement: its traffic
-phase is roughly ten milliseconds, and it swung by more than 2x per loop across
-those five runs. Every other row held within a few percent.
+The idle-activation result is unstable: throughput ranged from 8,654 to 24,687
+ops/s for rsloop and 8,689 to 29,780 ops/s for uvloop across the five runs.
+Its traffic phase lasted only about 8–23 ms at the medians, so the apparent
+lead is not reliable. Other rows also showed variation, including uvloop's
+Starlette WebSocket throughput ranging from 15,869 to 20,430 ops/s.
 
 These ordinary matrix defaults are intentionally short enough for local smoke
 and CI runs. Use `--sustained` and compare repeated runs before drawing
