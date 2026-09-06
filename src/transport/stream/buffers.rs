@@ -123,7 +123,11 @@ impl Drop for PendingReadBuffer<'_> {
             return;
         }
         self.bytes.clear();
-        *self.home.lock().expect("poisoned read coalesce buffer") = std::mem::take(&mut self.bytes);
+        // This is only an allocation cache. Do not wait or panic during drop
+        // if another consumer holds it or a previous consumer poisoned it.
+        if let Ok(mut home) = self.home.try_lock() {
+            *home = std::mem::take(&mut self.bytes);
+        }
     }
 }
 
@@ -678,6 +682,45 @@ mod tests {
         pool.release(recycled);
         drop(pending);
         assert!(home.lock().expect("coalesce buffer").capacity() >= 3);
+    }
+
+    #[test]
+    fn pending_coalesced_read_drop_does_not_wait_for_cache() {
+        let home = Mutex::new(Vec::new());
+        let pending = PendingReadBuffer {
+            bytes: vec![1, 2, 3],
+            home: &home,
+            pool: None,
+        };
+        std::thread::scope(|scope| {
+            let guard = home.lock().unwrap();
+            let (done, receiver) = std::sync::mpsc::channel();
+            let worker = scope.spawn(move || {
+                drop(pending);
+                done.send(()).unwrap();
+            });
+            let result = receiver.recv_timeout(std::time::Duration::from_secs(2));
+            // Release the lock before joining even if the regression occurs.
+            assert!(guard.is_empty());
+            drop(guard);
+            worker.join().unwrap();
+            assert!(result.is_ok(), "drop waited for the coalescing cache");
+        });
+    }
+
+    #[test]
+    fn pending_coalesced_read_drop_tolerates_poisoned_cache() {
+        let home = Mutex::new(Vec::new());
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = home.lock().unwrap();
+            panic!("poison cache");
+        });
+        assert!(home.is_poisoned());
+        drop(PendingReadBuffer {
+            bytes: vec![1, 2, 3],
+            home: &home,
+            pool: None,
+        });
     }
 
     #[test]

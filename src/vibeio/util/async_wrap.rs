@@ -16,7 +16,6 @@
 
 use std::{
     future::Future,
-    mem::MaybeUninit,
     pin::Pin,
     task::{Context, Poll},
 };
@@ -98,18 +97,8 @@ where
         if this.read_fut.is_none() {
             let buf_read = this.read_buf.take();
             if let Some((buf_read, advanced, n)) = buf_read {
-                let unfilled =
-                    unsafe { &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut [u8]) };
-                let copy_len = (n - advanced).min(unfilled.len());
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        buf_read.as_ptr().add(advanced),
-                        unfilled.as_mut_ptr(),
-                        copy_len,
-                    )
-                };
-                unsafe { buf.assume_init(copy_len) };
-                buf.advance(copy_len);
+                let copy_len = (n - advanced).min(buf.remaining());
+                buf.put_slice(&buf_read[advanced..advanced + copy_len]);
                 if advanced + copy_len < n {
                     this.read_buf = Some((buf_read, advanced + copy_len, n));
                 }
@@ -143,19 +132,8 @@ where
                         "reader returned more bytes than the supplied buffer can hold",
                     )));
                 }
-                // Put buf_read into buf
-                let unfilled =
-                    unsafe { &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut [u8]) };
-                let copy_len = n.min(unfilled.len());
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        buf_read.as_ptr(),
-                        unfilled.as_mut_ptr(),
-                        copy_len,
-                    )
-                };
-                unsafe { buf.assume_init(copy_len) };
-                buf.advance(copy_len);
+                let copy_len = n.min(buf.remaining());
+                buf.put_slice(&buf_read[..copy_len]);
                 if copy_len < n {
                     this.read_buf = Some((buf_read, copy_len, n));
                 }
@@ -416,6 +394,37 @@ mod tests {
 
             assert_eq!(reads.load(Ordering::SeqCst), 1);
         });
+    }
+
+    #[test]
+    fn async_wrap_reads_into_uninitialized_storage_and_preserves_prefix() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mut wrap = AsyncWrap::new(CountingReader::new(b"abcdef", reads.clone()));
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+
+        // Exercise both the newly completed read and the cached remainder.
+        for expected in [b"!abc", b"!def"] {
+            let mut storage = [std::mem::MaybeUninit::uninit(); 4];
+            let mut buf = ReadBuf::uninit(&mut storage);
+            buf.put_slice(b"!");
+            assert!(matches!(
+                Pin::new(&mut wrap).poll_read(&mut cx, &mut buf),
+                Poll::Ready(Ok(()))
+            ));
+            assert_eq!(buf.filled(), expected);
+            assert_eq!(buf.initialized().len(), 4);
+        }
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+
+        let mut storage = [std::mem::MaybeUninit::uninit(); 4];
+        let mut buf = ReadBuf::uninit(&mut storage);
+        assert!(matches!(
+            Pin::new(&mut wrap).poll_read(&mut cx, &mut buf),
+            Poll::Ready(Ok(()))
+        ));
+        assert!(buf.filled().is_empty());
+        assert!(buf.initialized().is_empty());
     }
 
     #[test]
