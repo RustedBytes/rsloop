@@ -666,6 +666,26 @@ impl Runtime {
         inner.spawn_blocking(f).await
     }
 
+    /// Service kernel readiness and one bounded task batch without parking.
+    /// Used when the embedding Python loop still has runnable callbacks.
+    pub(crate) fn poll_once(&self) {
+        let inner = self.inner.as_ref().expect("runtime has been dropped");
+        inner.driver.wait(Some(std::time::Duration::ZERO));
+        if let Some(timer) = inner.timer.as_ref() {
+            let _ = timer.spin_and_get_deadline();
+        }
+        let mut yielded = false;
+        self.block_on(std::future::poll_fn(move |cx| {
+            if yielded {
+                Poll::Ready(())
+            } else {
+                yielded = true;
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }));
+    }
+
     /// Run the runtime and execute the given future to completion.
     ///
     /// This method blocks the current thread and drives the runtime until
@@ -861,6 +881,25 @@ mod tests {
         let runtime = crate::vibeio::executor::Runtime::new(AnyDriver::new_mock());
         let value = runtime.block_on(async { 42usize });
         assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn poll_once_services_tasks_without_draining_a_self_waking_task() {
+        let runtime = Runtime::new(AnyDriver::new_mock());
+        runtime.poll_once();
+        let polls = Rc::new(Cell::new(0));
+        let task_polls = Rc::clone(&polls);
+        let handle = runtime.spawn(std::future::poll_fn(move |cx| {
+            task_polls.set(task_polls.get() + 1);
+            cx.waker().wake_by_ref();
+            Poll::<()>::Pending
+        }));
+        runtime.poll_once();
+        assert_eq!(polls.get(), 1);
+        runtime.poll_once();
+        assert_eq!(polls.get(), 2);
+        handle.cancel();
+        runtime.poll_once();
     }
 
     #[test]

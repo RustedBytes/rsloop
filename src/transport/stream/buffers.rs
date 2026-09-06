@@ -76,13 +76,20 @@ impl Drop for OwnedReadBuffer {
 pub(super) struct PendingReadBuffer<'a> {
     bytes: Vec<u8>,
     home: &'a Mutex<Vec<u8>>,
+    pool: Option<&'a ReadBufferPool>,
 }
 
 impl<'a> PendingReadBuffer<'a> {
-    pub(super) fn new(home: &'a Mutex<Vec<u8>>) -> Self {
-        let mut bytes = std::mem::take(&mut *home.lock().expect("poisoned read coalesce buffer"));
-        bytes.clear();
-        Self { bytes, home }
+    pub(super) fn from_pooled(
+        bytes: Vec<u8>,
+        pool: &'a ReadBufferPool,
+        home: &'a Mutex<Vec<u8>>,
+    ) -> Self {
+        Self {
+            bytes,
+            home,
+            pool: Some(pool),
+        }
     }
 
     #[inline]
@@ -96,12 +103,25 @@ impl<'a> PendingReadBuffer<'a> {
     }
 
     pub(super) fn extend(&mut self, data: &[u8]) {
+        // Most drains contain one read. Keep that allocation until delivery;
+        // only acquire and copy into the coalescing buffer for a second chunk.
+        if let Some(pool) = self.pool.take() {
+            let mut joined =
+                std::mem::take(&mut *self.home.lock().expect("poisoned read coalesce buffer"));
+            joined.clear();
+            joined.extend_from_slice(&self.bytes);
+            pool.release(std::mem::replace(&mut self.bytes, joined));
+        }
         self.bytes.extend_from_slice(data);
     }
 }
 
 impl Drop for PendingReadBuffer<'_> {
     fn drop(&mut self) {
+        if let Some(pool) = self.pool.take() {
+            pool.release(std::mem::take(&mut self.bytes));
+            return;
+        }
         self.bytes.clear();
         *self.home.lock().expect("poisoned read coalesce buffer") = std::mem::take(&mut self.bytes);
     }
@@ -643,15 +663,39 @@ mod tests {
     #[test]
     fn pending_read_buffer_coalesces_and_returns_storage_home() {
         let home = Mutex::new(vec![1, 2]);
-        let mut pending = PendingReadBuffer::new(&home);
-        let input = vec![3, 4, 5];
+        let pool = ReadBufferPool::new();
+        let mut input = pool.try_acquire(16).unwrap();
+        input.extend_from_slice(&[3, 4]);
+        let pointer = input.as_ptr();
+        let mut pending = PendingReadBuffer::from_pooled(input, &pool, &home);
 
-        pending.extend(&input);
+        pending.extend(&[5]);
 
         assert_eq!(pending.len(), 3);
         assert_eq!(pending.as_slice(), &[3, 4, 5]);
+        let recycled = pool.try_acquire(16).unwrap();
+        assert_eq!(recycled.as_ptr(), pointer);
+        pool.release(recycled);
         drop(pending);
         assert!(home.lock().expect("coalesce buffer").capacity() >= 3);
+    }
+
+    #[test]
+    fn pending_single_read_keeps_allocation_and_returns_it_to_pool() {
+        let home = Mutex::new(Vec::new());
+        let pool = ReadBufferPool::new();
+        let mut input = pool.try_acquire(16).unwrap();
+        input.extend_from_slice(b"frame");
+        let pointer = input.as_ptr();
+        let pending = PendingReadBuffer::from_pooled(input, &pool, &home);
+        assert_eq!(pending.as_slice().as_ptr(), pointer);
+        assert_eq!(pending.as_slice(), b"frame");
+        drop(pending);
+        let recycled = pool.try_acquire(16).unwrap();
+        assert_eq!(recycled.as_ptr(), pointer);
+        assert!(recycled.is_empty());
+        assert_eq!(home.lock().unwrap().capacity(), 0);
+        pool.release(recycled);
     }
 
     #[test]

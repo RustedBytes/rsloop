@@ -135,14 +135,9 @@ pub(super) fn new_stream_transport_core(
         &parts.state.callbacks.stream_reader_fast_path,
         Some(StreamReaderFastPath::Native { .. })
     );
-    // Batching modest writes until the ready drain ends pays for two reasons.
-    // The obvious one is joining a protocol header with its body into a single
-    // syscall. The larger one is that socket readers live on the runtime
-    // thread: a write to a loopback peer has to wake that thread out of
-    // `kevent`, which costs the writing loop thread about a microsecond of its
-    // own CPU. Writes released back-to-back at the end of a turn only pay that
-    // once, whereas writes spread across a turn let the reader fall back asleep
-    // between them and charge it again for every message.
+    // Batching modest writes joins protocol headers and bodies and releases
+    // groups of replies together. Coordination-thread readers then need fewer
+    // wakeups; local protocol readers also measured better with batching.
     //
     // That trade needs the loop thread to be the scarce resource, which is the
     // case for callback protocols (websockets, aiohttp, ASGI servers), where

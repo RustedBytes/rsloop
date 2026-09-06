@@ -27,6 +27,12 @@ pub enum ReadyItem {
     },
     StreamTransportRead(Arc<StreamTransportCore>),
     StreamTransportWrite(Arc<StreamTransportCore>),
+    #[cfg(unix)]
+    StartTcpReader {
+        fd: RawFd,
+        core: Arc<StreamTransportCore>,
+        stream: Arc<std::net::TcpStream>,
+    },
     ProcessTransport(Arc<ProcessTransportCore>),
     ServerAccepted {
         server: Arc<ServerCore>,

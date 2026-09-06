@@ -10,9 +10,12 @@
 
 Each `rsloop.Loop` owns a dedicated Rust runtime thread for loop coordination
 and I/O work. That thread runs an rsloop-specialized `vibeio` runtime, using
-io_uring on Linux, IOCP on Windows, and native kqueue readiness on macOS. Plain
-TCP / Unix socket reads and non-TLS server accepts run on that runtime. Python
-callbacks, tasks, and coroutines still run on the thread that calls
+io_uring on Linux, IOCP on Windows, and native kqueue readiness on macOS.
+Native-stream TCP reads and Unix-domain socket reads run on that runtime. On Unix, generic
+TCP protocol readers use a second `vibeio` runtime on the Python loop thread
+(io_uring on Linux), avoiding cross-thread delivery of each read. Non-TLS accepts
+run on either runtime depending on where the server starts. Python callbacks,
+tasks, and coroutines run on the thread that calls
 `run_forever()` or `run_until_complete()` (usually the main Python thread).
 
 The package exposes:
@@ -278,11 +281,14 @@ it as its own entry.
 
 ## Runtime Model
 
-The runtime is centered on one `vibeio` runtime per loop:
+Each loop combines a coordination runtime with a loop-thread I/O runtime:
 
-- the loop coordination thread is always the central scheduler
-- plain TCP / Unix socket reads and non-TLS accept loops use `vibeio` on that
-  thread across supported platforms
+- the coordination thread handles commands, timers, and cross-thread work
+- on Unix, generic TCP protocol readers run on the Python loop thread;
+  native fast streams and Unix-domain readers retain coordination-thread I/O
+- non-TLS accept loops use `vibeio` on the thread that starts them
+- bounded ready-callback turns service loop-thread I/O even when Python tasks
+  continually yield with `sleep(0)`
 - Windows TCP transports, including custom `asyncio.Protocol` implementations,
   start in IOCP completion mode and rebind to readiness mode before `start_tls`
   synchronously reclaims a socket
@@ -320,11 +326,9 @@ These gaps are visible in the current implementation.
   Unix socket APIs and Unix signal handlers remain Unix-only, and several
   subprocess options such as `pass_fds`, `user`, `group`, and `umask` are
   still specific to Unix process spawning.
-- The transport runtime model is still in transition:
-  plain socket reads and non-TLS accepts now run on the loop runtime thread on
-  all supported platforms, but generic descriptor watches, writes, and
-  TLS-heavy paths are not fully collapsed onto that same single-threaded I/O
-  path yet.
+- The transport runtime model is still in transition: protocol readers on Unix
+  avoid a coordination-thread hop, but native streams, generic descriptor
+  watches, and TLS-heavy paths do not share one single-threaded I/O path.
 
 ## Build
 
@@ -479,15 +483,14 @@ TLS, mixed message sizes, backpressure, and connection lifecycle behavior:
 ```bash
 uv run --with uvloop python benches/workload_matrix.py \
   --loops rsloop,uvloop \
-  --warmups 1 \
-  --repeat 5 \
-  --json-output target/workload-matrix-2026-09-06.json
+  --sustained \
+  --json-output target/matrix-opt-final.json
 ```
 
 Measured on September 6, 2026 with an Intel Core i9-9900K, Linux
 7.0.0-31-generic (x86_64), CPython 3.14.0, rsloop 0.1.47 (release build), and
-uvloop 0.22.1. Each row reports the median of five measured runs after one
-warmup, using the default 16 concurrent connections and 50 requests per
+uvloop 0.22.1. Each row reports the median of seven measured runs after two
+warmups, using 16 concurrent connections and 500 requests per
 connection. Throughput is traffic-only operations per second, except for
 `bulk_transfer`, which reports traffic MiB/s. The p95 columns are the medians
 of each run's p95 latency; the difference is `(rsloop / uvloop - 1) × 100%`.
@@ -499,28 +502,35 @@ are from a different host than the macOS microbenchmark example above.
 
 | Scenario | rsloop | uvloop | rsloop difference | rsloop p95 | uvloop p95 |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| HTTP keep-alive | 53,001 | 45,187 | +17.3% | 0.341 ms | 0.442 ms |
-| TLS HTTP | 66,364 | 23,138 | +186.8% | 0.269 ms | 0.791 ms |
-| Raw WebSocket | 5,027 | 4,928 | +2.0% | 4.547 ms | 3.707 ms |
-| Raw WebSocket over TLS | 5,361 | 4,876 | +9.9% | 3.794 ms | 3.788 ms |
-| `websockets` | 20,719 | 25,121 | -17.5% | 0.971 ms | 0.686 ms |
-| `websockets` over TLS | 27,299 | 15,076 | +81.1% | 0.649 ms | 1.166 ms |
-| aiohttp WebSocket | 25,195 | 32,667 | -22.9% | 0.804 ms | 0.515 ms |
-| aiohttp WebSocket over TLS | 32,897 | 18,961 | +73.5% | 0.548 ms | 0.912 ms |
-| Starlette WebSocket | 15,485 | 20,128 | -23.1% | 1.228 ms | 0.841 ms |
-| Starlette WebSocket over TLS | 18,116 | 13,480 | +34.4% | 0.992 ms | 1.274 ms |
-| Mixed streams | 39,998 | 34,714 | +15.2% | 0.495 ms | 0.504 ms |
-| Bulk transfer (MiB/s) | 2,018.6 | 1,177.2 | +71.5% | 14.488 ms | 27.112 ms |
-| Idle activation | 23,248 | 8,876 | +161.9% | 6.711 ms | 19.657 ms |
+| HTTP keep-alive | 51,561 | 51,410 | +0.3% | 0.354 ms | 0.351 ms |
+| TLS HTTP | 72,465 | 25,493 | +184.3% | 0.241 ms | 0.668 ms |
+| Raw WebSocket | 5,197 | 5,296 | -1.9% | 5.023 ms | 3.504 ms |
+| Raw WebSocket over TLS | 5,395 | 4,824 | +11.8% | 3.945 ms | 3.870 ms |
+| `websockets` | 22,756 | 24,780 | -8.2% | 0.830 ms | 0.690 ms |
+| `websockets` over TLS | 26,044 | 15,081 | +72.7% | 0.672 ms | 1.109 ms |
+| aiohttp WebSocket | 29,879 | 33,895 | -11.8% | 0.656 ms | 0.511 ms |
+| aiohttp WebSocket over TLS | 32,983 | 19,063 | +73.0% | 0.526 ms | 0.890 ms |
+| Starlette WebSocket | 18,524 | 20,325 | -8.9% | 0.997 ms | 0.832 ms |
+| Starlette WebSocket over TLS | 18,058 | 13,555 | +33.2% | 0.942 ms | 1.257 ms |
+| Mixed streams | 42,797 | 34,642 | +23.5% | 0.484 ms | 0.521 ms |
+| Bulk transfer (MiB/s) | 1,993.5 | 1,223.7 | +62.9% | 14.768 ms | 26.061 ms |
+| Idle activation | 11,286 | 41,772 | -73.0% | 15.576 ms | 4.199 ms |
 
-The idle-activation result is unstable: throughput ranged from 8,654 to 24,687
-ops/s for rsloop and 8,689 to 29,780 ops/s for uvloop across the five runs.
-Its traffic phase lasted only about 8–23 ms at the medians, so the apparent
-lead is not reliable. Other rows also showed variation, including uvloop's
-Starlette WebSocket throughput ranging from 15,869 to 20,430 ops/s.
+The idle-activation result is unstable: throughput ranged from 8,347 to 47,099
+ops/s for rsloop and 7,289 to 43,898 ops/s for uvloop across the seven runs.
+Its traffic phase lasted only about 5–18 ms at the medians, so neither loop
+has a reliable lead. HTTP's 0.3% difference is also too small to call a win.
 
-These ordinary matrix defaults are intentionally short enough for local smoke
-and CI runs. Use `--sustained` and compare repeated runs before drawing
+Compared with the same sustained workload on the pre-optimization build,
+plain-text `websockets`, aiohttp, and Starlette throughput improved by 10.2%,
+19.4%, and 22.3%, respectively. They still trail uvloop. The default regression
+gate also flags HTTP tail latency and idle activation; this is not an
+across-the-board performance win. See the
+[before/after report](./benches/performance-2026-09-06.md) for all changes,
+regressions, validation, and reproduction commands.
+
+The ordinary matrix defaults are intentionally short enough for local smoke
+and CI runs. Even with `--sustained`, compare repeated runs before drawing
 performance conclusions for a deployment — competing desktop load matters more
 than it looks, because rsloop trades helper-thread CPU for loop-thread work and
 so has more to lose when cores are contended.

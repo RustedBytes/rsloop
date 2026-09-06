@@ -25,6 +25,71 @@ EXCEPTION_GROUP = getattr(builtins, "ExceptionGroup", None)
 
 
 class CompatibilityTests(unittest.TestCase):
+    def test_stop_drains_ready_callbacks_beyond_io_budget(self) -> None:
+        loop = rsloop.new_event_loop()
+        observed = []
+        try:
+            loop.call_soon(loop.stop)
+            for index in range(4096):
+                loop.call_soon(observed.append, index)
+            loop.run_forever()
+            self.assertEqual(observed, list(range(4096)))
+        finally:
+            loop.close()
+
+    def test_repeated_server_startup_with_busy_ready_queue(self) -> None:
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            startup = asyncio.ensure_future(
+                loop.create_server(asyncio.Protocol, "127.0.0.1", 0)
+            )
+            deadline = time.monotonic() + 2
+            while not startup.done():
+                if time.monotonic() >= deadline:
+                    startup.cancel()
+                    self.fail("server startup starved behind a busy ready queue")
+                await asyncio.sleep(0)
+            server = await startup
+            server.close()
+            await server.wait_closed()
+
+        for _ in range(10):
+            rsloop.run(main())
+
+    def test_tcp_progresses_while_python_task_continually_yields(self) -> None:
+        async def main() -> None:
+            class Echo(asyncio.Protocol):
+                def connection_made(self, transport):
+                    self.transport = transport
+
+                def data_received(self, data):
+                    self.transport.write(data)
+
+            async def busy():
+                while True:
+                    await asyncio.sleep(0)
+
+            server = await asyncio.get_running_loop().create_server(Echo, "127.0.0.1", 0)
+            reader, writer = await asyncio.open_connection(
+                *server.sockets[0].getsockname()[:2]
+            )
+            spinner = asyncio.create_task(busy())
+            try:
+                writer.write(b"ping")
+                await writer.drain()
+                self.assertEqual(
+                    await asyncio.wait_for(reader.readexactly(4), 1), b"ping"
+                )
+            finally:
+                spinner.cancel()
+                await asyncio.gather(spinner, return_exceptions=True)
+                writer.close()
+                await writer.wait_closed()
+                server.close()
+                await server.wait_closed()
+
+        rsloop.run(main())
+
     @unittest.skipUnless(os.path.isdir("/dev/fd"), "requires descriptor enumeration")
     def test_closed_streams_do_not_retain_descriptors_across_loops(self) -> None:
         async def exercise() -> None:
@@ -812,6 +877,39 @@ class CompatibilityTests(unittest.TestCase):
             return events
 
         self.assertEqual(rsloop.run(main()), ["closed"])
+
+    def test_completed_asyncgens_are_released_before_loop_shutdown(self) -> None:
+        async def main() -> None:
+            async def gen():
+                yield "value"
+
+            agen = gen()
+            reference = weakref.ref(agen)
+            self.assertEqual(await anext(agen), "value")
+            await agen.aclose()
+            del agen
+            gc.collect()
+            self.assertIsNone(reference())
+
+        rsloop.run(main())
+
+    def test_abandoned_asyncgens_finalize_while_loop_is_running(self) -> None:
+        async def main() -> None:
+            finalized = asyncio.Event()
+
+            async def gen():
+                try:
+                    yield "value"
+                finally:
+                    finalized.set()
+
+            agen = gen()
+            self.assertEqual(await anext(agen), "value")
+            del agen
+            gc.collect()
+            await asyncio.wait_for(finalized.wait(), 1)
+
+        rsloop.run(main())
 
     def test_shutdown_asyncgens_warns_on_new_iteration_after_shutdown(self) -> None:
         async def main() -> tuple[list[str], list[object]]:

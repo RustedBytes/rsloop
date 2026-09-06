@@ -151,6 +151,7 @@ impl Future for WaitForWake {
 }
 
 const READY_DRAIN_SLICE: usize = 64;
+const MAX_READY_ITEMS_PER_TURN: usize = 1024;
 const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const RUN_FINISH_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -499,10 +500,11 @@ impl LoopCore {
                 .borrow_mut()
                 .entry(loop_runtime_key)
                 .or_insert_with(|| {
+                    let builder = crate::vibeio::RuntimeBuilder::new()
+                        .rsloop_profile()
+                        .enable_timer(true);
                     std::mem::ManuallyDrop::new(
-                        crate::vibeio::RuntimeBuilder::new()
-                            .rsloop_profile()
-                            .enable_timer(true)
+                        builder
                             .build()
                             .expect("failed to initialize loop-thread vibeio runtime"),
                     )
@@ -525,6 +527,7 @@ impl LoopCore {
             let mut ready_error = None;
             let mut deferred_fd_rearms = Vec::new();
             let mut processed_since_refill = 0_usize;
+            let mut processed_this_turn = 0_usize;
             loop {
                 if ready_batch.is_empty() || processed_since_refill >= READY_DRAIN_SLICE {
                     // Every cross-thread producer raises `wake_pending` after
@@ -653,6 +656,14 @@ impl LoopCore {
                         crate::profile_scope!("ready.stream_transport_write");
                         core.flush_pending_direct_write();
                     }
+                    #[cfg(unix)]
+                    ReadyItem::StartTcpReader { fd, core, stream } => {
+                        // The runtime is installed before the ready drain begins.
+                        assert!(self.spawn_io_tracked(
+                            fd,
+                            crate::transport::stream::run_tcp_socket_reader_task(core, stream),
+                        ));
+                    }
                     ReadyItem::ProcessTransport(core) => {
                         crate::profile_scope!("ready.process_transport");
                         core.drain_pending_events_with_py(py)?;
@@ -677,6 +688,15 @@ impl LoopCore {
                 }
 
                 processed_since_refill += 1;
+                processed_this_turn += 1;
+                if processed_this_turn >= MAX_READY_ITEMS_PER_TURN {
+                    // stop() must not truncate callbacks already queued for
+                    // this run merely because we reached the I/O budget.
+                    if !self.state.lock().expect("poisoned loop state").stopping {
+                        break;
+                    }
+                    processed_this_turn = 0;
+                }
             }
 
             self.set_ready_drain_active(false);
@@ -700,6 +720,18 @@ impl LoopCore {
             {
                 let _ = self.send_command(LoopCommand::RequestStop);
                 pending_signal_error = Some(err);
+                continue;
+            }
+
+            if !ready_batch.is_empty() || !local_ready.is_empty() {
+                // A task repeatedly yielding with sleep(0) must not prevent
+                // loop-thread socket readers from observing kernel readiness.
+                // This poll cannot park. Keep Python attached: repeatedly
+                // detaching/reacquiring here can starve workers trying to
+                // acquire the GIL during a busy Python callback chain.
+                LOOP_RUNTIMES.with(|runtimes| {
+                    runtimes.borrow()[&loop_runtime_key].poll_once();
+                });
                 continue;
             }
 
@@ -850,9 +882,7 @@ impl LoopCore {
         // Drop this loop's on-thread vibeio runtime now, while the loop thread
         // (and vibeio's own thread-locals) are still alive. Letting it drop
         // during thread destruction trips a TLS-access panic. `close()` runs on
-        // the loop thread with the loop stopped, so no `block_on` is active and
-        // the runtime holds no in-flight tasks yet (I/O still on the runtime
-        // thread in this phase).
+        // the loop thread with the loop stopped, so no `block_on` is active.
         let runtime_key = self as *const LoopCore as usize;
         // Cancel tracked tasks while the runtime and its driver are alive, then
         // drop the runtime after cancellation has released pending operations.
@@ -1178,6 +1208,24 @@ impl LoopCore {
     #[inline]
     fn try_handle_local_command(&self, command: LoopCommand) -> Result<(), LoopCommand> {
         match command {
+            #[cfg(unix)]
+            LoopCommand::Io(LoopIoCommand::StartSocketReader {
+                fd,
+                core,
+                reader: crate::transport::stream::ReaderTarget::Tcp(stream),
+            }) if !core.uses_native_stream_reader() => self
+                .try_enqueue_local_ready(ReadyItem::StartTcpReader { fd, core, stream })
+                .or_else(|item| self.try_enqueue_active_ready(item))
+                .map_err(|item| match item {
+                    ReadyItem::StartTcpReader { fd, core, stream } => {
+                        LoopCommand::Io(LoopIoCommand::StartSocketReader {
+                            fd,
+                            core,
+                            reader: crate::transport::stream::ReaderTarget::Tcp(stream),
+                        })
+                    }
+                    _ => unreachable!("local reader enqueue preserves item kind"),
+                }),
             LoopCommand::ScheduleReady(callback) => self
                 .try_enqueue_local_ready(ReadyItem::Callback(callback))
                 .or_else(|item| self.try_enqueue_active_ready(item))
@@ -1196,6 +1244,14 @@ impl LoopCore {
                     }
                     ReadyItem::StreamTransportWrite(core) => {
                         LoopCommand::Transport(LoopTransportCommand::StreamWrite(core))
+                    }
+                    #[cfg(unix)]
+                    ReadyItem::StartTcpReader { fd, core, stream } => {
+                        LoopCommand::Io(LoopIoCommand::StartSocketReader {
+                            fd,
+                            core,
+                            reader: crate::transport::stream::ReaderTarget::Tcp(stream),
+                        })
                     }
                     ReadyItem::ProcessTransport(core) => {
                         LoopCommand::Transport(LoopTransportCommand::Process(core))
@@ -1328,7 +1384,7 @@ impl LoopCore {
     #[inline]
     fn try_enqueue_local_ready(&self, item: ReadyItem) -> Result<(), ReadyItem> {
         ACTIVE_LOOP_TLS.with(|tls| {
-            if !std::ptr::eq(tls.core.get(), self) || !tls.drain_active.get() {
+            if !std::ptr::eq(tls.core.get(), self) {
                 return Err(item);
             }
 
@@ -1337,8 +1393,16 @@ impl LoopCore {
                 return Err(item);
             }
 
-            // SAFETY: `ready` points to the stack-local queue owned by `run_forever` on this thread.
+            // SAFETY: `ready` points to run_forever's stack-local queue on this
+            // thread. Neither callback invocation nor runtime polling holds a
+            // mutable reference to it across this call.
             unsafe { (*ready).push_back(item) };
+            if !tls.drain_active.get() {
+                // I/O futures are polled with Python detached, but still on
+                // this thread. Wake the park future without locking the
+                // cross-thread pending queue for each transport event.
+                self.wake.signal();
+            }
             Ok(())
         })
     }

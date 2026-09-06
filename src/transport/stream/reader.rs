@@ -6,12 +6,10 @@
 //! `poll()`, which removes the sleep/wake pair from a request/response
 //! round trip.
 //!
-//! Sockets are read on the runtime instead (see `reader_task`), but the
-//! *control* still goes through the runtime-thread command path here, because
-//! stopping a reader has to be observable: `stop_socket_reader` waits for the
-//! acknowledgement so `start_tls` can take exclusive ownership of the socket,
-//! while close and abort use the `_nowait` form to keep teardown off the
-//! critical path.
+//! Sockets are read on a runtime instead (see `reader_task`). Local readers
+//! cancel immediately; coordination-thread readers use an acknowledged command
+//! so `start_tls` can take exclusive ownership of the socket. Close and abort
+//! use the `_nowait` form to keep teardown off the critical path.
 
 use std::io::{self, Read as _};
 use std::sync::Arc;
@@ -191,13 +189,11 @@ pub(super) fn spin_read_stream(
 
 /// Starts the socket reader for a stream transport.
 ///
-/// Readers stay on the transitional runtime thread. Hosting them on the loop
-/// runtime was attempted but reverted: it segfaults for `AF_UNIX` socketpair
-/// sockets and races `start_tls`, which reclaims the fd for a blocking handshake
-/// while the reader still holds a non-blocking registration (EAGAIN). Reader
-/// migration only benefits the traffic path (already ahead of uvloop), so the
-/// risk is not worth it; accept loops — which are setup-relevant and terminate
-/// cleanly on socket close — remain on the loop runtime.
+/// Active Unix loops route generic-protocol TCP readers to their loop-thread
+/// runtime. Native fast streams, Unix-domain sockets, and Windows readers retain
+/// the coordination-thread path. Both stop
+/// helpers check loop-thread task ownership before sending a dispatcher command,
+/// so `start_tls` drops a local reader before reclaiming its socket.
 pub(super) fn spawn_socket_reader(
     fd: fd_ops::RawFd,
     core: Arc<StreamTransportCore>,
@@ -211,9 +207,11 @@ pub(super) fn spawn_socket_reader(
     }))
 }
 
-/// Stops the socket reader for `fd` via the runtime-thread command path (readers
-/// are hosted there; see `spawn_socket_reader`).
+/// Stops a local reader immediately, or waits for coordination-thread cancellation.
 pub(super) fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) -> io::Result<()> {
+    if core.loop_core.stop_io_task(fd) {
+        return Ok(());
+    }
     let (done_tx, done_rx) = mpsc::channel();
     core.loop_core
         .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader {
@@ -238,6 +236,9 @@ pub(super) fn stop_socket_reader_nowait(
     core: &StreamTransportCore,
     fd: fd_ops::RawFd,
 ) -> io::Result<()> {
+    if core.loop_core.stop_io_task(fd) {
+        return Ok(());
+    }
     let (done_tx, _done_rx) = mpsc::channel();
     core.loop_core
         .send_command(LoopCommand::Io(LoopIoCommand::StopSocketReader {

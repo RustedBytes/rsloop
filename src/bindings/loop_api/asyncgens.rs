@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule, PySet};
+use pyo3::types::{PyDict, PyModule, PySet, PyWeakrefMethods, PyWeakrefReference};
 
 use super::PyLoop;
 use crate::engine::LoopCore;
@@ -49,7 +49,7 @@ impl AsyncgenHooksGuard {
         {
             let mut state = core.state.lock().expect("poisoned loop state");
             if state.active_asyncgens.is_none() {
-                state.active_asyncgens = Some(PySet::empty(py)?.unbind());
+                state.active_asyncgens = Some(new_asyncgens_set(py)?);
             }
         }
 
@@ -75,12 +75,20 @@ impl Drop for AsyncgenHooksGuard {
     }
 }
 
+fn new_asyncgens_set(py: Python<'_>) -> PyResult<Py<PySet>> {
+    // A strong set retains every completed async context manager until loop
+    // shutdown and prevents abandoned generators from reaching their finalizer.
+    // Store weak references in a native set, with set.discard as the callback,
+    // avoiding a Python WeakSet.add frame for every async context manager.
+    Ok(PySet::empty(py)?.unbind())
+}
+
 fn active_asyncgens_set(py: Python<'_>, core: &Arc<LoopCore>) -> PyResult<Py<PySet>> {
     let mut state = core.state.lock().expect("poisoned loop state");
     if let Some(active) = state.active_asyncgens.as_ref() {
         return Ok(active.clone_ref(py));
     }
-    let active = PySet::empty(py)?.unbind();
+    let active = new_asyncgens_set(py)?;
     state.active_asyncgens = Some(active.clone_ref(py));
     Ok(active)
 }
@@ -93,8 +101,13 @@ pub(super) fn shutdown_asyncgens<'py>(
     let loop_obj = PyLoop::as_py_any(py, &slf);
     let active = active_asyncgens_set(py, &core)?;
     let mut closing_agens = Vec::with_capacity(active.bind(py).len());
-    for agen in active.bind(py).iter() {
-        closing_agens.push(agen.unbind());
+    // Weakref callbacks can remove entries during collection, including from
+    // another thread on free-threaded Python. Iterate a private snapshot.
+    let snapshot = active.bind(py).call_method0("copy")?;
+    for reference in snapshot.cast::<PySet>()?.iter() {
+        if let Some(agen) = reference.cast::<PyWeakrefReference>()?.upgrade() {
+            closing_agens.push(agen.unbind());
+        }
     }
     active.bind(py).clear();
     core.state
@@ -178,7 +191,10 @@ pub fn asyncgen_firstiter_hook(
         )?;
     }
 
-    active_asyncgens_set(py, &core)?.bind(py).add(agen)?;
+    let active = active_asyncgens_set(py, &core)?;
+    let active = active.bind(py);
+    let reference = PyWeakrefReference::new_with(agen, active.getattr("discard")?)?;
+    active.add(reference)?;
     Ok(())
 }
 
@@ -196,7 +212,9 @@ pub fn asyncgen_finalizer_hook(
     let core = loop_ref.core.clone();
     drop(loop_ref);
 
-    active_asyncgens_set(py, &core)?.bind(py).discard(agen)?;
+    active_asyncgens_set(py, &core)?
+        .bind(py)
+        .discard(PyWeakrefReference::new(agen)?)?;
     if !core.is_closed() {
         let create_task = loop_obj.getattr("create_task")?;
         let aclose = agen.call_method0("aclose")?;

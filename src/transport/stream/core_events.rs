@@ -393,18 +393,18 @@ impl StreamTransportCore {
                                         self.read_events_scheduled.store(false, Ordering::Release);
                                         return Ok(());
                                     }
-                                    let mut buffer =
-                                        PendingReadBuffer::new(&self.read_coalesce_buffer);
-                                    buffer.extend(&data);
-                                    self.read_buffer_pool.release(data);
-                                    pending_data = Some(buffer);
+                                    pending_data = Some(PendingReadBuffer::from_pooled(
+                                        data,
+                                        &self.read_buffer_pool,
+                                        &self.read_coalesce_buffer,
+                                    ));
                                 }
                                 None => {
-                                    let mut buffer =
-                                        PendingReadBuffer::new(&self.read_coalesce_buffer);
-                                    buffer.extend(&data);
-                                    self.read_buffer_pool.release(data);
-                                    pending_data = Some(buffer);
+                                    pending_data = Some(PendingReadBuffer::from_pooled(
+                                        data,
+                                        &self.read_buffer_pool,
+                                        &self.read_coalesce_buffer,
+                                    ));
                                 }
                             }
                         }
