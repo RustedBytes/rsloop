@@ -1,11 +1,5 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(
-    clippy::all,
-    clippy::pedantic,
-    dead_code,
-    unsafe_op_in_unsafe_fn,
-    unused_imports
-)]
+#![allow(dead_code, unsafe_op_in_unsafe_fn, unused_imports)]
 
 //! # vibeio
 //!

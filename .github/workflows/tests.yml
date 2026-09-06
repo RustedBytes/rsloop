@@ -54,7 +54,7 @@ jobs:
         run: python3 scripts/run_rust_tests.py
 
   clippy:
-    name: clippy (pedantic)
+    name: clippy (risk-focused)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

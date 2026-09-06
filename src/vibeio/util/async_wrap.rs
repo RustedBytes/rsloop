@@ -48,11 +48,20 @@ const BUFFER_SIZE: usize = 4096;
 pub struct AsyncWrap<T> {
     inner: Option<T>,
     read_buf: Option<(Buffer, usize, usize)>,
-    #[allow(clippy::type_complexity)]
+    #[allow(
+        clippy::type_complexity,
+        reason = "Spell out the owned read state returned by the in-flight future"
+    )]
     read_fut: Option<Pin<Box<dyn Future<Output = (Result<usize, std::io::Error>, Buffer, T)>>>>,
-    #[allow(clippy::type_complexity)]
+    #[allow(
+        clippy::type_complexity,
+        reason = "Spell out the owned write state returned by the in-flight future"
+    )]
     write_fut: Option<Pin<Box<dyn Future<Output = (Result<usize, std::io::Error>, T)>>>>,
-    #[allow(clippy::type_complexity)]
+    #[allow(
+        clippy::type_complexity,
+        reason = "Spell out the owned flush state returned by the in-flight future"
+    )]
     flush_fut: Option<Pin<Box<dyn Future<Output = (Result<(), std::io::Error>, T)>>>>,
 }
 

@@ -57,43 +57,18 @@ pyo3-build-config = "0.29.2"
 proptest = { version = "1", default-features = false, features = ["std"] }
 
 [lints.clippy]
-pedantic = { level = "warn", priority = -1 }
-# PyO3 callbacks and cross-thread workers intentionally transfer owned values.
-needless_pass_by_value = "allow"
-# Python protocol methods must keep their receiver and awaitable/Result shapes.
-unused_self = "allow"
-unused_async = "allow"
-# Rust 1.98 also reports intentional awaitable stubs through this separate lint.
-unused_async_trait_impl = "allow"
-unnecessary_wraps = "allow"
-# These internal types are public for PyO3 registration and compatibility
-# re-exports, rather than being a separately documented Rust API.
-missing_errors_doc = "allow"
-missing_panics_doc = "allow"
-must_use_candidate = "allow"
-# Explicit lifetimes and descriptive names make the Python/Rust boundary easier
-# to audit than the shorter forms suggested by these style-only lints.
-elidable_lifetime_names = "allow"
-similar_names = "allow"
-struct_excessive_bools = "allow"
-struct_field_names = "allow"
-too_many_lines = "allow"
-# Keep established control-flow and formatting where the pedantic alternative
-# is preference-only and would obscure diffs in hot transport code.
-explicit_deref_methods = "allow"
-if_not_else = "allow"
-manual_is_variant_and = "allow"
-manual_let_else = "allow"
-map_unwrap_or = "allow"
-needless_continue = "allow"
-option_as_ref_cloned = "allow"
-redundant_closure_for_method_calls = "allow"
-semicolon_if_nothing_returned = "allow"
-single_match_else = "allow"
-uninlined_format_args = "allow"
-# FFI sites retain explicit pointer casts alongside their safety invariants.
-borrow_as_ptr = "allow"
-ref_as_ptr = "allow"
+# Enforce bug, concurrency, and performance checks rather than style preferences.
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+style = { level = "allow", priority = -1 }
+pedantic = { level = "allow", priority = -1 }
+# Keep safety checks even when they belong to an otherwise disabled group.
+missing_safety_doc = "warn"
+cast_ptr_alignment = "warn"
+await_holding_lock = "warn"
+await_holding_refcell_ref = "warn"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(musl_v1_2_3)", "cfg(syscall_accept4)", "cfg(syscall_pipe2)", "cfg(feature, values(\"blocking-default\", \"fs\", \"pipe\", \"process\", \"signal\", \"splice\", \"stdio\"))"] }

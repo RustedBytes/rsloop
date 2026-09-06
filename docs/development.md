@@ -18,8 +18,18 @@ uv run --with maturin maturin develop --release
 
 ## Run Rust lints
 
-Clippy runs with its pedantic lint group enabled by the project manifest, and
-the development command treats every warning as an error:
+Clippy uses a risk-focused policy in `Cargo.toml`: `correctness` is denied,
+and `suspicious`, `perf`, and `complexity` are warnings. Safety documentation,
+pointer alignment, and holding locks or `RefCell` borrows across await points
+are explicitly checked. Blanket `style` and `pedantic` checks are disabled;
+`nursery` and `restriction` are not enabled as groups.
+
+The same policy covers the embedded vibeio runtime, without a blanket Clippy
+suppression. Exceptions should be scoped to the affected item and explain why
+the rule does not fit (for example, retaining inline driver storage). Existing
+vibeio allowances for Rust compiler compatibility are separate from this policy.
+
+CI and the development command treat every enabled warning as an error:
 
 ```bash
 uv run just clippy
@@ -29,6 +39,12 @@ The equivalent Cargo command is:
 
 ```bash
 cargo clippy --all-targets --all-features -- -D warnings
+```
+
+CI also passes `--locked`. Use rustfmt for formatting:
+
+```bash
+cargo fmt --all --check
 ```
 
 ## Run tests

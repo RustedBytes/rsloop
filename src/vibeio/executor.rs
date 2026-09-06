@@ -476,7 +476,10 @@ impl RuntimeInner {
 
         let mut slab = self.token_to_task.borrow_mut();
         let vacant_slab_entry = slab.vacant_entry();
-        #[allow(clippy::arc_with_non_send_sync)]
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "Wakers use atomic reference counting; the future itself remains thread-local"
+        )]
         let task = Arc::new(Task {
             future: RefCell::new(Some(future)),
             queue: Rc::downgrade(&self.queue),

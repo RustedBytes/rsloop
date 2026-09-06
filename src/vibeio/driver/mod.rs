@@ -205,7 +205,10 @@ pub trait Driver {
     fn get_interruptor(&self) -> Self::Interruptor;
 }
 
-#[allow(clippy::large_enum_variant)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep the selected driver inline without an extra allocation or indirection"
+)]
 pub enum AnyDriver {
     Mock(MockDriver),
     #[cfg(windows)]

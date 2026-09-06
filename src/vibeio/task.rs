@@ -138,7 +138,10 @@ mod tests {
     use super::*;
 
     fn task() -> Arc<Task> {
-        #[allow(clippy::arc_with_non_send_sync)]
+        #[allow(
+            clippy::arc_with_non_send_sync,
+            reason = "Match the executor's Arc-backed waker storage for this local task"
+        )]
         Arc::new(Task {
             future: RefCell::new(None),
             queue: Weak::new(),
@@ -153,13 +156,15 @@ mod tests {
     #[test]
     fn borrowed_waker_only_owns_references_when_cloned() {
         let task = task();
-        let borrowed = task.waker_ref();
-        assert_eq!(Arc::strong_count(&task), 1);
-        let owned = borrowed.clone();
-        assert_eq!(Arc::strong_count(&task), 2);
-        borrowed.wake_by_ref();
-        assert!(task.queued.load(Ordering::Relaxed));
-        drop(borrowed);
+        let owned = {
+            let borrowed = task.waker_ref();
+            assert_eq!(Arc::strong_count(&task), 1);
+            let owned = borrowed.clone();
+            assert_eq!(Arc::strong_count(&task), 2);
+            borrowed.wake_by_ref();
+            assert!(task.queued.load(Ordering::Relaxed));
+            owned
+        };
         assert_eq!(Arc::strong_count(&task), 2);
         task.mark_dequeued();
         owned.wake();
