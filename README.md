@@ -332,6 +332,10 @@ These gaps are visible in the current implementation.
 
 ## Build
 
+Local builds and build/test CI use Rust `1.98.1`, pinned in
+[`rust-toolchain.toml`](./rust-toolchain.toml). Rustup selects it automatically
+inside this repository. LLVM tools remain optional for PGO builds.
+
 Quick check:
 
 ```bash

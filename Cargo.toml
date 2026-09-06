@@ -63,6 +63,8 @@ needless_pass_by_value = "allow"
 # Python protocol methods must keep their receiver and awaitable/Result shapes.
 unused_self = "allow"
 unused_async = "allow"
+# Rust 1.98 also reports intentional awaitable stubs through this separate lint.
+unused_async_trait_impl = "allow"
 unnecessary_wraps = "allow"
 # These internal types are public for PyO3 registration and compatibility
 # re-exports, rather than being a separately documented Rust API.

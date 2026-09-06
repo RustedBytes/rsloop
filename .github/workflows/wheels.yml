@@ -68,7 +68,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: "1.98.1"
 
       - name: Install LLVM tools for PGO
         if: github.event_name == 'workflow_dispatch' && inputs.pgo
@@ -118,7 +118,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: "1.98.1"
 
       - name: Cache Cargo registry and target
         uses: Swatinem/rust-cache@v2
