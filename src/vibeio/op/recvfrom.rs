@@ -2,6 +2,7 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::io;
+#[cfg(unix)]
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
 use std::task::{Context, Poll};
@@ -29,14 +30,14 @@ use crate::vibeio::op::socket_addr::sockaddr_storage_to_socketaddr;
 #[inline]
 fn socket_recvfrom(
     socket: SOCKET,
-    buf: &mut [MaybeUninit<u8>],
+    buf: &mut impl IoBufMut,
     peek: bool,
 ) -> io::Result<(usize, SocketAddr)> {
     use windows_sys::Win32::Networking::WinSock::{
         self as WinSock, MSG_PEEK, SOCKADDR, SOCKADDR_STORAGE, SOCKET_ERROR, WSABUF,
     };
 
-    let len = crate::vibeio::op::io_util::completion_len(buf.len()).map_err(|_| {
+    let len = crate::vibeio::op::io_util::completion_len(buf.buf_capacity()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "read buffer is too large for Windows socket I/O",
@@ -45,14 +46,14 @@ fn socket_recvfrom(
 
     let mut wsabuf = WSABUF {
         len,
-        buf: buf.as_mut_ptr().cast(),
+        buf: buf.as_buf_mut_ptr().cast(),
     };
     let mut bytes: u32 = 0;
     let mut flags: u32 = if peek { MSG_PEEK as u32 } else { 0 };
     let mut addr = SOCKADDR_STORAGE::default();
     let mut addr_len = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
 
-    // SAFETY: wsabuf describes the exclusively borrowed writable slice. All
+    // SAFETY: IoBufMut grants exclusively borrowed writable capacity. All
     // output fields are live initialized stack storage; null OVERLAPPED makes
     // this synchronous, so no pointers survive the call.
     let recv_result = unsafe {
@@ -187,14 +188,7 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
 
         #[cfg(windows)]
         let result = match self.handle.handle {
-            RawOsHandle::Socket(socket) => {
-                // SAFETY: IoBufMut guarantees exclusive writable capacity, but
-                // not initialized bytes. The synchronous call retains no pointer.
-                let slice = unsafe {
-                    std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr().cast(), buf.buf_capacity())
-                };
-                socket_recvfrom(socket as SOCKET, slice, self.peek)
-            }
+            RawOsHandle::Socket(socket) => socket_recvfrom(socket as SOCKET, buf, self.peek),
             RawOsHandle::Handle(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "poll-based recvfrom currently supports sockets only on Windows",
@@ -440,6 +434,59 @@ impl<B: IoBufMut> Drop for RecvfromOp<'_, B> {
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn polling_datagrams_preserve_peek_address_and_empty_packet() {
+        use std::net::UdpSocket;
+        #[cfg(unix)]
+        use std::os::fd::AsRawFd;
+        #[cfg(windows)]
+        use std::os::windows::io::AsRawSocket;
+        use std::rc::Rc;
+
+        let reader = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let writer = UdpSocket::bind("127.0.0.1:0").unwrap();
+        reader
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let destination = reader.local_addr().unwrap();
+        let source = writer.local_addr().unwrap();
+        let driver = Rc::new(AnyDriver::new_mock());
+        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
+        #[cfg(unix)]
+        {
+            handle.handle = reader.as_raw_fd();
+        }
+        #[cfg(windows)]
+        {
+            handle.handle = RawOsHandle::Socket(reader.as_raw_socket());
+        }
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let mut buffer = Vec::<u8>::with_capacity(32);
+
+        for payload in [b"abc".as_slice(), b"", b"after empty"] {
+            assert_eq!(writer.send_to(payload, destination).unwrap(), payload.len());
+            for peek in [true, false] {
+                let mut op = if peek {
+                    RecvfromOp::new_peek(&handle, buffer)
+                } else {
+                    RecvfromOp::new(&handle, buffer)
+                };
+                assert!(
+                    matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok((count, addr)))
+                        if count == payload.len() && addr == source)
+                );
+                buffer = op.take_bufs();
+                assert_eq!(buffer, payload);
+            }
+        }
+        reader.set_nonblocking(true).unwrap();
+        assert_eq!(
+            reader.recv_from(&mut [0; 32]).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

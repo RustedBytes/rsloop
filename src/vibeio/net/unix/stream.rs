@@ -8,8 +8,9 @@
 //!
 //! - Unix domain sockets use native async syscalls via the async driver when available.
 //! - When io_uring completion is available, operations complete directly.
-//! - For platforms without native async support, operations fall back to synchronous std::os::unix::net calls.
-//! - The runtime must be active when calling these types' methods; otherwise they will panic.
+//! - Poll mode uses nonblocking socket calls and driver readiness notifications.
+//! - Register sockets and drive async I/O inside a runtime. Registration without
+//!   one returns an error; direct address/option queries need no current runtime.
 
 use std::cell::RefCell;
 use std::future::poll_fn;
@@ -107,20 +108,15 @@ fn new_socket(
 ///
 /// - Unix domain sockets use native async syscalls via the async driver when available.
 /// - When io_uring completion is available, operations complete directly.
-/// - For platforms without native async support, operations fall back to synchronous std::os::unix::net calls.
-/// - The runtime must be active when calling these methods; otherwise they will panic.
+/// - Poll mode uses nonblocking socket calls and driver readiness notifications.
+/// - Registration needs an entered runtime and returns an error without one.
+///   Drive async I/O inside a runtime; direct socket queries need no current runtime.
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use vibeio::net::UnixStream;
-///
-/// let mut stream = UnixStream::connect("/tmp/mysocket").await?;
-/// stream.write(b"hello").await.0?;
-/// let mut buf = [0u8; 1024];
-/// let (read, buf) = stream.read(buf).await;
-/// let read = read?;
-/// ```
+/// See "Unix socket exchange and path cleanup" in
+/// `tools/vibeio-check/EXAMPLES.md` for an executable local connection with
+/// timeout-bounded I/O and explicit socket-path cleanup.
 pub struct UnixStream {
     // Deregister before closing the socket (field declaration order).
     handle: InnerRawHandle,
@@ -134,7 +130,7 @@ pub struct UnixStream {
 ///
 /// # Implementation details
 ///
-/// - Always uses readiness-based I/O via `mio`.
+/// - Always uses readiness-based I/O through the owning runtime driver.
 /// - Can be converted to [`UnixStream`] with adaptive or completion mode.
 pub struct PollUnixStream {
     stream: UnixStream,

@@ -7,8 +7,9 @@
 //!
 //! - On Linux with io_uring support, TCP operations use native async syscalls via the async driver.
 //! - When io_uring completion is available, operations complete directly.
-//! - For platforms without native async support, operations fall back to synchronous std::net calls.
-//! - The runtime must be active when calling these types' methods; otherwise they will panic.
+//! - Poll mode uses nonblocking socket calls and driver readiness notifications.
+//! - Register sockets and drive async I/O inside a runtime. Registration without
+//!   one returns an error; direct address/option queries need no current runtime.
 
 use std::future::poll_fn;
 use std::io;
@@ -53,20 +54,15 @@ fn bind_one(address: SocketAddr) -> Result<StdTcpListener, io::Error> {
 ///
 /// - On Linux with io_uring support, TCP operations use native async syscalls via the async driver.
 /// - When io_uring completion is available, operations complete directly.
-/// - For platforms without native async support, operations fall back to synchronous std::net calls.
-/// - The runtime must be active when calling these methods; otherwise they will panic.
+/// - Poll mode uses nonblocking socket calls and driver readiness notifications.
+/// - Registration needs an entered runtime and returns an error without one.
+///   Drive async I/O inside a runtime; direct socket queries need no current runtime.
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use vibeio::net::TcpListener;
-///
-/// let listener = TcpListener::bind("127.0.0.1:8080").await?;
-/// loop {
-///     let (stream, addr) = listener.accept().await?;
-///     println!("Connection from: {}", addr);
-/// }
-/// ```
+/// See "TCP loopback with the Tokio I/O adapter" in
+/// `tools/vibeio-check/EXAMPLES.md`. Bind is synchronous and fallible; accepting
+/// a connection is asynchronous.
 pub struct TcpListener {
     // Deregister before closing the socket (field declaration order).
     handle: InnerRawHandle,

@@ -24,27 +24,7 @@ use crate::vibeio::fd_inner::RawOsHandle;
 
 use crate::vibeio::fs::open_options::OpenOptions;
 
-/// A file handle for asynchronous file I/O operations.
-///
-/// This struct provides async versions of common file operations like reading,
-/// writing, and syncing. It supports both io_uring completion-based I/O on Linux
-/// and blocking thread pool fallback for other platforms.
-///
-/// # Examples
-///
-/// ```ignore
-/// use vibeio::fs::File;
-///
-/// // Open a file for reading
-/// let file = File::open("hello.txt").await?;
-///
-/// // Read from the file
-/// let mut buf = [0u8; 1024];
-/// let (read, buf) = file.read_at(buf, 0).await;
-/// let read = read?;
-///
-/// println!("Read {} bytes", read);
-/// ```
+/// Selects completion-based I/O or the synchronous/offloaded fallback.
 enum FileIo {
     Completion(InnerRawHandle),
     Blocking,
@@ -58,19 +38,8 @@ enum FileIo {
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use vibeio::fs::File;
-///
-/// // Open a file for reading
-/// let file = File::open("hello.txt").await?;
-///
-/// // Read from the file
-/// let mut buf = [0u8; 1024];
-/// let (read, buf) = file.read_at(buf, 0).await;
-/// let read = read?;
-///
-/// println!("Read {} bytes", read);
-/// ```
+/// See "Filesystem offload" in `tools/vibeio-check/EXAMPLES.md` for an executable
+/// example of opening a file and using the returned count and owned read buffer.
 pub struct File {
     // Fields drop in declaration order: deregister before closing the file.
     io: FileIo,
@@ -97,11 +66,8 @@ impl File {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs::File;
-    ///
-    /// let file = File::open("hello.txt").await?;
-    /// ```
+    /// See the executable "Filesystem offload" example in
+    /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[inline]
     pub async fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         OpenOptions::new().read(true).open(path).await
@@ -125,11 +91,8 @@ impl File {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs::File;
-    ///
-    /// let file = File::create("hello.txt").await?;
-    /// ```
+    /// See the executable "Filesystem offload" example in
+    /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[inline]
     pub async fn create(path: impl AsRef<Path>) -> io::Result<Self> {
         OpenOptions::new()
@@ -223,14 +186,8 @@ impl File {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs::File;
-    ///
-    /// let file = File::open("hello.txt").await?;
-    /// let mut buf = [0u8; 1024];
-    /// let (read, buf) = file.read_at(buf, 0).await;
-    /// let read = read?;
-    /// ```
+    /// See the executable "Filesystem offload" example in
+    /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[inline]
     pub async fn read_at<B: IoBufMut>(&self, mut buf: B, offset: u64) -> (io::Result<usize>, B) {
         if buf.buf_capacity() == 0 {
@@ -274,14 +231,8 @@ impl File {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs::File;
-    ///
-    /// let file = File::open("hello.txt").await?;
-    /// let mut buf = [0u8; 1024];
-    /// let (result, buf) = file.read_exact_at(buf, 0).await;
-    /// result?;
-    /// ```
+    /// See the executable "Filesystem offload" example in
+    /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[inline]
     pub async fn read_exact_at<B: IoBufMut>(&self, buf: B, offset: u64) -> (io::Result<()>, B) {
         exact_at(buf, offset, ExactAt::Read, |buf, offset| {
@@ -309,14 +260,8 @@ impl File {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs::File;
-    ///
-    /// let file = File::create("hello.txt").await?;
-    /// let buf = b"Hello, world!";
-    /// let (written, buf) = file.write_at(buf.to_vec(), 0).await;
-    /// let written = written?;
-    /// ```
+    /// See the executable "Filesystem offload" example in
+    /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[inline]
     pub async fn write_at<B: IoBuf>(&self, buf: B, offset: u64) -> (io::Result<usize>, B) {
         if buf.buf_len() == 0 {
@@ -362,14 +307,8 @@ impl File {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs::File;
-    ///
-    /// let file = File::create("hello.txt").await?;
-    /// let buf = b"Hello, world!";
-    /// let (result, buf) = file.write_exact_at(buf.to_vec(), 0).await;
-    /// result?;
-    /// ```
+    /// See the executable "Filesystem offload" example in
+    /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[inline]
     pub async fn write_exact_at<B: IoBuf>(&self, buf: B, offset: u64) -> (io::Result<()>, B) {
         exact_at(buf, offset, ExactAt::Write, |buf, offset| {
@@ -395,12 +334,8 @@ impl File {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs::File;
-    ///
-    /// let file = File::create("hello.txt").await?;
-    /// file.sync_all().await?;
-    /// ```
+    /// See the executable "Filesystem offload" example in
+    /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[inline]
     pub async fn sync_all(&self) -> io::Result<()> {
         if let Some(handle) = self.completion_handle() {
@@ -438,12 +373,8 @@ impl File {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs::File;
-    ///
-    /// let file = File::create("hello.txt").await?;
-    /// file.sync_data().await?;
-    /// ```
+    /// See the executable "Filesystem offload" example in
+    /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[inline]
     pub async fn sync_data(&self) -> io::Result<()> {
         if let Some(handle) = self.completion_handle() {
@@ -481,13 +412,8 @@ impl File {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs::File;
-    ///
-    /// let file = File::open("hello.txt").await?;
-    /// let metadata = file.metadata().await?;
-    /// println!("File size: {} bytes", metadata.len());
-    /// ```
+    /// See the executable "Filesystem offload" example in
+    /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[inline]
     pub async fn metadata(&self) -> io::Result<Metadata> {
         if let Some(handle) = self.completion_handle() {

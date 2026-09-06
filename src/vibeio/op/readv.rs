@@ -380,6 +380,63 @@ impl<B: IoVectoredBufMut> Drop for ReadvOp<'_, B> {
 mod cancellation_tests {
     use super::*;
 
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn polling_short_read_skips_empty_segments_and_preserves_suffix() {
+        use std::net::UdpSocket;
+        #[cfg(unix)]
+        use std::os::fd::AsRawFd;
+        #[cfg(windows)]
+        use std::os::windows::io::AsRawSocket;
+        use std::rc::Rc;
+
+        // Datagram boundaries make the short read deterministic: a stream may
+        // legally return fewer bytes than its currently queued payload.
+        let reader = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let writer = UdpSocket::bind("127.0.0.1:0").unwrap();
+        reader.connect(writer.local_addr().unwrap()).unwrap();
+        writer.connect(reader.local_addr().unwrap()).unwrap();
+        reader
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let driver = Rc::new(AnyDriver::new_mock());
+        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
+        #[cfg(unix)]
+        {
+            handle.handle = reader.as_raw_fd();
+        }
+        #[cfg(windows)]
+        {
+            handle.handle = RawOsHandle::Socket(reader.as_raw_socket());
+        }
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let mut buffers: Vec<Box<[u8]>> = [0, 2, 0, 4, 0]
+            .into_iter()
+            .map(|len| vec![b'_'; len].into_boxed_slice())
+            .collect();
+        let addresses: Vec<_> = buffers.iter().map(|buf| buf.as_ptr()).collect();
+
+        for payload in [b"abc".as_slice(), b""] {
+            assert_eq!(writer.send(payload).unwrap(), payload.len());
+            let mut op = ReadvOp::new(&handle, buffers);
+            assert!(
+                matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(count))
+                    if count == payload.len())
+            );
+            buffers = op.take_bufs();
+            assert_eq!(&*buffers[1], b"ab");
+            assert_eq!(&*buffers[3], b"c___");
+            assert_eq!(
+                buffers.iter().map(|buf| buf.len()).collect::<Vec<_>>(),
+                [0, 2, 0, 4, 0]
+            );
+            assert_eq!(
+                buffers.iter().map(|buf| buf.as_ptr()).collect::<Vec<_>>(),
+                addresses
+            );
+        }
+    }
+
     #[test]
     fn pending_buffer_is_retained_by_owning_driver() {
         crate::vibeio::op::io_util::cancellation_tests::check_cancellation(

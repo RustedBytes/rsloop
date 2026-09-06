@@ -7,8 +7,9 @@
 //!
 //! - On Linux with io_uring support, UDP operations use native async syscalls via the async driver.
 //! - When io_uring completion is available, operations complete directly.
-//! - For platforms without native async support, operations fall back to synchronous std::net calls.
-//! - The runtime must be active when calling these types' methods; otherwise they will panic.
+//! - Poll mode uses nonblocking socket calls and driver readiness notifications.
+//! - Register sockets and drive async I/O inside a runtime. Registration without
+//!   one returns an error; direct address/option queries need no current runtime.
 
 use std::cell::RefCell;
 use std::future::poll_fn;
@@ -48,20 +49,17 @@ async fn connect_one(handle: &InnerRawHandle, address: SocketAddr) -> Result<(),
 ///
 /// # Implementation details
 ///
-/// - On Linux with io_uring support, UDP operations use native async syscalls via the async driver.
-/// - When io_uring completion is available, operations complete directly.
-/// - For platforms without native async support, operations fall back to synchronous std::net calls.
-/// - The runtime must be active when calling these methods; otherwise they will panic.
+/// - Completion mode submits operations through the owning runtime driver.
+/// - Poll mode uses nonblocking socket calls and waits for readiness on WouldBlock.
+/// - Bind and from_std need an entered runtime for registration and return an
+///   error if none is available. Not every method requires a current runtime;
+///   for example, local_addr queries the already-owned socket directly.
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use vibeio::net::UdpSocket;
-///
-/// let socket = UdpSocket::bind("127.0.0.1:0").await?;
-/// socket.connect("127.0.0.1:9000").await?;
-/// socket.send(b"hello").await?;
-/// ```
+/// See "UDP loopback exchange" in `tools/vibeio-check/EXAMPLES.md` for an
+/// executable example. Bind is synchronous; send and receive return a result
+/// together with the owned buffer.
 pub struct UdpSocket {
     // Deregister before closing the socket (field declaration order).
     handle: InnerRawHandle,
@@ -602,12 +600,8 @@ impl<'a> AsInnerRawHandle<'a> for UdpSocket {
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use vibeio::net::UdpSocket;
-///
-/// let socket = UdpSocket::bind("127.0.0.1:0")?;
-/// let poll_socket = socket.into_poll()?;
-/// ```
+/// See "UDP loopback exchange" in `tools/vibeio-check/EXAMPLES.md` for an
+/// executable conversion followed by receiving a reply through the poll socket.
 pub struct PollUdpSocket {
     socket: UdpSocket,
     read_ready: RefCell<bool>,

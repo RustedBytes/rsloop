@@ -12,24 +12,14 @@
 //!   via the async driver. When io_uring completion is available, operations complete directly.
 //! - For platforms without native async support, operations either offload to a blocking thread pool
 //!   (if file I/O offload is enabled) or fall back to synchronous std::fs calls.
-//! - The runtime must be active when calling these functions; otherwise they will panic.
+//! - Outside a runtime, filesystem operations use synchronous fallbacks when
+//!   polled. Offloading inside a runtime requires a configured blocking pool.
 //!
 //! # Examples
 //!
-//! ```ignore
-//! use vibeio::fs;
-//!
-//! // Write to a file
-//! fs::write("hello.txt", b"Hello, world!").await?;
-//!
-//! // Read from a file
-//! let contents = fs::read_to_string("hello.txt").await?;
-//! println!("File contents: {}", contents);
-//!
-//! // Create a directory
-//! fs::create_dir("my_dir").await?;
-//!
-//! ```
+//! See the executable "Filesystem offload" example in
+//! `tools/vibeio-check/EXAMPLES.md`. It configures a pool explicitly and confines
+//! writes and cleanup to a newly created temporary directory.
 
 mod file;
 mod metadata;
@@ -1082,11 +1072,26 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use crate::vibeio::{
-        driver::AnyDriver,
         executor::Runtime,
         fs::{File, OpenOptions, metadata, read, read_to_string, write},
         io::AsyncWrite,
     };
+
+    // Exercise offloaded filesystem operations without requiring the optional
+    // default pool implementation to be enabled by an unrelated feature.
+    fn filesystem_test_runtime() -> Runtime {
+        struct TestPool;
+        impl crate::vibeio::blocking::BlockingThreadPool for TestPool {
+            fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
+                std::thread::spawn(task);
+            }
+        }
+        crate::vibeio::RuntimeBuilder::new()
+            .driver(crate::vibeio::DriverKind::Mock)
+            .blocking_pool(Box::new(TestPool))
+            .build()
+            .unwrap()
+    }
 
     fn unique_path(name: &str) -> PathBuf {
         let now = SystemTime::now()
@@ -1098,7 +1103,7 @@ mod tests {
 
     #[test]
     fn fs_read_write_helpers_work() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let path = unique_path("helpers");
             write(&path, b"hello world")
@@ -1119,7 +1124,7 @@ mod tests {
 
     #[test]
     fn file_read_at_and_write_exact_at_work() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let path = unique_path("offset");
             let file = OpenOptions::new()
@@ -1203,7 +1208,7 @@ mod tests {
                 std::io::ErrorKind::InvalidInput
             );
         }
-        Runtime::new(AnyDriver::new_mock()).block_on(async {
+        filesystem_test_runtime().block_on(async {
             for (source, destination) in [("\0", "link"), ("target", "\0")] {
                 assert_eq!(
                     super::symlink_file(source, destination)
@@ -1318,7 +1323,7 @@ mod tests {
             }
             panic!("symlink capability probe failed: {error}");
         }
-        Runtime::new(AnyDriver::new_mock()).block_on(async move {
+        filesystem_test_runtime().block_on(async move {
             let destination = root.join("file-link");
             super::symlink_file(&source, &destination).await.unwrap();
             assert_eq!(std::fs::read_link(&destination).unwrap(), source);
@@ -1445,7 +1450,7 @@ mod tests {
 
     #[test]
     fn metadata_basic_properties() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let path = unique_path("metadata");
             write(&path, b"test content")
@@ -1464,7 +1469,7 @@ mod tests {
 
     #[test]
     fn metadata_directory() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let path = unique_path("dir");
             std::fs::create_dir(&path).expect("create_dir should succeed");
@@ -1479,7 +1484,7 @@ mod tests {
 
     #[test]
     fn metadata_timestamps() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let path = unique_path("timestamps");
             write(&path, b"test").await.expect("write should succeed");
@@ -1503,7 +1508,7 @@ mod tests {
 
     #[test]
     fn metadata_permissions() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let path = unique_path("perms");
             write(&path, b"test").await.expect("write should succeed");
@@ -1520,7 +1525,7 @@ mod tests {
 
     #[test]
     fn metadata_file_type() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let path = unique_path("type");
             write(&path, b"test").await.expect("write should succeed");
@@ -1538,7 +1543,7 @@ mod tests {
 
     #[test]
     fn metadata_empty_file() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let path = unique_path("empty");
             let mut file = OpenOptions::new()
@@ -1559,7 +1564,7 @@ mod tests {
 
     #[test]
     fn create_dir_works() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let path = unique_path("create_dir");
             crate::vibeio::fs::create_dir(&path)
@@ -1577,7 +1582,7 @@ mod tests {
 
     #[test]
     fn create_dir_all_works() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let base = unique_path("create_dir_all");
             let path = base.join("a/b/c");
@@ -1608,7 +1613,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlink_metadata_works() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let target = unique_path("symlink_target");
             let link = unique_path("symlink");
@@ -1645,7 +1650,7 @@ mod tests {
 
     #[test]
     fn symlink_metadata_on_regular_file() {
-        let runtime = Runtime::new(AnyDriver::new_mock());
+        let runtime = filesystem_test_runtime();
         runtime.block_on(async {
             let path = unique_path("regular_file");
             write(&path, b"content")

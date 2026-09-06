@@ -400,6 +400,12 @@ pub unsafe trait IoVectoredBuf: 'static {
 }
 
 /// Owned writable buffers for vectored input operations.
+///
+/// A successful read returns the total number of bytes initialized across the
+/// descriptors in order, skipping empty regions. Unlike `IoBufMut`, this trait
+/// has no initialization-length setter: reads do not resize individual buffers
+/// or update custom initialization metadata. Implementations exposing spare
+/// capacity must use the returned byte count before exposing those bytes safely.
 /// # Safety
 ///
 /// Every returned vector must describe exclusively writable memory that remains

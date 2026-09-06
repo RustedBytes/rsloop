@@ -9,17 +9,8 @@
 //!
 //! # Examples
 //!
-//! ```ignore
-//! use vibeio::RuntimeBuilder;
-//!
-//! let runtime = RuntimeBuilder::new().build().unwrap();
-//! let value = runtime.block_on(async {
-//!     // Spawn a task and await its result
-//!     let handle = vibeio::spawn(async { 42 });
-//!     handle.await + 10
-//! });
-//! assert_eq!(value, 52);
-//! ```
+//! See "Spawning and joining tasks" and "Blocking work with an explicit pool"
+//! in `tools/vibeio-check/EXAMPLES.md` for executable examples.
 //!
 //! # Implementation notes
 //! - The runtime is single-threaded, with a local ready queue and a remote wake queue.
@@ -135,7 +126,17 @@ where
                 }
                 Poll::Ready(())
             }
-            Poll::Pending => Poll::Pending,
+            Poll::Pending => {
+                // Cancellation during the inner poll cannot take its future
+                // from the task slot: the executor is currently holding it.
+                // Finish now so its resources are dropped in this task batch,
+                // even if the embedding loop does not run another tick.
+                if this.state.borrow().canceled {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }
         }
     }
 }
@@ -146,10 +147,8 @@ where
 /// It allows you to wait for a spawned task to complete and get its result.
 ///
 /// # Examples
-/// ```ignore
-/// let handle = vibeio::spawn(async { 42 });
-/// let result = handle.await;  // result == 42
-/// ```
+/// See "Spawning and joining tasks" in `tools/vibeio-check/EXAMPLES.md` for
+/// awaiting an output and explicitly canceling an unpolled task.
 pub struct JoinHandle<T> {
     state: Rc<RefCell<JoinState<T>>>,
 }
@@ -164,6 +163,8 @@ impl<T> JoinHandle<T> {
     /// Cancels the task associated with this handle.
     ///
     /// The task will be interrupted and not resumed.
+    /// If called from inside the task's own poll, its future is released when
+    /// that poll returns; otherwise its pending future is released immediately.
     #[inline]
     pub fn cancel(self) {
         let task = {
@@ -378,10 +379,7 @@ pub(crate) async fn current_zombie_reaper() -> Option<async_channel::Sender<Zomb
 /// Panics if called outside a runtime context.
 ///
 /// # Examples
-/// ```ignore
-/// let handle = vibeio::spawn(async { 42 });
-/// let result = handle.await;
-/// ```
+/// See "Spawning and joining tasks" in `tools/vibeio-check/EXAMPLES.md`.
 pub fn spawn<T>(future: impl Future<Output = T> + 'static) -> JoinHandle<T>
 where
     T: 'static,
@@ -408,12 +406,8 @@ where
 /// or if the pool does not deliver a result.
 ///
 /// # Examples
-/// ```ignore
-/// let result = vibeio::spawn_blocking(|| {
-///     // blocking work
-///     42
-/// }).await?;
-/// ```
+/// See "Blocking work with an explicit pool" in
+/// `tools/vibeio-check/EXAMPLES.md` for a checked result and pool configuration.
 pub async fn spawn_blocking<T, F>(f: F) -> Result<T, SpawnBlockingError>
 where
     T: Send + 'static,
@@ -467,11 +461,7 @@ pub(crate) struct RuntimeInner {
 /// - File I/O offloading (when the `fs` feature is enabled).
 ///
 /// # Examples
-/// ```ignore
-/// let runtime = RuntimeBuilder::new().build().unwrap();
-/// let value = runtime.block_on(async { 42 });
-/// assert_eq!(value, 42);
-/// ```
+/// See "Spawning and joining tasks" in `tools/vibeio-check/EXAMPLES.md`.
 pub struct Runtime {
     inner: Option<Rc<RuntimeInner>>,
 }
@@ -1266,6 +1256,48 @@ mod tests {
                 .borrow()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn self_cancellation_releases_future_when_its_current_poll_returns() {
+        struct OnDrop(Rc<Cell<usize>>);
+        impl Drop for OnDrop {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        for ready in [false, true] {
+            let runtime = Runtime::new(AnyDriver::new_mock());
+            let slot = Rc::new(RefCell::new(None::<JoinHandle<()>>));
+            let own_handle = slot.clone();
+            let drops = Rc::new(Cell::new(0));
+            let guard = OnDrop(drops.clone());
+            let polls = Rc::new(Cell::new(0));
+            let polled = polls.clone();
+            let handle = runtime.spawn(std::future::poll_fn(move |_| {
+                let _keep_alive = &guard;
+                polled.set(polled.get() + 1);
+                own_handle.borrow_mut().take().unwrap().cancel();
+                if ready {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }));
+            *slot.borrow_mut() = Some(handle);
+            runtime.poll_once();
+            assert_eq!(polls.get(), 1);
+            assert_eq!(drops.get(), 1, "cancellation must not require another tick");
+            assert!(
+                runtime
+                    .inner
+                    .as_ref()
+                    .unwrap()
+                    .token_to_task
+                    .borrow()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]

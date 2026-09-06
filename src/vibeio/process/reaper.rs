@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::io::{self};
 use std::process::ExitStatus;
 use std::task::{Context, Poll, Waker};
@@ -463,13 +465,17 @@ async fn zombie_reaper_fn(rx: async_channel::Receiver<ZombieReaperMessage>) {
 #[cfg(target_os = "linux")]
 #[inline]
 fn pidfd_available() -> bool {
+    use std::os::fd::{FromRawFd, OwnedFd};
+
     // Try opening a pidfd for our own PID — it will succeed on 5.3+ and fail
     // with ENOSYS on older kernels.
-    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0 as libc::c_uint) };
+    let pid = std::process::id() as libc::pid_t;
+    // SAFETY: pidfd_open takes the current process's integer PID and zero flags,
+    // with no pointers. A successful result transfers a fresh descriptor.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0 as libc::c_uint) };
     if fd >= 0 {
-        unsafe {
-            libc::close(fd as libc::c_int);
-        }
+        // SAFETY: the successful syscall returned a valid, uniquely owned fd.
+        let _pidfd = unsafe { OwnedFd::from_raw_fd(fd as libc::c_int) };
         true
     } else {
         let err = io::Error::last_os_error();

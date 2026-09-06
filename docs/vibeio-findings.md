@@ -1,5 +1,9 @@
 # Remaining Qualirs finding dispositions
 
+Current rescan after the kqueue ownership follow-up: **220** diagnostics
+(95 Q0087, 63 Q0090, 44 Q0095 and 18 in other rules). Findings remain enabled;
+the per-location dispositions below do not remove them from analyzer output.
+
 Rescan before the RecvOp follow-up: **231** diagnostics (106 Q0087, 63 Q0090,
 44 Q0095 and 18 in other rules). Older counts below remain historical snapshots.
 
@@ -40,6 +44,482 @@ anchors. No rules were disabled for this review.
 | Q0082 | signal/windows.rs:94, CtrlC::drop | Open synchronization constraint: removes its slab entry under a std mutex. Retired waker drops occur after unlocking; cross-thread contention remains possible. Portable state tests are not native console lifecycle verification. |
 
 ## Still requiring per-location review
+
+### Network backend and registration documentation
+
+Removed stale module/type notes claiming networking falls back to blocking-pool
+or synchronous standard-library I/O and that every method panics without a
+runtime. Poll mode instead uses nonblocking calls plus readiness; registration
+without a runtime returns an error, while direct address/option queries use the
+owned socket. Async I/O should still be driven inside a runtime. The module notes
+now explicitly distinguish synchronous bind/address resolution from data I/O.
+Poll stream descriptions refer to the owning readiness driver, not exclusively Mio.
+
+Added an executed no-runtime registration regression for standard UDP sockets,
+TCP listeners and Unix stream pairs, checking NotConnected rather than panic.
+All 245 Linux harness tests and 16 documentation checks pass; Windows/macOS
+all-feature Clippy compile the applicable tests. Strict rustdoc and formatting
+pass. The test does not prove all methods work outside a runtime or validate
+native Windows/macOS execution.
+
+### Process examples and final ignored-example removal
+
+Replaced the final five ignored process examples with one executable Unix/sh
+example covering child stdin, stdout, stderr, wait, command status and captured
+output. The old stdin snippet called write_all on an owned-buffer stream without
+an adapter; the replacement uses AsyncWrap, flushes and closes stdin, then drains
+both output pipes concurrently with child.wait. It checks bytes and exit status,
+configures its pool independently of blocking-default, and bounds async work
+with a timeout without claiming timeout kills the process.
+
+Process-only and all-feature doctests pass: 16 checks, zero ignored examples.
+One of those checks remains the intentionally compile-only stdin echo example;
+feature/platform-gated blocks execute only when applicable. The process example
+executes on Linux and is explicitly Unix-gated, not evidence of Windows execution.
+Strict rustdoc, formatting and whitespace checks pass. Removing ignored examples
+does not close the remaining unsafe/lifecycle review or native platform gates.
+
+### Executable splice example
+
+Replaced the ignored splice example's dependency on data.txt and the separately
+gated vibeio pipe helper with a self-contained standard-pipe-to-Unix-socket
+transfer. It executes with splice alone, closes the producer to establish EOF,
+checks the short transferred count against a larger requested limit, and verifies
+all bytes at the peer. I/O is timeout-bounded; the tiny payload avoids requiring
+a concurrent consumer. The example uses PollUnixStream's direct Tokio traits,
+not AsyncWrap, which adapts the separate owned-buffer traits.
+
+Clarified the module summary: splice_exact stops at EOF and can return fewer
+than len bytes. Splice-only and all-feature doctests pass (15 checks each), with
+zero and five ignored examples respectively. Strict rustdoc and formatting pass.
+This exercises the Linux readiness path, not io_uring completion or throughput.
+
+### Unix socket examples
+
+Replaced three ignored Unix-socket examples using a fixed /tmp/mysocket path
+and an incorrectly awaited bind with a finite executable example. It creates a
+unique short directory, checks the bound pathname, polls connect and accept
+together, and verifies a flushed message through the Tokio adapter. A five-second
+timeout bounds the exchange. An ownership guard removes only the created socket
+path and directory; the docs explain that dropping the listener alone does not
+unlink a filesystem socket.
+
+No-feature and all-feature doctests pass (14 checks each). There are no ignored
+examples in the default-feature build and six under all features. Strict rustdoc,
+formatting and whitespace checks pass. The Unix example executes with Mio on
+Linux; macOS execution remains outstanding and Windows gates this block out.
+
+### TCP and Tokio-adapter examples
+
+Replaced four ignored TCP/AsyncWrap examples with a finite loopback exchange.
+The listener snippets incorrectly awaited synchronous bind; the adapter snippet
+called an undefined placeholder reader. The executable replacement binds an
+ephemeral port, polls connect and accept together, checks the peer address, and
+uses Tokio read_exact/write_all over AsyncWrap without requiring a Tokio runtime.
+Explicit flushes deliver both messages; dropping the client allows read_to_end
+to observe EOF. A five-second timeout bounds stalled I/O. The example documents
+the adapter's lack of half-close and limits itself to sequential request/response,
+not a claimed full-duplex fix.
+
+No-feature and all-feature doctests pass (13 checks each), with 3 and 9 ignored
+examples respectively. Strict rustdoc, formatting and whitespace checks pass.
+This is Linux execution; native Windows/macOS validation remains outstanding.
+
+### UDP examples and runtime requirements
+
+Replaced three ignored UDP examples with one executable, timeout-bounded loopback
+exchange on ephemeral ports. The old adaptive-socket snippets incorrectly awaited
+synchronous bind, lacked a mutable binding for connect, and applied ? to send's
+(result, buffer) tuple. The replacement checks the send count and receive sender,
+then converts to poll mode and verifies a reply plus preservation of local address.
+No external server or fixed service port is needed.
+
+Corrected UdpSocket's implementation notes: poll mode is nonblocking readiness
+I/O, not a blocking std::net fallback; registration outside a runtime returns an
+error rather than a blanket panic on every method. No-feature and all-feature
+doctests pass (12 checks each), leaving 7 and 13 ignored examples respectively.
+Strict rustdoc and formatting pass. Executed on Linux; native Windows/macOS
+network behavior remains unverified by this example.
+
+### Signal example cancellation semantics
+
+Replaced two ignored signal examples with references to the executable signal
+wait example. The old module example gated only the Unix listener declaration,
+leaving its recv call outside that platform gate. The replacement gates the
+whole Unix block and tests SIGTERM registration plus immediate receive timeout
+without sending process signals. It explicitly drops the retained listener:
+canceling its borrowed recv future does not itself unregister the listener.
+The existing Ctrl-C cancellation example remains covered in the same test.
+
+Isolated signal and all-feature doctests pass (11 checks each), with 10 and 16
+ignored examples respectively. Strict rustdoc, formatting and whitespace checks
+pass. These Linux executions verify registration/cancellation, not native
+Windows console delivery or external-handler/fork races.
+
+### Runtime and blocking-task examples
+
+Replaced six ignored builder/executor examples with references to two executable
+harness examples. The first constructs a runtime, enters it with block_on,
+cancels an unpolled task and joins another task's output. The canceled task would
+panic if polled, so successful execution checks cancellation instead of only
+compilation. The second explicitly configures the optional default blocking pool
+and checks spawn_blocking's fallible result. Documentation distinguishes dropping
+a join handle from explicit cancellation and notes that running blocking work
+cannot be stopped by dropping its future.
+
+No-feature and all-feature doctests pass: 11 checks each, with 10 and 18 ignored
+examples respectively. The pool example executes under all features and is gated
+out without blocking-default. Strict rustdoc, formatting and whitespace checks
+pass. These are Linux executions, not new native Windows/macOS evidence.
+
+### File method examples now exercised
+
+The nine remaining ignored File method examples now reference the executable
+filesystem example. Added explicit coverage for File::create, read_exact_at,
+write_at, sync_data, sync_all and handle metadata; File::open, read_at and
+write_exact_at were already exercised there. The write_at example handles a
+short successful count by writing only the remaining suffix at the advanced
+offset. Final readback verifies contents, not just the resulting file size.
+Created files live only in the owned scratch directory and close before cleanup.
+
+Isolated fs and all-feature doctests pass (9 checks each), leaving 16 and 24
+ignored examples respectively. Strict rustdoc, formatting and whitespace checks
+pass. These executed Linux examples exercise offload, not io_uring or native
+Windows/macOS behavior; they do not simulate crashes to prove disk durability.
+
+### Metadata example semantics
+
+The FileType::is_symlink example incorrectly called metadata, which follows the
+link and reports its target. Replaced it with explicit symlink_metadata guidance
+and executable Unix coverage comparing both queries on the same link. Consolidated
+the other four ignored metadata/file-type examples into the same scratch-directory
+harness example, adding size, regular-file and directory assertions. The link
+is relative to the scratch directory and has explicit cleanup. Its Unix gating
+avoids requiring Windows symlink privileges, rather than silently skipping errors.
+
+Metadata's backend documentation now distinguishes completion-backed queries
+from synchronous/offloaded standard-library fallbacks. Isolated fs and all-feature
+doctests pass (9 checks each); ignored counts are 25 and 33 respectively. Strict
+rustdoc and formatting pass. Symlink execution is verified on Linux only.
+
+### File and OpenOptions example consolidation
+
+Removed a duplicated public File example incorrectly attached to the private
+FileIo enum, replacing it with an accurate description of that enum's role.
+File, OpenOptions and OpenOptions::open now reference the executable filesystem
+example instead of ignored snippets operating on fixed working-directory paths.
+Expanded the example to read five bytes at offset seven into owned Vec capacity,
+check the returned count/prefix, then truncate only its scratch file and perform
+an exact positional write with returned-buffer verification. Closing the handles
+before cleanup also makes the example suitable for Windows file-sharing rules.
+
+Isolated-fs and all-feature documentation checks pass (9 each), with ignored
+examples reduced to 30 and 38 respectively. Strict rustdoc, formatting and
+whitespace checks pass. Native Windows/macOS execution remains unverified.
+
+### Executable filesystem module example
+
+Replaced the ignored filesystem module example, which wrote fixed paths in the
+current directory, with a pointer to a runnable harness example. The replacement
+configures an explicit demonstration pool, exercises write/read/create_dir and
+metadata, and cleans only known paths beneath its successfully created unique
+scratch directory. It runs with fs alone as well as all features, without relying
+on blocking-default. The example identifies its thread-per-operation pool as a
+demonstration, not a production pool recommendation.
+
+Corrected the module's blanket claim that calls outside a runtime panic; current
+open/file/path implementations have synchronous fallbacks. Isolated fs and
+all-feature doctests pass: 9 documentation checks, with 34 and 42 ignored examples
+respectively. Strict all-feature rustdoc passes. The filesystem example executes
+on Linux; native Windows/macOS example execution is still outstanding.
+
+### Process Option reborrows and blocking-operation documentation
+
+Reviewed seven process/mod.rs Q0090 sites from the 220-finding snapshot:
+
+| Snapshot location | Disposition |
+| --- | --- |
+| 326, ChildStdin::write | Option<ChildStdin>::as_mut is borrowed through &mut self only in the synchronous fallback. Offloaded writes instead take owned storage and restore it after awaiting. |
+| 351, ChildStdin::flush | Safe Option reborrow for synchronous flush; no raw cast. The worker path separately owns the stream. |
+| 380, ChildStdout::read | Safe Option reborrow for synchronous read_into_buf; exclusive buffer initialization is delegated to that checked helper. |
+| 414, ChildStderr::read | Same safe synchronous stream reborrow; no alias is manufactured by as_mut. |
+| 606, Child::inner_mut | Converts an exclusive Option<Child> borrow to Result<&mut Child>, reporting consumed state. |
+| 682, Command::inner_mut | Converts an exclusive Option<Command> borrow to &mut Command, with an intentional consumed-state panic. |
+| 773, Command::spawn | Safe exclusive Option reborrow for std's synchronous spawn; consumed state returns an error. |
+
+Corrected module documentation that claimed nonblocking process interaction and
+a runtime requirement even for the synchronous outside-runtime fallback. Added
+explicit status/output and module-level cancellation notes: once an offload owns
+the object, dropping its pending future does not stop the worker or restore the
+wrapper. Infallible consumed-command accessors can panic. This documents an open
+reusability limitation rather than claiming cancellation recovery is fixed.
+
+### Reaper raw ownership review
+
+No ManuallyDrop or ptr::read ownership conversions remain under src/vibeio.
+The Linux pidfd capability probe now wraps its successful descriptor in OwnedFd
+instead of manually closing it, and uses std::process::id rather than an unsafe
+getpid call. Its existing ENOSYS-only capability decision is unchanged.
+Enabled module-local undocumented-unsafe enforcement in process/reaper.rs.
+
+Retained Windows wait_callback's Arc::from_raw: the registrar transfers exactly
+one strong reference to the one-shot callback and holds its own reference until
+the wait handle is published. Failed registration recovers the transferred
+reference; it cannot invoke the callback. The Q0095 registration block is one
+FFI call with independent output storage, not a sequence of unchecked mutations.
+Existing early-callback tests compile but still need native Windows execution.
+This review does not prove all native wait teardown behavior or eliminate the
+thread-creation-failure fallback's blocking wait.
+
+Validation: 173 isolated process-feature Linux tests and 8 documentation checks
+pass, along with root and Windows-target all-feature Clippy and formatting.
+
+### Splice staging-pipe ownership
+
+Removed WriteOwnedFd's ManuallyDrop wrapper and custom unsafe destructor.
+Its InnerRawHandle field now precedes OwnedFd so ordinary field destruction
+deregisters before closing the pipe writer. Constructor-local ownership also
+continues to close the writer if registration or flag setup fails.
+
+Added an executed Linux regression for successful construction/drop and injected
+registration failure. The nonblocking reader observes EOF on both paths (a
+descriptor leak would instead fail with WouldBlock); the mock ledger records
+exactly one deregistration on success and none for rejected registration.
+The test does not inject a subsequent fcntl failure. All 244 all-feature harness
+tests, 173 isolated splice-feature tests, 8 documentation checks per configuration,
+strict root Clippy and formatting pass.
+
+### Exact splice interruption recovery
+
+splice_exact and sendfile_exact previously propagated Interrupted immediately.
+For sendfile_exact, an interrupted drain could discard a nonempty staging pipe
+even though its source position had already advanced. Both helpers now use a
+shared retry wrapper; transfer totals and pending staged bytes are unchanged
+until a successful syscall count arrives. EOF, WriteZero and non-interrupted
+errors retain their existing behavior. Public docs describe the retry policy.
+
+Added a deterministic transfer_batches regression: interrupted fill, five-byte
+fill, two-byte drain, interrupted drain, remaining three-byte drain, then EOF.
+It checks every requested count, exact attempt counts and five transferred bytes.
+The original code failed with Interrupted; the fixed code passes. This does not
+claim rollback of staged bytes on cancellation or other terminal errors.
+
+Validation: 243 all-feature Linux harness tests, 172 isolated splice-feature
+tests, 8 documentation checks per configuration, strict root Clippy and
+formatting pass. Production default-feature Python behavior is unchanged.
+
+### Splice completion count and syscall boundary
+
+SpliceOp's per-operation cap still used u32::MAX despite the driver's signed
+i32 completion-result format. Aligned it with i32::MAX, preserving the existing
+short-transfer policy rather than rejecting larger requests. The boundary test
+now includes i32::MAX and i32::MAX+1; it failed on the former implementation's
+cap and passes after the change. No multi-gigabyte allocation or actual kernel
+count overflow was reproduced. Public splice docs now state the cap and point
+to splice_exact for repeated transfers.
+
+Reviewed op/splice.rs:108 (Q0095 in the 220-finding snapshot): the long unsafe
+block is one syscall with null offset pointers, no userspace data buffers, and
+SPLICE_F_NONBLOCK. Added its local contract and enabled module-local unsafe
+comment enforcement. Existing duplicate-fd and poll contracts remain in place;
+NONBLOCK does not promise that regular-file storage access cannot block.
+
+All 242 all-feature Linux harness tests, 171 isolated splice-feature tests,
+8 documentation checks in each configuration, strict root Clippy, formatting
+and whitespace checks pass. Splice is Linux-only and optional; this follow-up
+does not alter the default-feature Python path last measured.
+
+### Builder platform-query boundaries
+
+Reviewed builder.rs:23 (Q0095 in the 220-finding snapshot). The nine-line unsafe
+block contains a single sysctlbyname call, not nine lines of unsafe logic. Its
+NUL-terminated constant name, 64-byte initialized output buffer and length
+out-parameter remain live through the call; null newp requests no modification.
+The safe parser bounds-checks the returned length before reading it. Existing
+tests cover out-of-range sizes, missing/interior NULs, invalid UTF-8 and version
+thresholds. Retained the readable call formatting; no lint suppression added.
+
+The Windows query duplicated OSVERSIONINFOW and RtlGetVersion locally. Replaced
+both with windows-sys 0.61.2's generated structure and function, inspecting the
+installed binding's signature and field layout first. Enabled its SystemServices
+and SystemInformation feature gates in root and isolated harness manifests.
+Structure size initialization, NTSTATUS error handling and minimum-version policy
+are unchanged. Added a Windows-only test that invokes the native query on the
+supported test host, in addition to the existing portable threshold tests.
+
+Windows all-target/all-feature Clippy passes, and all 242 Linux harness tests
+and 8 documentation checks pass. Native Windows execution and linking remain
+outstanding (no MinGW linker found locally); no successful native query is
+claimed from cross-compilation alone.
+
+### Apple datagram wake retries
+
+Both native kqueue and the Apple Mio fallback recursively called wake after
+Interrupted. Replaced that duplicated recursion with one iterative send helper,
+so repeated interruptions do not depend on compiler tail-call optimization to
+bound stack use. Successful sends still finish immediately, WouldBlock still
+means a wake is already queued, and other errors are returned unchanged.
+
+The shared helper is compiled for Apple production builds and all test targets.
+A Linux-executed deterministic test injects 100,000 interruptions before each
+of success, WouldBlock and BrokenPipe, checking attempt counts and preservation
+of the terminal error. No signal delivery or native macOS wake reliability is
+inferred from that simulation. All 242 Linux harness tests and 8 documentation
+checks pass; root and macOS-target all-feature Clippy pass. This does not change
+the production Linux wake path tested by the latest Python/matrix run.
+
+### Executor reborrow audit and self-cancellation fix
+
+Reviewed the four executor Q0090 locations in the 220-finding snapshot:
+
+| Snapshot location | Disposition |
+| --- | --- |
+| executor.rs:724 | Root future is pinned with pin!; Pin::as_mut safely reborrows it for each poll. |
+| executor.rs:803 | Spawned future is Pin<Box<dyn Future>> taken from its RefCell slot. Moving the box does not move the pinned allocation; the slot borrow is dropped before polling. |
+| executor.rs:852 | &mut *inner.token_to_task.borrow_mut() is a safe RefMut dereference used by mem::take. The slab is detached before user futures are dropped. |
+| executor.rs:1342 | The remote-wake test uses pin! and Pin::as_mut for sequential receiver polls. No unchecked projection or pointer cast occurs. |
+
+The Q0090 claims themselves are false positives, but inspection found a separate
+lifecycle defect: a task canceling itself during poll could return Pending and
+be restored to its task slot until a later scheduler tick. SpawnFuture now
+rechecks cancellation after a pending inner poll and reports completion so the
+executor drops its storage in the same batch. Documented the distinction between
+immediate cancellation of a suspended task and cancellation during its own poll.
+
+Added a regression covering self-cancellation followed by Pending and Ready.
+It checks one poll, one destructor call and immediate slab reclamation after
+poll_once. The Pending case failed before the fix (zero destructor calls), then
+passed. All 241 Linux harness tests, 8 documentation checks and strict root
+Clippy pass. This changes the task-poll path; Python integration and performance
+measurements have not yet been refreshed for this follow-up.
+
+### Q0090 safe reborrows reviewed in the 220-finding snapshot
+
+These nine diagnostics misidentify safe reference reborrows as unsafe mutable
+casts. Inspection included the containing fields and methods, not just the
+flagged expression. Locations identify this snapshot and may move with edits.
+
+| Location under src/vibeio | Expression/type and disposition |
+| --- | --- |
+| time/timeout.rs:75 | future_pin.as_mut() reborrows Pin<&mut Option<F>> obtained through pin_project_lite. as_pin_mut projects the optional future; no raw-pointer cast or unchecked projection is present here. |
+| time/timeout.rs:90 | this.sleep.as_mut() borrows Option<Sleep> through the distinct unpinned projected field; Pin::new checks its Unpin requirement. This does not alias the projected future. |
+| util/async_wrap.rs:92 | write_fut.as_mut() borrows Option<Pin<Box<dyn Future>>> through &mut self. Polling retains the boxed future's pin; the slot is cleared only after the ready result is extracted. |
+| util/async_wrap.rs:105 | flush_fut.as_mut() has the same safe Option/Pin<Box> reborrow and ready-before-clear structure for the flush slot. |
+| util/async_wrap.rs:172 | read_fut.as_mut() borrows the owned pinned future slot; after completion the returned buffer and inner stream are recovered before use. No mutable pointer cast occurs at this expression. |
+| op/io_util.rs:496 | Test borrows CompletionBuffer<[u8; 32]> mutably to obtain an address for equality checks. The pointer is not dereferenced after moving the wrapper; the test checks boxed storage stability. |
+| op/io_util.rs:542 | CompletionBuffer::as_mut matches &mut self; its Box branch uses Box::as_mut to return the exclusive borrow. No unsafe block or cast exists in the method. |
+| process/reaper.rs:31 | ReapChild::deref_mut uses Option<Child>::as_mut through &mut self and returns that exclusive reference. No raw pointer or unsafe operation occurs. |
+| process/reaper.rs:249 | Test uses Pin<Box<future>>::as_mut to poll a pinned wait future. The result is consumed before the next poll; no unchecked pin operation is present. |
+
+These close only the stated Q0090 claims at these nine sites. They do not close
+AsyncWrap's full-duplex limitation, the reaper's thread-creation-failure fallback,
+or the separate cancellation/FFI findings elsewhere.
+
+Refreshed integrated validation: run_rust_tests.py --all-features passes all
+357 root tests, including the embedded vibeio and rsloop transport suites.
+Log: target/vibeio-cleanup-root-current.log. This Linux run does not execute
+Windows/macOS-only regressions.
+
+### Kqueue descriptor ownership and FFI boundaries
+
+KqueueDriver now owns its queue through OwnedFd rather than a raw descriptor
+and custom Drop. Ownership is acquired immediately after successful creation,
+so failed wake-socket setup and failed wake-filter installation both release
+the queue automatically. The queue remains the first field, preserving closure
+before registration/user-waker destruction. Kernel calls borrow its raw handle.
+
+Documented all five remaining unsafe sites in this module: queue creation,
+ownership acquisition, changelist submission, event retrieval and initialized
+event-prefix access. Enabled module-local undocumented-unsafe Clippy enforcement.
+macOS all-target/all-feature Clippy passes; 240 Linux harness tests and 8 docs
+pass but do not execute the macOS implementation. Native shutdown, registration
+rollback and deletion-failure regressions still require macOS execution.
+
+### Kqueue deregistration error handling
+
+Deregistration removed the slab entry, then used early-return propagation for
+each filter deletion. Failure deleting the read filter therefore skipped the
+write filter entirely. It now attempts every installed filter, returning the
+first error and retiring wakers outside the driver-state borrow as before.
+
+Added fault-injection coverage for read-only failure, write-only failure and
+both failures. The test verifies both deletions are attempted, the first error
+is retained, the slab token is retired, successful deletion removes real kernel
+state, and failed filters remain available for explicit test cleanup. It also
+checks the state is not borrowed during deletion. macOS all-target/all-feature
+Clippy compiles the test; native execution remains outstanding. Linux harness
+tests (240), documentation checks (8), formatting and whitespace checks pass.
+This prevents skipping independent cleanup; it does not guarantee removal of a
+filter whose kernel deletion actually fails.
+
+### Kqueue initial-registration rollback
+
+Initial registration previously submitted both filters in one changelist and
+removed only the slab token on failure. A partially applied changelist could
+leave a kernel filter behind. Registration now attempts deletion of every
+requested filter before discarding the token, continuing cleanup after a
+deletion failure. Successful cleanup preserves the original registration error;
+failed cleanup reports both errors. The normal successful path still uses one
+batch submission.
+
+[Apple's kevent manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/kevent.2.html)
+describes per-element changelist errors rather than transaction rollback.
+The new regression applies zero, one or both real kernel filters before injecting
+an error, checks subsequent raw deletions return ENOENT, and verifies the open
+descriptor can be registered again. macOS-target all-target/all-feature Clippy
+compiles this regression; native execution remains outstanding. Exceptional
+rollback failure can still leave filters until descriptor/queue closure and is
+now surfaced, not claimed solved. Existing interest-change retry behavior is
+unchanged; this fix addresses initial registration only.
+
+### ReadvOp polling initialization contract
+
+ReadvOp already uses owned descriptors without constructing a temporary byte
+slice. IoVectoredBufMut intentionally has no initialization-length setter;
+documented that callers with custom spare-capacity storage must use the returned
+byte count, and that individual buffer lengths are not automatically changed.
+
+Added a connected-UDP regression for deterministic short reads across leading,
+interior and trailing empty segments. It verifies the returned count, prefix
+contents, unchanged suffix, descriptor lengths and allocation addresses, then
+checks that an empty datagram leaves all buffers unchanged. It passes on Linux
+and compiles under Windows/macOS all-target/all-feature Clippy. The full Linux
+harness now passes 240 tests and 8 documentation checks. This is polling-path
+coverage, not native Windows/macOS execution or validation of Windows file
+staging and asynchronous completion.
+
+### RecvfromOp polling buffer boundary
+
+The Windows synchronous WSARecvFrom helper now borrows IoBufMut directly,
+removing its temporary raw-parts slice. Capacity is checked before extracting
+the writable pointer; address validation and successful-prefix initialization
+are unchanged. MaybeUninit is now imported only for the Unix address storage.
+SendtoOp already borrows IoBuf directly and needed no equivalent change.
+
+Added a cross-platform UDP loopback regression exercising a nonempty packet,
+an empty datagram, and another nonempty packet using the same owned buffer.
+Each packet is peeked and then consumed, checking both payload and sender address;
+the final nonblocking receive confirms that no packet was left queued. A read
+timeout bounds failures. This covers polling, not overlapped MSG_PEEK support.
+
+Validation: 239 Linux harness tests and 8 documentation checks pass. Windows
+and macOS all-target/all-feature Clippy compile the test; native execution on
+those platforms remains outstanding.
+
+### ReadOp buffer boundary
+
+Follow-up after commit 39dde2b: the Windows synchronous socket helper borrows
+IoBufMut directly, validates capacity before pointer extraction, and no longer
+constructs a temporary MaybeUninit slice with from_raw_parts_mut. The existing
+successful-read initialization and completion/cancellation retention are unchanged.
+Added a Windows loopback regression using an empty Vec with spare capacity:
+one received byte becomes initialized, then EOF clears its initialized length.
+The socket has a five-second read timeout to bound a broken regression.
+
+Validation: 238 Linux harness tests and 8 documentation checks pass; strict
+Windows all-target/all-feature Clippy compiles the new regression. Native Windows
+execution remains outstanding; this is not evidence of an overlapped-read test
+or a performance improvement.
 
 ### RecvOp buffer boundary
 

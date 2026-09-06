@@ -7,8 +7,9 @@
 //!
 //! - Unix domain sockets use native async syscalls via the async driver when available.
 //! - When io_uring completion is available, operations complete directly.
-//! - For platforms without native async support, operations fall back to synchronous std::os::unix::net calls.
-//! - The runtime must be active when calling these types' methods; otherwise they will panic.
+//! - Poll mode uses nonblocking socket calls and driver readiness notifications.
+//! - Register sockets and drive async I/O inside a runtime. Registration without
+//!   one returns an error; direct address/option queries need no current runtime.
 
 use std::future::poll_fn;
 use std::io;
@@ -32,20 +33,15 @@ use crate::vibeio::op::AcceptUnixOp;
 ///
 /// - Unix domain sockets use native async syscalls via the async driver when available.
 /// - When io_uring completion is available, operations complete directly.
-/// - For platforms without native async support, operations fall back to synchronous std::os::unix::net calls.
-/// - The runtime must be active when calling these methods; otherwise they will panic.
+/// - Poll mode uses nonblocking socket calls and driver readiness notifications.
+/// - Registration needs an entered runtime and returns an error without one.
+///   Drive async I/O inside a runtime; direct socket queries need no current runtime.
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use vibeio::net::UnixListener;
-///
-/// let listener = UnixListener::bind("/tmp/mysocket").await?;
-/// loop {
-///     let (stream, addr) = listener.accept().await?;
-///     println!("Connection from: {:?}", addr);
-/// }
-/// ```
+/// See "Unix socket exchange and path cleanup" in
+/// `tools/vibeio-check/EXAMPLES.md`. Bind is synchronous; accepting is async.
+/// Dropping a listener closes its socket but does not unlink its pathname.
 pub struct UnixListener {
     // Deregister before closing the socket (field declaration order).
     handle: InnerRawHandle,

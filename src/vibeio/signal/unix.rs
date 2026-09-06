@@ -171,10 +171,10 @@ impl PendingSignals {
 /// the signal is received.
 ///
 /// # Examples
-/// ```ignore
-/// let mut sig = Signal::new(SignalKind::terminate())?;
-/// sig.recv().await?;  // Wait for SIGTERM
-/// ```
+/// See "Registering and cancelling signal waits" in
+/// `tools/vibeio-check/EXAMPLES.md` for an executable SIGTERM registration and
+/// receive-timeout example. Dropping a receive future alone does not unregister
+/// a retained listener; drop the listener when it is no longer needed.
 pub struct Signal {
     kind: SignalKind,
     state: Arc<SignalState>,

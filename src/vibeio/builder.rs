@@ -64,32 +64,15 @@ fn ensure_supported_macos_release(buffer: &[u8], length: usize) -> std::io::Resu
 
 #[cfg(windows)]
 fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
-    #[allow(non_snake_case)]
-    #[repr(C)]
-    struct OsVersionInfo {
-        dwOSVersionInfoSize: u32,
-        dwMajorVersion: u32,
-        dwMinorVersion: u32,
-        dwBuildNumber: u32,
-        dwPlatformId: u32,
-        szCSDVersion: [u16; 128],
-    }
+    use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
+    use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 
-    #[link(name = "ntdll")]
-    unsafe extern "system" {
-        fn RtlGetVersion(info: *mut OsVersionInfo) -> i32;
-    }
-
-    let mut info = OsVersionInfo {
-        dwOSVersionInfoSize: std::mem::size_of::<OsVersionInfo>() as u32,
-        dwMajorVersion: 0,
-        dwMinorVersion: 0,
-        dwBuildNumber: 0,
-        dwPlatformId: 0,
-        szCSDVersion: [0; 128],
+    let mut info = OSVERSIONINFOW {
+        dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+        ..OSVERSIONINFOW::default()
     };
-    // SAFETY: the repr(C) structure has the OSVERSIONINFOW field layout and
-    // initialized size expected by RtlGetVersion, with exclusive writable storage.
+    // SAFETY: info is initialized OSVERSIONINFOW storage with its required size
+    // field set, exclusively borrowed through this synchronous version query.
     let status = unsafe { RtlGetVersion(&mut info) };
     if status < 0 {
         return Err(std::io::Error::other(format!(
@@ -168,12 +151,8 @@ impl DriverKind {
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use vibeio::RuntimeBuilder;
-///
-/// let runtime = RuntimeBuilder::new()
-///     .build();
-/// ```
+/// See "Spawning and joining tasks" and "Blocking work with an explicit pool"
+/// in `tools/vibeio-check/EXAMPLES.md` for executable builder configurations.
 pub struct RuntimeBuilder {
     driver_kind: Option<DriverKind>,
     enable_timer: bool,
@@ -276,6 +255,12 @@ impl Default for RuntimeBuilder {
 #[cfg(test)]
 mod tests {
     use super::{ensure_supported_macos_release, ensure_supported_windows_version};
+
+    #[cfg(windows)]
+    #[test]
+    fn native_windows_version_query_supports_the_test_host() {
+        super::ensure_rsloop_platform().expect("tests require Windows 10 or newer");
+    }
 
     #[test]
     fn macos_version_parsing_uses_only_reported_bytes() {

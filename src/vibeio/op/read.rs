@@ -25,10 +25,10 @@ use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]
-fn socket_read(socket: SOCKET, buf: &mut [std::mem::MaybeUninit<u8>]) -> io::Result<usize> {
+fn socket_read(socket: SOCKET, buf: &mut impl IoBufMut) -> io::Result<usize> {
     use windows_sys::Win32::Networking::WinSock::{self as WinSock, SOCKET_ERROR, WSABUF};
 
-    let len = crate::vibeio::op::io_util::completion_len(buf.len()).map_err(|_| {
+    let len = completion_len(buf.buf_capacity()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "read buffer is too large for Windows socket I/O",
@@ -37,12 +37,12 @@ fn socket_read(socket: SOCKET, buf: &mut [std::mem::MaybeUninit<u8>]) -> io::Res
 
     let mut wsabuf = WSABUF {
         len,
-        buf: buf.as_mut_ptr().cast(),
+        buf: buf.as_buf_mut_ptr().cast(),
     };
     let mut bytes: u32 = 0;
     let mut flags: u32 = 0;
 
-    // SAFETY: wsabuf describes exclusive writable MaybeUninit bytes. All output
+    // SAFETY: IoBufMut grants exclusive writable capacity. All output
     // locals remain live during this synchronous, null-OVERLAPPED call.
     let recv_result = unsafe {
         WinSock::WSARecv(
@@ -125,14 +125,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
 
         #[cfg(windows)]
         let result = match self.handle.handle {
-            RawOsHandle::Socket(socket) => {
-                // SAFETY: IoBufMut guarantees exclusive writable capacity, but
-                // not initialized bytes. The synchronous call retains no pointer.
-                let slice = unsafe {
-                    std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr().cast(), buf.buf_capacity())
-                };
-                socket_read(socket as SOCKET, slice)
-            }
+            RawOsHandle::Socket(socket) => socket_read(socket as SOCKET, buf),
             RawOsHandle::Handle(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "poll-based read currently supports sockets only on Windows",
@@ -312,6 +305,36 @@ impl<B: IoBufMut> Drop for ReadOp<'_, B> {
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn socket_read_initializes_spare_capacity_and_clears_length_at_eof() {
+        use std::io::Write;
+        use std::net::{Shutdown, TcpListener, TcpStream};
+        use std::os::windows::io::AsRawSocket;
+        use std::rc::Rc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut writer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (reader, _) = listener.accept().unwrap();
+        reader
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        writer.write_all(b"x").unwrap();
+        writer.shutdown(Shutdown::Write).unwrap();
+
+        let driver = Rc::new(AnyDriver::new_mock());
+        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
+        handle.handle = RawOsHandle::Socket(reader.as_raw_socket());
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let mut op = ReadOp::new(&handle, Vec::<u8>::with_capacity(32));
+        assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(1))));
+        let buffer = op.take_bufs();
+        assert_eq!(buffer, b"x");
+        let mut op = ReadOp::new(&handle, buffer);
+        assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(0))));
+        assert!(op.take_bufs().is_empty());
+    }
 
     #[cfg(unix)]
     #[test]

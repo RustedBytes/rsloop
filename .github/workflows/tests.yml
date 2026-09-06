@@ -102,6 +102,7 @@ jobs:
         run: |
           for feature in '' fs process signal pipe stdio splice blocking-default; do
             cargo clippy --manifest-path tools/vibeio-check/Cargo.toml --all-targets --no-default-features --features "$feature" --locked -- -D warnings
+            cargo test --manifest-path tools/vibeio-check/Cargo.toml --no-default-features --features "$feature" --locked
           done
 
       - name: Run default-feature embedded runtime tests

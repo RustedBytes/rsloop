@@ -88,14 +88,7 @@ impl DriverWaker {
 
     #[inline]
     fn wake(&self) -> io::Result<()> {
-        match self.sender.send(&[1]) {
-            Ok(_) => Ok(()),
-            // A full socket is already readable and therefore already carries
-            // the wake notification we need.
-            Err(err) if err.kind() == ErrorKind::WouldBlock => Ok(()),
-            Err(err) if err.kind() == ErrorKind::Interrupted => self.wake(),
-            Err(err) => Err(err),
-        }
+        super::send_wake_datagram(|| self.sender.send(&[1]))
     }
 
     fn acknowledge(&self) {

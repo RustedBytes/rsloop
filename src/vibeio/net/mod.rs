@@ -15,41 +15,28 @@
 //! Implementation notes:
 //! - On Linux with io_uring support, some operations use native async syscalls (e.g. `accept4`, `sendto`)
 //!   via the async driver. When io_uring completion is available, operations complete directly.
-//! - For platforms without native async support, operations either offload to a blocking thread pool
-//!   or fall back to synchronous std::net calls.
-//! - The runtime must be active when calling these functions; otherwise they will panic.
+//! - Poll mode uses nonblocking socket calls and driver readiness notifications,
+//!   not a blocking-pool fallback. Binding and ToSocketAddrs resolution are
+//!   synchronous setup operations; prefer resolved addresses if DNS may block.
+//! - Register sockets and drive async I/O inside a runtime. Missing-runtime
+//!   registration returns an error; direct address/option queries need no current runtime.
 //!
 //! # Examples
 //!
 //! ## TCP Server
 //!
-//! ```ignore
-//! use vibeio::net::TcpListener;
-//!
-//! let listener = TcpListener::bind("127.0.0.1:8080").await?;
-//! loop {
-//!     let (stream, addr) = listener.accept().await?;
-//!     println!("Connection from: {}", addr);
-//! }
-//! ```
+//! See "TCP loopback with the Tokio I/O adapter" in
+//! `tools/vibeio-check/EXAMPLES.md` for a finite client/server exchange.
 //!
 //! ## UDP Client
 //!
-//! ```ignore
-//! use vibeio::net::UdpSocket;
-//!
-//! let socket = UdpSocket::bind("127.0.0.1:0").await?;
-//! socket.connect("127.0.0.1:9000").await?;
-//! socket.send(b"hello").await?;
-//! ```
+//! See "UDP loopback exchange" in `tools/vibeio-check/EXAMPLES.md` for an
+//! executable example with owned buffers, ephemeral ports and a timeout.
 //!
 //! ## Unix Domain Socket
 //!
-//! ```ignore
-//! use vibeio::net::UnixStream;
-//!
-//! let stream = UnixStream::connect("/tmp/mysocket").await?;
-//! ```
+//! See "Unix socket exchange and path cleanup" in
+//! `tools/vibeio-check/EXAMPLES.md` for an executable, Unix-gated example.
 
 mod tcp;
 mod udp;
@@ -62,6 +49,30 @@ pub use tcp::*;
 pub use udp::*;
 #[cfg(unix)]
 pub use unix::*;
+
+#[cfg(test)]
+mod registration_tests {
+    #[test]
+    fn socket_registration_without_runtime_returns_an_error() {
+        use std::io::ErrorKind;
+        assert!(crate::vibeio::executor::current_driver().is_none());
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        assert!(
+            matches!(super::UdpSocket::from_std(udp), Err(error) if error.kind() == ErrorKind::NotConnected)
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        assert!(
+            matches!(super::TcpListener::from_std(listener), Err(error) if error.kind() == ErrorKind::NotConnected)
+        );
+        #[cfg(unix)]
+        {
+            let (stream, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            assert!(
+                matches!(super::UnixStream::from_std(stream), Err(error) if error.kind() == ErrorKind::NotConnected)
+            );
+        }
+    }
+}
 
 #[cfg(all(test, unix))]
 mod ownership_tests {

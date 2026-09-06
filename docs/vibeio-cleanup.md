@@ -22,6 +22,48 @@ runtime is safe or that the Qualirs review is finished.
 
 ## Current inventory
 
+### Refreshed isolated-feature execution
+
+- All 24 strict Clippy combinations pass: no features and each of fs, process,
+  signal, pipe, stdio, splice and blocking-default on Linux, Windows GNU and
+  macOS ARM64 targets. Windows/macOS checks remain compilation, not execution.
+- Running the Linux feature tests exposed 12 fs-only failures previously hidden
+  by all-features tests: test runtimes assumed blocking-default supplied a pool.
+  Filesystem success tests now configure a small explicit test pool; the two
+  Windows-only filesystem fixtures use it too. Production feature dependencies
+  and no-pool error policy remain unchanged. The fs-only suite now passes 196
+  tests, including those 12 formerly failing tests.
+- All eight Linux configurations now execute successfully: none 159, fs 196,
+  process 173, signal 171, pipe 163, stdio 165, splice 173, blocking-default 161.
+  Each also passes 8 documentation checks. The fs-only Clippy checks were rerun
+  successfully on all three targets after the fixture fix.
+- The native CI isolated-feature loop now runs cargo test as well as Clippy.
+  This workflow change is uncommitted and has not been dispatched; native
+  Windows/macOS results remain outstanding.
+
+### Integration after self-cancellation fix
+
+- Rebuilt and installed the default-feature release extension with maturin
+  develop --release --locked (37.67 seconds compilation). Environment: Linux
+  x86_64, CPython 3.14.0, rsloop 0.1.48, uvloop 0.22.1. Python suite passed:
+  109 tests in 3.320 seconds, with two skips.
+- Re-ran all 13 workload-matrix scenarios for rsloop and uvloop on CPUs 2,3.
+  All 26 loop/scenario records contain three measured runs and completed without
+  a benchmark failure. This is an integration smoke run, not a matched
+  before/after performance experiment.
+- Idle v2 completed all six fresh-process runs (three per loop), each with
+  100 measured cycles and five warmup cycles at 0.2 seconds idle. The observed
+  paired latency difference was **+35.6% for rsloop versus uvloop**. The harness
+  labels it inconclusive because fewer than seven process runs provide no
+  confidence interval; this result neither establishes a scheduler regression
+  nor supports a speedup claim. Sustained paired measurements remain necessary.
+- Current artifacts (ignored, overwritten by future refreshes):
+  target/vibeio-cleanup-rebuild-current.log,
+  target/vibeio-cleanup-python-current.log,
+  target/vibeio-cleanup-matrix-current.log and the matching .json file.
+  Earlier sections below retain historical results. No README speed claims
+  were changed, and native Windows/macOS validation remains outstanding.
+
 ### Owned multishot accept queue
 
 - io_uring's accept queue now stores Result<OwnedFd, i32> instead of raw signed

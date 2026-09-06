@@ -49,17 +49,9 @@ const BUFFER_SIZE: usize = 4096;
 /// error kind. Interrupted writes are retried internally and do not fail it.
 ///
 /// # Examples
-/// ```ignore
-/// use tokio::io::{AsyncReadExt, AsyncWriteExt};
-/// use vibeio::util::AsyncWrap;
-///
-/// // Wrap a vibeio async reader
-/// let mut reader = some_vibeio_reader();
-/// let mut wrap = AsyncWrap::new(reader);
-///
-/// let mut buf = Vec::new();
-/// wrap.read_to_end(&mut buf).await?;  // tokio method
-/// ```
+/// See "TCP loopback with the Tokio I/O adapter" in
+/// `tools/vibeio-check/EXAMPLES.md` for an executable request/response exchange,
+/// including explicit flushes and reading through EOF after peer closure.
 pub struct AsyncWrap<T> {
     inner: Option<T>,
     write_error: Option<std::io::ErrorKind>,

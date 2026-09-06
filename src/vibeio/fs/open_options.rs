@@ -28,24 +28,8 @@ use crate::vibeio::fs::file::File;
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use vibeio::fs::OpenOptions;
-///
-/// // Open a file for reading
-/// let file = OpenOptions::new()
-///     .read(true)
-///     .open("hello.txt")
-///     .await?;
-///
-/// // Create a new file for writing (truncate if exists)
-/// let file = OpenOptions::new()
-///     .write(true)
-///     .create(true)
-///     .truncate(true)
-///     .open("output.txt")
-///     .await?;
-///
-/// ```
+/// See "Filesystem offload" in `tools/vibeio-check/EXAMPLES.md` for an executable
+/// example of opening for reading and truncating a scratch file for writing.
 #[derive(Clone, Debug)]
 pub struct OpenOptions {
     read: bool,
@@ -173,14 +157,9 @@ impl OpenOptions {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs::OpenOptions;
-    ///
-    /// let file = OpenOptions::new()
-    ///     .read(true)
-    ///     .open("hello.txt")
-    ///     .await?;
-    /// ```
+    /// See the executable "Filesystem offload" example in
+    /// `tools/vibeio-check/EXAMPLES.md`; all modified paths belong to its scratch
+    /// directory rather than the current working directory.
     #[inline]
     pub async fn open(&self, path: impl AsRef<Path>) -> io::Result<File> {
         self.validate()?;

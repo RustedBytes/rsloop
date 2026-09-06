@@ -53,6 +53,21 @@ pub(crate) fn completion_error(result: i32) -> io::Error {
     }
 }
 
+#[cfg(any(target_vendor = "apple", test))]
+#[inline]
+fn send_wake_datagram(mut send: impl FnMut() -> io::Result<usize>) -> io::Result<()> {
+    loop {
+        match send() {
+            Ok(_) => return Ok(()),
+            // A full nonblocking socket already has a queued wake notification.
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            // Retry without recursive stack growth under repeated signals.
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        }
+    }
+}
+
 #[inline]
 fn unsupported_completion_error() -> io::Error {
     io::Error::new(
@@ -566,6 +581,37 @@ impl AnyDriver {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn wake_datagram_retries_interruptions_without_losing_terminal_result() {
+        use std::io::{self, ErrorKind};
+        for terminal in [
+            None,
+            Some(ErrorKind::WouldBlock),
+            Some(ErrorKind::BrokenPipe),
+        ] {
+            let mut attempts = 0usize;
+            let result = super::send_wake_datagram(|| {
+                attempts += 1;
+                if attempts <= 100_000 {
+                    return Err(ErrorKind::Interrupted.into());
+                }
+                assert_eq!(attempts, 100_001, "must stop at the terminal result");
+                match terminal {
+                    None => Ok(1),
+                    Some(kind) => Err(io::Error::new(kind, "terminal send result")),
+                }
+            });
+            assert_eq!(attempts, 100_001);
+            if terminal == Some(ErrorKind::BrokenPipe) {
+                let error = result.unwrap_err();
+                assert_eq!(error.kind(), ErrorKind::BrokenPipe);
+                assert_eq!(error.to_string(), "terminal send result");
+            } else {
+                result.unwrap();
+            }
+        }
+    }
+
     use super::AnyDriver;
     use std::{
         future::poll_fn,

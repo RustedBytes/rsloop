@@ -7,23 +7,19 @@ use std::time::{Duration, UNIX_EPOCH};
 /// File metadata information.
 ///
 /// This type mirrors a subset of [`std::fs::Metadata`]. On supported Linux
-/// targets we back it by `statx` (via io_uring), otherwise we delegate to
-/// `std::fs::metadata` on a blocking thread.
+/// targets completion-backed queries use `statx` (via io_uring). Fallback
+/// queries use standard-library metadata, offloaded when filesystem offload is
+/// enabled or queried synchronously otherwise.
 ///
 /// # Platform-specific behavior
 ///
-/// - On Linux with io_uring support and glibc/musl v1.2.3+, this uses the `statx` syscall directly
-///   for better async performance.
-/// - On other platforms, this uses the standard library's `std::fs::Metadata`.
+/// - On supported Linux targets, completion-backed queries use `statx` directly.
+/// - Other queries use the standard library's `std::fs::Metadata`.
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use vibeio::fs;
-///
-/// let metadata = fs::metadata("hello.txt").await?;
-/// println!("File size: {} bytes", metadata.len());
-/// ```
+/// See "Filesystem offload" in `tools/vibeio-check/EXAMPLES.md` for executable
+/// file-size, directory and symlink metadata checks using isolated paths.
 #[derive(Clone, Debug)]
 pub struct Metadata {
     inner: MetadataInner,
@@ -216,18 +212,8 @@ mod tests {
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use vibeio::fs;
-///
-/// let metadata = fs::metadata("hello.txt").await?;
-/// let file_type = metadata.file_type();
-///
-/// if file_type.is_file() {
-///     println!("It's a file!");
-/// } else if file_type.is_dir() {
-///     println!("It's a directory!");
-/// }
-/// ```
+/// See "Filesystem offload" in `tools/vibeio-check/EXAMPLES.md` for executable
+/// file-type checks, including the difference between metadata and symlink_metadata.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FileType {
     is_dir: bool,
@@ -240,14 +226,7 @@ impl FileType {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs;
-    ///
-    /// let metadata = fs::metadata("my_dir").await?;
-    /// if metadata.file_type().is_dir() {
-    ///     println!("It's a directory!");
-    /// }
-    /// ```
+    /// The "Filesystem offload" harness example creates and checks a directory.
     #[inline]
     pub fn is_dir(&self) -> bool {
         self.is_dir
@@ -257,14 +236,7 @@ impl FileType {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs;
-    ///
-    /// let metadata = fs::metadata("hello.txt").await?;
-    /// if metadata.file_type().is_file() {
-    ///     println!("It's a file!");
-    /// }
-    /// ```
+    /// The "Filesystem offload" harness example checks a regular file's type.
     #[inline]
     pub fn is_file(&self) -> bool {
         self.is_file
@@ -274,14 +246,10 @@ impl FileType {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use vibeio::fs;
-    ///
-    /// let metadata = fs::metadata("link_to_file").await?;
-    /// if metadata.file_type().is_symlink() {
-    ///     println!("It's a symlink!");
-    /// }
-    /// ```
+    /// Use [`super::symlink_metadata`] to inspect the link itself;
+    /// [`super::metadata`] follows it and reports the target's file type.
+    /// See the Unix symlink checks in "Filesystem offload" in
+    /// `tools/vibeio-check/EXAMPLES.md`.
     #[inline]
     pub fn is_symlink(&self) -> bool {
         self.is_symlink

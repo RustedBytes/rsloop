@@ -5,15 +5,9 @@
 //! - On Unix, `Signal` and `signal()` allow listening for specific signals.
 //!
 //! # Examples
-//! ```ignore
-//! // Wait for Ctrl-C (cross-platform)
-//! vibeio::signal::ctrl_c()?.await?;
-//!
-//! // Wait for SIGTERM (Unix only)
-//! # #[cfg(unix)]
-//! let mut sig = vibeio::signal::signal(vibeio::signal::SignalKind::terminate())?;
-//! sig.recv().await?;
-//! ```
+//! See "Registering and cancelling signal waits" in
+//! `tools/vibeio-check/EXAMPLES.md` for executable Ctrl-C and Unix SIGTERM
+//! examples. They use immediate timeouts instead of waiting for external input.
 //!
 //! # Implementation notes
 //! - On Unix, signals are delivered via a dedicated dispatch thread that reads

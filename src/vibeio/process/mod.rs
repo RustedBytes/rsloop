@@ -1,12 +1,13 @@
 //! Process utilities for spawning and managing child processes.
 //!
 //! This module provides async-aware wrappers around `std::process::Command` and
-//! `std::process::Child`, allowing you to spawn and interact with child processes
-//! without blocking the executor.
+//! `std::process::Child`, with driver-backed pipe I/O and offloaded blocking
+//! operations when configured inside a runtime.
 //!
 //! Key types:
 //! - `Command`: an async-aware builder for spawning child processes.
-//! - `Child`: represents a running child process with async `wait()`, `kill()`, etc.
+//! - `Child`: represents a running child process with async `wait()` and
+//!   synchronous `kill()` and `try_wait()` methods.
 //! - `ChildStdin`, `ChildStdout`, `ChildStderr`: async-aware stdio streams.
 //!
 //! Implementation notes:
@@ -15,9 +16,19 @@
 //!   when the driver is unavailable or registration fails.
 //! - Child drop retains reaping ownership through a runtime reaper when available
 //!   or a background-thread fallback otherwise.
-//! - Construction and child waiting can run outside a runtime. Async stdio's
-//!   blocking fallback requires a runtime with a blocking pool and reports an
-//!   I/O error when that pool is unavailable.
+//! - Construction and child waiting can run outside a runtime. Inside a runtime,
+//!   stdio's blocking fallback and Command::status/output require a blocking
+//!   pool. Outside a runtime, those fallback operations execute synchronously
+//!   when polled. Command::spawn always invokes std's synchronous spawn.
+//!
+//! # Cancellation of blocking operations
+//!
+//! An offloaded operation owns its stream or command until its worker finishes.
+//! Dropping the pending future does not stop the worker or restore that object
+//! to its wrapper. The wrapper remains consumed; operations return a closed or
+//! consumed error, and infallible command configuration/accessors may panic.
+//! A future dropped before its first poll has not transferred ownership.
+//! This limitation is distinct from Unix driver-backed pipe cancellation.
 
 mod reaper;
 
@@ -146,10 +157,9 @@ where
 /// the executor.
 ///
 /// # Examples
-/// ```ignore
-/// let mut child = Command::new("cat").stdin(Stdio::piped()).spawn()?;
-/// child.stdin.as_mut().unwrap().write_all(b"hello\n").await?;
-/// ```
+/// See "Child-process pipes and exit status" in
+/// `tools/vibeio-check/EXAMPLES.md` for a Unix-gated executable example with
+/// checked I/O results, explicit flushing and concurrent pipe draining.
 pub struct ChildStdin {
     inner: Option<std::process::ChildStdin>,
     #[allow(dead_code)]
@@ -163,11 +173,9 @@ pub struct ChildStdin {
 /// the executor.
 ///
 /// # Examples
-/// ```ignore
-/// let mut child = Command::new("echo").stdout(Stdio::piped()).spawn()?;
-/// let mut buf = vec![0u8; 64];
-/// let (result, buf) = child.stdout.as_mut().unwrap().read(buf).await;
-/// ```
+/// See "Child-process pipes and exit status" in
+/// `tools/vibeio-check/EXAMPLES.md` for a Unix-gated executable example with
+/// checked I/O results, explicit flushing and concurrent pipe draining.
 pub struct ChildStdout {
     inner: Option<std::process::ChildStdout>,
     #[allow(dead_code)]
@@ -181,11 +189,9 @@ pub struct ChildStdout {
 /// the executor.
 ///
 /// # Examples
-/// ```ignore
-/// let mut child = Command::new("sh").stderr(Stdio::piped()).spawn()?;
-/// let mut buf = vec![0u8; 64];
-/// let (result, buf) = child.stderr.as_mut().unwrap().read(buf).await;
-/// ```
+/// See "Child-process pipes and exit status" in
+/// `tools/vibeio-check/EXAMPLES.md` for a Unix-gated executable example with
+/// checked I/O results, explicit flushing and concurrent pipe draining.
 pub struct ChildStderr {
     inner: Option<std::process::ChildStderr>,
     #[allow(dead_code)]
@@ -545,11 +551,9 @@ impl IntoRawHandle for ChildStderr {
 /// - `stdin`, `stdout`, `stderr`: async streams for stdio.
 ///
 /// # Examples
-/// ```ignore
-/// let mut child = Command::new("echo").arg("hello").spawn()?;
-/// let status = child.wait().await?;
-/// println!("exit status: {}", status);
-/// ```
+/// See "Child-process pipes and exit status" in
+/// `tools/vibeio-check/EXAMPLES.md` for a Unix-gated executable example with
+/// checked I/O results, explicit flushing and concurrent pipe draining.
 pub struct Child {
     inner: Option<std::process::Child>,
     id: u32,
@@ -657,13 +661,9 @@ impl Drop for Child {
 /// - `output()`: run the process to completion and return its output.
 ///
 /// # Examples
-/// ```ignore
-/// let status = Command::new("echo")
-///     .arg("hello")
-///     .status()
-///     .await?;
-/// println!("exit status: {}", status);
-/// ```
+/// See "Child-process pipes and exit status" in
+/// `tools/vibeio-check/EXAMPLES.md` for a Unix-gated executable example with
+/// checked I/O results, explicit flushing and concurrent pipe draining.
 pub struct Command {
     inner: Option<std::process::Command>,
 }
@@ -779,6 +779,9 @@ impl Command {
     /// Run the process to completion and return its exit status.
     ///
     /// This is an async version of `std::process::Command::status`.
+    /// Inside a runtime it requires a blocking pool; outside one it blocks when
+    /// polled. Canceling a pending offload leaves this command consumed and does
+    /// not stop the worker. See the module's cancellation notes.
     #[inline]
     pub async fn status(&mut self) -> io::Result<ExitStatus> {
         if current_driver().is_some() {
@@ -795,6 +798,9 @@ impl Command {
     /// Run the process to completion and return its output.
     ///
     /// This is an async version of `std::process::Command::output`.
+    /// Inside a runtime it requires a blocking pool; outside one it blocks when
+    /// polled. Canceling a pending offload leaves this command consumed and does
+    /// not stop the worker. See the module's cancellation notes.
     #[inline]
     pub async fn output(&mut self) -> io::Result<Output> {
         if current_driver().is_some() {

@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::task::{Context, Poll};
@@ -49,9 +51,10 @@ impl<'a> SpliceOp<'a> {
         Self {
             fd_in,
             fd_out,
-            // The completion ABI has a 32-bit length. A larger request must
-            // make a short transfer, never wrap to zero and masquerade as EOF.
-            len: len.min(u32::MAX as usize),
+            // SQE lengths are unsigned, but successful CQE counts must fit i32:
+            // negative results encode errors. Larger requests make a short
+            // transfer, never wrap to zero and masquerade as EOF.
+            len: len.min(i32::MAX as usize),
             completion_token: None,
             source_registration: None,
             completion_fds: None,
@@ -105,6 +108,9 @@ impl Op for SpliceOp<'_> {
         driver: &AnyDriver,
     ) -> Poll<io::Result<Self::Output>> {
         let result = {
+            // SAFETY: null offsets select the descriptors' current positions;
+            // no userspace payload pointers are supplied or retained. The kernel
+            // validates descriptors, and NONBLOCK avoids waiting on pipe buffers.
             let returned = unsafe {
                 libc::splice(
                     self.fd_in,
@@ -480,12 +486,14 @@ mod tests {
         for len in [
             0,
             17,
+            i32::MAX as usize,
+            i32::MAX as usize + 1,
             u32::MAX as usize,
             (u32::MAX as usize).saturating_add(1),
             usize::MAX,
         ] {
             let op = SpliceOp::new(reader.as_raw_fd(), &handle, len);
-            assert_eq!(op.len, len.min(u32::MAX as usize));
+            assert_eq!(op.len, len.min(i32::MAX as usize));
         }
     }
 }
