@@ -1170,3 +1170,41 @@ separate synchronization design.
   296 root all-feature tests, 179 harness tests, and 6 doctests pass (44 ignored).
   Root all-target/all-feature strict Clippy, formatting, and whitespace checks
   pass, including the new benchmark. Broader package cleanup remains open.
+
+## Datagram source-address length validation
+
+- After the committed cleanup batch, refreshed Qualirs and reviewed recvfrom's
+  address decoding. Poll and completion paths previously ignored the returned
+  source-address length while interpreting IPv4/IPv6 fields.
+- The shared per-platform decoder now rejects lengths smaller than the selected
+  address structure or larger than storage capacity. Unix recvfrom, Linux
+  recvmsg completion, Windows synchronous WSARecvFrom, and Windows completion
+  all pass their returned lengths. Negative Windows lengths cast to oversized
+  usize values and are rejected. Added size/alignment/union safety explanations
+  beside the address casts; no blanket suppression was introduced.
+- Regression tests cover IPv4/IPv6 exact lengths, truncated/empty/oversized
+  responses, and usize::MAX. Linux executes these tests; Windows/macOS variants
+  are cross-compiled. This hardens parsing of malformed metadata; no normal
+  kernel misbehavior or end-to-end vulnerability is claimed from the finding.
+- Validation passes: 297 root all-feature tests, 180 harness tests and 6 doctests
+  (44 ignored), Linux/Windows-target/macOS-target strict harness Clippy, formatting,
+  and whitespace checks. Native non-Linux receive execution remains unverified.
+
+## Recvfrom unsafe-boundary documentation and metadata reuse
+
+- Reviewed the remaining recvfrom unsafe blocks and documented synchronous
+  output-storage lifetimes, initialized-prefix publication after successful I/O,
+  Winsock error retrieval, retained overlapped storage, and validity of zeroed
+  C metadata. Enabled unsafe_op_in_unsafe_fn denial and undocumented-unsafe
+  warnings locally; no broad suppression was added.
+- Removed duplicate zero-initialization of existing Linux address/header state.
+  Initial allocation still initializes all storage; every msghdr input/output
+  field is explicitly assigned on each build, and address decoding checks the
+  returned length. No performance claim was inferred from removing those writes.
+- Added a regression that mutates receive output metadata, rebuilds the SQE,
+  and verifies reset lengths/flags/control fields and unchanged boxed metadata
+  and buffer addresses. Existing cancellation and address-length tests still pass.
+- Validation: 298 root all-feature tests, 181 harness tests, 6 doctests (44
+  ignored), Linux/Windows-target/macOS-target strict harness Clippy, formatting,
+  and whitespace checks pass. Native Windows/macOS FFI behavior and broader
+  findings remain open; these documentation checks are not a proof of all I/O safety.

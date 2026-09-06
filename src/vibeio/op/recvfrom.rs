@@ -1,3 +1,6 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::io;
 use std::mem::MaybeUninit;
 use std::net::SocketAddr;
@@ -22,14 +25,32 @@ use crate::vibeio::io::IoBufMut;
 use crate::vibeio::op::Op;
 use crate::vibeio::op::io_util::CompletionBuffer;
 
+fn validate_address_length(length: usize, expected: usize, capacity: usize) -> io::Result<()> {
+    if length < expected || length > capacity {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid source address length",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 #[inline]
 fn sockaddr_storage_to_socketaddr(
     storage: &libc::sockaddr_storage,
+    length: usize,
 ) -> Result<SocketAddr, io::Error> {
     let family = storage.ss_family as libc::c_int;
 
     if family == libc::AF_INET {
+        validate_address_length(
+            length,
+            std::mem::size_of::<libc::sockaddr_in>(),
+            std::mem::size_of_val(storage),
+        )?;
+        // SAFETY: sockaddr_storage has sufficient size/alignment for sockaddr_in;
+        // the family and returned length establish that its IPv4 fields are present.
         let addr_in: &libc::sockaddr_in =
             unsafe { &*(storage as *const _ as *const libc::sockaddr_in) };
         let port = u16::from_be(addr_in.sin_port);
@@ -37,6 +58,13 @@ fn sockaddr_storage_to_socketaddr(
         let ip = std::net::Ipv4Addr::from(ip_u32);
         Ok(SocketAddr::V4(std::net::SocketAddrV4::new(ip, port)))
     } else if family == libc::AF_INET6 {
+        validate_address_length(
+            length,
+            std::mem::size_of::<libc::sockaddr_in6>(),
+            std::mem::size_of_val(storage),
+        )?;
+        // SAFETY: storage is aligned/sized for sockaddr_in6, and both the family
+        // and returned length have been checked before borrowing its fields.
         let addr_in6: &libc::sockaddr_in6 =
             unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
         let port = u16::from_be(addr_in6.sin6_port);
@@ -57,24 +85,43 @@ fn sockaddr_storage_to_socketaddr(
 
 #[cfg(windows)]
 #[inline]
-fn sockaddr_storage_to_socketaddr(storage: &SOCKADDR_STORAGE) -> Result<SocketAddr, io::Error> {
+fn sockaddr_storage_to_socketaddr(
+    storage: &SOCKADDR_STORAGE,
+    length: usize,
+) -> Result<SocketAddr, io::Error> {
     let family = storage.ss_family;
 
     if family == AF_INET {
+        validate_address_length(
+            length,
+            std::mem::size_of::<SOCKADDR_IN>(),
+            std::mem::size_of_val(storage),
+        )?;
+        // SAFETY: storage is suitably sized/aligned, and the family/length match IPv4.
         let addr_in: &SOCKADDR_IN = unsafe { &*(storage as *const _ as *const SOCKADDR_IN) };
         let port = u16::from_be(addr_in.sin_port);
+        // SAFETY: the IPv4 address union contains initialized network-order bytes.
         let ip_u32 = u32::from_be(unsafe { addr_in.sin_addr.S_un.S_addr });
         let ip = std::net::Ipv4Addr::from(ip_u32);
         Ok(SocketAddr::V4(std::net::SocketAddrV4::new(ip, port)))
     } else if family == AF_INET6 {
+        validate_address_length(
+            length,
+            std::mem::size_of::<SOCKADDR_IN6>(),
+            std::mem::size_of_val(storage),
+        )?;
+        // SAFETY: storage is suitably sized/aligned, and the family/length match IPv6.
         let addr_in6: &SOCKADDR_IN6 = unsafe { &*(storage as *const _ as *const SOCKADDR_IN6) };
         let port = u16::from_be(addr_in6.sin6_port);
+        // SAFETY: the IPv6 address union contains sixteen initialized address bytes.
         let ip = std::net::Ipv6Addr::from(unsafe { addr_in6.sin6_addr.u.Byte });
+        // SAFETY: the validated IPv6 structure includes the initialized scope union.
+        let scope_id = unsafe { addr_in6.Anonymous.sin6_scope_id };
         Ok(SocketAddr::V6(std::net::SocketAddrV6::new(
             ip,
             port,
             addr_in6.sin6_flowinfo,
-            unsafe { addr_in6.Anonymous.sin6_scope_id },
+            scope_id,
         )))
     } else {
         Err(io::Error::new(
@@ -111,6 +158,9 @@ fn socket_recvfrom(
     let mut addr = SOCKADDR_STORAGE::default();
     let mut addr_len = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
 
+    // SAFETY: wsabuf describes the exclusively borrowed writable slice. All
+    // output fields are live initialized stack storage; null OVERLAPPED makes
+    // this synchronous, so no pointers survive the call.
     let recv_result = unsafe {
         WinSock::WSARecvFrom(
             socket,
@@ -125,12 +175,13 @@ fn socket_recvfrom(
         )
     };
     if recv_result == SOCKET_ERROR {
+        // SAFETY: retrieves the calling thread's Winsock error; takes no pointers.
         return Err(io::Error::from_raw_os_error(unsafe {
             WinSock::WSAGetLastError()
         }));
     }
 
-    let address = sockaddr_storage_to_socketaddr(&addr)?;
+    let address = sockaddr_storage_to_socketaddr(&addr, addr_len as usize)?;
     Ok((bytes as usize, address))
 }
 
@@ -215,6 +266,9 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
         let result = {
             let mut addr = MaybeUninit::<libc::sockaddr_storage>::zeroed();
             let mut addr_len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+            // SAFETY: IoBufMut provides exclusive writable capacity, and addr
+            // and addr_len are live output storage of the supplied sizes. This
+            // synchronous call retains no pointers and does not request MSG_TRUNC.
             let read = unsafe {
                 libc::recvfrom(
                     self.handle.handle,
@@ -229,8 +283,10 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
             if read == -1 {
                 Err(io::Error::last_os_error())
             } else {
+                // SAFETY: storage was fully zero-initialized (all-zero integer
+                // fields are valid); recvfrom only overwrites bytes within it.
                 let addr = unsafe { addr.assume_init() };
-                let address = sockaddr_storage_to_socketaddr(&addr)?;
+                let address = sockaddr_storage_to_socketaddr(&addr, addr_len as usize)?;
                 Ok((read as usize, address))
             }
         };
@@ -253,6 +309,8 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
 
         match result {
             Ok((read, address)) => {
+                // SAFETY: successful recvfrom initialized exactly the reported
+                // prefix of the supplied capacity; MSG_TRUNC was not requested.
                 unsafe { buf.set_buf_init(read) };
                 Poll::Ready(Ok((read, address)))
             }
@@ -306,8 +364,12 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
                 .completion_state
                 .as_ref()
                 .ok_or_else(|| io::Error::other("recvfrom completion missing source address"))
-                .and_then(|state| sockaddr_storage_to_socketaddr(&state.addr));
+                .and_then(|state| {
+                    sockaddr_storage_to_socketaddr(&state.addr, state.msghdr.msg_namelen as usize)
+                });
             let buf = self.buf.as_mut().unwrap().as_mut();
+            // SAFETY: the successful CQE acknowledges initialization of this
+            // many bytes in the retained stable buffer. No MSG_TRUNC was requested.
             unsafe { buf.set_buf_init(read) };
             Poll::Ready(address.map(|address| (read, address)))
         }
@@ -331,8 +393,12 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
                         "recvfrom completion missing source address",
                     )
                 })
-                .and_then(|state| sockaddr_storage_to_socketaddr(&state.addr));
+                .and_then(|state| {
+                    sockaddr_storage_to_socketaddr(&state.addr, state.addr_len as usize)
+                });
             let buf = self.buf.as_mut().unwrap().as_mut();
+            // SAFETY: the successful overlapped completion reports initialized
+            // bytes within the WSABUF capacity retained through its acknowledgement.
             unsafe { buf.set_buf_init(read) };
             Poll::Ready(address.map(|address| (read, address)))
         }
@@ -372,6 +438,10 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
         completion.addr_len = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
         completion.flags = if self.peek { MSG_PEEK as u32 } else { 0 };
 
+        // SAFETY: the boxed completion state and CompletionBuffer have stable
+        // addresses and retain all writable regions through completion. The
+        // driver supplies live OVERLAPPED storage; Drop transfers operation
+        // storage to that driver if cancellation precedes acknowledgement.
         let recv_result = unsafe {
             WinSock::WSARecvFrom(
                 socket as SOCKET,
@@ -390,6 +460,7 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
             return Ok(());
         }
 
+        // SAFETY: reads this thread's last Winsock error without pointers.
         let err = unsafe { WinSock::WSAGetLastError() };
         if err == WSA_IO_PENDING {
             Ok(())
@@ -410,20 +481,24 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
         let buf = self.buf.as_mut().unwrap().as_mut();
         let completion = self.completion_state.get_or_insert_with(|| {
             Box::new(RecvfromLinuxCompletion {
+                // SAFETY: sockaddr_storage consists of integer and byte fields,
+                // for which all-zero initialization is valid.
                 addr: unsafe { std::mem::zeroed() },
                 iovec: libc::iovec {
                     iov_base: std::ptr::null_mut(),
                     iov_len: 0,
                 },
+                // SAFETY: msghdr contains integers and raw pointers, all valid
+                // when zeroed. Its live pointers are installed after boxing.
                 msghdr: unsafe { std::mem::zeroed() },
             })
         });
-        completion.addr = unsafe { std::mem::zeroed() };
+        // Reuse initialized address storage. The decoder checks the returned
+        // length, and every input/output msghdr field is reset below.
         completion.iovec = libc::iovec {
             iov_base: buf.as_buf_mut_ptr().cast::<libc::c_void>(),
             iov_len: buf.buf_capacity(),
         };
-        completion.msghdr = unsafe { std::mem::zeroed::<libc::msghdr>() };
         completion.msghdr.msg_name =
             &mut completion.addr as *mut libc::sockaddr_storage as *mut libc::c_void;
         completion.msghdr.msg_namelen =
@@ -470,6 +545,84 @@ impl<B: IoBufMut> Drop for RecvfromOp<'_, B> {
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reused_recvmsg_state_resets_metadata_and_keeps_stable_addresses() {
+        let driver = std::rc::Rc::new(AnyDriver::new_mock());
+        let handle = InnerRawHandle::for_mock_completion(driver);
+        let mut op = RecvfromOp::new(&handle, Vec::<u8>::with_capacity(32));
+        op.build_completion_entry(1).unwrap();
+        let state = op.completion_state.as_mut().unwrap();
+        let state_address = std::ptr::from_ref(state.as_ref());
+        let buffer_address = state.iovec.iov_base;
+        let capacity = state.iovec.iov_len;
+        // Model output fields changed by a completed receive. Rebuilding must
+        // restore the supplied sizes and remove obsolete ancillary-data state.
+        state.msghdr.msg_namelen = 0;
+        state.msghdr.msg_iovlen = 0;
+        state.msghdr.msg_flags = libc::MSG_TRUNC;
+        state.msghdr.msg_control = std::ptr::addr_of_mut!(state.addr).cast();
+        state.msghdr.msg_controllen = 1;
+        op.build_completion_entry(2).unwrap();
+        let state = op.completion_state.as_ref().unwrap();
+        assert_eq!(std::ptr::from_ref(state.as_ref()), state_address);
+        assert_eq!(state.iovec.iov_base, buffer_address);
+        assert_eq!(state.iovec.iov_len, capacity);
+        assert_eq!(
+            state.msghdr.msg_namelen as usize,
+            std::mem::size_of_val(&state.addr)
+        );
+        assert_eq!(
+            state.msghdr.msg_name,
+            std::ptr::addr_of!(state.addr).cast_mut().cast()
+        );
+        assert_eq!(
+            state.msghdr.msg_iov,
+            std::ptr::addr_of!(state.iovec).cast_mut()
+        );
+        assert_eq!(state.msghdr.msg_iovlen, 1);
+        assert_eq!(state.msghdr.msg_flags, 0);
+        assert!(state.msghdr.msg_control.is_null());
+        assert_eq!(state.msghdr.msg_controllen, 0);
+    }
+
+    #[test]
+    fn source_address_length_is_checked_before_decoding() {
+        #[cfg(unix)]
+        type Storage = libc::sockaddr_storage;
+        #[cfg(windows)]
+        type Storage = SOCKADDR_STORAGE;
+        #[cfg(unix)]
+        let families = [
+            (libc::AF_INET, std::mem::size_of::<libc::sockaddr_in>()),
+            (libc::AF_INET6, std::mem::size_of::<libc::sockaddr_in6>()),
+        ];
+        #[cfg(windows)]
+        let families = [
+            (AF_INET as i32, std::mem::size_of::<SOCKADDR_IN>()),
+            (AF_INET6 as i32, std::mem::size_of::<SOCKADDR_IN6>()),
+        ];
+        for (index, (family, required)) in families.into_iter().enumerate() {
+            // SAFETY: socket address storage consists of integer/byte fields;
+            // zero initializes its entire storage before the family is assigned.
+            let mut storage: Storage = unsafe { std::mem::zeroed() };
+            storage.ss_family = family as _;
+            let capacity = std::mem::size_of::<Storage>();
+            for length in [0, required - 1, capacity + 1, usize::MAX] {
+                assert_eq!(
+                    sockaddr_storage_to_socketaddr(&storage, length)
+                        .unwrap_err()
+                        .kind(),
+                    io::ErrorKind::InvalidData
+                );
+            }
+            let address = sockaddr_storage_to_socketaddr(&storage, required).unwrap();
+            assert_eq!(address.is_ipv4(), index == 0);
+            assert!(address.ip().is_unspecified());
+            assert_eq!(address.port(), 0);
+        }
+    }
 
     #[test]
     fn pending_buffer_is_retained_by_owning_driver() {
