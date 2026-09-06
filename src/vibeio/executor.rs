@@ -766,7 +766,7 @@ impl Runtime {
                 let mut future_slot = task.future.borrow_mut();
                 if let Some(mut future) = future_slot.take() {
                     drop(future_slot);
-                    let waker = task.waker();
+                    let waker = task.waker_ref();
                     let mut context = Context::from_waker(&waker);
 
                     if future.as_mut().poll(&mut context).is_pending() {
@@ -932,6 +932,32 @@ mod tests {
             }
         }));
         assert_eq!(value, 11);
+    }
+
+    #[test]
+    fn spawned_task_resumes_after_remote_wake() {
+        let runtime = Runtime::new(AnyDriver::new_mock());
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        let (polled, wait_for_poll) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            wait_for_poll.recv().unwrap();
+            sender.send(42).unwrap();
+        });
+        let handle = runtime.spawn(async move {
+            let mut receiver = std::pin::pin!(receiver);
+            let mut polled = Some(polled);
+            std::future::poll_fn(move |cx| {
+                let result = receiver.as_mut().poll(cx);
+                if let Some(polled) = polled.take() {
+                    polled.send(()).unwrap();
+                }
+                result
+            })
+            .await
+            .unwrap()
+        });
+        assert_eq!(runtime.block_on(handle), 42);
+        worker.join().unwrap();
     }
 
     #[cfg(feature = "blocking-default")]

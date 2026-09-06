@@ -1,5 +1,6 @@
 use std::cell::{RefCell, UnsafeCell};
 use std::collections::VecDeque;
+use std::mem::ManuallyDrop;
 use std::rc::Weak;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,6 +8,7 @@ use std::task::{RawWaker, RawWakerVTable, Waker};
 
 use crossbeam_queue::SegQueue;
 use futures_util::future::LocalBoxFuture;
+use futures_util::task::WakerRef;
 
 use crate::vibeio::driver::AnyInterruptor;
 
@@ -28,6 +30,17 @@ pub struct Task {
 }
 
 impl Task {
+    /// Borrow the polling task's reference instead of incrementing its Arc count.
+    #[inline]
+    pub fn waker_ref(self: &Arc<Self>) -> WakerRef<'_> {
+        // SAFETY: the returned lifetime keeps `self` alive. WakerRef suppresses
+        // the borrowed waker's destructor and only exposes &Waker. Cloning it
+        // uses our normal vtable to acquire an owned Arc, so futures may retain
+        // cloned wakers or send them to other threads after this borrow ends.
+        let waker = unsafe { Waker::from_raw(Self::raw_waker(Arc::as_ptr(self).cast())) };
+        WakerRef::new_unowned(ManuallyDrop::new(waker))
+    }
+
     #[inline]
     pub fn waker(self: &Arc<Self>) -> Waker {
         // SAFETY: the vtable methods correctly clone/drop the Arc reference count.
@@ -117,5 +130,62 @@ impl Task {
     #[inline]
     pub fn mark_dequeued(&self) {
         self.queued.store(false, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task() -> Arc<Task> {
+        #[allow(clippy::arc_with_non_send_sync)]
+        Arc::new(Task {
+            future: RefCell::new(None),
+            queue: Weak::new(),
+            next_task: Weak::new(),
+            remote_wake: std::sync::Weak::new(),
+            queued: AtomicBool::new(false),
+            thread_id: std::thread::current().id(),
+            token: 0,
+        })
+    }
+
+    #[test]
+    fn borrowed_waker_only_owns_references_when_cloned() {
+        let task = task();
+        let borrowed = task.waker_ref();
+        assert_eq!(Arc::strong_count(&task), 1);
+        let owned = borrowed.clone();
+        assert_eq!(Arc::strong_count(&task), 2);
+        borrowed.wake_by_ref();
+        assert!(task.queued.load(Ordering::Relaxed));
+        drop(borrowed);
+        assert_eq!(Arc::strong_count(&task), 2);
+        task.mark_dequeued();
+        owned.wake();
+        assert!(task.queued.load(Ordering::Relaxed));
+        assert_eq!(Arc::strong_count(&task), 1);
+    }
+
+    #[test]
+    fn cloned_borrowed_waker_outlives_task_owner_and_wakes_remotely() {
+        let task = task();
+        let weak = Arc::downgrade(&task);
+        let owned = task.waker_ref().clone();
+        drop(task);
+        assert!(weak.upgrade().is_some());
+        std::thread::spawn(move || owned.wake()).join().unwrap();
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn borrowed_waker_does_not_release_task_during_unwind() {
+        let task = task();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _waker = task.waker_ref();
+            panic!("poll panicked");
+        }));
+        assert!(result.is_err());
+        assert_eq!(Arc::strong_count(&task), 1);
     }
 }

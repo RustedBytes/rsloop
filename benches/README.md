@@ -173,12 +173,26 @@ Add `--require-improvement 10` when validating an optimization that is expected
 to improve at least one workload by 10%. The checker accepts JSON from either
 benchmark runner and only compares matching `rsloop` measurements.
 
-The vendored executor also has a release-mode microbenchmark for task dispatch
-and timer fanout:
+The embedded `src/vibeio` executor also has a release-mode microbenchmark for
+spawn/join, single-task self-wakes, and batches of 256 self-waking tasks:
 
 ```bash
-cargo bench --manifest-path vendor/vibeio/Cargo.toml --bench runtime
+cargo bench --bench runtime
 ```
+
+It prints CSV with seven measured samples after three warmups per workload.
+Each sample includes runtime creation, spawning, polling, joining, and teardown;
+`operations` counts task polls (including each task's final ready poll). The
+benchmark compiles the embedded source directly, without making it public API.
+Save stdout for before/after comparisons, use identical CPU affinity, and run
+benchmarks without concurrent builds or tests. On Linux, for example:
+
+```bash
+taskset -c 2 cargo bench --bench runtime > /tmp/runtime.csv
+```
+
+These Rust scheduler measurements isolate dispatch costs; use the Python
+benchmarks above to establish whether improvements carry through to applications.
 
 For kernel-level profiling, pair the same release workloads with `perf stat` and
 `perf record` on Linux, Instruments on macOS, or Windows Performance Recorder.
