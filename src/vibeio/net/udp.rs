@@ -13,7 +13,6 @@
 use std::cell::RefCell;
 use std::future::poll_fn;
 use std::io;
-use std::mem::ManuallyDrop;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket as StdUdpSocket};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
@@ -64,8 +63,9 @@ async fn connect_one(handle: &InnerRawHandle, address: SocketAddr) -> Result<(),
 /// socket.send(b"hello").await?;
 /// ```
 pub struct UdpSocket {
+    // Deregister before closing the socket (field declaration order).
+    handle: InnerRawHandle,
     inner: StdUdpSocket,
-    handle: ManuallyDrop<InnerRawHandle>,
 }
 
 impl UdpSocket {
@@ -116,7 +116,6 @@ impl UdpSocket {
         )?;
 
         inner.set_nonblocking(!handle.uses_completion())?;
-        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 
@@ -140,14 +139,9 @@ impl UdpSocket {
     /// Converts this `UdpSocket` into the standard library `UdpSocket`.
     #[inline]
     pub fn into_std(self) -> StdUdpSocket {
-        let mut this = ManuallyDrop::new(self);
-
-        // Safety: `this` will not be dropped, so we must drop the registration
-        // handle manually and move out the inner socket.
-        unsafe {
-            ManuallyDrop::drop(&mut this.handle);
-            std::ptr::read(&this.inner)
-        }
+        let Self { handle, inner } = self;
+        drop(handle);
+        inner
     }
 
     /// Returns the local address of this socket.
@@ -587,16 +581,6 @@ impl IntoRawSocket for UdpSocket {
     #[inline]
     fn into_raw_socket(self) -> RawSocket {
         self.into_std().into_raw_socket()
-    }
-}
-
-impl Drop for UdpSocket {
-    #[inline]
-    fn drop(&mut self) {
-        // Safety: The struct is dropped after the handle is dropped.
-        unsafe {
-            ManuallyDrop::drop(&mut self.handle);
-        }
     }
 }
 

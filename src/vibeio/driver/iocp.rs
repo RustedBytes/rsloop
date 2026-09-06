@@ -16,8 +16,8 @@ use windows_sys::Wdk::Storage::FileSystem::{
 };
 use windows_sys::Wdk::System::IO::NtDeviceIoControlFile;
 use windows_sys::Win32::Foundation::{
-    ERROR_ABANDONED_WAIT_0, HANDLE, INVALID_HANDLE_VALUE, NTSTATUS, OBJ_CASE_INSENSITIVE,
-    RtlNtStatusToDosError, UNICODE_STRING, WAIT_TIMEOUT,
+    ERROR_ABANDONED_WAIT_0, ERROR_ARITHMETIC_OVERFLOW, HANDLE, INVALID_HANDLE_VALUE, NTSTATUS,
+    OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError, UNICODE_STRING, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Networking::WinSock::{
     self as WinSock, INVALID_SOCKET, SIO_BASE_HANDLE, SIO_BSP_HANDLE_POLL, SOCKET, SOCKET_ERROR,
@@ -47,6 +47,30 @@ mod retirement_tests {
     use super::*;
     use std::cell::Cell;
     use std::rc::{Rc, Weak};
+
+    #[test]
+    fn successful_completion_counts_do_not_wrap_into_unrelated_errors() {
+        for count in [0, 1, i32::MAX as u32] {
+            let entry = OVERLAPPED_ENTRY {
+                dwNumberOfBytesTransferred: count,
+                ..OVERLAPPED_ENTRY::default()
+            };
+            assert_eq!(
+                IocpDriver::completion_result_from_entry(&entry),
+                count as i32
+            );
+        }
+        for count in [i32::MAX as u32 + 1, u32::MAX] {
+            let entry = OVERLAPPED_ENTRY {
+                dwNumberOfBytesTransferred: count,
+                ..OVERLAPPED_ENTRY::default()
+            };
+            assert_eq!(
+                IocpDriver::completion_result_from_entry(&entry),
+                -(ERROR_ARITHMETIC_OVERFLOW as i32)
+            );
+        }
+    }
 
     #[test]
     fn shutdown_waits_for_packet_before_releasing_storage() {
@@ -481,7 +505,11 @@ impl IocpDriver {
     #[inline]
     fn completion_result_from_entry(entry: &OVERLAPPED_ENTRY) -> i32 {
         if entry.Internal == 0 {
-            return entry.dwNumberOfBytesTransferred as i32;
+            // The shared completion representation reserves negative values
+            // for errors. Do not reinterpret a large successful count as an
+            // unrelated error (or i32::MIN, whose negation would overflow).
+            return i32::try_from(entry.dwNumberOfBytesTransferred)
+                .unwrap_or(-(ERROR_ARITHMETIC_OVERFLOW as i32));
         }
 
         let ntstatus = entry.Internal as i32;
@@ -688,13 +716,15 @@ impl IocpDriver {
                 }
             };
 
-            let mut io_status = Box::new(unsafe { std::mem::zeroed::<AfdIoStatusCtx>() });
             let mut input = Box::new(AfdPollInfo::new(socket, poll_events));
             let mut output = Box::new(AfdPollInfo::new(socket, 0));
 
             let poll_entry = state.poll_ops.vacant_entry();
             let poll_token = poll_entry.key();
-            io_status.token = poll_token;
+            let mut io_status = Box::new(AfdIoStatusCtx {
+                io_status: IO_STATUS_BLOCK::default(),
+                token: poll_token,
+            });
 
             let io_status_ptr = &mut io_status.io_status as *mut IO_STATUS_BLOCK;
             let input_ptr = (&mut *input as *mut AfdPollInfo).cast();
@@ -716,6 +746,11 @@ impl IocpDriver {
             (poll_token, io_status_ptr, input_ptr, output_ptr)
         };
 
+        // SAFETY: afd_handle is owned by this driver. The status, input and
+        // output pointers refer to separate boxed allocations already stored
+        // in poll_ops, and their lengths match AfdPollInfo. The completion
+        // context is the status allocation's address. None of those allocations
+        // is released merely because this submission is pending or cancelled.
         let status = unsafe {
             NtDeviceIoControlFile(
                 afd_handle,
@@ -767,6 +802,10 @@ impl IocpDriver {
         };
 
         let mut cancel_status = IO_STATUS_BLOCK::default();
+        // SAFETY: afd_handle is still driver-owned and io_status_ptr identifies
+        // the boxed status of the retained poll operation. cancel_status is
+        // writable output for this call. Cancellation does not remove poll_ops:
+        // its kernel-visible storage remains until a completion is processed.
         let _ = unsafe { NtCancelIoFileEx(afd_handle, io_status_ptr, &mut cancel_status) };
     }
 
@@ -1061,8 +1100,10 @@ impl Driver for IocpDriver {
             let vacant_completion = state.completions.vacant_entry();
             let completion_token = vacant_completion.key();
 
-            let mut overlapped = Box::new(unsafe { std::mem::zeroed::<OverlappedCtx>() });
-            overlapped.token = completion_token;
+            let mut overlapped = Box::new(OverlappedCtx {
+                overlapped: OVERLAPPED::default(),
+                token: completion_token,
+            });
             let overlapped_ptr: *mut OVERLAPPED = &mut overlapped.overlapped;
 
             vacant_completion.insert(Completion {

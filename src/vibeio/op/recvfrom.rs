@@ -36,7 +36,7 @@ fn socket_recvfrom(
         self as WinSock, MSG_PEEK, SOCKADDR, SOCKADDR_STORAGE, SOCKET_ERROR, WSABUF,
     };
 
-    let len = u32::try_from(buf.len()).map_err(|_| {
+    let len = crate::vibeio::op::io_util::completion_len(buf.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "read buffer is too large for Windows socket I/O",
@@ -247,7 +247,7 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
             }
         };
         if result < 0 {
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
+            return Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)));
         }
         #[cfg(any(target_os = "linux", windows))]
         let read = result as usize;
@@ -309,12 +309,13 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
             ));
         };
 
-        let read_len = u32::try_from(buf.buf_capacity()).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "read buffer is too large for Windows socket I/O",
-            )
-        })?;
+        let read_len =
+            crate::vibeio::op::io_util::completion_len(buf.buf_capacity()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "read buffer is too large for Windows socket I/O",
+                )
+            })?;
 
         let completion = self.completion_state.get_or_insert_with(|| {
             Box::new(RecvfromWindowsCompletion {

@@ -55,7 +55,7 @@ impl Op for FsyncOp<'_> {
         };
 
         if result < 0 {
-            Poll::Ready(Err(io::Error::from_raw_os_error(-result)))
+            Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)))
         } else {
             Poll::Ready(Ok(()))
         }

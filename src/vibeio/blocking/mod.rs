@@ -23,6 +23,95 @@ impl fmt::Display for SpawnBlockingError {
 
 impl std::error::Error for SpawnBlockingError {}
 
+/// Offload a borrowed operation while retaining ownership through worker unwind.
+/// Cancellation drops the caller's share; a queued/running worker retains its
+/// share until it stops using the buffer. Partial mutations are not rolled back.
+#[cfg(any(feature = "fs", feature = "stdio", feature = "process"))]
+pub(crate) async fn with_buffer<B, R>(
+    buf: B,
+    operation: impl FnOnce(&mut B) -> R + Send + 'static,
+) -> (Result<R, SpawnBlockingError>, B)
+where
+    B: Send + 'static,
+    R: Send + 'static,
+{
+    use std::sync::{Arc, Mutex};
+
+    let storage = Arc::new(Mutex::new(Some(buf)));
+    let worker = storage.clone();
+    let result = crate::vibeio::spawn_blocking(move || {
+        // Borrow, don't take: unwinding must leave the buffer recoverable.
+        let mut guard = worker.lock().unwrap_or_else(|error| error.into_inner());
+        operation(guard.as_mut().expect("worker owns the buffer slot"))
+    })
+    .await;
+    // The result channel completes only after the worker releases its guard,
+    // including during unwinding. Poison does not invalidate buffer ownership.
+    let returned = storage
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+        .expect("only the caller removes the buffer");
+    (result, returned)
+}
+
+#[cfg(all(test, any(feature = "fs", feature = "stdio", feature = "process")))]
+mod buffer_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::future::Future;
+    use std::rc::Rc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::task::{Context, Poll, Waker};
+
+    #[derive(Default)]
+    struct QueuedPool(RefCell<Option<Box<dyn FnOnce() + Send>>>);
+
+    impl BlockingThreadPool for Rc<QueuedPool> {
+        fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
+            assert!(self.0.borrow_mut().replace(task).is_none());
+        }
+    }
+
+    #[test]
+    fn cancelled_buffer_offload_retains_storage_until_worker_releases_it() {
+        struct Buffer(Arc<AtomicUsize>);
+        impl Drop for Buffer {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        for execute in [false, true] {
+            let pool = Rc::new(QueuedPool::default());
+            let runtime = crate::vibeio::RuntimeBuilder::new()
+                .driver(crate::vibeio::DriverKind::Mock)
+                .blocking_pool(Box::new(pool.clone()))
+                .build()
+                .unwrap();
+            let drops = Arc::new(AtomicUsize::new(0));
+            runtime.block_on(async move {
+                let mut future = Box::pin(with_buffer(Buffer(drops.clone()), |buf| {
+                    assert_eq!(buf.0.load(Ordering::SeqCst), 0);
+                }));
+                let mut cx = Context::from_waker(Waker::noop());
+                assert!(matches!(future.as_mut().poll(&mut cx), Poll::Pending));
+                drop(future);
+                assert_eq!(drops.load(Ordering::SeqCst), 0);
+                let task = pool.0.borrow_mut().take().unwrap();
+                if execute {
+                    std::thread::spawn(task).join().unwrap();
+                } else {
+                    drop(task);
+                }
+                assert_eq!(drops.load(Ordering::SeqCst), 1);
+            });
+        }
+    }
+}
+
 /// A trait for pluggable blocking thread pools.
 ///
 /// This trait allows users to provide their own implementation of a thread pool for executing

@@ -385,7 +385,7 @@ impl Op for AcceptOp<'_> {
         if result < 0 {
             #[cfg(windows)]
             drop(self.accept_socket.take());
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
+            return Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)));
         }
 
         #[cfg(unix)]

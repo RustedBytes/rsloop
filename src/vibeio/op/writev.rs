@@ -31,7 +31,7 @@ fn socket_write_vectored<B: IoVectoredBuf>(socket: SOCKET, bufs: &B) -> io::Resu
     let iovecs = bufs.as_iovecs();
     let mut wsabufs = Vec::with_capacity(iovecs.len());
     for iovec in iovecs {
-        let len = u32::try_from(iovec.len).map_err(|_| {
+        let len = crate::vibeio::op::io_util::completion_len(iovec.len).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "writev buffer is too large for Windows socket I/O",
@@ -73,8 +73,6 @@ pub struct WritevOp<'a, B: IoVectoredBuf> {
     bufs: Option<B>,
     completion_token: Option<usize>,
     #[cfg(windows)]
-    completion_wsabufs: Option<Box<[WSABUF]>>,
-    #[cfg(windows)]
     completion_staging: Option<Vec<u8>>,
     #[cfg(target_os = "linux")]
     completion_system_iovecs: Option<Box<[libc::iovec]>>,
@@ -87,8 +85,6 @@ impl<'a, B: IoVectoredBuf> WritevOp<'a, B> {
             handle,
             bufs: Some(bufs),
             completion_token: None,
-            #[cfg(windows)]
-            completion_wsabufs: None,
             #[cfg(windows)]
             completion_staging: None,
             #[cfg(target_os = "linux")]
@@ -188,15 +184,13 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
         if result < 0 {
             #[cfg(windows)]
             {
-                self.completion_wsabufs = None;
                 self.completion_staging = None;
             }
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
+            return Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)));
         }
 
         #[cfg(windows)]
         {
-            self.completion_wsabufs = None;
             self.completion_staging = None;
         }
 
@@ -210,24 +204,29 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
         match self.handle.handle {
             RawOsHandle::Socket(socket) => {
                 let iovecs = bufs.as_iovecs();
+                crate::vibeio::op::io_util::completion_vectored_len(
+                    iovecs.iter().map(|iov| iov.len),
+                )?;
                 let mut wsabufs = Vec::with_capacity(iovecs.len());
                 for iovec in iovecs {
-                    let len = u32::try_from(iovec.len).map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "writev buffer is too large for Windows socket I/O",
-                        )
-                    })?;
+                    let len =
+                        crate::vibeio::op::io_util::completion_len(iovec.len).map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "writev buffer is too large for Windows socket I/O",
+                            )
+                        })?;
                     wsabufs.push(WSABUF {
                         len,
                         buf: iovec.ptr as *mut _,
                     });
                 }
 
-                let mut wsabufs = wsabufs.into_boxed_slice();
-                // SAFETY: checked descriptors and initialized payloads remain
-                // owned through completion; Drop transfers them to cancellation
-                // storage until acknowledgement. The driver owns OVERLAPPED.
+                // SAFETY: Winsock captures the WSABUF descriptors before return.
+                // Their Vec need only survive this call; payloads remain owned
+                // through completion/cancellation, and the driver retains the
+                // OVERLAPPED until acknowledgement.
+                // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsasend
                 let send_result = unsafe {
                     WinSock::WSASend(
                         socket as SOCKET,
@@ -241,7 +240,6 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
                 };
 
                 if send_result == 0 {
-                    self.completion_wsabufs = Some(wsabufs);
                     self.completion_staging = None;
                     return Ok(());
                 }
@@ -249,11 +247,9 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
                 // SAFETY: reads thread-local Winsock error after failed submission.
                 let err = unsafe { WinSock::WSAGetLastError() };
                 if err == WSA_IO_PENDING {
-                    self.completion_wsabufs = Some(wsabufs);
                     self.completion_staging = None;
                     Ok(())
                 } else {
-                    self.completion_wsabufs = None;
                     self.completion_staging = None;
                     Err(io::Error::from_raw_os_error(err))
                 }
@@ -265,12 +261,13 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
                         io::Error::new(io::ErrorKind::InvalidInput, "writev buffer length overflow")
                     })
                 })?;
-                let total_len_u32 = u32::try_from(total_len).map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "writev total length is too large for Windows file I/O",
-                    )
-                })?;
+                let total_len_u32 =
+                    crate::vibeio::op::io_util::completion_len(total_len).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "writev total length is too large for Windows file I/O",
+                        )
+                    })?;
 
                 let mut staging = Vec::with_capacity(total_len);
                 for iovec in iovecs {
@@ -298,18 +295,15 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
                 };
 
                 if write_result != 0 {
-                    self.completion_wsabufs = None;
                     self.completion_staging = Some(staging);
                     return Ok(());
                 }
 
                 let err = io::Error::last_os_error();
                 if err.raw_os_error() == Some(ERROR_IO_PENDING as i32) {
-                    self.completion_wsabufs = None;
                     self.completion_staging = Some(staging);
                     Ok(())
                 } else {
-                    self.completion_wsabufs = None;
                     self.completion_staging = None;
                     Err(err)
                 }
@@ -357,10 +351,7 @@ impl<B: IoVectoredBuf> Drop for WritevOp<'_, B> {
             #[cfg(target_os = "linux")]
             let completion_state = self.completion_system_iovecs.take();
             #[cfg(windows)]
-            let completion_state = (
-                self.completion_wsabufs.take(),
-                self.completion_staging.take(),
-            );
+            let completion_state = self.completion_staging.take();
             #[cfg(not(any(target_os = "linux", windows)))]
             let completion_state = ();
             // The owning driver, not the currently entered runtime, must retain
@@ -374,6 +365,34 @@ impl<B: IoVectoredBuf> Drop for WritevOp<'_, B> {
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn cancelled_file_write_retains_staging_allocation() {
+        let owner = std::rc::Rc::new(AnyDriver::new_mock());
+        let handle = InnerRawHandle::for_mock_completion(owner.clone());
+        let mut op = WritevOp::new(&handle, vec![b"payload".to_vec().into_boxed_slice()]);
+        let staging = b"payload".to_vec();
+        let ptr = staging.as_ptr();
+        op.completion_staging = Some(staging);
+        op.completion_token = Some(41);
+        drop(op);
+        let AnyDriver::Mock(driver) = owner.as_ref() else {
+            unreachable!()
+        };
+        let held = driver.ignored.take();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].0, 41);
+        let (staging, buffers) = held[0]
+            .1
+            .downcast_ref::<(Option<Vec<u8>>, Option<Vec<Box<[u8]>>>)>()
+            .unwrap();
+        let staging = staging.as_ref().unwrap();
+        assert_eq!(staging.as_ptr(), ptr);
+        assert_eq!(staging, b"payload");
+        assert_eq!(&*buffers.as_ref().unwrap()[0], b"payload");
+        drop(held); // Model acknowledgement releasing all retained storage.
+    }
 
     #[test]
     fn pending_buffer_is_retained_by_owning_driver() {

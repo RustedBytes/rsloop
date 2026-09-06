@@ -77,7 +77,7 @@ impl Op for StatxOp {
         };
 
         if result < 0 {
-            Poll::Ready(Err(io::Error::from_raw_os_error(-result)))
+            Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)))
         } else {
             // SAFETY: kernel fills the statx struct on success.
             let statxbuf = self.statxbuf.take().expect("statxbuf is None");

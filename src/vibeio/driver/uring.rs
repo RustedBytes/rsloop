@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::sync::Arc as StdArc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
@@ -86,21 +86,9 @@ struct PollRegistration {
 }
 
 struct AcceptRegistration {
-    results: VecDeque<i32>,
+    results: VecDeque<Result<OwnedFd, i32>>,
     waiter: Option<Waker>,
     armed: bool,
-}
-
-impl Drop for AcceptRegistration {
-    fn drop(&mut self) {
-        for result in self.results.drain(..) {
-            if result >= 0 {
-                unsafe {
-                    libc::close(result);
-                }
-            }
-        }
-    }
 }
 
 struct CompletionRegistration {
@@ -507,14 +495,21 @@ impl UringDriver {
 
                 if key_kind == ACCEPT_KEY_KIND {
                     let generation = Self::decode_poll_generation(key);
-                    let mut delivered = false;
+                    let mut accepted = Some(if result >= 0 {
+                        // SAFETY: a successful accept CQE transfers ownership of
+                        // one new descriptor. Queue ownership or this local's
+                        // drop closes it unless it is returned to a caller.
+                        Ok(unsafe { OwnedFd::from_raw_fd(result) })
+                    } else {
+                        Err(result)
+                    });
                     if let Some(HandleRegistration::Completion(registration)) =
                         state.registrations.get_mut(token.0)
                     {
                         if registration.generation == generation {
                             if let Some(accept) = registration.accept.as_mut() {
                                 accept.armed = cqueue::more(cqe.flags());
-                                accept.results.push_back(result);
+                                accept.results.push_back(accepted.take().unwrap());
                                 if let Some(waiter) = accept.waiter.take() {
                                     if fast_count < fast_wakers.len() {
                                         fast_wakers[fast_count] = Some(waiter);
@@ -523,15 +518,11 @@ impl UringDriver {
                                     }
                                     fast_count += 1;
                                 }
-                                delivered = true;
                             }
                         }
                     }
-                    if !delivered && result >= 0 {
-                        unsafe {
-                            libc::close(result);
-                        }
-                    }
+                    // Stale registration/generation: drop any undelivered fd.
+                    drop(accepted);
                     continue;
                 }
 
@@ -1053,11 +1044,11 @@ impl Driver for UringDriver {
                     armed: false,
                 });
             if let Some(result) = accept.results.pop_front() {
-                return if result >= 0 {
-                    Poll::Ready(Ok(result))
-                } else {
-                    Poll::Ready(Err(io::Error::from_raw_os_error(-result)))
-                };
+                return Poll::Ready(
+                    result
+                        .map(IntoRawFd::into_raw_fd)
+                        .map_err(super::completion_error),
+                );
             }
             old_waker = Self::update_waiter(&mut accept.waiter, waker);
             if accept.armed {
@@ -1123,6 +1114,111 @@ mod completion_cleanup_tests {
     use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
     use std::os::unix::net::UnixStream;
     use std::sync::Arc;
+
+    #[test]
+    fn listener_teardown_releases_accept_waker_outside_driver_borrows() {
+        struct ReentrantDrop(Arc<std::sync::atomic::AtomicUsize>);
+        #[allow(
+            clippy::manual_noop_waker,
+            reason = "The destructor probes driver reentrancy; Waker::noop cannot exercise it"
+        )]
+        impl std::task::Wake for ReentrantDrop {
+            fn wake(self: Arc<Self>) {}
+        }
+        impl Drop for ReentrantDrop {
+            fn drop(&mut self) {
+                let owner = crate::vibeio::executor::current_driver().unwrap();
+                let crate::vibeio::driver::AnyDriver::IoUring(driver) = owner.as_ref() else {
+                    unreachable!()
+                };
+                assert!(driver.state.try_borrow_mut().is_ok());
+                assert!(driver.ring.try_borrow_mut().is_ok());
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let runtime =
+            crate::vibeio::Runtime::new(crate::vibeio::driver::AnyDriver::new_uring().unwrap());
+        runtime.block_on(async {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let handle = InnerRawHandle::new(listener.as_raw_fd(), Interest::READABLE).unwrap();
+            let (queued, mut peer) = UnixStream::pair().unwrap();
+            peer.set_nonblocking(true).unwrap();
+            let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let owner = crate::vibeio::executor::current_driver().unwrap();
+            let crate::vibeio::driver::AnyDriver::IoUring(driver) = owner.as_ref() else {
+                unreachable!()
+            };
+            {
+                let mut state = driver.state.borrow_mut();
+                let HandleRegistration::Completion(registration) =
+                    state.registrations.get_mut(handle.token.0).unwrap()
+                else {
+                    unreachable!()
+                };
+                registration.accept = Some(AcceptRegistration {
+                    results: VecDeque::from([Ok(OwnedFd::from(queued))]),
+                    waiter: Some(Waker::from(Arc::new(ReentrantDrop(drops.clone())))),
+                    armed: false,
+                });
+            }
+            assert_eq!(drops.load(Ordering::SeqCst), 0);
+            drop(handle);
+            assert_eq!(drops.load(Ordering::SeqCst), 1);
+            assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+        });
+    }
+
+    #[test]
+    fn accept_queue_closes_only_descriptors_it_still_owns() {
+        let (abandoned, mut abandoned_peer) = UnixStream::pair().unwrap();
+        let (transferred, mut transferred_peer) = UnixStream::pair().unwrap();
+        abandoned_peer.set_nonblocking(true).unwrap();
+        transferred_peer.set_nonblocking(true).unwrap();
+        let mut accept = AcceptRegistration {
+            results: VecDeque::from([
+                Ok(OwnedFd::from(transferred)),
+                Err(-libc::ECONNABORTED),
+                Ok(OwnedFd::from(abandoned)),
+            ]),
+            waiter: None,
+            armed: false,
+        };
+        let transferred = accept.results.pop_front().unwrap().unwrap().into_raw_fd();
+        // SAFETY: the popped result just transferred sole fd ownership.
+        let transferred = unsafe { OwnedFd::from_raw_fd(transferred) };
+        drop(accept);
+        assert_eq!(abandoned_peer.read(&mut [0]).unwrap(), 0);
+        assert_eq!(
+            transferred_peer.read(&mut [0]).unwrap_err().kind(),
+            ErrorKind::WouldBlock
+        );
+        drop(transferred);
+        assert_eq!(transferred_peer.read(&mut [0]).unwrap(), 0);
+    }
+
+    #[test]
+    fn multishot_accept_decodes_extreme_errors_without_panicking() {
+        let runtime =
+            crate::vibeio::Runtime::new(crate::vibeio::driver::AnyDriver::new_uring().unwrap());
+        runtime.block_on(async {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let handle = InnerRawHandle::new(listener.as_raw_fd(), Interest::READABLE).unwrap();
+            let owner = crate::vibeio::executor::current_driver().unwrap();
+            let crate::vibeio::driver::AnyDriver::IoUring(driver) = owner.as_ref() else { unreachable!() };
+            {
+                let mut state = driver.state.borrow_mut();
+                let HandleRegistration::Completion(registration) = state.registrations.get_mut(handle.token.0).unwrap() else { unreachable!() };
+                registration.accept = Some(AcceptRegistration {
+                    results: VecDeque::from([Err(i32::MIN), Err(-libc::ECONNABORTED)]),
+                    waiter: None,
+                    armed: false,
+                });
+            }
+            let mut cx = Context::from_waker(Waker::noop());
+            assert!(matches!(driver.poll_multishot_accept(&handle, &mut cx), Poll::Ready(Err(error)) if error.kind() == ErrorKind::InvalidData));
+            assert!(matches!(driver.poll_multishot_accept(&handle, &mut cx), Poll::Ready(Err(error)) if error.raw_os_error() == Some(libc::ECONNABORTED)));
+        });
+    }
 
     thread_local! {
         static WAKER_DROP_DRIVER: RefCell<Option<std::rc::Rc<UringDriver>>> = const { RefCell::new(None) };

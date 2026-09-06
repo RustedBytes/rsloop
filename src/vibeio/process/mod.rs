@@ -24,17 +24,14 @@ mod reaper;
 use reaper::ZombieReaper;
 pub(crate) use reaper::{ZombieReaperMessage, start_zombie_reaper};
 
-use std::cell::RefCell;
 use std::ffi::OsStr;
 #[cfg(unix)]
 use std::future::poll_fn;
 use std::io::{self, Read, Write};
-use std::sync::{Arc, Mutex};
 
 #[cfg(unix)]
 use mio::Interest;
 
-use std::mem::ManuallyDrop;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 #[cfg(windows)]
@@ -53,7 +50,7 @@ pub use std::process::{ExitStatus, Output, Stdio};
 
 #[cfg(unix)]
 enum ChildIo {
-    Async(ManuallyDrop<InnerRawHandle>),
+    Async(InnerRawHandle),
     Blocking,
 }
 
@@ -97,7 +94,6 @@ fn make_child_io(fd: RawFd, interest: Interest) -> io::Result<ChildIo> {
         ) {
             Ok(handle) => {
                 crate::vibeio::fd_inner::set_nonblocking(fd, !handle.uses_completion())?;
-                let handle = ManuallyDrop::new(handle);
                 Ok(ChildIo::Async(handle))
             }
             Err(_) => Ok(ChildIo::Blocking),
@@ -113,30 +109,16 @@ where
     R: Read + Send + 'static,
     B: IoBufMut,
 {
-    let shared = Arc::new(Mutex::new(RefCell::new(Some((inner, buf)))));
-    let shared_clone = shared.clone();
-    let result = crate::vibeio::spawn_blocking(move || {
-        let (mut inner, mut buf) = shared_clone
-            .try_lock()
-            .ok()
-            .and_then(|rc| rc.take())
-            .expect("inner/buf is none");
-        let result = read_into_buf(&mut buf, |slice| inner.read(slice));
-        (result, inner, buf)
-    })
-    .await;
-
-    match result {
-        Ok(result) => result,
-        Err(_) => {
-            let (inner, buf) = shared
-                .try_lock()
-                .ok()
-                .and_then(|rc| rc.take())
-                .expect("inner/buf is none");
-            (Err(blocking_pool_io_error()), inner, buf)
-        }
-    }
+    let (result, (inner, buf)) =
+        crate::vibeio::blocking::with_buffer((inner, buf), |(inner, buf)| {
+            read_into_buf(buf, |slice| inner.read(slice))
+        })
+        .await;
+    (
+        result.unwrap_or_else(|_| Err(blocking_pool_io_error())),
+        inner,
+        buf,
+    )
 }
 
 #[inline]
@@ -145,31 +127,16 @@ where
     W: Write + Send + 'static,
     B: IoBuf,
 {
-    let shared = Arc::new(Mutex::new(RefCell::new(Some((inner, buf)))));
-    let shared_clone = shared.clone();
-    let result = crate::vibeio::spawn_blocking(move || {
-        let (mut inner, buf) = shared_clone
-            .try_lock()
-            .ok()
-            .and_then(|rc| rc.take())
-            .expect("inner/buf is none");
-        let temp_slice = iobuf_to_slice(&buf);
-        let result = inner.write(temp_slice);
-        (result, inner, buf)
-    })
-    .await;
-
-    match result {
-        Ok(result) => result,
-        Err(_) => {
-            let (inner, buf) = shared
-                .try_lock()
-                .ok()
-                .and_then(|rc| rc.take())
-                .expect("inner/buf is none");
-            (Err(blocking_pool_io_error()), inner, buf)
-        }
-    }
+    let (result, (inner, buf)) =
+        crate::vibeio::blocking::with_buffer((inner, buf), |(inner, buf)| {
+            inner.write(iobuf_to_slice(buf))
+        })
+        .await;
+    (
+        result.unwrap_or_else(|_| Err(blocking_pool_io_error())),
+        inner,
+        buf,
+    )
 }
 
 /// Async-aware child process stdin stream.
@@ -242,29 +209,15 @@ impl ChildStdin {
 
     /// Consume this `ChildStdin` and return the underlying `std::process::ChildStdin`.
     #[inline]
-    pub fn into_std(self) -> std::process::ChildStdin {
-        #[cfg(not(unix))]
-        let this = ManuallyDrop::new(self);
-        #[cfg(unix)]
-        let mut this = ManuallyDrop::new(self);
-        #[cfg(unix)]
-        if let ChildIo::Async(handle) = &mut this.io {
-            unsafe {
-                ManuallyDrop::drop(handle);
-            }
-        }
-        let inner = unsafe { std::ptr::read(&this.inner) };
-        inner.expect("child stdin is already taken")
+    pub fn into_std(mut self) -> std::process::ChildStdin {
+        self.inner.take().expect("child stdin is already taken")
     }
 
     #[inline]
     fn drop_handle(&mut self) {
-        #[cfg(unix)]
-        if let ChildIo::Async(handle) = &mut self.io {
-            unsafe {
-                ManuallyDrop::drop(handle);
-            }
-        }
+        // Deregister before the standard stream closes its descriptor.
+        // Replacing the state also prevents a second drop during field cleanup.
+        self.io = ChildIo::Blocking;
     }
 }
 
@@ -285,29 +238,15 @@ impl ChildStdout {
 
     /// Consume this `ChildStdout` and return the underlying `std::process::ChildStdout`.
     #[inline]
-    pub fn into_std(self) -> std::process::ChildStdout {
-        #[cfg(not(unix))]
-        let this = ManuallyDrop::new(self);
-        #[cfg(unix)]
-        let mut this = ManuallyDrop::new(self);
-        #[cfg(unix)]
-        if let ChildIo::Async(handle) = &mut this.io {
-            unsafe {
-                ManuallyDrop::drop(handle);
-            }
-        }
-        let inner = unsafe { std::ptr::read(&this.inner) };
-        inner.expect("child stdout is already taken")
+    pub fn into_std(mut self) -> std::process::ChildStdout {
+        self.inner.take().expect("child stdout is already taken")
     }
 
     #[inline]
     fn drop_handle(&mut self) {
-        #[cfg(unix)]
-        if let ChildIo::Async(handle) = &mut self.io {
-            unsafe {
-                ManuallyDrop::drop(handle);
-            }
-        }
+        // Deregister before the standard stream closes its descriptor.
+        // Replacing the state also prevents a second drop during field cleanup.
+        self.io = ChildIo::Blocking;
     }
 }
 
@@ -328,29 +267,15 @@ impl ChildStderr {
 
     /// Consume this `ChildStderr` and return the underlying `std::process::ChildStderr`.
     #[inline]
-    pub fn into_std(self) -> std::process::ChildStderr {
-        #[cfg(not(unix))]
-        let this = ManuallyDrop::new(self);
-        #[cfg(unix)]
-        let mut this = ManuallyDrop::new(self);
-        #[cfg(unix)]
-        if let ChildIo::Async(handle) = &mut this.io {
-            unsafe {
-                ManuallyDrop::drop(handle);
-            }
-        }
-        let inner = unsafe { std::ptr::read(&this.inner) };
-        inner.expect("child stderr is already taken")
+    pub fn into_std(mut self) -> std::process::ChildStderr {
+        self.inner.take().expect("child stderr is already taken")
     }
 
     #[inline]
     fn drop_handle(&mut self) {
-        #[cfg(unix)]
-        if let ChildIo::Async(handle) = &mut self.io {
-            unsafe {
-                ManuallyDrop::drop(handle);
-            }
-        }
+        // Deregister before the standard stream closes its descriptor.
+        // Replacing the state also prevents a second drop during field cleanup.
+        self.io = ChildIo::Blocking;
     }
 }
 
@@ -419,34 +344,9 @@ impl AsyncWrite for ChildStdin {
                 Some(inner) => inner,
                 None => return Err(stdio_closed_error()),
             };
-            let shared = Arc::new(Mutex::new(RefCell::new(Some(inner))));
-            let shared_clone = shared.clone();
-            let result = crate::vibeio::spawn_blocking(move || {
-                let mut inner = shared_clone
-                    .try_lock()
-                    .ok()
-                    .and_then(|rc| rc.take())
-                    .expect("inner is none");
-                let flush_result = inner.flush();
-                (flush_result, inner)
-            })
-            .await;
-
-            match result {
-                Ok((flush_result, inner)) => {
-                    self.inner = Some(inner);
-                    flush_result
-                }
-                Err(_) => {
-                    let inner = shared
-                        .try_lock()
-                        .ok()
-                        .and_then(|rc| rc.take())
-                        .expect("inner is none");
-                    self.inner = Some(inner);
-                    Err(blocking_pool_io_error())
-                }
-            }
+            let (result, inner) = crate::vibeio::blocking::with_buffer(inner, Write::flush).await;
+            self.inner = Some(inner);
+            result.unwrap_or_else(|_| Err(blocking_pool_io_error()))
         } else {
             let inner = self.inner.as_mut().ok_or_else(stdio_closed_error)?;
             inner.flush()
@@ -883,34 +783,10 @@ impl Command {
     pub async fn status(&mut self) -> io::Result<ExitStatus> {
         if current_driver().is_some() {
             let inner = self.inner.take().ok_or_else(command_consumed_error)?;
-            let shared = Arc::new(Mutex::new(RefCell::new(Some(inner))));
-            let shared_clone = shared.clone();
-            let result = crate::vibeio::spawn_blocking(move || {
-                let mut cmd = shared_clone
-                    .try_lock()
-                    .ok()
-                    .and_then(|rc| rc.take())
-                    .expect("command is none");
-                let status = cmd.status();
-                (status, cmd)
-            })
-            .await;
-
-            match result {
-                Ok((status, cmd)) => {
-                    self.inner = Some(cmd);
-                    status
-                }
-                Err(_) => {
-                    let cmd = shared
-                        .try_lock()
-                        .ok()
-                        .and_then(|rc| rc.take())
-                        .expect("command is none");
-                    self.inner = Some(cmd);
-                    Err(blocking_pool_io_error())
-                }
-            }
+            let (result, inner) =
+                crate::vibeio::blocking::with_buffer(inner, std::process::Command::status).await;
+            self.inner = Some(inner);
+            result.unwrap_or_else(|_| Err(blocking_pool_io_error()))
         } else {
             self.inner_mut().status()
         }
@@ -923,34 +799,10 @@ impl Command {
     pub async fn output(&mut self) -> io::Result<Output> {
         if current_driver().is_some() {
             let inner = self.inner.take().ok_or_else(command_consumed_error)?;
-            let shared = Arc::new(Mutex::new(RefCell::new(Some(inner))));
-            let shared_clone = shared.clone();
-            let result = crate::vibeio::spawn_blocking(move || {
-                let mut cmd = shared_clone
-                    .try_lock()
-                    .ok()
-                    .and_then(|rc| rc.take())
-                    .expect("command is none");
-                let output = cmd.output();
-                (output, cmd)
-            })
-            .await;
-
-            match result {
-                Ok((output, cmd)) => {
-                    self.inner = Some(cmd);
-                    output
-                }
-                Err(_) => {
-                    let cmd = shared
-                        .try_lock()
-                        .ok()
-                        .and_then(|rc| rc.take())
-                        .expect("command is none");
-                    self.inner = Some(cmd);
-                    Err(blocking_pool_io_error())
-                }
-            }
+            let (result, inner) =
+                crate::vibeio::blocking::with_buffer(inner, std::process::Command::output).await;
+            self.inner = Some(inner);
+            result.unwrap_or_else(|_| Err(blocking_pool_io_error()))
         } else {
             self.inner_mut().output()
         }
@@ -975,6 +827,66 @@ mod tests {
     use crate::vibeio::driver::AnyDriver;
     use crate::vibeio::executor::Runtime;
     use crate::vibeio::io::{AsyncRead, AsyncWrite, IoBufWithCursor};
+
+    #[cfg(unix)]
+    #[test]
+    fn child_stream_conversion_deregisters_once_and_preserves_descriptors() {
+        use std::os::fd::AsFd;
+        let mut driver = AnyDriver::new_mock();
+        let AnyDriver::Mock(mock) = &mut driver else {
+            unreachable!()
+        };
+        mock.registrations = Some(Default::default());
+        mock.registrations
+            .as_ref()
+            .unwrap()
+            .results
+            .borrow_mut()
+            .extend((0..3).map(|index| Ok(mio::Token(index))));
+        Runtime::new(driver).block_on(async {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--list")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            // Reap even if an assertion fails; closing streams unblocks output.
+            struct Cleanup(std::process::Child);
+            impl Drop for Cleanup {
+                fn drop(&mut self) {
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
+            }
+            let stdin = child.stdin.take().unwrap();
+            let stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+            let child = Cleanup(child);
+            macro_rules! roundtrip {
+                ($stream:ident, $wrapper:ident) => {{
+                    let fd = $stream.as_raw_fd();
+                    let stream = $wrapper::from_std($stream).unwrap().into_std();
+                    assert_eq!(stream.as_raw_fd(), fd);
+                    drop(stream.as_fd().try_clone_to_owned().unwrap());
+                    stream
+                }};
+            }
+            let stdin = roundtrip!(stdin, ChildStdin);
+            let stdout = roundtrip!(stdout, ChildStdout);
+            let stderr = roundtrip!(stderr, ChildStderr);
+            let driver = current_driver().unwrap();
+            let AnyDriver::Mock(mock) = driver.as_ref() else {
+                unreachable!()
+            };
+            assert_eq!(
+                *mock.registrations.as_ref().unwrap().deregistered.borrow(),
+                [mio::Token(0), mio::Token(1), mio::Token(2)]
+            );
+            drop((stdin, stdout, stderr));
+            drop(child);
+        });
+    }
 
     #[cfg(unix)]
     #[test]
@@ -1006,6 +918,99 @@ mod tests {
 
     fn make_runtime() -> Runtime {
         Runtime::new(AnyDriver::new_best().expect("driver should initialize"))
+    }
+
+    #[test]
+    fn command_offloads_restore_configuration_on_success_and_pool_rejection() {
+        struct TestPool(bool);
+        impl crate::vibeio::blocking::BlockingThreadPool for TestPool {
+            fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
+                if self.0 {
+                    std::thread::spawn(task).join().unwrap();
+                }
+            }
+        }
+        for run in [false, true] {
+            let runtime = crate::vibeio::RuntimeBuilder::new()
+                .driver(crate::vibeio::DriverKind::Mock)
+                .blocking_pool(Box::new(TestPool(run)))
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                // Enumerate this test binary's tests without running them.
+                let executable = std::env::current_exe().unwrap();
+                let mut command = Command::new(&executable);
+                command
+                    .as_std()
+                    .arg("--list")
+                    .stdout(std::process::Stdio::null());
+                let status = command.status().await;
+                if run {
+                    assert!(status.unwrap().success());
+                } else {
+                    assert_eq!(status.unwrap_err().kind(), io::ErrorKind::Other);
+                }
+                assert_eq!(command.as_std().get_program(), executable.as_os_str());
+                assert_eq!(command.as_std().get_args().collect::<Vec<_>>(), ["--list"]);
+
+                command.as_std().stdout(std::process::Stdio::piped());
+                let output = command.output().await;
+                if run {
+                    let output = output.unwrap();
+                    assert!(output.status.success());
+                    assert!(!output.stdout.is_empty());
+                } else {
+                    assert_eq!(output.unwrap_err().kind(), io::ErrorKind::Other);
+                }
+                assert_eq!(command.as_std().get_program(), executable.as_os_str());
+                assert_eq!(command.as_std().get_args().collect::<Vec<_>>(), ["--list"]);
+            });
+        }
+    }
+
+    #[test]
+    fn blocking_pipe_worker_panics_preserve_stream_and_buffer() {
+        struct JoiningPool;
+        impl crate::vibeio::blocking::BlockingThreadPool for JoiningPool {
+            fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
+                let _ = std::thread::spawn(task).join();
+            }
+        }
+        struct PanickingIo(usize);
+        impl Read for PanickingIo {
+            fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+                self.0 += 1;
+                panic!("injected reader panic")
+            }
+        }
+        impl Write for PanickingIo {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                self.0 += 1;
+                panic!("injected writer panic")
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let runtime = crate::vibeio::RuntimeBuilder::new()
+            .driver(crate::vibeio::DriverKind::Mock)
+            .blocking_pool(Box::new(JoiningPool))
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let buf = b"preserved".to_vec();
+            let ptr = buf.as_ptr();
+            let (result, inner, buf) = read_in_blocking_pool(PanickingIo(0), buf).await;
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
+            assert_eq!(inner.0, 1);
+            assert_eq!(buf, b"preserved");
+            assert_eq!(buf.as_ptr(), ptr);
+            let (result, inner, buf) = write_in_blocking_pool(inner, buf).await;
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
+            assert_eq!(inner.0, 2);
+            assert_eq!(buf, b"preserved");
+            assert_eq!(buf.as_ptr(), ptr);
+        });
     }
 
     #[cfg(feature = "blocking-default")]

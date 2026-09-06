@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::io;
 use std::task::{Context, Poll};
 
@@ -21,16 +23,12 @@ use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]
-fn socket_recv(
-    socket: SOCKET,
-    buf: &mut [std::mem::MaybeUninit<u8>],
-    peek: bool,
-) -> io::Result<usize> {
+fn socket_recv(socket: SOCKET, buf: &mut impl IoBufMut, peek: bool) -> io::Result<usize> {
     use windows_sys::Win32::Networking::WinSock::{
         self as WinSock, MSG_PEEK, SOCKET_ERROR, WSABUF,
     };
 
-    let len = u32::try_from(buf.len()).map_err(|_| {
+    let len = crate::vibeio::op::io_util::completion_len(buf.buf_capacity()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "read buffer is too large for Windows socket I/O",
@@ -39,11 +37,14 @@ fn socket_recv(
 
     let mut wsabuf = WSABUF {
         len,
-        buf: buf.as_mut_ptr().cast(),
+        buf: buf.as_buf_mut_ptr().cast(),
     };
     let mut bytes: u32 = 0;
     let mut flags: u32 = if peek { MSG_PEEK as u32 } else { 0 };
 
+    // SAFETY: IoBufMut provides exclusive writable capacity. Descriptor and
+    // output values live for this synchronous call; null OVERLAPPED means
+    // none of these pointers is retained after return.
     let recv_result = unsafe {
         WinSock::WSARecv(
             socket,
@@ -56,6 +57,7 @@ fn socket_recv(
         )
     };
     if recv_result == SOCKET_ERROR {
+        // SAFETY: queries the calling thread's Winsock error without pointers.
         return Err(io::Error::from_raw_os_error(unsafe {
             WinSock::WSAGetLastError()
         }));
@@ -115,6 +117,8 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
 
         #[cfg(unix)]
         let result = {
+            // SAFETY: the socket is live and IoBufMut provides exclusive
+            // writable capacity; recv does not retain the pointer after return.
             let read = unsafe {
                 libc::recv(
                     self.handle.handle,
@@ -132,14 +136,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
 
         #[cfg(windows)]
         let result = match self.handle.handle {
-            RawOsHandle::Socket(socket) => {
-                // SAFETY: IoBufMut guarantees exclusive writable capacity, but
-                // not initialized bytes. The synchronous call retains no pointer.
-                let slice = unsafe {
-                    std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr().cast(), buf.buf_capacity())
-                };
-                socket_recv(socket as SOCKET, slice, self.peek)
-            }
+            RawOsHandle::Socket(socket) => socket_recv(socket as SOCKET, buf, self.peek),
             RawOsHandle::Handle(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "poll-based recv currently supports sockets only on Windows",
@@ -147,6 +144,8 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
         };
         match poll_result_or_wait(result, self.handle, cx, driver, Interest::READABLE) {
             Poll::Ready(Ok(read)) => {
+                // SAFETY: the successful synchronous receive initialized the
+                // reported prefix within the supplied writable capacity.
                 unsafe { buf.set_buf_init(read) };
                 Poll::Ready(Ok(read))
             }
@@ -187,10 +186,12 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
             }
         };
         if result < 0 {
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
+            return Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)));
         }
         let read = result as usize;
         let buf = self.buf.as_mut().unwrap().as_mut();
+        // SAFETY: completion reports the initialized prefix of the submitted
+        // writable capacity; pending storage remained owned by CompletionBuffer.
         unsafe { buf.set_buf_init(read) };
         Poll::Ready(Ok(read))
     }
@@ -202,16 +203,17 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
         let RawOsHandle::Socket(socket) = self.handle.handle else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "WSARecv can be used only with listening sockets",
+                "WSARecv requires a socket handle",
             ));
         };
 
-        let read_len = u32::try_from(buf.buf_capacity()).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "read buffer is too large for Windows socket I/O",
-            )
-        })?;
+        let read_len =
+            crate::vibeio::op::io_util::completion_len(buf.buf_capacity()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "read buffer is too large for Windows socket I/O",
+                )
+            })?;
 
         let mut wsabuf = WSABUF {
             len: read_len,
@@ -238,6 +240,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
             return Ok(());
         }
 
+        // SAFETY: queries the calling thread's Winsock error without pointers.
         let err = unsafe { WinSock::WSAGetLastError() };
         if err == WSA_IO_PENDING {
             Ok(())
@@ -255,10 +258,11 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
         use io_uring::{opcode, types};
 
         let buf = self.buf.as_mut().unwrap().as_mut();
+        let transfer_len = completion_len(buf.buf_capacity())?;
         let entry = opcode::Recv::new(
             types::Fd(self.handle.handle),
             buf.as_buf_mut_ptr(),
-            completion_len(buf.buf_capacity())?,
+            transfer_len,
         )
         .flags(if self.peek { libc::MSG_PEEK } else { 0 })
         .build()

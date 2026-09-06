@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::io;
 use std::task::{Context, Poll};
 
@@ -80,12 +82,18 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
             }
         };
         let result = if result < 0 {
-            crate::vibeio::op::io_util::read_error_result(io::Error::from_raw_os_error(-result))?
+            crate::vibeio::op::io_util::read_error_result(
+                crate::vibeio::op::io_util::completion_error(result),
+            )?
         } else {
             result
         };
         let read = result as usize;
         let buf = self.buf.as_mut().unwrap().as_mut();
+        // SAFETY: successful file-read completion initializes exactly the
+        // reported prefix of the submitted writable capacity. Pending storage
+        // stays owned by CompletionBuffer; errors return before changing length.
+        // Windows EOF is normalized to a zero-byte successful completion above.
         unsafe { buf.set_buf_init(read) };
         Poll::Ready(Ok(read))
     }
@@ -101,18 +109,27 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
             ));
         };
 
-        let read_len = u32::try_from(buf.buf_capacity()).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "read buffer is too large for Windows file I/O",
-            )
-        })?;
+        let read_len =
+            crate::vibeio::op::io_util::completion_len(buf.buf_capacity()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "read buffer is too large for Windows file I/O",
+                )
+            })?;
 
+        // SAFETY: the IOCP driver supplies its live, exclusively initialized
+        // OVERLAPPED record for this submission. Both offset words are written
+        // before ReadFile can retain the record; the driver owns it to completion.
         unsafe {
             (*overlapped).Anonymous.Anonymous.Offset = self.offset as u32;
             (*overlapped).Anonymous.Anonymous.OffsetHigh = (self.offset >> 32) as u32;
         }
 
+        // SAFETY: handle is the borrowed file handle, kept alive by the enclosing
+        // file operation. IoBufMut supplies exclusive writable storage for
+        // read_len bytes. CompletionBuffer keeps its allocation stable while
+        // ReadFile is pending, and Drop transfers it to the owning driver on
+        // cancellation. The driver retains OVERLAPPED until acknowledgement.
         let read_result = unsafe {
             ReadFile(
                 handle as HANDLE,
@@ -144,12 +161,13 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
         use io_uring::{opcode, types};
 
         let buf = self.buf.as_mut().unwrap().as_mut();
-        let read_len = u32::try_from(buf.buf_capacity()).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "read buffer is too large for io_uring",
-            )
-        })?;
+        let read_len =
+            crate::vibeio::op::io_util::completion_len(buf.buf_capacity()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "read buffer is too large for io_uring",
+                )
+            })?;
 
         let entry = opcode::Read::new(
             types::Fd(self.handle.handle),

@@ -22,6 +22,186 @@ runtime is safe or that the Qualirs review is finished.
 
 ## Current inventory
 
+### Owned multishot accept queue
+
+- io_uring's accept queue now stores Result<OwnedFd, i32> instead of raw signed
+  integers. Successful CQEs acquire descriptor ownership at the completion
+  boundary; stale/undelivered results close by normal drop. Queue destruction
+  closes only unconsumed successes, without a manual close loop. Returning an
+  accepted result explicitly transfers raw ownership to the caller.
+- Added a socket-pair regression mixing successful and error queue entries.
+  Dropping the queue closes its abandoned endpoint (peer observes EOF), leaves
+  a transferred endpoint alive (peer observes WouldBlock), and closing the
+  transferred owner then yields EOF. Existing extreme-error dispatch tests pass.
+- Validation: 354 root tests, 237 harness tests, 8 documentation checks, strict
+  root/harness Clippy, formatting and whitespace checks pass. This Linux-only
+  change has no new native Windows behavior. Queue representation changed;
+  no throughput or memory-footprint improvement is claimed. Changes remain
+  uncommitted and the broader cleanup remains open.
+
+### Post-ownership-change Python integration
+
+- Rebuilt and installed the release CPython 3.14 extension from the current
+  worktree using maturin develop --release --locked. Python compatibility suite:
+  109 tests in 3.607 seconds, successful with 2 skips. Logs are in
+  target/vibeio-cleanup-rebuild.log and target/vibeio-cleanup-python-current.log.
+- Completed the default workload matrix for rsloop and uvloop, pinned to CPUs
+  2,3, with raw results in target/vibeio-cleanup-matrix-current.json and the
+  matching .log file. This is a three-repeat integration smoke run, not a
+  sustained before/after experiment or evidence of a cleanup speedup. Idle v2
+  completed all three process blocks per loop, 100 cycles per run, and reports
+  an inconclusive comparison (fewer than seven process runs).
+- A fresh Qualirs scan reports 242 vibeio diagnostics: 117 Q0087, 63 Q0090,
+  44 Q0095 and 18 in the other rules. The disposition document retains its
+  earlier snapshot locations and now records this newer count separately.
+  Remaining unsafe findings still require per-location review. No README
+  performance claims were updated; changes remain uncommitted.
+
+### Safe socket ownership
+
+- TCP/Unix listeners, TCP/Unix streams and UDP sockets now own registration
+  handles directly, with declaration order ensuring deregistration precedes
+  socket closure. Raw-handle/std conversions destructure safely and release
+  registration before transferring ownership. Removed their manual destructors,
+  ManuallyDrop and pointer reads. Shared TCP conversion still duplicates the
+  descriptor when Arc ownership prevents taking the original socket.
+- A live Unix regression covers all five wrapper types plus shared TCP. It
+  checks raw descriptor identity where ownership is unique, address validity,
+  retained shared TCP ownership after closing the duplicate, and exactly-once
+  deregistration for all six registrations. This is conversion/ownership
+  coverage, not proof of outstanding-operation cancellation or shutdown safety.
+- Validation: 350 root tests, 233 harness tests, 8 documentation checks, strict
+  root/all-feature/default-feature harness Clippy and Windows/macOS cross-target
+  harness Clippy pass. Formatting and whitespace checks pass. Native Windows
+  and macOS execution remain outstanding; changes are uncommitted and the
+  package audit remains open.
+
+### Safe pipe conversion and destruction
+
+- Pipe now directly owns its registration handle, declared before OwnedFd so
+  normal destruction deregisters before closing. IntoRawFd destructures safely,
+  releases registration, then transfers the descriptor. Removed the manual
+  destructor, ManuallyDrop and raw pointer reads from production pipe code.
+- A live pipe regression transfers both endpoints to standard file ownership,
+  checks descriptor identity, writes and reads data through EOF, and verifies
+  exactly-once deregistration. Existing readiness/mode-conversion tests pass.
+- Validation: 349 root tests, 232 all-feature harness tests, strict root/harness
+  Clippy, macOS cross-target Clippy, isolated pipe-feature tests and Clippy,
+  formatting and whitespace checks pass. Pipe is Unix-only; macOS compilation
+  is not native execution. Changes remain uncommitted and broader cleanup is
+  still open.
+
+### Safe file conversion and destruction
+
+- FileIo now directly owns its completion handle. File declares that state
+  before the standard file, enforcing deregistration-before-close through normal
+  field destruction. into_std destructures the object, drops registration state,
+  and returns the file without raw pointer reads or ManuallyDrop. The custom
+  unsafe destructor is removed.
+- A regression registers two real files with the mock driver. Conversion keeps
+  the original descriptor/handle and readable contents; conversion and ordinary
+  destruction each release their registration exactly once. This tests ownership
+  bookkeeping, not native IOCP cancellation or io_uring shutdown.
+- Validation: 348 root tests, 231 harness tests, 8 documentation checks,
+  strict root/harness Clippy, Windows/macOS cross-target harness Clippy,
+  formatting and whitespace checks pass. Native Windows/macOS execution remains
+  outstanding. Changes remain uncommitted; the package audit is still open.
+
+### Child-stream safe conversion and destruction
+
+- ChildIo now owns InnerRawHandle directly. Each child-stream destructor
+  replaces its I/O state with Blocking before the standard stream is dropped,
+  preserving deregistration-before-close without manual destruction. into_std
+  takes the existing Option safely and lets normal destruction deregister it.
+  Removed raw pointer reads and all ManuallyDrop uses from process/mod.rs.
+- Added live Unix conversion coverage for stdin, stdout and stderr. The mock
+  registration ledger records each deregistration exactly once; returned
+  descriptors retain their original number and remain valid for duplication.
+  The test owns and reaps its child even when an assertion fails.
+- Validation: 347 root tests, 230 harness tests, 8 documentation checks,
+  strict root/harness Clippy, Windows/macOS cross-target harness Clippy,
+  formatting and whitespace checks pass. The live conversion regression ran
+  on Linux, not Windows or macOS. Broader cleanup remains open and changes
+  remain uncommitted.
+
+### Remaining process ownership handoffs
+
+- ChildStdin flush and Command status/output now use the shared owned-operation
+  helper. Removed the remaining duplicated RefCell/mutex take-and-recover paths
+  from process/mod.rs. Successful operations and worker errors restore the
+  returned object before exposing the result to the caller.
+- A real child test enumerates the current test executable without executing
+  its tests. It checks status, captured output, and preserved executable/argument
+  configuration. The same sequence with a rejecting pool returns errors while
+  leaving the command reusable. Shared-helper tests cover worker unwinding;
+  this test does not inject a panic into std::process or exercise native Windows
+  child-stdin flushing.
+- Cancellation semantics are unchanged: dropping the pending wrapper operation
+  leaves its inner slot empty while the worker retains the object until it
+  finishes. This work does not claim cancellation makes commands reusable.
+- Validation: 346 root tests, 229 all-feature harness tests, 162 process-only
+  tests, 8 documentation checks, strict root/harness/process-only Clippy,
+  Windows/macOS cross-target harness Clippy, formatting and whitespace checks
+  pass. Broader audit remains open; changes are uncommitted.
+
+### Child-pipe blocking-buffer handoff
+
+- Child-pipe read/write offloads also took the stream and buffer out of shared
+  storage before calling synchronous I/O. They now pass the owned pair through
+  blocking::with_buffer, preserving both objects when the worker unwinds.
+  The helper and cancellation test are enabled for the isolated process feature.
+- Fault injection uses safe Read/Write implementations that mutate a stream
+  counter then panic on a real worker thread. Both operations return an error
+  with the changed counter, original buffer contents, and original allocation.
+  Existing empty-vector and EOF coverage continues to pass.
+- Validation: 345 root tests, 228 all-feature harness tests, 161 process-only
+  harness tests, 8 documentation checks, strict root/harness/process-only
+  Clippy and Windows/macOS cross-target harness Clippy pass. Native platform
+  execution is not implied. ChildStdin flush and Command status/output still
+  have separate ownership handoffs requiring review. Changes are uncommitted;
+  broader package cleanup remains open.
+
+### Shared blocking-buffer handoff
+
+- Filesystem positional read/write offloads had the same take-before-I/O
+  pattern as stdio. Both now use a shared blocking::with_buffer helper, as does
+  stdio. The worker borrows the buffer; only the resumed caller takes it out.
+  File-clone errors still return immediately with the original buffer, and
+  file/stdio-specific worker-error messages are retained.
+- Added actual offloaded file-read and read-only-descriptor write-error tests,
+  checking contents and allocation identity. Added deterministic cancellation
+  coverage: dropping a pending caller keeps the buffer alive until the queued
+  worker either executes on a real thread or is discarded, then drops it once.
+  Existing stdio worker-unwind tests now exercise the shared helper.
+- Validation: 344 root tests, 227 harness tests, 8 documentation checks, strict
+  root/harness Clippy, Windows/macOS cross-target harness Clippy, and isolated
+  Linux fs/stdio feature Clippy pass. Cross-target checks are not native tests.
+  This does not establish a latency improvement or complete the package audit.
+  Changes remain uncommitted.
+
+### Stdio blocking-buffer ownership follow-up
+
+- Consolidated three stdio buffer-offload implementations into one helper. The
+  worker now borrows the buffer inside shared storage instead of taking it out
+  before I/O. An unwinding worker leaves the buffer recoverable, including any
+  partial mutation; the caller returns the worker error without a second panic.
+  Removed the redundant RefCell inside the mutex.
+- Fault injection on a real worker thread reproduced the old secondary
+  `buf is none` panic after the injected worker panic. The regression now
+  returns the original allocation. Additional tests cover missing/rejecting
+  pools, successful operations and ordinary I/O errors without losing identity.
+  The deterministic test pool joins its worker; this is not a latency test or
+  a claim to exercise real terminal input/output. Panic-abort is not recoverable.
+- Validation: 342 root tests, 225 harness tests, 8 documentation checks (one
+  compile-only), strict root/harness Clippy and Windows/macOS cross-target
+  harness Clippy pass. Filesystem helpers have a similar handoff pattern and
+  still need the corresponding audit; this does not close all blocking I/O.
+  These changes remain uncommitted.
+
+The latest focused review is in [remaining finding dispositions](vibeio-findings.md).
+It records 255 current diagnostics and per-location dispositions for 18 findings
+outside the three bulk unsafe-analysis rules. The baseline below is historical.
+
 `target/qualirs-cleanup-baseline.json` captures the start of the full cleanup
 after the initial buffer/timer fixes. It contains 481 vibeio findings:
 
@@ -1515,6 +1695,38 @@ The Windows metadata-retention change below is superseded by the later
 - Validation: 320 root tests, 203 harness tests, 6 doctests (44 ignored), root
   strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
   formatting and whitespace checks pass. Broader cleanup remains open.
+
+## Buffered adapter interrupted writes
+
+- AsyncWrap acknowledged a write batch before draining it, but discarded the
+  remaining owned bytes when the inner writer returned Interrupted. Retrying
+  flush could not recover those already accepted bytes. The drain loop now
+  retains the returned buffer and retries without advancing its cursor.
+- A regression alternates interruptions with two-byte successful writes. It
+  failed before the fix with Interrupted; afterward all six accepted bytes are
+  delivered exactly once across six attempts and the inner writer is flushed.
+- Validation: 338 root tests, 221 harness tests, 7 doctests (44 ignored), root
+  strict Clippy and Linux/Windows-target/macOS-target strict harness Clippy pass.
+  Windows and macOS checks are cross-target linting, not native execution.
+  This change is uncommitted; the broader package cleanup remains open.
+
+## Buffered adapter terminal drain errors
+
+- A non-interrupted write-drain failure discarded the remainder of an accepted
+  batch, then allowed shutdown/flush to succeed and new writes to be accepted.
+  The adapter now remembers the failure kind and rejects subsequent drains.
+  The original failing call retains the complete original error. This is a
+  documented terminal-error policy, not recovery of the discarded bytes.
+- The regression failed on shutdown before the fix. It now checks repeated
+  flush, shutdown, nonempty write and read calls after an inner BrokenPipe,
+  zero-byte write, or oversized completion. Reads return the drain error without
+  invoking the inner reader or modifying the caller's buffer. Interrupted writes
+  retain the retry behavior tested separately.
+- Empty read/write calls remain successful no-ops. Flush errors from the inner
+  writer are not made terminal: those do not discard this adapter's write batch.
+- Validation: Linux root and harness tests and strict Clippy pass; Windows and
+  macOS validation remains cross-target linting, not native execution. Broader
+  cleanup remains open; these adapter changes are not committed.
 
 ## Append/truncate option validation
 

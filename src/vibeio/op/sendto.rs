@@ -28,7 +28,7 @@ use crate::vibeio::op::{Op, socket_addr_to_raw};
 fn socket_sendto<B: IoBuf>(socket: SOCKET, buf: &B, addr: SocketAddr) -> io::Result<usize> {
     use windows_sys::Win32::Networking::WinSock::{self as WinSock, SOCKET_ERROR, WSABUF};
 
-    let len = u32::try_from(buf.buf_len()).map_err(|_| {
+    let len = crate::vibeio::op::io_util::completion_len(buf.buf_len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "write buffer is too large for Windows socket I/O",
@@ -197,7 +197,7 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
             }
         };
         if result < 0 {
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
+            return Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)));
         }
         let written = result as usize;
         Poll::Ready(Ok(written))
@@ -214,12 +214,13 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
             ));
         };
 
-        let write_len = u32::try_from(buf.buf_len()).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "write buffer is too large for Windows socket I/O",
-            )
-        })?;
+        let write_len =
+            crate::vibeio::op::io_util::completion_len(buf.buf_len()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "write buffer is too large for Windows socket I/O",
+                )
+            })?;
 
         let (raw_addr, raw_addr_len) = socket_addr_to_raw(self.addr);
         let completion = self.completion_state.get_or_insert_with(|| {

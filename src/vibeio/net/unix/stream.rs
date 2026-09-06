@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::future::poll_fn;
 use std::io::{self, IoSlice};
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::net::Shutdown;
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
@@ -122,8 +122,9 @@ fn new_socket(
 /// let read = read?;
 /// ```
 pub struct UnixStream {
+    // Deregister before closing the socket (field declaration order).
+    handle: InnerRawHandle,
     inner: StdUnixStream,
-    handle: ManuallyDrop<InnerRawHandle>,
 }
 
 /// A poll-only variant that always uses readiness-based operations.
@@ -217,7 +218,6 @@ impl UnixStream {
             mode,
         )?;
         inner.set_nonblocking(!handle.uses_completion())?;
-        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 
@@ -463,14 +463,9 @@ impl<'a> AsInnerRawHandle<'a> for PollUnixStream {
 impl IntoRawFd for UnixStream {
     #[inline]
     fn into_raw_fd(self) -> RawFd {
-        let mut this = ManuallyDrop::new(self);
-
-        // Safety: `this` will not be dropped, so we must drop the registration handle manually.
-        // We then move out the inner std stream and transfer its fd ownership to the caller.
-        unsafe {
-            ManuallyDrop::drop(&mut this.handle);
-            std::ptr::read(&this.inner).into_raw_fd()
-        }
+        let Self { handle, inner } = self;
+        drop(handle);
+        inner.into_raw_fd()
     }
 }
 
@@ -551,16 +546,6 @@ impl AsyncWritePoll for PollUnixStream {
             .poll_op_poll(cx, &mut ReadinessOp::new_writable(&self.stream.handle))?;
         *self.write_ready.borrow_mut() = true;
         poll.map(Ok)
-    }
-}
-
-impl Drop for UnixStream {
-    #[inline]
-    fn drop(&mut self) {
-        // Safety: The struct is dropped after the handle is dropped.
-        unsafe {
-            ManuallyDrop::drop(&mut self.handle);
-        }
     }
 }
 

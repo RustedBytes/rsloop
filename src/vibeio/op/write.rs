@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::io;
 use std::task::{Context, Poll};
 
@@ -22,10 +24,10 @@ use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]
-fn socket_write(socket: SOCKET, buf: &[u8]) -> io::Result<usize> {
+fn socket_write(socket: SOCKET, buf: &impl IoBuf) -> io::Result<usize> {
     use windows_sys::Win32::Networking::WinSock::{self as WinSock, SOCKET_ERROR, WSABUF};
 
-    let len = u32::try_from(buf.len()).map_err(|_| {
+    let len = crate::vibeio::op::io_util::completion_len(buf.buf_len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "write buffer is too large for Windows socket I/O",
@@ -34,10 +36,12 @@ fn socket_write(socket: SOCKET, buf: &[u8]) -> io::Result<usize> {
 
     let mut wsabuf = WSABUF {
         len,
-        buf: buf.as_ptr().cast_mut().cast(),
+        buf: buf.as_buf_ptr().cast_mut().cast(),
     };
     let mut bytes: u32 = 0;
 
+    // SAFETY: IoBuf owns len initialized bytes; the metadata and output count
+    // are live for the synchronous call. Null OVERLAPPED prevents retention.
     let send_result = unsafe {
         WinSock::WSASend(
             socket,
@@ -50,6 +54,7 @@ fn socket_write(socket: SOCKET, buf: &[u8]) -> io::Result<usize> {
         )
     };
     if send_result == SOCKET_ERROR {
+        // SAFETY: reads the calling thread's Winsock error without pointers.
         return Err(io::Error::from_raw_os_error(unsafe {
             WinSock::WSAGetLastError()
         }));
@@ -64,8 +69,6 @@ pub struct WriteOp<'a, B: IoBuf> {
     handle: &'a InnerRawHandle,
     buf: Option<CompletionBuffer<B>>,
     completion_token: Option<usize>,
-    #[cfg(windows)]
-    socket_buf: Option<Box<WSABUF>>,
 }
 
 impl<'a, B: IoBuf> WriteOp<'a, B> {
@@ -75,8 +78,6 @@ impl<'a, B: IoBuf> WriteOp<'a, B> {
             handle,
             buf: Some(CompletionBuffer::new(buf, handle.uses_completion())),
             completion_token: None,
-            #[cfg(windows)]
-            socket_buf: None,
         }
     }
 
@@ -104,6 +105,8 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
 
         #[cfg(unix)]
         let result = {
+            // SAFETY: the borrowed descriptor is live and IoBuf owns the
+            // initialized prefix. The synchronous call does not retain pointers.
             let written = unsafe {
                 libc::write(
                     self.handle.handle,
@@ -120,10 +123,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
 
         #[cfg(windows)]
         let result = match self.handle.handle {
-            RawOsHandle::Socket(socket) => {
-                let slice = unsafe { std::slice::from_raw_parts(buf.as_buf_ptr(), buf.buf_len()) };
-                socket_write(socket as SOCKET, slice)
-            }
+            RawOsHandle::Socket(socket) => socket_write(socket as SOCKET, buf),
             RawOsHandle::Handle(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "poll-based write currently supports sockets only on Windows",
@@ -169,7 +169,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
             }
         };
         if result < 0 {
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
+            return Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)));
         }
         Poll::Ready(Ok(result as usize))
     }
@@ -180,26 +180,27 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
         let buf = self.buf.as_ref().unwrap().as_ref();
         match self.handle.handle {
             RawOsHandle::Socket(socket) => {
-                let write_len = u32::try_from(buf.buf_len()).map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "write buffer is too large for Windows socket I/O",
-                    )
-                })?;
+                let write_len =
+                    crate::vibeio::op::io_util::completion_len(buf.buf_len()).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "write buffer is too large for Windows socket I/O",
+                        )
+                    })?;
 
-                let wsabuf = self.socket_buf.get_or_insert_with(|| {
-                    Box::new(WSABUF {
-                        len: 0,
-                        buf: std::ptr::null_mut(),
-                    })
-                });
-                wsabuf.len = write_len;
-                wsabuf.buf = buf.as_buf_ptr() as *mut _;
+                let mut wsabuf = WSABUF {
+                    len: write_len,
+                    buf: buf.as_buf_ptr().cast_mut().cast(),
+                };
 
+                // SAFETY: Winsock captures WSABUF metadata before returning.
+                // CompletionBuffer retains the initialized payload, including
+                // on cancellation; the driver retains OVERLAPPED until completion.
+                // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsasend
                 let send_result = unsafe {
                     WinSock::WSASend(
                         socket as SOCKET,
-                        wsabuf.as_mut() as *mut WSABUF,
+                        &mut wsabuf,
                         1,
                         std::ptr::null_mut(),
                         0,
@@ -212,6 +213,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
                     return Ok(());
                 }
 
+                // SAFETY: reads the calling thread's Winsock error, no pointers.
                 let err = unsafe { WinSock::WSAGetLastError() };
                 if err == WSA_IO_PENDING {
                     Ok(())
@@ -220,13 +222,17 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
                 }
             }
             RawOsHandle::Handle(handle) => {
-                let write_len = u32::try_from(buf.buf_len()).map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "write buffer is too large for Windows file I/O",
-                    )
-                })?;
+                let write_len =
+                    crate::vibeio::op::io_util::completion_len(buf.buf_len()).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "write buffer is too large for Windows file I/O",
+                        )
+                    })?;
 
+                // SAFETY: the borrowed file handle and initialized payload are
+                // live; write_len was checked. CompletionBuffer and the driver
+                // retain payload and OVERLAPPED through completion/cancellation.
                 let write_result = unsafe {
                     WriteFile(
                         handle as HANDLE,
@@ -260,10 +266,11 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
         use io_uring::{opcode, types};
 
         let buf = self.buf.as_ref().unwrap().as_ref();
+        let transfer_len = completion_len(buf.buf_len())?;
         let entry = opcode::Write::new(
             types::Fd(self.handle.handle),
             buf.as_buf_ptr(),
-            completion_len(buf.buf_len())?,
+            transfer_len,
         )
         .build()
         .user_data(user_data);
@@ -276,9 +283,6 @@ impl<B: IoBuf> Drop for WriteOp<'_, B> {
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
-            #[cfg(windows)]
-            let completion_state = self.socket_buf.take();
-            #[cfg(not(windows))]
             let completion_state = ();
             // The owning driver, not the currently entered runtime, must retain
             // every kernel-visible allocation until completion is acknowledged.

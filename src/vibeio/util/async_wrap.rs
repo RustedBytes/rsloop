@@ -14,6 +14,8 @@
 //!   different buffer on the next call cannot misattribute an old completion.
 //! - Errors writing accepted bytes are reported by the next write, read, flush,
 //!   or shutdown that drains them. Dropping the wrapper does not flush.
+//! - A failed write drain is terminal: later delivery operations return the same
+//!   error kind rather than acknowledging more bytes after data was discarded.
 //! - Concurrent operations are rejected with an error.
 //! - The wrapper is `Unpin` regardless of the inner type.
 
@@ -42,6 +44,9 @@ const BUFFER_SIZE: usize = 4096;
 /// kernel writes. Call flush or shutdown before drop to finish delivery. Shutdown
 /// flushes but cannot half-close the inner stream: the buffer-owning trait has no
 /// shutdown operation.
+/// A write-drain error permanently fails the adapter. The first error retains
+/// its original details; subsequent operations that drain writes return its
+/// error kind. Interrupted writes are retried internally and do not fail it.
 ///
 /// # Examples
 /// ```ignore
@@ -57,6 +62,7 @@ const BUFFER_SIZE: usize = 4096;
 /// ```
 pub struct AsyncWrap<T> {
     inner: Option<T>,
+    write_error: Option<std::io::ErrorKind>,
     read_buf: Option<(Buffer, usize, usize)>,
     #[allow(
         clippy::type_complexity,
@@ -77,12 +83,21 @@ pub struct AsyncWrap<T> {
 
 impl<T> AsyncWrap<T> {
     fn poll_pending_write(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        if let Some(kind) = self.write_error {
+            return Poll::Ready(Err(std::io::Error::new(
+                kind,
+                "a previous write drain failed; accepted data could not be delivered",
+            )));
+        }
         let Some(future) = self.write_fut.as_mut() else {
             return Poll::Ready(Ok(()));
         };
         let (result, inner) = futures_util::ready!(future.poll_unpin(cx));
         self.write_fut = None;
         self.inner = Some(inner);
+        if let Err(error) = &result {
+            self.write_error = Some(error.kind());
+        }
         Poll::Ready(result)
     }
 
@@ -101,6 +116,7 @@ impl<T> AsyncWrap<T> {
     pub fn new(inner: T) -> Self {
         Self {
             inner: Some(inner),
+            write_error: None,
             read_buf: None,
             read_fut: None,
             write_fut: None,
@@ -210,6 +226,12 @@ where
                     let (written, mut returned) =
                         crate::vibeio::io::AsyncWrite::write(&mut inner, buf).await;
                     let count = match written {
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                            // These bytes were already acknowledged to the caller.
+                            // Retain the returned buffer and retry at the same cursor.
+                            buf = returned;
+                            continue;
+                        }
                         Err(error) => return (Err(error), inner),
                         Ok(0) => return (Err(std::io::ErrorKind::WriteZero.into()), inner),
                         Ok(count) if count > supplied || count > returned.buf_len() => {
@@ -354,6 +376,54 @@ mod tests {
     }
 
     struct PendingIo;
+
+    struct InterruptedWriter {
+        inner: ChunkedWriter,
+        attempts: Arc<AtomicUsize>,
+    }
+
+    impl AsyncWrite for InterruptedWriter {
+        async fn write<B: IoBuf>(&mut self, buf: B) -> (io::Result<usize>, B) {
+            if self
+                .attempts
+                .fetch_add(1, Ordering::SeqCst)
+                .is_multiple_of(2)
+            {
+                (Err(io::ErrorKind::Interrupted.into()), buf)
+            } else {
+                self.inner.write(buf).await
+            }
+        }
+
+        async fn flush(&mut self) -> io::Result<()> {
+            self.inner.flush().await
+        }
+    }
+
+    #[test]
+    fn async_wrap_retries_interrupted_writes_without_losing_accepted_bytes() {
+        let runtime =
+            crate::vibeio::executor::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
+        runtime.block_on(async {
+            let state = Arc::new(Mutex::new(WriterState {
+                data: Vec::new(),
+                writes: 0,
+                flushed: false,
+            }));
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let mut wrap = AsyncWrap::new(InterruptedWriter {
+                inner: ChunkedWriter::new(state.clone(), 2),
+                attempts: attempts.clone(),
+            });
+            wrap.write_all(b"abcdef").await.unwrap();
+            wrap.flush().await.unwrap();
+            let state = state.lock().unwrap();
+            assert_eq!(state.data, b"abcdef");
+            assert_eq!(state.writes, 3);
+            assert!(state.flushed);
+            assert_eq!(attempts.load(Ordering::SeqCst), 6);
+        });
+    }
 
     impl AsyncRead for PendingIo {
         async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<usize, io::Error>, B) {
@@ -527,6 +597,55 @@ mod tests {
         ));
         assert!(matches!(Pin::new(&mut wrap).poll_write(&mut cx, b"bc"),
             Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::BrokenPipe));
+    }
+
+    #[test]
+    fn async_wrap_drain_failure_cannot_be_followed_by_successful_delivery() {
+        for kind in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::WriteZero,
+            io::ErrorKind::InvalidData,
+        ] {
+            struct FailingWriter(io::ErrorKind);
+            impl AsyncWrite for FailingWriter {
+                async fn write<B: IoBuf>(&mut self, buf: B) -> (io::Result<usize>, B) {
+                    let result = match self.0 {
+                        io::ErrorKind::WriteZero => Ok(0),
+                        io::ErrorKind::InvalidData => Ok(buf.buf_len() + 1),
+                        kind => Err(kind.into()),
+                    };
+                    (result, buf)
+                }
+            }
+            impl AsyncRead for FailingWriter {
+                async fn read<B: IoBufMut>(&mut self, _buf: B) -> (io::Result<usize>, B) {
+                    panic!("a read must report the failed drain before reaching the inner reader")
+                }
+            }
+            let mut wrap = AsyncWrap::new(FailingWriter(kind));
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            assert!(matches!(
+                Pin::new(&mut wrap).poll_write(&mut cx, b"accepted"),
+                Poll::Ready(Ok(8))
+            ));
+            for _ in 0..2 {
+                assert!(
+                    matches!(Pin::new(&mut wrap).poll_flush(&mut cx), Poll::Ready(Err(error)) if error.kind() == kind)
+                );
+                assert!(
+                    matches!(Pin::new(&mut wrap).poll_shutdown(&mut cx), Poll::Ready(Err(error)) if error.kind() == kind)
+                );
+                assert!(
+                    matches!(Pin::new(&mut wrap).poll_write(&mut cx, b"later"), Poll::Ready(Err(error)) if error.kind() == kind)
+                );
+                let mut storage = [0; 1];
+                let mut read_buf = ReadBuf::new(&mut storage);
+                assert!(
+                    matches!(Pin::new(&mut wrap).poll_read(&mut cx, &mut read_buf), Poll::Ready(Err(error)) if error.kind() == kind)
+                );
+                assert!(read_buf.filled().is_empty());
+            }
+        }
     }
 
     #[test]

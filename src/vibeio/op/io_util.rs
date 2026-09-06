@@ -6,6 +6,25 @@ use mio::Interest;
 use crate::vibeio::driver::AnyDriver;
 use crate::vibeio::fd_inner::InnerRawHandle;
 
+pub(super) use crate::vibeio::driver::completion_error;
+
+#[cfg(test)]
+mod completion_error_tests {
+    use super::*;
+
+    #[test]
+    fn decoding_preserves_error_codes_and_rejects_unrepresentable_results() {
+        for code in [1, 5, 38, 995, i32::MAX] {
+            assert_eq!(completion_error(-code).raw_os_error(), Some(code));
+        }
+        for result in [i32::MIN, 0, 1, i32::MAX] {
+            let error = completion_error(result);
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(error.raw_os_error(), None);
+        }
+    }
+}
+
 /// Normalize EOF reported either during submission or by a completed read.
 pub(super) fn read_error_result(error: io::Error) -> io::Result<i32> {
     // Overlapped ReadFile can report EOF immediately or through its completion.
@@ -51,12 +70,22 @@ pub(super) fn iovec_to_system(bufs: &[crate::vibeio::io::IoVec]) -> Box<[libc::i
 
 #[inline]
 pub(super) fn completion_len(capacity: usize) -> io::Result<u32> {
-    u32::try_from(capacity).map_err(|_| {
+    // CompletionIoResult stores successful counts in a signed i32, with
+    // negative values reserved for errors. Reject before submitting any I/O.
+    i32::try_from(capacity).map(|len| len as u32).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "buffer exceeds completion length limit",
         )
     })
+}
+
+#[cfg(any(windows, test))]
+pub(super) fn completion_vectored_len(mut lengths: impl Iterator<Item = usize>) -> io::Result<u32> {
+    let total = lengths
+        .try_fold(0usize, |total, len| total.checked_add(len))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "vectored length overflow"))?;
+    completion_len(total)
 }
 
 #[cfg(unix)]
@@ -431,13 +460,30 @@ mod storage_tests {
 
     #[test]
     fn completion_lengths_do_not_wrap() {
-        for capacity in [0, 1, 4096, u32::MAX as usize] {
+        for capacity in [0, 1, 4096, i32::MAX as usize] {
             assert_eq!(completion_len(capacity).unwrap() as usize, capacity);
         }
-        #[cfg(target_pointer_width = "64")]
-        for capacity in [u32::MAX as usize + 1, usize::MAX] {
+        for capacity in [i32::MAX as usize + 1, u32::MAX as usize, usize::MAX] {
             assert_eq!(
                 completion_len(capacity).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+    }
+
+    #[test]
+    fn vectored_completion_lengths_fit_the_signed_result() {
+        let limit = i32::MAX as usize;
+        assert_eq!(
+            completion_vectored_len([0, limit - 1, 1].into_iter()).unwrap(),
+            limit as u32
+        );
+        assert_eq!(completion_vectored_len([].into_iter()).unwrap(), 0);
+        for lengths in [[limit, 1], [usize::MAX, 1]] {
+            assert_eq!(
+                completion_vectored_len(lengths.into_iter())
+                    .unwrap_err()
+                    .kind(),
                 io::ErrorKind::InvalidInput
             );
         }

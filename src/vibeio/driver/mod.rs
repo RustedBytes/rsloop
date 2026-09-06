@@ -42,6 +42,17 @@ pub enum CompletionIoResult {
     SubmitErr(std::io::Error),
 }
 
+/// Decode the driver's negative error representation without signed overflow.
+pub(crate) fn completion_error(result: i32) -> io::Error {
+    match result.checked_neg().filter(|code| *code > 0) {
+        Some(code) => io::Error::from_raw_os_error(code),
+        None => io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid negative completion result",
+        ),
+    }
+}
+
 #[inline]
 fn unsupported_completion_error() -> io::Error {
     io::Error::new(

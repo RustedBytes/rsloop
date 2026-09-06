@@ -12,7 +12,6 @@
 
 use std::future::poll_fn;
 use std::io;
-use std::mem::ManuallyDrop;
 use std::net::{SocketAddr, TcpListener as StdTcpListener, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
@@ -69,8 +68,9 @@ fn bind_one(address: SocketAddr) -> Result<StdTcpListener, io::Error> {
 /// }
 /// ```
 pub struct TcpListener {
+    // Deregister before closing the socket (field declaration order).
+    handle: InnerRawHandle,
     inner: StdTcpListener,
-    handle: ManuallyDrop<InnerRawHandle>,
 }
 
 impl TcpListener {
@@ -115,7 +115,6 @@ impl TcpListener {
             Interest::READABLE,
         )?;
         inner.set_nonblocking(!handle.uses_completion())?;
-        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 
@@ -135,7 +134,6 @@ impl TcpListener {
             crate::vibeio::driver::RegistrationMode::Poll,
         )?;
         inner.set_nonblocking(!handle.uses_completion())?;
-        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 
@@ -191,14 +189,9 @@ impl AsRawFd for TcpListener {
 impl IntoRawFd for TcpListener {
     #[inline]
     fn into_raw_fd(self) -> RawFd {
-        let mut this = ManuallyDrop::new(self);
-
-        // Safety: `this` will not be dropped, so we must drop the registration handle manually.
-        // We then move out the inner std stream and transfer its fd ownership to the caller.
-        unsafe {
-            ManuallyDrop::drop(&mut this.handle);
-            std::ptr::read(&this.inner).into_raw_fd()
-        }
+        let Self { handle, inner } = self;
+        drop(handle);
+        inner.into_raw_fd()
     }
 }
 
@@ -214,24 +207,9 @@ impl AsRawSocket for TcpListener {
 impl IntoRawSocket for TcpListener {
     #[inline]
     fn into_raw_socket(self) -> RawSocket {
-        let mut this = ManuallyDrop::new(self);
-
-        // Safety: `this` will not be dropped, so we must drop the registration handle manually.
-        // We then move out the inner std stream and transfer its socket ownership to the caller.
-        unsafe {
-            ManuallyDrop::drop(&mut this.handle);
-            std::ptr::read(&this.inner).into_raw_socket()
-        }
-    }
-}
-
-impl Drop for TcpListener {
-    #[inline]
-    fn drop(&mut self) {
-        // Safety: The struct is dropped after the handle is dropped.
-        unsafe {
-            ManuallyDrop::drop(&mut self.handle);
-        }
+        let Self { handle, inner } = self;
+        drop(handle);
+        inner.into_raw_socket()
     }
 }
 

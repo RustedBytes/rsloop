@@ -92,6 +92,28 @@ runtime.block_on(async {
 # Ok::<(), std::io::Error>(())
 ```
 
+## Standard input echo
+
+With the `stdio` feature, use `copy` to handle read counts, partial writes,
+interruptions, and the final flush. Inside a runtime, stdio requires a configured
+blocking pool. Outside a runtime it performs synchronous I/O when polled.
+This example is compile-checked but not run: executing it would consume the
+test runner's standard input and could wait indefinitely for EOF.
+
+```no_run
+# #[cfg(feature = "stdio")]
+# {
+use rsloop_vibeio_check::vibeio::io::{self, stdin, stdout};
+
+async fn echo() -> std::io::Result<u64> {
+    let mut input = stdin();
+    let mut output = stdout();
+    io::copy(&mut input, &mut output).await
+}
+# drop(echo());
+# }
+```
+
 ## Registering and cancelling a Ctrl-C wait
 
 `ctrl_c()` registers a listener and returns a `Result`; apply `?` before

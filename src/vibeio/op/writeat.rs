@@ -93,7 +93,7 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
             }
         };
         if result < 0 {
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
+            return Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)));
         }
         let written = result as usize;
         Poll::Ready(Ok(written))
@@ -111,12 +111,13 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
         };
 
         let buf = self.buf.as_ref().unwrap().as_ref();
-        let write_len = u32::try_from(buf.buf_len()).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "write buffer is too large for Windows file I/O",
-            )
-        })?;
+        let write_len =
+            crate::vibeio::op::io_util::completion_len(buf.buf_len()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "write buffer is too large for Windows file I/O",
+                )
+            })?;
 
         // SAFETY: the driver provides exclusive writable OVERLAPPED storage
         // before submission. Splitting the offset preserves both 32-bit words.
@@ -158,12 +159,13 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
         use io_uring::{opcode, types};
 
         let buf = self.buf.as_ref().unwrap().as_ref();
-        let write_len = u32::try_from(buf.buf_len()).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "write buffer is too large for io_uring",
-            )
-        })?;
+        let write_len =
+            crate::vibeio::op::io_util::completion_len(buf.buf_len()).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "write buffer is too large for io_uring",
+                )
+            })?;
 
         let entry = opcode::Write::new(types::Fd(self.handle.handle), buf.as_buf_ptr(), write_len)
             .offset(crate::vibeio::op::io_util::positional_offset(self.offset)?)

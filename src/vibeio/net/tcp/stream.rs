@@ -14,7 +14,6 @@
 use std::cell::RefCell;
 use std::future::poll_fn;
 use std::io::{self, IoSlice};
-use std::mem::ManuallyDrop;
 use std::net::{Shutdown, SocketAddr, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
@@ -92,8 +91,9 @@ fn new_socket(
 /// let read = read?;
 /// ```
 pub struct TcpStream {
+    // Deregister before closing the socket (field declaration order).
+    handle: InnerRawHandle,
     inner: Arc<std::net::TcpStream>,
-    handle: ManuallyDrop<InnerRawHandle>,
 }
 
 /// A poll-only variant that always uses readiness-based operations.
@@ -262,7 +262,6 @@ impl TcpStream {
             mode,
         )?;
         inner.set_nonblocking(!handle.uses_completion())?;
-        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 
@@ -445,20 +444,14 @@ impl AsRawFd for PollTcpStream {
 impl IntoRawFd for TcpStream {
     #[inline]
     fn into_raw_fd(self) -> RawFd {
-        let mut this = ManuallyDrop::new(self);
-
-        // Safety: `this` will not be dropped, so we must drop the registration handle manually.
-        // We then move out the inner std stream and transfer its fd ownership to the caller.
-        unsafe {
-            ManuallyDrop::drop(&mut this.handle);
-            let inner = std::ptr::read(&this.inner);
-            match Arc::try_unwrap(inner) {
-                Ok(inner) => inner.into_raw_fd(),
-                Err(inner) => inner
-                    .try_clone()
-                    .expect("failed to duplicate shared TCP stream")
-                    .into_raw_fd(),
-            }
+        let Self { handle, inner } = self;
+        drop(handle);
+        match Arc::try_unwrap(inner) {
+            Ok(inner) => inner.into_raw_fd(),
+            Err(inner) => inner
+                .try_clone()
+                .expect("failed to duplicate shared TCP stream")
+                .into_raw_fd(),
         }
     }
 }
@@ -483,20 +476,14 @@ impl AsRawSocket for TcpStream {
 impl IntoRawSocket for TcpStream {
     #[inline]
     fn into_raw_socket(self) -> RawSocket {
-        let mut this = ManuallyDrop::new(self);
-
-        // Safety: `this` will not be dropped, so we must drop the registration handle manually.
-        // We then move out the inner std stream and transfer its socket ownership to the caller.
-        unsafe {
-            ManuallyDrop::drop(&mut this.handle);
-            let inner = std::ptr::read(&this.inner);
-            match Arc::try_unwrap(inner) {
-                Ok(inner) => inner.into_raw_socket(),
-                Err(inner) => inner
-                    .try_clone()
-                    .expect("failed to duplicate shared TCP stream")
-                    .into_raw_socket(),
-            }
+        let Self { handle, inner } = self;
+        drop(handle);
+        match Arc::try_unwrap(inner) {
+            Ok(inner) => inner.into_raw_socket(),
+            Err(inner) => inner
+                .try_clone()
+                .expect("failed to duplicate shared TCP stream")
+                .into_raw_socket(),
         }
     }
 }
@@ -686,16 +673,6 @@ impl AsyncWritePoll for PollTcpStream {
             .poll_op_poll(cx, &mut ReadinessOp::new_writable(&self.stream.handle))?;
         *self.write_ready.borrow_mut() = true;
         poll.map(Ok)
-    }
-}
-
-impl Drop for TcpStream {
-    #[inline]
-    fn drop(&mut self) {
-        // Safety: The struct is dropped after the handle is dropped.
-        unsafe {
-            ManuallyDrop::drop(&mut self.handle);
-        }
     }
 }
 

@@ -117,7 +117,7 @@ impl Op for AcceptUnixOp<'_> {
         };
 
         if result < 0 {
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
+            return Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)));
         }
 
         let fd = result as RawFd;

@@ -28,7 +28,7 @@ use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
 fn socket_read(socket: SOCKET, buf: &mut [std::mem::MaybeUninit<u8>]) -> io::Result<usize> {
     use windows_sys::Win32::Networking::WinSock::{self as WinSock, SOCKET_ERROR, WSABUF};
 
-    let len = u32::try_from(buf.len()).map_err(|_| {
+    let len = crate::vibeio::op::io_util::completion_len(buf.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "read buffer is too large for Windows socket I/O",
@@ -185,7 +185,9 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
             }
         };
         let result = if result < 0 {
-            crate::vibeio::op::io_util::read_error_result(io::Error::from_raw_os_error(-result))?
+            crate::vibeio::op::io_util::read_error_result(
+                crate::vibeio::op::io_util::completion_error(result),
+            )?
         } else {
             result
         };

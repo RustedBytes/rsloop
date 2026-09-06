@@ -1,9 +1,6 @@
-use std::cell::RefCell;
 use std::future::poll_fn;
 use std::io::{self, ErrorKind};
-use std::mem::ManuallyDrop;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 
 use mio::Interest;
 
@@ -49,7 +46,7 @@ use crate::vibeio::fs::open_options::OpenOptions;
 /// println!("Read {} bytes", read);
 /// ```
 enum FileIo {
-    Completion(ManuallyDrop<InnerRawHandle>),
+    Completion(InnerRawHandle),
     Blocking,
 }
 
@@ -75,8 +72,9 @@ enum FileIo {
 /// println!("Read {} bytes", read);
 /// ```
 pub struct File {
-    inner: std::fs::File,
+    // Fields drop in declaration order: deregister before closing the file.
     io: FileIo,
+    inner: std::fs::File,
     cursor: u64,
 }
 
@@ -176,7 +174,7 @@ impl File {
                     Interest::READABLE | Interest::WRITABLE,
                     RegistrationMode::Completion,
                 ) {
-                    Ok(handle) => FileIo::Completion(ManuallyDrop::new(handle)),
+                    Ok(handle) => FileIo::Completion(handle),
                     Err(_) => FileIo::Blocking,
                 }
             } else {
@@ -192,13 +190,9 @@ impl File {
     /// Converts the `File` back into a standard library `std::fs::File`.
     #[inline]
     pub fn into_std(self) -> std::fs::File {
-        let mut this = ManuallyDrop::new(self);
-        unsafe {
-            if let FileIo::Completion(handle) = &mut this.io {
-                ManuallyDrop::drop(handle);
-            }
-            std::ptr::read(&this.inner)
-        }
+        let Self { io, inner, .. } = self;
+        drop(io);
+        inner
     }
 
     /// Returns the completion handle if this file is using io_uring completion.
@@ -750,27 +744,14 @@ async fn read_at_in_blocking_pool<B: IoBufMut>(
         Ok(file) => file,
         Err(e) => return (Err(e), buf),
     };
-    let buf = Arc::new(Mutex::new(RefCell::new(Some(buf))));
-    let buf_clone = buf.clone();
-    crate::vibeio::spawn_blocking(move || {
-        let mut buf = buf_clone
-            .try_lock()
-            .ok()
-            .and_then(|rc| rc.take())
-            .expect("buf is none");
-        let result = read_into_buf(&mut buf, |slice| read_at_blocking(&file, slice, offset));
-        (result, buf)
+    let (result, buf) = crate::vibeio::blocking::with_buffer(buf, move |buf| {
+        read_into_buf(buf, |slice| read_at_blocking(&file, slice, offset))
     })
-    .await
-    .unwrap_or_else(|_| {
-        (
-            Err(blocking_pool_io_error()),
-            buf.try_lock()
-                .ok()
-                .and_then(|rc| rc.take())
-                .expect("buf is none"),
-        )
-    })
+    .await;
+    (
+        result.unwrap_or_else(|_| Err(blocking_pool_io_error())),
+        buf,
+    )
 }
 
 #[inline]
@@ -783,28 +764,14 @@ async fn write_at_in_blocking_pool<B: IoBuf>(
         Ok(file) => file,
         Err(e) => return (Err(e), buf),
     };
-    let buf = Arc::new(Mutex::new(RefCell::new(Some(buf))));
-    let buf_clone = buf.clone();
-    crate::vibeio::spawn_blocking(move || {
-        let buf = buf_clone
-            .try_lock()
-            .ok()
-            .and_then(|rc| rc.take())
-            .expect("buf is none");
-        let temp_slice = iobuf_to_slice(&buf);
-        let result = write_at_blocking(&file, temp_slice, offset);
-        (result, buf)
+    let (result, buf) = crate::vibeio::blocking::with_buffer(buf, move |buf| {
+        write_at_blocking(&file, iobuf_to_slice(buf), offset)
     })
-    .await
-    .unwrap_or_else(|_| {
-        (
-            Err(blocking_pool_io_error()),
-            buf.try_lock()
-                .ok()
-                .and_then(|rc| rc.take())
-                .expect("buf is none"),
-        )
-    })
+    .await;
+    (
+        result.unwrap_or_else(|_| Err(blocking_pool_io_error())),
+        buf,
+    )
 }
 
 #[inline]
@@ -858,17 +825,6 @@ impl AsyncWrite for File {
     }
 }
 
-impl Drop for File {
-    #[inline]
-    fn drop(&mut self) {
-        unsafe {
-            if let FileIo::Completion(handle) = &mut self.io {
-                ManuallyDrop::drop(handle);
-            }
-        }
-    }
-}
-
 #[cfg(unix)]
 impl AsRawFd for File {
     #[inline]
@@ -898,5 +854,92 @@ impl IntoRawHandle for File {
     #[inline]
     fn into_raw_handle(self) -> RawHandle {
         self.into_std().into_raw_handle()
+    }
+}
+
+#[cfg(test)]
+mod blocking_buffer_tests {
+    use super::*;
+
+    #[test]
+    fn file_conversion_and_drop_release_each_registration_once() {
+        use crate::vibeio::driver::AnyDriver;
+        let mut driver = AnyDriver::new_mock();
+        let AnyDriver::Mock(mock) = &mut driver else {
+            unreachable!()
+        };
+        mock.registrations = Some(Default::default());
+        mock.registrations
+            .as_ref()
+            .unwrap()
+            .results
+            .borrow_mut()
+            .extend([Ok(mio::Token(0)), Ok(mio::Token(1))]);
+        crate::vibeio::Runtime::new(driver).block_on(async {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+            let original = std::fs::File::open(&path).unwrap();
+            #[cfg(unix)]
+            let raw = original.as_raw_fd();
+            #[cfg(windows)]
+            let raw = original.as_raw_handle();
+            let file = File::from_std(original).unwrap();
+            assert!(file.completion_handle().is_some());
+            let mut returned = file.into_std();
+            #[cfg(unix)]
+            assert_eq!(returned.as_raw_fd(), raw);
+            #[cfg(windows)]
+            assert_eq!(returned.as_raw_handle(), raw);
+            let mut contents = Vec::new();
+            std::io::Read::read_to_end(&mut returned, &mut contents).unwrap();
+            assert_eq!(contents, std::fs::read(&path).unwrap());
+            drop(returned);
+            let file = File::from_std(std::fs::File::open(path).unwrap()).unwrap();
+            assert!(file.completion_handle().is_some());
+            drop(file);
+            let driver = current_driver().unwrap();
+            let AnyDriver::Mock(mock) = driver.as_ref() else {
+                unreachable!()
+            };
+            assert_eq!(
+                *mock.registrations.as_ref().unwrap().deregistered.borrow(),
+                [mio::Token(0), mio::Token(1)]
+            );
+        });
+    }
+
+    struct JoiningPool;
+    impl crate::vibeio::blocking::BlockingThreadPool for JoiningPool {
+        fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
+            std::thread::spawn(task).join().unwrap();
+        }
+    }
+
+    #[test]
+    fn blocking_file_io_preserves_buffers_on_success_and_error() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let contents = std::fs::read(&path).unwrap();
+        let file = std::fs::File::open(path).unwrap();
+        let runtime = crate::vibeio::RuntimeBuilder::new()
+            .driver(crate::vibeio::DriverKind::Mock)
+            .blocking_pool(Box::new(JoiningPool))
+            .build()
+            .unwrap();
+        runtime.block_on(async move {
+            let buffer = Vec::with_capacity(16);
+            let ptr = buffer.as_ptr();
+            let (result, buffer) = read_at_in_blocking_pool(&file, buffer, 1).await;
+            let count = result.unwrap();
+            assert!(count > 0);
+            assert_eq!(buffer, contents[1..1 + count]);
+            assert_eq!(buffer.as_ptr(), ptr);
+
+            // The descriptor is read-only: no repository file can be modified.
+            let buffer = b"unchanged".to_vec();
+            let ptr = buffer.as_ptr();
+            let (result, buffer) = write_at_in_blocking_pool(&file, buffer, 0).await;
+            assert!(result.is_err());
+            assert_eq!(buffer, b"unchanged");
+            assert_eq!(buffer.as_ptr(), ptr);
+        });
     }
 }

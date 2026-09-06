@@ -13,7 +13,6 @@
 
 use std::future::poll_fn;
 use std::io::{self, IoSlice};
-use std::mem::ManuallyDrop;
 use std::os::fd::OwnedFd;
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 use std::pin::Pin;
@@ -42,6 +41,52 @@ fn pipe_inner() -> std::io::Result<(OwnedFd, OwnedFd)> {
 mod setup_tests {
     use super::*;
     use crate::vibeio::{driver::AnyDriver, executor::Runtime};
+
+    #[test]
+    fn raw_pipe_conversion_releases_registration_and_transfers_live_endpoints() {
+        use std::io::{Read, Write};
+        use std::os::fd::FromRawFd;
+        let mut driver = AnyDriver::new_mock();
+        let AnyDriver::Mock(mock) = &mut driver else {
+            unreachable!()
+        };
+        mock.registrations = Some(Default::default());
+        mock.registrations
+            .as_ref()
+            .unwrap()
+            .results
+            .borrow_mut()
+            .extend([Ok(mio::Token(0)), Ok(mio::Token(1))]);
+        Runtime::new(driver).block_on(async {
+            let (reader, writer) = pipe().unwrap();
+            let read_fd = reader.as_raw_fd();
+            let write_fd = writer.as_raw_fd();
+            let reader = reader.into_raw_fd();
+            // SAFETY: into_raw_fd transferred sole ownership of a live fd.
+            let reader = unsafe { OwnedFd::from_raw_fd(reader) };
+            let writer = writer.into_raw_fd();
+            // SAFETY: into_raw_fd transferred sole ownership of a live fd.
+            let writer = unsafe { OwnedFd::from_raw_fd(writer) };
+            assert_eq!(reader.as_raw_fd(), read_fd);
+            assert_eq!(writer.as_raw_fd(), write_fd);
+            let mut reader = std::fs::File::from(reader);
+            let mut writer = std::fs::File::from(writer);
+            writer.write_all(b"pipe").unwrap();
+            drop(writer);
+            let mut data = Vec::new();
+            reader.read_to_end(&mut data).unwrap();
+            assert_eq!(data, b"pipe");
+            drop(reader);
+            let driver = crate::vibeio::executor::current_driver().unwrap();
+            let AnyDriver::Mock(mock) = driver.as_ref() else {
+                unreachable!()
+            };
+            assert_eq!(
+                *mock.registrations.as_ref().unwrap().deregistered.borrow(),
+                [mio::Token(0), mio::Token(1)]
+            );
+        });
+    }
 
     #[test]
     fn pipe_endpoints_are_close_on_exec() {
@@ -124,8 +169,9 @@ pub fn pipe() -> std::io::Result<(Pipe, Pipe)> {
 
 /// A pipe endpoint that can use either completion or readiness-based I/O.
 pub struct Pipe {
+    // Deregister before closing the descriptor (fields drop in declaration order).
+    handle: InnerRawHandle,
     inner: OwnedFd,
-    handle: ManuallyDrop<InnerRawHandle>,
 }
 
 /// A poll-only variant that always uses readiness-based operations.
@@ -147,7 +193,6 @@ impl Pipe {
             mode,
         )?;
         set_nonblocking(inner.as_raw_fd(), !handle.uses_completion())?;
-        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 
@@ -195,14 +240,9 @@ impl AsRawFd for PollPipe {
 impl IntoRawFd for Pipe {
     #[inline]
     fn into_raw_fd(self) -> RawFd {
-        let mut this = ManuallyDrop::new(self);
-
-        // Safety: `this` will not be dropped, so we must drop the registration handle manually.
-        // We then move out the inner std stream and transfer its fd ownership to the caller.
-        unsafe {
-            ManuallyDrop::drop(&mut this.handle);
-            std::ptr::read(&this.inner).into_raw_fd()
-        }
+        let Self { handle, inner } = self;
+        drop(handle);
+        inner.into_raw_fd()
     }
 }
 
@@ -352,15 +392,5 @@ impl TokioAsyncWrite for PollPipe {
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))
-    }
-}
-
-impl Drop for Pipe {
-    #[inline]
-    fn drop(&mut self) {
-        // Safety: The struct is dropped after the handle is dropped.
-        unsafe {
-            ManuallyDrop::drop(&mut self.handle);
-        }
     }
 }

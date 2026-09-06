@@ -10,28 +10,12 @@
 //!
 //! # Examples
 //!
-//! ```ignore
-//! use vibeio::io::{AsyncRead, AsyncWrite, stdin, stdout};
-//!
-//! async fn echo() {
-//!     let mut stdin = stdin();
-//!     let mut stdout = stdout();
-//!     let mut buf = vec![0u8; 1024];
-//!     loop {
-//!         let (read, buf) = stdin.read(buf).await;
-//!         let read = read?;
-//!         if read == 0 {
-//!             break;
-//!         }
-//!         let (written, buf) = stdout.write(buf).await;
-//!         written?;
-//!     }
-//! }
-//! ```
+//! See the compile-checked "Standard input echo" example in
+//! `tools/vibeio-check/EXAMPLES.md`. Use [`super::copy`] to respect read counts,
+//! handle partial writes, and flush stdout at EOF. Writing the entire returned
+//! read buffer can emit stale bytes beyond the count from that read.
 
-use std::cell::RefCell;
 use std::io::{self, Read, Write};
-use std::sync::{Arc, Mutex};
 
 use crate::vibeio::executor::current_driver;
 use crate::vibeio::io::{AsyncRead, AsyncWrite, IoBuf, IoBufMut, iobuf_to_slice, read_into_buf};
@@ -109,79 +93,127 @@ fn blocking_pool_io_error() -> io::Error {
 
 #[inline]
 async fn read_in_blocking_pool<B: IoBufMut>(buf: B) -> (io::Result<usize>, B) {
-    let buf = Arc::new(Mutex::new(RefCell::new(Some(buf))));
-    let buf_clone = buf.clone();
-    crate::vibeio::spawn_blocking(move || {
-        let mut buf = buf_clone
-            .try_lock()
-            .ok()
-            .and_then(|rc| rc.take())
-            .expect("buf is none");
-        let result = read_into_buf(&mut buf, read_stdin_blocking);
-        (result, buf)
-    })
-    .await
-    .unwrap_or_else(|_| {
-        (
-            Err(blocking_pool_io_error()),
-            buf.try_lock()
-                .ok()
-                .and_then(|rc| rc.take())
-                .expect("buf is none"),
-        )
-    })
+    stdio_in_blocking_pool(buf, |buf| read_into_buf(buf, read_stdin_blocking)).await
+}
+
+async fn stdio_in_blocking_pool<B: Send + 'static>(
+    buf: B,
+    operation: impl FnOnce(&mut B) -> io::Result<usize> + Send + 'static,
+) -> (io::Result<usize>, B) {
+    let (result, buf) = crate::vibeio::blocking::with_buffer(buf, operation).await;
+    (
+        result.unwrap_or_else(|_| Err(blocking_pool_io_error())),
+        buf,
+    )
 }
 
 #[inline]
 async fn write_stdout_in_blocking_pool<B: IoBuf>(buf: B) -> (io::Result<usize>, B) {
-    let buf = Arc::new(Mutex::new(RefCell::new(Some(buf))));
-    let buf_clone = buf.clone();
-    crate::vibeio::spawn_blocking(move || {
-        let buf = buf_clone
-            .try_lock()
-            .ok()
-            .and_then(|rc| rc.take())
-            .expect("buf is none");
-        let temp_slice = iobuf_to_slice(&buf);
-        let result = write_stdout_blocking(temp_slice);
-        (result, buf)
-    })
-    .await
-    .unwrap_or_else(|_| {
-        (
-            Err(blocking_pool_io_error()),
-            buf.try_lock()
-                .ok()
-                .and_then(|rc| rc.take())
-                .expect("buf is none"),
-        )
-    })
+    stdio_in_blocking_pool(buf, |buf| write_stdout_blocking(iobuf_to_slice(buf))).await
 }
 
 #[inline]
 async fn write_stderr_in_blocking_pool<B: IoBuf>(buf: B) -> (io::Result<usize>, B) {
-    let buf = Arc::new(Mutex::new(RefCell::new(Some(buf))));
-    let buf_clone = buf.clone();
-    crate::vibeio::spawn_blocking(move || {
-        let buf = buf_clone
-            .try_lock()
-            .ok()
-            .and_then(|rc| rc.take())
-            .expect("buf is none");
-        let temp_slice = iobuf_to_slice(&buf);
-        let result = write_stderr_blocking(temp_slice);
-        (result, buf)
-    })
-    .await
-    .unwrap_or_else(|_| {
-        (
-            Err(blocking_pool_io_error()),
-            buf.try_lock()
-                .ok()
-                .and_then(|rc| rc.take())
-                .expect("buf is none"),
-        )
-    })
+    stdio_in_blocking_pool(buf, |buf| write_stderr_blocking(iobuf_to_slice(buf))).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vibeio::{DriverKind, RuntimeBuilder, blocking::BlockingThreadPool};
+
+    struct JoiningPool;
+
+    struct RejectingPool;
+
+    impl BlockingThreadPool for RejectingPool {
+        fn spawn(&self, _task: Box<dyn FnOnce() + Send + 'static>) {}
+    }
+
+    impl BlockingThreadPool for JoiningPool {
+        fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+            // A deterministic test pool: worker panics close the result channel.
+            // Joining here is test-only and does not model scheduling latency.
+            let _ = std::thread::spawn(task).join();
+        }
+    }
+
+    #[test]
+    fn worker_panic_returns_the_owned_stdio_buffer() {
+        let runtime = RuntimeBuilder::new()
+            .driver(DriverKind::Mock)
+            .blocking_pool(Box::new(JoiningPool))
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let original = b"buffer".to_vec();
+            let ptr = original.as_ptr();
+            let (result, returned) = stdio_in_blocking_pool(original, |buf| {
+                buf[0] = b'B';
+                panic!("injected worker panic")
+            })
+            .await;
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
+            assert_eq!(returned, b"Buffer");
+            assert_eq!(returned.as_ptr(), ptr);
+        });
+    }
+
+    #[test]
+    fn stdio_buffer_survives_missing_or_rejecting_pool() {
+        for rejecting in [false, true] {
+            let mut builder = RuntimeBuilder::new().driver(DriverKind::Mock);
+            if rejecting {
+                builder = builder.blocking_pool(Box::new(RejectingPool));
+            }
+            let runtime = builder.build().unwrap();
+            runtime.block_on(async {
+                let original = b"untouched".to_vec();
+                let ptr = original.as_ptr();
+                let (result, returned) = stdio_in_blocking_pool(original, |_| {
+                    panic!("unavailable pool must not execute I/O")
+                })
+                .await;
+                assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Other);
+                assert_eq!(returned, b"untouched");
+                assert_eq!(returned.as_ptr(), ptr);
+            });
+        }
+    }
+
+    #[test]
+    fn stdio_worker_preserves_normal_results_and_buffer_identity() {
+        let runtime = RuntimeBuilder::new()
+            .driver(DriverKind::Mock)
+            .blocking_pool(Box::new(JoiningPool))
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            for fail in [false, true] {
+                let original = b"data".to_vec();
+                let ptr = original.as_ptr();
+                let (result, returned) = stdio_in_blocking_pool(original, move |buf| {
+                    buf[0] = b'D';
+                    if fail {
+                        Err(io::ErrorKind::PermissionDenied.into())
+                    } else {
+                        Ok(1)
+                    }
+                })
+                .await;
+                assert_eq!(
+                    result.map_err(|error| error.kind()),
+                    if fail {
+                        Err(io::ErrorKind::PermissionDenied)
+                    } else {
+                        Ok(1)
+                    }
+                );
+                assert_eq!(returned, b"Data");
+                assert_eq!(returned.as_ptr(), ptr);
+            }
+        });
+    }
 }
 
 #[inline]

@@ -30,7 +30,7 @@ fn socket_read_vectored<B: IoVectoredBufMut>(socket: SOCKET, bufs: &mut B) -> io
     let iovecs = bufs.as_iovecs_mut();
     let mut wsabufs = Vec::with_capacity(iovecs.len());
     for iovec in iovecs {
-        let len = u32::try_from(iovec.len).map_err(|_| {
+        let len = crate::vibeio::op::io_util::completion_len(iovec.len).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "readv buffer is too large for Windows socket I/O",
@@ -183,7 +183,9 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
             {
                 self.completion_staging = None;
             }
-            crate::vibeio::op::io_util::read_error_result(io::Error::from_raw_os_error(-result))?
+            crate::vibeio::op::io_util::read_error_result(
+                crate::vibeio::op::io_util::completion_error(result),
+            )?
         } else {
             result
         };
@@ -227,14 +229,18 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
         match self.handle.handle {
             RawOsHandle::Socket(socket) => {
                 let iovecs = bufs.as_iovecs_mut();
+                crate::vibeio::op::io_util::completion_vectored_len(
+                    iovecs.iter().map(|iov| iov.len),
+                )?;
                 let mut wsabufs = Vec::with_capacity(iovecs.len());
                 for iovec in iovecs {
-                    let len = u32::try_from(iovec.len).map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            "readv buffer is too large for Windows socket I/O",
-                        )
-                    })?;
+                    let len =
+                        crate::vibeio::op::io_util::completion_len(iovec.len).map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::InvalidInput,
+                                "readv buffer is too large for Windows socket I/O",
+                            )
+                        })?;
                     wsabufs.push(WSABUF {
                         len,
                         buf: iovec.ptr as *mut _,
@@ -280,12 +286,13 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                         io::Error::new(io::ErrorKind::InvalidInput, "readv buffer length overflow")
                     })
                 })?;
-                let total_len_u32 = u32::try_from(total_len).map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "readv total length is too large for Windows file I/O",
-                    )
-                })?;
+                let total_len_u32 =
+                    crate::vibeio::op::io_util::completion_len(total_len).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "readv total length is too large for Windows file I/O",
+                        )
+                    })?;
 
                 let mut staging = vec![0u8; total_len];
                 // SAFETY: staging owns total_len writable bytes and is retained
