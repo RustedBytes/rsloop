@@ -6,7 +6,9 @@ import asyncio
 import base64
 import hashlib
 import json
+import math
 import os
+import platform
 import socket
 import ssl
 import statistics
@@ -15,7 +17,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from compare_event_loops import (
@@ -28,6 +30,7 @@ from compare_event_loops import (
     maybe_wait_closed,
     normalize_csv,
 )
+from idle_statistics import latency_comparison
 
 SCENARIO_CHOICES = (
     "http_keepalive",
@@ -85,6 +88,10 @@ class MatrixResult:
     traffic_seconds: float = 0.0
     teardown_seconds: float = 0.0
     idle_residency_seconds: float = 0.0
+    benchmark_version: int = 1
+    idle_cycles: list[dict[str, float]] = field(default_factory=list)
+    warmup_seconds: float = 0.0
+    environment: dict[str, object] = field(default_factory=dict)
 
     @property
     def ops_per_sec(self) -> float:
@@ -166,6 +173,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bulk-chunk-size", type=int, default=64 * 1024)
     parser.add_argument("--idle-connections", type=int, default=200)
     parser.add_argument("--idle-seconds", type=float, default=0.2)
+    parser.add_argument("--idle-cycles", type=int, default=100)
+    parser.add_argument("--idle-warmup-cycles", type=int, default=5)
+    parser.add_argument(
+        "--idle-timeout",
+        type=float,
+        default=30.0,
+        help="Timeout in seconds for connection setup or one activation burst.",
+    )
+    parser.add_argument(
+        "--cpu-affinity",
+        help="Optional comma-separated CPU IDs (where supported); inherited by child threads.",
+    )
     parser.add_argument("--tls-dir", type=Path, default=TLS_DIR)
     parser.add_argument("--json-output", type=Path)
     parser.add_argument(
@@ -208,8 +227,23 @@ def validate_args(args: argparse.Namespace) -> None:
     positive(args.bulk_bytes, "--bulk-bytes")
     positive(args.bulk_chunk_size, "--bulk-chunk-size")
     positive(args.idle_connections, "--idle-connections")
-    if args.idle_seconds < 0:
+    positive(args.idle_cycles, "--idle-cycles")
+    if args.idle_warmup_cycles < 0:
+        raise SystemExit("--idle-warmup-cycles must be >= 0")
+    if not math.isfinite(args.idle_timeout) or args.idle_timeout <= 0:
+        raise SystemExit("--idle-timeout must be finite and > 0")
+    if not math.isfinite(args.idle_seconds) or args.idle_seconds < 0:
         raise SystemExit("--idle-seconds must be >= 0")
+    if args.cpu_affinity:
+        if not hasattr(os, "sched_setaffinity"):
+            raise SystemExit("--cpu-affinity is unsupported on this platform")
+        try:
+            cpus = {int(cpu) for cpu in args.cpu_affinity.split(",")}
+            if not cpus or min(cpus) < 0:
+                raise ValueError("CPU IDs must be nonnegative")
+            os.sched_setaffinity(0, cpus)
+        except (ValueError, OSError) as exc:
+            raise SystemExit(f"invalid --cpu-affinity: {exc}") from exc
     for attribute, option in (
         ("mixed_payload_sizes", "--mixed-payload-sizes"),
         ("websocket_payload_sizes", "--websocket-payload-sizes"),
@@ -845,56 +879,96 @@ async def run_idle_connections(
             await close_writer(writer)
 
     server = await asyncio.start_server(
-        ping,
-        "127.0.0.1",
-        0,
-        backlog=max(100, args.idle_connections),
+        ping, "127.0.0.1", 0, backlog=max(100, args.idle_connections)
     )
     host, port = server.sockets[0].getsockname()[:2]
-    started = time.perf_counter()
-    connections = await asyncio.gather(
-        *(asyncio.open_connection(host, port) for _ in range(args.idle_connections))
-    )
-    setup_finished = time.perf_counter()
-    await asyncio.sleep(args.idle_seconds)
-    idle_finished = time.perf_counter()
+    connections: list[tuple[asyncio.StreamReader, asyncio.StreamWriter]] = []
     latencies: list[float] = []
+    cycles: list[dict[str, float]] = []
+    setup_seconds = warmup_seconds = idle_seconds = traffic_seconds = 0.0
+    started = time.perf_counter()
 
-    async def activate(
-        connection: tuple[asyncio.StreamReader, asyncio.StreamWriter],
-    ) -> int:
-        reader, writer = connection
-        started = time.perf_counter()
-        writer.write(b"p")
-        await writer.drain()
-        if await reader.readexactly(1) != b"p":
-            raise RuntimeError("idle connection ping mismatch")
-        latencies.append((time.perf_counter() - started) * 1000)
-        return 2
+    async def open_client() -> None:
+        connections.append(await asyncio.open_connection(host, port))
 
+    opening = [asyncio.create_task(open_client()) for _ in range(args.idle_connections)]
     try:
-        transferred = sum(
-            await asyncio.gather(*(activate(item) for item in connections))
-        )
-        traffic_finished = time.perf_counter()
+        await asyncio.wait_for(asyncio.gather(*opening), args.idle_timeout)
+        setup_seconds = time.perf_counter() - started
+        for index in range(args.idle_warmup_cycles + args.idle_cycles):
+            cycle_started = time.perf_counter()
+            await asyncio.sleep(args.idle_seconds)
+            activated = time.perf_counter()
+            replies: list[float] = []
+
+            async def activate(
+                connection: tuple[asyncio.StreamReader, asyncio.StreamWriter],
+                origin: float,
+                completions: list[float],
+            ) -> None:
+                reader, writer = connection
+                writer.write(b"p")
+                await writer.drain()
+                if await reader.readexactly(1) != b"p":
+                    raise RuntimeError("idle connection ping mismatch")
+                # One origin includes scheduling delay before this client starts.
+                completions.append((time.perf_counter() - origin) * 1000)
+
+            await asyncio.wait_for(
+                asyncio.gather(
+                    *(
+                        activate(connection, activated, replies)
+                        for connection in connections
+                    )
+                ),
+                args.idle_timeout,
+            )
+            finished = time.perf_counter()
+            if index < args.idle_warmup_cycles:
+                warmup_seconds += finished - cycle_started
+                continue
+            residency = activated - cycle_started
+            duration = finished - activated
+            cycles.append(
+                {
+                    "first_ms": min(replies),
+                    "p50_ms": percentile(replies, 0.50),
+                    "p95_ms": percentile(replies, 0.95),
+                    "all_ms": max(replies),
+                    "idle_seconds": residency,
+                    "traffic_seconds": duration,
+                }
+            )
+            latencies.extend(replies)
+            idle_seconds += residency
+            traffic_seconds += duration
     finally:
-        await asyncio.gather(*(close_writer(writer) for _, writer in connections))
+        teardown_started = time.perf_counter()
+        for task in opening:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*opening, return_exceptions=True)
+        await asyncio.gather(
+            *(close_writer(writer) for _, writer in connections), return_exceptions=True
+        )
         await close_server(server)
-    finished = time.perf_counter()
-    setup_seconds = setup_finished - started
-    traffic_seconds = traffic_finished - idle_finished
-    teardown_seconds = finished - traffic_finished
+        teardown_seconds = time.perf_counter() - teardown_started
+
+    operations = args.idle_connections * len(cycles)
     return MatrixResult(
         loop_name,
         "idle_connections",
         setup_seconds + traffic_seconds + teardown_seconds,
-        args.idle_connections,
-        transferred,
+        operations,
+        operations * 2,
         latencies,
         connection_setup_seconds=setup_seconds,
         traffic_seconds=traffic_seconds,
         teardown_seconds=teardown_seconds,
-        idle_residency_seconds=idle_finished - setup_finished,
+        idle_residency_seconds=idle_seconds,
+        benchmark_version=2,
+        idle_cycles=cycles,
+        warmup_seconds=warmup_seconds,
     )
 
 
@@ -976,6 +1050,18 @@ def child_main(args: argparse.Namespace) -> int:
     if args.profile_label:
         print(f"[profile] Tracy session label: {args.profile_label}", flush=True)
     for _ in range(args.child_runs):
+        environment = {
+            "platform": platform.platform(),
+            "python": sys.version,
+            "cpu_count": os.cpu_count(),
+            "cpu_affinity": sorted(os.sched_getaffinity(0))
+            if hasattr(os, "sched_getaffinity")
+            else None,
+            "load_average_start": os.getloadavg()
+            if hasattr(os, "getloadavg")
+            else None,
+            "pid": os.getpid(),
+        }
         if args.profile_label:
             with rsloop.profile():
                 awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
@@ -983,8 +1069,17 @@ def child_main(args: argparse.Namespace) -> int:
         else:
             awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
             result = run_with_loop(args.loop, awaitable)
+        environment["load_average_end"] = (
+            os.getloadavg() if hasattr(os, "getloadavg") else None
+        )
         results.append(
-            MatrixResult(**{**asdict(result), "peak_rss_bytes": get_peak_rss_bytes()})
+            MatrixResult(
+                **{
+                    **asdict(result),
+                    "peak_rss_bytes": get_peak_rss_bytes(),
+                    "environment": environment,
+                }
+            )
         )
     payload: object = (
         asdict(results[0])
@@ -1030,6 +1125,12 @@ def child_command(
         str(args.idle_connections),
         "--idle-seconds",
         str(args.idle_seconds),
+        "--idle-cycles",
+        str(args.idle_cycles),
+        "--idle-warmup-cycles",
+        str(args.idle_warmup_cycles),
+        "--idle-timeout",
+        str(args.idle_timeout),
         "--tls-dir",
         str(args.tls_dir),
         "--child-runs",
@@ -1037,6 +1138,8 @@ def child_command(
     ]
     if profile_label:
         cmd.extend(("--profile-label", profile_label))
+    if args.cpu_affinity:
+        cmd.extend(("--cpu-affinity", args.cpu_affinity))
     if args.allow_profiler_build:
         cmd.append("--allow-profiler-build")
     return cmd
@@ -1059,7 +1162,18 @@ def run_child_batch(
         capture_output=True,
         text=True,
         check=False,
-        timeout=300,
+        timeout=max(
+            300,
+            child_runs
+            * (
+                (args.idle_cycles + args.idle_warmup_cycles)
+                * (args.idle_seconds + args.idle_timeout)
+                + args.idle_timeout
+                + 60
+            ),
+        )
+        if scenario == "idle_connections"
+        else 300,
     )
     if proc.returncode:
         raise RuntimeError(
@@ -1093,6 +1207,32 @@ def percentile(values: list[float], fraction: float) -> float:
 
 
 def summarize(scenario: str, runs: dict[str, list[MatrixResult]]) -> None:
+    if scenario == "idle_connections":
+        print(
+            "\nidle_connections v2: shared-origin activation latency (lower is better)"
+        )
+        print(
+            "loop         first_ms     50%_ms     95%_ms     all_ms   cycle95 min/p10/p50/p90/max ms"
+        )
+        for name, measured in runs.items():
+            milestones = [
+                statistics.median(
+                    statistics.median(cycle[key] for cycle in run.idle_cycles)
+                    for run in measured
+                )
+                for key in ("first_ms", "p50_ms", "p95_ms", "all_ms")
+            ]
+            cycle95 = [cycle["p95_ms"] for run in measured for cycle in run.idle_cycles]
+            distribution = "/".join(
+                f"{percentile(cycle95, q):.3f}" for q in (0, 0.1, 0.5, 0.9, 1)
+            )
+            print(
+                f"{name:<10} "
+                + " ".join(f"{value:>10.3f}" for value in milestones)
+                + "   "
+                + distribution
+            )
+        return
     rows = []
     for loop_name, measured in runs.items():
         median_seconds = statistics.median(item.seconds for item in measured)
@@ -1171,6 +1311,81 @@ def parent_main(args: argparse.Namespace) -> int:
 
     output: list[dict[str, object]] = []
     for scenario in scenarios:
+        if scenario == "idle_connections":
+            # Every process has its own within-run warmup cycles. Outer warmups
+            # and warm-process batching are deliberately not used for idle v2.
+            print(
+                f"Idle v2: {args.repeat} fresh-process blocks, {args.idle_cycles} cycles/run, "
+                f"{args.idle_warmup_cycles} warmup cycles, {args.idle_seconds}s idle/cycle."
+            )
+            scenario_runs = {name: [] for name in available}
+            orders = []
+            if args.profile_rsloop_dir:
+                args.profile_rsloop_dir.mkdir(parents=True, exist_ok=True)
+                run_child(
+                    args,
+                    "rsloop",
+                    scenario,
+                    str(args.profile_rsloop_dir / "rsloop-idle_connections"),
+                )
+            for block in range(args.repeat):
+                # AB/BA for two loops; rotate the first loop for larger sets.
+                offset = block % len(available)
+                order = available[offset:] + available[:offset]
+                orders.append(order)
+                for name in order:
+                    print(
+                        f"Running idle block {block + 1}/{args.repeat} on {name}...",
+                        flush=True,
+                    )
+                    scenario_runs[name].append(run_child(args, name, scenario))
+            summarize(scenario, scenario_runs)
+            reference = "uvloop" if "uvloop" in available else available[0]
+            for name, measured in scenario_runs.items():
+                comparison = None
+                if name != reference:
+                    comparison = latency_comparison(
+                        [
+                            statistics.median(c["p95_ms"] for c in run.idle_cycles)
+                            for run in scenario_runs[reference]
+                        ],
+                        [
+                            statistics.median(c["p95_ms"] for c in run.idle_cycles)
+                            for run in measured
+                        ],
+                    )
+                    interval = comparison["ci95_percent"]
+                    ci_text = (
+                        f"95% CI [{interval[0]:+.1f}%, {interval[1]:+.1f}%]"
+                        if interval
+                        else "95% CI unavailable (<7 process runs)"
+                    )
+                    print(
+                        f"{name} vs {reference}: {comparison['change_percent']:+.1f}% latency, "
+                        f"{ci_text}, {comparison['classification']} "
+                        "(5% threshold; geometric mean paired run ratio)"
+                    )
+                output.append(
+                    {
+                        "scenario": scenario,
+                        "loop": name,
+                        "measurement_mode": "paired-cold",
+                        "benchmark_version": 2,
+                        "settings": {
+                            "connections": args.idle_connections,
+                            "cycles": args.idle_cycles,
+                            "warmup_cycles": args.idle_warmup_cycles,
+                            "idle_seconds": args.idle_seconds,
+                            "timeout_seconds": args.idle_timeout,
+                            "cpu_affinity": args.cpu_affinity,
+                        },
+                        "block_orders": orders,
+                        "comparison_reference": reference,
+                        "idle_comparison": comparison,
+                        "runs": [asdict(item) for item in measured],
+                    }
+                )
+            continue
         scenario_runs: dict[str, list[MatrixResult]] = {}
         for loop_name in available:
             print(f"Running {scenario} on {loop_name}...")

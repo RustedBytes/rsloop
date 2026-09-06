@@ -514,26 +514,65 @@ are from a different host than the macOS microbenchmark example above.
 | Starlette WebSocket over TLS | 18,058 | 13,555 | +33.2% | 0.942 ms | 1.257 ms |
 | Mixed streams | 42,797 | 34,642 | +23.5% | 0.484 ms | 0.521 ms |
 | Bulk transfer (MiB/s) | 1,993.5 | 1,223.7 | +62.9% | 14.768 ms | 26.061 ms |
-| Idle activation | 11,286 | 41,772 | -73.0% | 15.576 ms | 4.199 ms |
 
-The idle-activation result is unstable: throughput ranged from 8,347 to 47,099
-ops/s for rsloop and 7,289 to 43,898 ops/s for uvloop across the seven runs.
-Its traffic phase lasted only about 5–18 ms at the medians, so neither loop
-has a reliable lead. HTTP's 0.3% difference is also too small to call a win.
+The former single-burst idle-activation row has been retired: its traffic
+phase lasted only a few milliseconds and produced unstable throughput rankings.
+Idle activation now has a separate, versioned latency benchmark described below.
+The other measurements above are unchanged. HTTP's 0.3% difference is too small
+to call a win.
 
 Compared with the same sustained workload on the pre-optimization build,
 plain-text `websockets`, aiohttp, and Starlette throughput improved by 10.2%,
-19.4%, and 22.3%, respectively. They still trail uvloop. The default regression
-gate also flags HTTP tail latency and idle activation; this is not an
+19.4%, and 22.3%, respectively. They still trail uvloop. The historical regression
+gate also flagged HTTP tail latency and legacy idle activation; this is not an
 across-the-board performance win. See the
-[before/after report](./benches/performance-2026-09-06.md) for all changes,
-regressions, validation, and reproduction commands.
+[benchmark documentation](./benches/README.md) for workload definitions and
+reproduction commands.
 
 The ordinary matrix defaults are intentionally short enough for local smoke
 and CI runs. Even with `--sustained`, compare repeated runs before drawing
 performance conclusions for a deployment — competing desktop load matters more
 than it looks, because rsloop trades helper-thread CPU for loop-thread work and
 so has more to lose when cores are contended.
+
+### Idle activation latency
+
+```bash
+.venv/bin/python benches/workload_matrix.py \
+  --loops rsloop,uvloop --scenarios idle_connections --repeat 8 \
+  --idle-cycles 100 --idle-warmup-cycles 5 --idle-seconds 0.2 \
+  --json-output target/idle-v2-paired.json
+```
+
+Idle v2 reuses 200 established connections across repeated idle/wakeup cycles.
+It measures all replies from one shared activation timestamp, including task
+scheduling delay, and reports first/50%/95%/all-reply latency. Eight fresh-process
+blocks alternate loop order; confidence intervals resample whole paired runs,
+not individual connections. Results are classified as improved, regressed, or
+inconclusive using a 5% practical threshold and an approximate 95% confidence
+interval. The command takes about six minutes; use `--idle-cycles 3
+--idle-warmup-cycles 1 --idle-seconds 0.01 --repeat 1` for a smoke test only.
+
+The new measurements cannot be compared with the retired ops/s row. See
+[benchmark methodology and regression handling](./benches/README.md#idle-activation-v2)
+for timing definitions, host controls, raw distributions, and sample requirements.
+
+Validation on the Linux/i9-9900K host above collected 800 measured cycles per
+loop in 16 distinct processes, with unrestricted affinity and no concurrent
+builds or test runs. These are medians across runs of each run's median cycle
+milestone, in milliseconds (lower is better):
+
+| Loop | First reply | 50% replied | 95% replied | All replied |
+| --- | ---: | ---: | ---: | ---: |
+| rsloop | 17.510 | 17.893 | 18.169 | 18.299 |
+| uvloop | 18.072 | 18.584 | 19.029 | 19.076 |
+
+The preselected paired comparison is **inconclusive**: the geometric mean
+run-level p95 latency change for rsloop versus uvloop is +9.6%, with a 95%
+bootstrap interval of [-4.8%, +32.2%]. This uses paired run ratios, not the
+ratio of the table's medians. Individual cycle-p95 latencies still form fast
+and slow clusters (rsloop 3.423–28.634 ms; uvloop 3.708–24.329 ms). The new
+benchmark exposes that uncertainty rather than declaring a throughput winner.
 
 See [`benches/README.md`](./benches/README.md) for workload details and
 extra flags, and [`examples/README.md`](./examples/README.md) for the FastAPI

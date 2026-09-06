@@ -8,6 +8,8 @@ import statistics
 from pathlib import Path
 from typing import Any
 
+from idle_statistics import latency_comparison
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -32,15 +34,24 @@ def percentile(values: list[float], fraction: float) -> float:
     return ordered[index]
 
 
-def load_metrics(path: Path) -> dict[str, dict[str, float]]:
+def load_metrics(path: Path) -> dict[str, dict[str, Any]]:
     payload: list[dict[str, Any]] = json.loads(path.read_text(encoding="utf-8"))
-    metrics: dict[str, dict[str, float]] = {}
+    metrics: dict[str, dict[str, Any]] = {}
     for item in payload:
         if item.get("loop") != "rsloop":
             continue
         runs = item["runs"]
         name = item.get("scenario") or item.get("workload")
         if not isinstance(name, str) or not runs:
+            continue
+        if name == "idle_connections" and item.get("benchmark_version") == 2:
+            metrics[name] = {
+                "benchmark_version": 2,
+                "settings": item["settings"],
+                "samples": [
+                    median([c["p95_ms"] for c in run["idle_cycles"]]) for run in runs
+                ],
+            }
             continue
         if "latency_ms" in runs[0]:
             throughput = median([run["operations"] / run["seconds"] for run in runs])
@@ -75,11 +86,38 @@ def main() -> int:
         raise SystemExit("baseline and candidate have no matching rsloop workloads")
 
     failures: list[str] = []
+    inconclusive: list[str] = []
     best_improvement = float("-inf")
     print(f"{'workload':<24} {'throughput':>12} {'p95':>10} {'p99':>10} {'rss':>10}")
     for name in names:
         old = baseline[name]
         new = candidate[name]
+        if name == "idle_connections" and (
+            old.get("benchmark_version") == 2 or new.get("benchmark_version") == 2
+        ):
+            if old.get("benchmark_version") != new.get("benchmark_version") or old.get(
+                "settings"
+            ) != new.get("settings"):
+                failures.append(
+                    "idle_connections: incompatible benchmark versions/settings; collect matching v2 baselines"
+                )
+                continue
+            result = latency_comparison(
+                old["samples"],
+                new["samples"],
+                paired=False,
+                threshold=args.latency_regression,
+            )
+            print(f"idle_connections v2: {result}")
+            if result["classification"] == "regressed":
+                failures.append(
+                    "idle_connections: run-level p95 activation latency regressed with 95% confidence"
+                )
+            elif result["classification"] == "inconclusive":
+                inconclusive.append(
+                    "idle_connections: latency change is inconclusive (not a gate pass)"
+                )
+            continue
         throughput = percent_change(old["throughput"], new["throughput"])
         p95 = percent_change(old["p95"], new["p95"])
         p99 = percent_change(old["p99"], new["p99"])
@@ -106,6 +144,11 @@ def main() -> int:
         for failure in failures:
             print(f"- {failure}")
         return 1
+    if inconclusive:
+        print("\nPerformance gate inconclusive:")
+        for reason in inconclusive:
+            print(f"- {reason}")
+        return 2
     print("\nPerformance gate passed.")
     return 0
 

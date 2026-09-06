@@ -72,10 +72,11 @@ uv run --with uvloop python benches/compare_event_loops.py --no-rsloop-fast-stre
 ## Representative workload matrix
 
 [`workload_matrix.py`](./workload_matrix.py) complements the microbenchmarks
-with concurrent, production-shaped network traffic. By default, each
-loop/scenario pair gets one subprocess so warmups populate the same process
-caches used by measured runs. It reports total and traffic-only throughput,
-p50/p95/p99 operation latency, and peak RSS.
+with concurrent, production-shaped network traffic. Except for idle activation,
+each loop/scenario pair gets one subprocess by default so warmups populate the
+same process caches used by measured runs. These scenarios report total and
+traffic-only throughput, p50/p95/p99 operation latency, and peak RSS. Idle v2
+instead reports shared-origin latency across fresh-process paired blocks.
 
 The scenarios are:
 
@@ -94,7 +95,8 @@ The scenarios are:
 - `mixed_streams`: concurrent connections cycling through 64 B to 64 KiB
   messages
 - `bulk_transfer`: concurrent large transfers with `drain()` backpressure
-- `idle_connections`: many idle connections activated at the same time
+- `idle_connections`: repeated idle/wakeup cycles on established connections,
+  measured as shared-origin activation latency (see below)
 
 Build rsloop in release mode and run the standard matrix with:
 
@@ -118,6 +120,8 @@ uv run --with uvloop python benches/workload_matrix.py \
   --requests-per-connection 5 \
   --bulk-bytes 262144 \
   --idle-connections 20 \
+  --idle-cycles 3 \
+  --idle-warmup-cycles 1 \
   --idle-seconds 0.01
 ```
 
@@ -128,6 +132,9 @@ For performance conclusions, add `--sustained`. It raises short loopback
 workloads to at least two warmups, seven measured runs, and 500 operations per
 connection; the ordinary defaults remain intentionally quick for smoke and CI
 runs.
+Idle activation is an exception: it always uses fresh-process paired blocks
+and its own warmup cycles, regardless of `--measurement-mode` or `--warmups`.
+Use the explicit small cycle count above for smoke tests.
 TLS uses the test certificates under `tests/fixtures/tls`; regenerate them
 cross-platform when needed with:
 
@@ -158,6 +165,72 @@ Treat this matrix as a regression and trade-off tool, not a single leaderboard.
 Compare throughput together with tail latency and memory, and tune concurrency,
 payload sizes, application work, and connection counts to match the target
 deployment.
+
+### Idle activation v2
+
+```bash
+.venv/bin/python benches/workload_matrix.py \
+  --loops rsloop,uvloop --scenarios idle_connections \
+  --repeat 8 --idle-connections 200 \
+  --idle-cycles 100 --idle-warmup-cycles 5 --idle-seconds 0.2 \
+  --json-output target/idle-v2-paired.json
+```
+
+Allow about six minutes for this two-loop comparison. Each process establishes
+200 connections once, discards five idle/activation warmup cycles, then measures
+100 cycles on the same connections. Each cycle idles for 200 ms, schedules one
+ping per connection, and waits for every reply before beginning the next idle
+period. It does not become a continuous ping-pong throughput test.
+
+All replies are timed from a shared timestamp immediately before scheduling the
+activation tasks. This includes per-client scheduling delay, rather than
+starting a separate stopwatch only after each coroutine begins. Each cycle
+records time to the first reply, 50%, 95%, and all replies. Setup, teardown,
+warmup, and actual idle durations are recorded separately and excluded from
+activation latency. `--idle-timeout` bounds setup and each burst (default 30 s).
+
+Each measured run uses a fresh process. Two loops run in AB/BA order across
+blocks; larger loop sets rotate their starting position. Eight blocks give
+balanced order for two loops. `--warmups` is not used for idle v2: configure
+`--idle-warmup-cycles` instead. `--sustained` still ensures at least seven runs,
+but does not override explicit cycle counts.
+
+The console table reports the median across process runs of each run's median
+cycle milestone. It also shows min/p10/p50/p90/max cycle-p95 latency to expose
+fast/slow clusters. JSON preserves every cycle and every connection's reply
+latency; these correlated samples are **not** treated as independent trials.
+
+For comparison, each run contributes one value: its median cycle-p95 latency.
+The reported effect is the geometric mean paired candidate/reference ratio,
+expressed as a percentage latency change (negative is better). A deterministic
+10,000-resample percentile bootstrap resamples whole process-run pairs, giving
+an approximate 95% confidence interval. The reference is uvloop when present,
+otherwise the first selected loop. Only this preselected metric determines the
+classification; the other milestones are descriptive, not extra significance
+tests.
+
+- **Improved:** the entire interval is below -5%.
+- **Regressed:** the entire interval is above +5%.
+- **Inconclusive:** otherwise, or fewer than seven process runs. No confidence
+  interval is reported for an insufficient sample. Inconclusive does not prove
+  equivalence or stability; collect more independent runs if needed.
+
+Avoid concurrent builds and CPU-heavy jobs. JSON records OS/Python information,
+CPU count, effective affinity, process ID, and load averages before and after
+each run where supported. `--cpu-affinity` accepts a comma-separated CPU set on
+platforms with `sched_setaffinity`; it applies to the parent, children, and
+their helper threads. Choose the same suitable multi-core allocation for both
+loops. The harness does not change governors, disable host services, or claim
+that affinity alone eliminates interference. Confidence intervals are not
+proof against systematic host drift; repeat paired invocations.
+
+Idle v2 is explicitly versioned and **not comparable** to the old single-burst
+ops/s row. `check_regression.py` rejects mixed versions or different idle
+settings. For two matching v2 files it independently bootstraps process runs
+(separate invocations are not paired), checks the latency threshold, and does
+not apply the legacy throughput/RSS gate to idle. Its exit codes are 0 for a
+passed gate, 1 for a regression/incompatible data, and 2 for an inconclusive
+idle result with no other failures. Old non-idle regression checks are unchanged.
 
 ## Regression gate and runtime microbenchmarks
 
