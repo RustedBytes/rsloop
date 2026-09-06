@@ -42,6 +42,143 @@ const AFD_POLL_COMPLETION_KEY: usize = usize::MAX - 1;
 const IOCP_BATCH_SIZE: usize = 128;
 const IOCP_DRAIN_BATCHES: usize = 8;
 
+#[cfg(test)]
+mod retirement_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::{Rc, Weak};
+
+    #[test]
+    fn shutdown_waits_for_packet_before_releasing_storage() {
+        struct Tracked(Rc<Cell<bool>>);
+        impl Drop for Tracked {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        let mut driver = IocpDriver::new().unwrap();
+        let dropped = Rc::new(Cell::new(false));
+        let token = driver.state.get_mut().completions.vacant_key();
+        let mut ctx = Box::new(OverlappedCtx {
+            overlapped: OVERLAPPED::default(),
+            token,
+        });
+        let pointer = &mut ctx.overlapped as *mut OVERLAPPED;
+        driver.state.get_mut().completions.insert(Completion {
+            waiter: None,
+            completed: None,
+            overlapped: Some(ctx),
+            ignored_data: Some(Box::new(Tracked(dropped.clone()))),
+        });
+        assert_eq!(
+            driver.quiesce(Duration::ZERO).unwrap_err().kind(),
+            ErrorKind::TimedOut
+        );
+        assert!(!dropped.get());
+        // SAFETY: this modeled packet uses an owned context held by the driver
+        // until dequeued. No kernel I/O was submitted with this pointer.
+        assert_ne!(
+            unsafe { PostQueuedCompletionStatus(driver.iocp_handle(), 0, 0, pointer) },
+            0
+        );
+        driver.quiesce(Duration::from_secs(5)).unwrap();
+        assert!(dropped.get());
+        assert!(driver.state.get_mut().completions.is_empty());
+    }
+
+    struct ReentrantDrop {
+        driver: Weak<IocpDriver>,
+        dropped: Rc<Cell<bool>>,
+    }
+    impl Drop for ReentrantDrop {
+        fn drop(&mut self) {
+            let driver = self.driver.upgrade().unwrap();
+            assert!(
+                driver.state.try_borrow_mut().is_ok(),
+                "payload dropped under state borrow"
+            );
+            self.dropped.set(true);
+        }
+    }
+
+    #[test]
+    fn consuming_completed_record_releases_payload_outside_state_borrow() {
+        let driver = Rc::new(IocpDriver::new().unwrap());
+        let dropped = Rc::new(Cell::new(false));
+        let token = driver.state.borrow_mut().completions.insert(Completion {
+            waiter: None,
+            completed: Some(7),
+            overlapped: None,
+            ignored_data: Some(Box::new(ReentrantDrop {
+                driver: Rc::downgrade(&driver),
+                dropped: dropped.clone(),
+            })),
+        });
+        assert_eq!(driver.get_completion_result(token), Some(7));
+        assert!(dropped.get());
+        assert_eq!(driver.get_completion_result(token), None);
+    }
+
+    #[test]
+    fn completed_and_unknown_cancellation_release_payload_outside_borrow() {
+        let driver = Rc::new(IocpDriver::new().unwrap());
+        for completed in [false, true] {
+            let dropped = Rc::new(Cell::new(false));
+            let token = if completed {
+                driver.state.borrow_mut().completions.insert(Completion {
+                    waiter: None,
+                    completed: Some(0),
+                    overlapped: None,
+                    ignored_data: None,
+                })
+            } else {
+                usize::MAX
+            };
+            // No CancelIoEx call is needed for a completed or unknown token.
+            driver.cancel_completion(
+                token,
+                RawOsHandle::Handle(ptr::null_mut()),
+                Box::new(ReentrantDrop {
+                    driver: Rc::downgrade(&driver),
+                    dropped: dropped.clone(),
+                }),
+            );
+            assert!(dropped.get());
+            assert!(driver.state.borrow().completions.is_empty());
+        }
+    }
+
+    #[test]
+    fn dequeuing_cancelled_completion_releases_payload_outside_borrow() {
+        let driver = Rc::new(IocpDriver::new().unwrap());
+        let dropped = Rc::new(Cell::new(false));
+        let mut state = driver.state.borrow_mut();
+        let token = state.completions.vacant_key();
+        let mut ctx = Box::new(OverlappedCtx {
+            overlapped: OVERLAPPED::default(),
+            token,
+        });
+        let pointer = &mut ctx.overlapped as *mut OVERLAPPED;
+        state.completions.insert(Completion {
+            waiter: None,
+            completed: None,
+            overlapped: Some(ctx),
+            ignored_data: Some(Box::new(ReentrantDrop {
+                driver: Rc::downgrade(&driver),
+                dropped: dropped.clone(),
+            })),
+        });
+        drop(state);
+        let entry = OVERLAPPED_ENTRY {
+            lpOverlapped: pointer,
+            ..Default::default()
+        };
+        driver.process_entries(&[entry]);
+        assert!(dropped.get());
+        assert!(driver.state.borrow().completions.is_empty());
+    }
+}
+
 const STATUS_PENDING: NTSTATUS = 0x0000_0103;
 const IOCTL_AFD_POLL: u32 = 0x0001_2024;
 const FILE_SKIP_SET_EVENT_ON_HANDLE: u8 = 0x02;
@@ -157,13 +294,110 @@ struct DriverState {
     next_registration_generation: u64,
 }
 
+impl DriverState {
+    fn retain_cancelled(
+        &mut self,
+        token: usize,
+        data: Box<dyn std::any::Any>,
+    ) -> (Option<Completion>, Option<*mut OVERLAPPED>) {
+        let Some(completion) = self.completions.get_mut(token) else {
+            return (
+                Some(Completion {
+                    waiter: None,
+                    completed: None,
+                    overlapped: None,
+                    ignored_data: Some(data),
+                }),
+                None,
+            );
+        };
+        completion.ignored_data = Some(data);
+        if completion.completed.is_some() {
+            // Its packet was already dequeued: no future IOCP notification can
+            // release this entry. Return it for destruction outside the borrow.
+            return (Some(self.completions.remove(token)), None);
+        }
+        let overlapped = completion
+            .overlapped
+            .as_deref_mut()
+            .map(|ctx| &mut ctx.overlapped as *mut OVERLAPPED);
+        (None, overlapped)
+    }
+}
+
 pub struct IocpDriver {
     port: Arc<OwnedHandle>,
     afd: RefCell<Option<OwnedHandle>>,
     state: RefCell<DriverState>,
 }
 
+impl Drop for IocpDriver {
+    fn drop(&mut self) {
+        if self.quiesce(Duration::from_secs(1)).is_err() {
+            // CancelIoEx/NtCancelIoFileEx are requests, not acknowledgements.
+            // Keep every unacknowledged kernel pointer alive on timeout/error.
+            // Completed entries need no retention and can be released normally.
+            for (_, completion) in std::mem::take(&mut self.state.get_mut().completions) {
+                if completion.overlapped.is_some() {
+                    std::mem::forget(completion);
+                }
+            }
+            std::mem::forget(std::mem::take(&mut self.state.get_mut().poll_ops));
+        }
+    }
+}
+
 impl IocpDriver {
+    fn quiesce(&mut self, timeout: Duration) -> io::Result<()> {
+        let mut wakers = Vec::new();
+        let state = self.state.get_mut();
+        for (_, completion) in &mut state.completions {
+            if let Some(waker) = completion.waiter.take() {
+                wakers.push(waker);
+            }
+        }
+        for (_, registration) in &mut state.registrations {
+            if let HandleRegistration::Poll(registration) = registration {
+                if let Some(waker) = registration.waiter.take() {
+                    wakers.push(waker);
+                }
+            }
+        }
+        let poll_tokens = state
+            .poll_ops
+            .iter()
+            .map(|(token, _)| token)
+            .collect::<Vec<_>>();
+        // No task wakeups or rearming during teardown. Operation drops have
+        // requested cancellation of completion I/O before releasing their driver
+        // owner; outstanding driver-owned AFD polls must be cancelled here.
+        drop(wakers);
+        for token in poll_tokens {
+            self.cancel_poll_operation(token);
+        }
+
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let state = self.state.get_mut();
+            let pending = !state.poll_ops.is_empty()
+                || state
+                    .completions
+                    .iter()
+                    .any(|(_, completion)| completion.overlapped.is_some());
+            if !pending {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    ErrorKind::TimedOut,
+                    "IOCP shutdown awaiting completion packets",
+                ));
+            }
+            self.process_batch(Self::duration_to_timeout_ms(Some(remaining)))?;
+        }
+    }
+
     #[inline]
     pub(crate) fn new() -> Result<Self, io::Error> {
         let port = unsafe {
@@ -186,12 +420,14 @@ impl IocpDriver {
     }
 
     #[inline]
-    fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) {
+    fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) -> Option<Waker> {
         if !waiter_slot
             .as_ref()
             .is_some_and(|waiter| waiter.will_wake(&waker))
         {
-            *waiter_slot = Some(waker);
+            waiter_slot.replace(waker)
+        } else {
+            Some(waker)
         }
     }
 
@@ -555,6 +791,8 @@ impl IocpDriver {
 
     #[inline]
     fn process_entries(&self, entries: &[OVERLAPPED_ENTRY]) {
+        let mut wakers = Vec::new();
+        let mut retired = Vec::new();
         let mut state = self.state.borrow_mut();
         for entry in entries {
             if entry.lpCompletionKey == INTERRUPT_KEY {
@@ -584,7 +822,7 @@ impl IocpDriver {
                                 registration.poll_token = None;
                             }
                             if let Some(waiter) = registration.waiter.take() {
-                                waiter.wake();
+                                wakers.push(waiter);
                             }
                         }
                     }
@@ -604,12 +842,18 @@ impl IocpDriver {
                 completion.completed = Some(Self::completion_result_from_entry(entry));
                 completion.overlapped = None;
                 if let Some(waiter) = completion.waiter.take() {
-                    waiter.wake();
+                    wakers.push(waiter);
                 }
                 if completion.ignored_data.is_some() {
-                    state.completions.remove(completion_token);
+                    retired.push(state.completions.remove(completion_token));
                 }
             }
+        }
+        // Wakers and retained payload destructors can re-enter the driver.
+        drop(state);
+        drop(retired);
+        for waker in wakers {
+            waker.wake();
         }
     }
 
@@ -776,31 +1020,29 @@ impl Driver for IocpDriver {
 
     #[inline]
     fn deregister_handle(&self, handle: &InnerRawHandle) -> Result<(), io::Error> {
-        let poll_token = {
-            let mut state = self.state.borrow_mut();
-            match state.registrations.try_remove(handle.token.0) {
-                Some(HandleRegistration::Completion) => None,
-                Some(HandleRegistration::Poll(registration)) => registration.poll_token,
-                None => {
-                    return Err(io::Error::new(
-                        ErrorKind::NotFound,
-                        format!(
-                            "I/O token {} is not registered with this driver",
-                            handle.token.0
-                        ),
-                    ));
+        let registration = self
+            .state
+            .borrow_mut()
+            .registrations
+            .try_remove(handle.token.0)
+            .ok_or_else(|| {
+                io::Error::new(
+                    ErrorKind::NotFound,
+                    format!(
+                        "I/O token {} is not registered with this driver",
+                        handle.token.0
+                    ),
+                )
+            })?;
+        match &registration {
+            HandleRegistration::Poll(registration) => {
+                if let Some(poll_token) = registration.poll_token {
+                    self.cancel_poll_operation(poll_token);
                 }
             }
-        };
-
-        if let Some(poll_token) = poll_token {
-            // Poll-based I/O
-            self.cancel_poll_operation(poll_token);
-        } else {
-            // Completion-based I/O
-            self.disassociate_iocp_handle(handle);
+            HandleRegistration::Completion => self.disassociate_iocp_handle(handle),
         }
-
+        drop(registration);
         Ok(())
     }
 
@@ -849,6 +1091,7 @@ impl Driver for IocpDriver {
         waker: Waker,
         interest: Interest,
     ) -> Result<(), io::Error> {
+        let old_waker;
         let (socket, should_arm) = {
             let mut state = self.state.borrow_mut();
             let registration = state.registrations.get_mut(handle.token.0).ok_or_else(|| {
@@ -872,14 +1115,23 @@ impl Driver for IocpDriver {
             };
 
             registration.interest = interest;
-            Self::update_waiter(&mut registration.waiter, waker);
+            old_waker = Self::update_waiter(&mut registration.waiter, waker);
             (registration.socket, registration.poll_token.is_none())
         };
 
         if should_arm {
-            self.arm_poll_operation(handle.token.0, socket, interest)?;
+            if let Err(error) = self.arm_poll_operation(handle.token.0, socket, interest) {
+                let mut state = self.state.borrow_mut();
+                let failed_waker = match state.registrations.get_mut(handle.token.0) {
+                    Some(HandleRegistration::Poll(registration)) => registration.waiter.take(),
+                    _ => None,
+                };
+                drop(state);
+                drop(failed_waker);
+                return Err(error);
+            }
         }
-
+        drop(old_waker);
         Ok(())
     }
 
@@ -890,18 +1142,22 @@ impl Driver for IocpDriver {
             .completions
             .get(token)
             .and_then(|completion| completion.completed);
-        if completed.is_some() {
-            state.completions.remove(token);
-        }
+        let retired = completed.map(|_| state.completions.remove(token));
+        drop(state);
+        drop(retired);
         completed
     }
 
     #[inline]
     fn set_completion_waker(&self, token: usize, waker: Waker) {
         let mut state = self.state.borrow_mut();
-        if let Some(completion) = state.completions.get_mut(token) {
-            Self::update_waiter(&mut completion.waiter, waker);
-        }
+        let old_waker = if let Some(completion) = state.completions.get_mut(token) {
+            Self::update_waiter(&mut completion.waiter, waker)
+        } else {
+            Some(waker)
+        };
+        drop(state);
+        drop(old_waker);
     }
 
     #[inline]
@@ -913,25 +1169,14 @@ impl Driver for IocpDriver {
 
     #[inline]
     fn ignore_completion(&self, token: usize, data: Box<dyn std::any::Any>) {
-        let mut state = self.state.borrow_mut();
-        if let Some(c) = state.completions.get_mut(token) {
-            c.ignored_data = Some(data);
-        }
+        let (retired, _) = self.state.borrow_mut().retain_cancelled(token, data);
+        drop(retired);
     }
 
     #[inline]
     fn cancel_completion(&self, token: usize, handle: RawOsHandle, data: Box<dyn std::any::Any>) {
-        let overlapped = {
-            let mut state = self.state.borrow_mut();
-            let Some(completion) = state.completions.get_mut(token) else {
-                return;
-            };
-            completion.ignored_data = Some(data);
-            completion
-                .overlapped
-                .as_deref_mut()
-                .map(|ctx| &mut ctx.overlapped as *mut OVERLAPPED)
-        };
+        let (retired, overlapped) = self.state.borrow_mut().retain_cancelled(token, data);
+        drop(retired);
 
         if let Some(overlapped) = overlapped {
             // The completion entry and ignored_data remain registered until

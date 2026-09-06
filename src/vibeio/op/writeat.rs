@@ -38,6 +38,10 @@ impl<'a, B: IoBuf> WriteAtOp<'a, B> {
 
     #[inline]
     pub fn take_bufs(mut self) -> B {
+        assert!(
+            self.completion_token.is_none(),
+            "cannot reclaim a buffer while I/O is pending"
+        );
         self.buf.take().unwrap().into_inner()
     }
 }
@@ -153,14 +157,39 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
 impl<B: IoBuf> Drop for WriteAtOp<'_, B> {
     #[inline]
     fn drop(&mut self) {
-        if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = crate::vibeio::current_driver() {
-                if let Some(buf) = self.buf.take() {
-                    driver.ignore_completion(completion_token, Box::new(buf.into_stable_box()));
-                } else {
-                    driver.ignore_completion(completion_token, Box::new(()));
-                }
-            }
+        if let Some(token) = self.completion_token.take() {
+            let completion_state = ();
+            // The owning driver, not the currently entered runtime, must retain
+            // every kernel-visible allocation until completion is acknowledged.
+            self.handle.cancel_completion(
+                token,
+                Box::new((
+                    completion_state,
+                    self.buf.take().map(CompletionBuffer::into_stable_box),
+                )),
+            );
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn pending_buffer_is_retained_by_owning_driver() {
+        crate::vibeio::op::io_util::cancellation_tests::check_cancellation(
+            |handle, buffer, reclaim| {
+                let mut op = WriteAtOp::new(handle, buffer, 0);
+                op.completion_token = Some(41);
+                if reclaim {
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op.take_bufs()));
+                    assert!(result.is_err(), "pending storage must not be reclaimed");
+                } else {
+                    drop(op);
+                }
+            },
+        );
     }
 }

@@ -13,7 +13,7 @@ use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 use std::os::windows::io::{AsRawHandle, IntoRawHandle, RawHandle};
 
 use crate::vibeio::fs::Metadata;
-use crate::vibeio::io::{IoBuf, IoBufMut, IoBufWithCursor, iobuf_to_slice, iobufmut_to_slice};
+use crate::vibeio::io::{IoBuf, IoBufMut, IoBufWithCursor, iobuf_to_slice, read_into_buf};
 use crate::vibeio::{
     driver::RegistrationMode,
     executor::current_driver,
@@ -239,7 +239,7 @@ impl File {
     /// ```
     #[inline]
     pub async fn read_at<B: IoBufMut>(&self, mut buf: B, offset: u64) -> (io::Result<usize>, B) {
-        if buf.buf_len() == 0 {
+        if buf.buf_capacity() == 0 {
             return (Ok(0), buf);
         }
 
@@ -250,15 +250,18 @@ impl File {
         } else if crate::vibeio::executor::offload_fs() && current_driver().is_some() {
             read_at_in_blocking_pool(&self.inner, buf, offset).await
         } else {
-            let slice = iobufmut_to_slice(&mut buf);
-            (read_at_blocking(&self.inner, slice, offset), buf)
+            let result = read_into_buf(&mut buf, |slice| {
+                read_at_blocking(&self.inner, slice, offset)
+            });
+            (result, buf)
         }
     }
 
     /// Reads bytes from the file at a specific offset, filling the entire buffer.
     ///
-    /// This method reads into the provided buffer starting at the given offset,
-    /// ensuring the entire buffer is filled. The cursor position of the file is not modified.
+    /// This method fills the provided buffer's writable capacity starting at the
+    /// given offset, including spare capacity in an empty Vec. The cursor
+    /// position of the file is not modified.
     ///
     /// # Platform-specific behavior
     ///
@@ -286,7 +289,7 @@ impl File {
     #[inline]
     pub async fn read_exact_at<B: IoBufMut>(&self, buf: B, mut offset: u64) -> (io::Result<()>, B) {
         let mut buf = IoBufWithCursor::new(buf);
-        while buf.buf_len() > 0 {
+        while buf.buf_capacity() > 0 {
             let (read, mut buf_returned) = self.read_at(buf, offset).await;
             let read = match read {
                 Ok(read) => read,
@@ -532,6 +535,7 @@ impl File {
                 use std::ffi::CString;
 
                 let mut op = crate::vibeio::op::StatxOp::new(
+                    handle.driver_owner(),
                     handle.handle,
                     CString::new(b"").expect("invalid path"),
                     libc::AT_EMPTY_PATH,
@@ -619,8 +623,7 @@ async fn read_at_in_blocking_pool<B: IoBufMut>(
             .ok()
             .and_then(|rc| rc.take())
             .expect("buf is none");
-        let temp_slice = iobufmut_to_slice(&mut buf);
-        let result = read_at_blocking(&file, temp_slice, offset);
+        let result = read_into_buf(&mut buf, |slice| read_at_blocking(&file, slice, offset));
         (result, buf)
     })
     .await

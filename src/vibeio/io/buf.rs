@@ -21,16 +21,12 @@
 //!
 //! # Examples
 //!
-//! ```ignore
-//! use vibeio::io::{AsyncRead, IoBufMut};
-//!
-//! async fn read_something<R: AsyncRead>(reader: &mut R) {
-//!     let mut buf = vec![0u8; 1024];
-//!     let (result, buf) = reader.read(buf).await;
-//!     let bytes_read = result.unwrap_or(0);
-//!     println!("Read {} bytes", bytes_read);
-//! }
-//! ```
+//! See the executable "Buffer length and capacity" and "Pipe buffer ownership" examples in
+//! `tools/vibeio-check/EXAMPLES.md`. Read errors must be handled separately from
+//! EOF; the returned buffer contains the data initialized by the operation.
+
+#![deny(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::io::{IoSlice, IoSliceMut};
 
@@ -41,7 +37,11 @@ use std::io::{IoSlice, IoSliceMut};
 /// # Safety
 ///
 /// Implementors must keep the returned pointer valid and stable for reads of
-/// `buf_len()` bytes while the buffer is owned by an I/O operation. The
+/// `buf_len()` bytes while the buffer value stays at a fixed address. Callers
+/// must not move the value while a submitted pointer is outstanding; completion
+/// operations enforce this by retaining the same boxed buffer allocation across
+/// cancellation. Moving a Vec or Box may preserve its pointer, but inline arrays
+/// require this caller-side address stability. The
 /// reported length must not exceed `buf_capacity()`.
 pub unsafe trait IoBuf: Send + 'static {
     /// Returns a raw pointer to the inner buffer.
@@ -75,6 +75,8 @@ pub unsafe trait IoBufMut: IoBuf {
     unsafe fn set_buf_init(&mut self, len: usize);
 }
 
+// SAFETY: Vec owns its allocation; len describes initialized bytes and never
+// exceeds capacity. Operations do not resize it while its pointer is in use.
 unsafe impl IoBuf for Vec<u8> {
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
@@ -92,6 +94,8 @@ unsafe impl IoBuf for Vec<u8> {
     }
 }
 
+// SAFETY: &mut Vec grants exclusive access to its allocation, including spare
+// capacity. set_buf_init exposes only the prefix initialized by its caller.
 unsafe impl IoBufMut for Vec<u8> {
     #[inline]
     fn as_buf_mut_ptr(&mut self) -> *mut u8 {
@@ -100,10 +104,13 @@ unsafe impl IoBufMut for Vec<u8> {
 
     #[inline]
     unsafe fn set_buf_init(&mut self, len: usize) {
-        self.set_len(len);
+        // SAFETY: the IoBufMut caller guarantees initialization and capacity.
+        unsafe { self.set_len(len) };
     }
 }
 
+// SAFETY: String owns initialized UTF-8 bytes. Only read access to its len-byte
+// prefix is exposed, so neither UTF-8 validity nor spare capacity is modified.
 unsafe impl IoBuf for String {
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
@@ -121,6 +128,7 @@ unsafe impl IoBuf for String {
     }
 }
 
+// SAFETY: the initialized slice is immutable and outlives every operation.
 unsafe impl IoBuf for &'static [u8] {
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
@@ -138,6 +146,7 @@ unsafe impl IoBuf for &'static [u8] {
     }
 }
 
+// SAFETY: the initialized UTF-8 bytes are immutable and have static storage.
 unsafe impl IoBuf for &'static str {
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
@@ -155,6 +164,8 @@ unsafe impl IoBuf for &'static str {
     }
 }
 
+// SAFETY: all N bytes are initialized. The operation keeps the array stationary
+// while using its pointer (completion operations box their buffer storage).
 unsafe impl<const N: usize> IoBuf for [u8; N] {
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
@@ -172,6 +183,8 @@ unsafe impl<const N: usize> IoBuf for [u8; N] {
     }
 }
 
+// SAFETY: the exclusive array borrow covers all N writable initialized bytes.
+// Partial writes do not make any of the remaining array elements uninitialized.
 unsafe impl<const N: usize> IoBufMut for [u8; N] {
     #[inline]
     fn as_buf_mut_ptr(&mut self) -> *mut u8 {
@@ -181,6 +194,7 @@ unsafe impl<const N: usize> IoBufMut for [u8; N] {
     unsafe fn set_buf_init(&mut self, _len: usize) {}
 }
 
+// SAFETY: the box owns len initialized bytes at a stable allocation address.
 unsafe impl IoBuf for Box<[u8]> {
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
@@ -198,6 +212,8 @@ unsafe impl IoBuf for Box<[u8]> {
     }
 }
 
+// SAFETY: the box exclusively owns its initialized slice; partial writes leave
+// the other bytes valid and do not change the allocation size.
 unsafe impl IoBufMut for Box<[u8]> {
     #[inline]
     fn as_buf_mut_ptr(&mut self) -> *mut u8 {
@@ -209,8 +225,8 @@ unsafe impl IoBufMut for Box<[u8]> {
 
 /// A buffer wrapper with a cursor for tracking progress.
 pub(crate) struct IoBufWithCursor<I: IoBuf> {
-    pub(crate) buf: I,
-    pub(crate) cursor: usize,
+    buf: I,
+    cursor: usize,
 }
 
 impl<I: IoBuf> IoBufWithCursor<I> {
@@ -237,9 +253,13 @@ impl<I: IoBuf> IoBufWithCursor<I> {
     }
 }
 
+// SAFETY: private fields and checked advance keep cursor within initialized
+// data. The underlying IoBuf retains ownership and supplies stable storage.
 unsafe impl<I: IoBuf> IoBuf for IoBufWithCursor<I> {
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
+        // SAFETY: cursor is at most the initialized length, hence in bounds or
+        // one-past-the-end of the allocation supplied by IoBuf.
         unsafe { self.buf.as_buf_ptr().add(self.cursor) }
     }
 
@@ -254,14 +274,19 @@ unsafe impl<I: IoBuf> IoBuf for IoBufWithCursor<I> {
     }
 }
 
+// SAFETY: the suffix is exclusively borrowed from the underlying IoBufMut;
+// its writable capacity is reduced by the checked cursor offset.
 unsafe impl<I: IoBufMut> IoBufMut for IoBufWithCursor<I> {
     #[inline]
     fn as_buf_mut_ptr(&mut self) -> *mut u8 {
+        // SAFETY: cursor never exceeds the underlying initialized length.
         unsafe { self.buf.as_buf_mut_ptr().add(self.cursor) }
     }
 
     unsafe fn set_buf_init(&mut self, len: usize) {
-        self.buf.set_buf_init(self.cursor + len);
+        // SAFETY: caller initialized len suffix bytes within suffix capacity;
+        // the prefix before cursor was already initialized.
+        unsafe { self.buf.set_buf_init(self.cursor + len) };
     }
 }
 
@@ -355,14 +380,12 @@ pub struct IoVec {
 /// Trait for vectored read buffers.
 /// # Safety
 ///
-/// Every returned vector must describe memory that remains valid and stable
-/// for reads for as long as the I/O operation owns this value.
+/// Every returned vector must describe initialized memory that remains valid
+/// and stable for reads for as long as the I/O operation owns this value,
+/// including across moves of the value and asynchronous cancellation.
 pub unsafe trait IoVectoredBuf: 'static {
     /// Returns a pointer to an array of `iovec` structures and its length.
-    #[inline]
-    fn as_iovecs(&self) -> Box<[IoVec]> {
-        unimplemented!()
-    }
+    fn as_iovecs(&self) -> Box<[IoVec]>;
 
     /// Returns `true` if the vectored buffer is empty.
     #[inline]
@@ -374,29 +397,25 @@ pub unsafe trait IoVectoredBuf: 'static {
 /// Trait for vectored write buffers.
 /// # Safety
 ///
-/// Every returned vector must describe memory that remains valid and stable
-/// for writes for as long as the I/O operation owns this value.
+/// Every returned vector must describe exclusively writable memory that remains
+/// valid and stable for as long as the I/O operation owns this value. Writable
+/// regions must not overlap one another or any live references to their bytes.
 pub unsafe trait IoVectoredBufMut: IoVectoredBuf {
     /// Returns a mutable pointer to an array of `iovec` structures and its length.
-    #[inline]
-    fn as_iovecs_mut(&mut self) -> Box<[IoVec]> {
-        unimplemented!()
-    }
+    fn as_iovecs_mut(&mut self) -> Box<[IoVec]>;
 }
 
-#[cfg(unix)]
-unsafe impl IoVectoredBuf for Vec<libc::iovec> {
+// SAFETY: each box owns initialized bytes at an address stable across moves of
+// the vector. Unlike a collection of libc::iovec, it owns the pointed-to storage.
+unsafe impl IoVectoredBuf for Vec<Box<[u8]>> {
     #[inline]
     fn as_iovecs(&self) -> Box<[IoVec]> {
-        let mut iovecs = Box::new_uninit_slice(self.len());
-        for (index, iovec) in self.iter().enumerate() {
-            iovecs[index].write(IoVec {
-                ptr: iovec.iov_base as *mut u8,
-                len: iovec.iov_len,
-            });
-        }
-
-        unsafe { iovecs.assume_init() }
+        self.iter()
+            .map(|buf| IoVec {
+                ptr: buf.as_ptr().cast_mut(),
+                len: buf.len(),
+            })
+            .collect()
     }
 
     #[inline]
@@ -405,45 +424,33 @@ unsafe impl IoVectoredBuf for Vec<libc::iovec> {
     }
 }
 
-#[cfg(unix)]
-unsafe impl IoVectoredBufMut for Vec<libc::iovec> {
+// SAFETY: distinct owned boxes cannot overlap; &mut self grants exclusive access
+// to every initialized buffer for the duration of the operation.
+unsafe impl IoVectoredBufMut for Vec<Box<[u8]>> {
     #[inline]
     fn as_iovecs_mut(&mut self) -> Box<[IoVec]> {
-        self.as_iovecs()
-    }
-}
-
-#[cfg(unix)]
-unsafe impl IoVectoredBuf for Box<[libc::iovec]> {
-    #[inline]
-    fn as_iovecs(&self) -> Box<[IoVec]> {
-        let mut iovecs = Box::new_uninit_slice(self.len());
-        for (index, iovec) in self.iter().enumerate() {
-            iovecs[index].write(IoVec {
-                ptr: iovec.iov_base as *mut u8,
-                len: iovec.iov_len,
-            });
-        }
-
-        unsafe { iovecs.assume_init() }
-    }
-}
-
-#[cfg(unix)]
-unsafe impl IoVectoredBufMut for Box<[libc::iovec]> {
-    #[inline]
-    fn as_iovecs_mut(&mut self) -> Box<[IoVec]> {
-        self.as_iovecs()
+        self.iter_mut()
+            .map(|buf| IoVec {
+                ptr: buf.as_mut_ptr(),
+                len: buf.len(),
+            })
+            .collect()
     }
 }
 
 /// A temporary vectored buffer for polling operations.
 pub(crate) struct IoVectoredBufTemporaryPoll {
-    pub(crate) iovecs: Vec<(*mut u8, usize)>,
+    iovecs: Vec<(*mut u8, usize)>,
 }
 
 impl IoVectoredBufTemporaryPoll {
     /// Create a new `IoVectoredBufTemporaryPoll` from immutable slices.
+    ///
+    /// # Safety
+    ///
+    /// All backing borrows must outlive this wrapper and any use of its pointers.
+    /// Use only for synchronous write polling, never completion submission or
+    /// mutable I/O. No pointer may be retained after the poll returns.
     #[inline]
     pub(crate) unsafe fn new(iovecs: &[IoSlice<'_>]) -> Self {
         let iovecs = iovecs
@@ -454,6 +461,11 @@ impl IoVectoredBufTemporaryPoll {
     }
 
     /// Create a new `IoVectoredBufTemporaryPoll` from mutable slices.
+    ///
+    /// # Safety
+    ///
+    /// All backing exclusive borrows must outlive this wrapper and any pointer
+    /// use. Use only for synchronous polling, never completion submission.
     #[allow(dead_code)]
     #[inline]
     pub(crate) unsafe fn new_mut(iovecs: &mut [IoSliceMut<'_>]) -> Self {
@@ -465,18 +477,15 @@ impl IoVectoredBufTemporaryPoll {
     }
 }
 
+// SAFETY: the unsafe constructors require stable, initialized borrowed storage
+// and forbid retaining pointers beyond the synchronous polling operation.
 unsafe impl IoVectoredBuf for IoVectoredBufTemporaryPoll {
     #[inline]
     fn as_iovecs(&self) -> Box<[IoVec]> {
-        let mut iovecs = Box::new_uninit_slice(self.iovecs.len());
-        for (index, iovec) in self.iovecs.iter().enumerate() {
-            iovecs[index].write(IoVec {
-                ptr: iovec.0,
-                len: iovec.1,
-            });
-        }
-
-        unsafe { iovecs.assume_init() }
+        self.iovecs
+            .iter()
+            .map(|&(ptr, len)| IoVec { ptr, len })
+            .collect()
     }
 
     #[inline]
@@ -485,6 +494,8 @@ unsafe impl IoVectoredBuf for IoVectoredBufTemporaryPoll {
     }
 }
 
+// SAFETY: mutable I/O is permitted only for new_mut, whose contract preserves
+// the non-overlapping exclusive IoSliceMut borrows throughout the poll.
 unsafe impl IoVectoredBufMut for IoVectoredBufTemporaryPoll {
     #[inline]
     fn as_iovecs_mut(&mut self) -> Box<[IoVec]> {
@@ -495,18 +506,146 @@ unsafe impl IoVectoredBufMut for IoVectoredBufTemporaryPoll {
 #[cfg(any(feature = "fs", feature = "process", feature = "stdio"))]
 #[inline]
 pub(crate) fn iobuf_to_slice(buf: &impl IoBuf) -> &[u8] {
+    // SAFETY: IoBuf supplies a stable pointer to buf_len initialized bytes for
+    // this borrow; the returned slice cannot outlive the buffer reference.
     unsafe { std::slice::from_raw_parts(buf.as_buf_ptr(), buf.buf_len()) }
 }
 
 #[cfg(any(feature = "fs", feature = "process", feature = "stdio"))]
 #[inline]
-pub(crate) fn iobufmut_to_slice(buf: &mut impl IoBufMut) -> &mut [u8] {
-    unsafe { std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr(), buf.buf_len()) }
+pub(crate) fn read_into_buf(
+    buf: &mut impl IoBufMut,
+    read: impl FnOnce(&mut [u8]) -> std::io::Result<usize>,
+) -> std::io::Result<usize> {
+    let capacity = buf.buf_capacity();
+    if capacity == 0 {
+        return Ok(0);
+    }
+    let initialized = buf.buf_len();
+    let ptr = buf.as_buf_mut_ptr();
+    // SAFETY: IoBufMut provides exclusive writable capacity and an initialized
+    // prefix. Initialize only spare bytes before exposing a safe Rust slice:
+    // even a safe Read implementation may inspect its destination contents.
+    let slice = unsafe {
+        ptr.add(initialized).write_bytes(0, capacity - initialized);
+        std::slice::from_raw_parts_mut(ptr, capacity)
+    };
+    let count = read(slice)?;
+    if count > capacity {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "reader reported more bytes than the supplied buffer capacity",
+        ));
+    }
+    // SAFETY: the complete capacity was initialized before invoking read, and
+    // the returned count was checked. Errors leave the original length intact.
+    unsafe { buf.set_buf_init(count) };
+    Ok(count)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{IoBuf, IoBufMut, IoBufTemporaryPoll};
+    use super::{IoBuf, IoBufMut, IoBufTemporaryPoll, IoVectoredBuf, IoVectoredBufMut};
+
+    #[cfg(any(feature = "fs", feature = "process", feature = "stdio"))]
+    #[test]
+    fn blocking_read_initializes_spare_capacity_and_tracks_result_length() {
+        let mut buf = Vec::with_capacity(8);
+        buf.extend_from_slice(b"ab");
+        let capacity = buf.capacity();
+        let count = super::read_into_buf(&mut buf, |slice| {
+            assert_eq!(slice.len(), capacity);
+            assert_eq!(&slice[..2], b"ab");
+            assert!(slice[2..].iter().all(|byte| *byte == 0));
+            slice[..3].copy_from_slice(b"xyz");
+            Ok(3)
+        })
+        .unwrap();
+        assert_eq!(count, 3);
+        assert_eq!(buf, b"xyz");
+        super::read_into_buf(&mut buf, |_| Ok(0)).unwrap();
+        assert!(buf.is_empty());
+    }
+
+    #[cfg(any(feature = "fs", feature = "process", feature = "stdio"))]
+    #[test]
+    fn blocking_read_errors_do_not_expose_unreported_bytes() {
+        let mut buf = Vec::with_capacity(8);
+        buf.extend_from_slice(b"ab");
+        assert!(
+            super::read_into_buf(&mut buf, |_| Err(std::io::ErrorKind::Interrupted.into()))
+                .is_err()
+        );
+        assert_eq!(buf, b"ab");
+        let capacity = buf.capacity();
+        let error = super::read_into_buf(&mut buf, |_| Ok(capacity + 1)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(buf, b"ab");
+        let mut empty = Vec::<u8>::new();
+        assert_eq!(
+            super::read_into_buf(&mut empty, |_| panic!("zero capacity must not read")).unwrap(),
+            0
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn raw_iovec_collections_do_not_implement_owned_buffer_traits() {
+        // Inference becomes ambiguous (a compile error) if the unsafe blanket
+        // implementation for unowned raw pointer collections is reintroduced.
+        trait AmbiguousIfVectored<A> {
+            fn check() {}
+        }
+        impl<T: ?Sized> AmbiguousIfVectored<()> for T {}
+        struct ImplementsVectored;
+        impl<T: IoVectoredBuf> AmbiguousIfVectored<ImplementsVectored> for T {}
+        let _ = <Vec<libc::iovec> as AmbiguousIfVectored<_>>::check;
+        let _ = <Box<[libc::iovec]> as AmbiguousIfVectored<_>>::check;
+    }
+
+    #[test]
+    fn owned_vectors_keep_storage_stable_across_moves() {
+        let buffers = vec![
+            Box::<[u8]>::from(&b"abc"[..]),
+            Box::<[u8]>::from(&b"def"[..]),
+        ];
+        let before = buffers.as_iovecs();
+        let mut moved = Box::new(buffers);
+        let after = moved.as_iovecs_mut();
+        for (before, after) in before.iter().zip(after.iter()) {
+            assert_eq!(before.ptr, after.ptr);
+            assert_eq!(before.len, after.len);
+        }
+        assert_ne!(after[0].ptr, after[1].ptr);
+        let empty: Vec<Box<[u8]>> = Vec::new();
+        assert!(IoVectoredBuf::is_empty(&empty));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_vectors_round_trip_through_unix_stream() {
+        use crate::vibeio::io::{AsyncRead, AsyncWrite};
+        use std::io::{Read, Write};
+        let runtime = crate::vibeio::executor::Runtime::new(
+            crate::vibeio::driver::AnyDriver::new_mio().unwrap(),
+        );
+        runtime.block_on(async {
+            let (stream, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            let mut stream = crate::vibeio::net::UnixStream::from_std(stream).unwrap();
+            peer.write_all(b"abcdef").unwrap();
+            let buffers = vec![vec![0; 2].into_boxed_slice(), vec![0; 4].into_boxed_slice()];
+            let (result, buffers) = stream.read_vectored(buffers).await;
+            let read = result.unwrap();
+            assert!(read > 0 && read <= 6);
+            assert_eq!(&buffers.concat()[..read], &b"abcdef"[..read]);
+            let (result, returned) = stream.write_vectored(buffers).await;
+            let written = result.unwrap();
+            assert!(written > 0 && written <= 6);
+            let mut received = vec![0; written];
+            peer.read_exact(&mut received).unwrap();
+            assert_eq!(received, returned.concat()[..written]);
+        });
+    }
 
     #[test]
     fn temporary_poll_buffer_tracks_initialized_prefix() {

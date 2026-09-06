@@ -10,7 +10,6 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::vibeio::current_driver;
 use crate::vibeio::driver::AnyDriver;
 use crate::vibeio::driver::CompletionIoResult;
 use crate::vibeio::fd_inner::InnerRawHandle;
@@ -111,6 +110,10 @@ impl<'a, B: IoVectoredBuf> WritevOp<'a, B> {
 
     #[inline]
     pub fn take_bufs(mut self) -> B {
+        assert!(
+            self.completion_token.is_none(),
+            "cannot reclaim a buffer while I/O is pending"
+        );
         self.bufs.take().unwrap()
     }
 }
@@ -347,17 +350,42 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
 impl<B: IoVectoredBuf> Drop for WritevOp<'_, B> {
     #[inline]
     fn drop(&mut self) {
-        if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = current_driver() {
-                #[cfg(target_os = "linux")]
-                let bufs = self.completion_system_iovecs.take();
-                #[cfg(windows)]
-                let bufs = self.completion_wsabufs.take();
-                #[cfg(not(any(target_os = "linux", windows)))]
-                let bufs = ();
-
-                driver.ignore_completion(completion_token, Box::new((bufs, self.bufs.take())));
-            }
+        if let Some(token) = self.completion_token.take() {
+            #[cfg(target_os = "linux")]
+            let completion_state = self.completion_system_iovecs.take();
+            #[cfg(windows)]
+            let completion_state = (
+                self.completion_wsabufs.take(),
+                self.completion_staging.take(),
+            );
+            #[cfg(not(any(target_os = "linux", windows)))]
+            let completion_state = ();
+            // The owning driver, not the currently entered runtime, must retain
+            // every kernel-visible allocation until completion is acknowledged.
+            self.handle
+                .cancel_completion(token, Box::new((completion_state, self.bufs.take())));
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn pending_buffer_is_retained_by_owning_driver() {
+        crate::vibeio::op::io_util::cancellation_tests::check_cancellation(
+            |handle, buffer, reclaim| {
+                let mut op = WritevOp::new(handle, buffer);
+                op.completion_token = Some(41);
+                if reclaim {
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op.take_bufs()));
+                    assert!(result.is_err(), "pending storage must not be reclaimed");
+                } else {
+                    drop(op);
+                }
+            },
+        );
     }
 }

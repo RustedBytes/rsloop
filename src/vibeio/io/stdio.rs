@@ -34,9 +34,7 @@ use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 
 use crate::vibeio::executor::current_driver;
-use crate::vibeio::io::{
-    AsyncRead, AsyncWrite, IoBuf, IoBufMut, iobuf_to_slice, iobufmut_to_slice,
-};
+use crate::vibeio::io::{AsyncRead, AsyncWrite, IoBuf, IoBufMut, iobuf_to_slice, read_into_buf};
 
 /// Async-aware stdin reader.
 #[derive(Debug, Default, Clone, Copy)]
@@ -119,8 +117,7 @@ async fn read_in_blocking_pool<B: IoBufMut>(buf: B) -> (io::Result<usize>, B) {
             .ok()
             .and_then(|rc| rc.take())
             .expect("buf is none");
-        let temp_slice = iobufmut_to_slice(&mut buf);
-        let result = read_stdin_blocking(temp_slice);
+        let result = read_into_buf(&mut buf, read_stdin_blocking);
         (result, buf)
     })
     .await
@@ -204,15 +201,15 @@ async fn flush_stderr_in_blocking_pool() -> io::Result<()> {
 impl AsyncRead for Stdin {
     #[inline]
     async fn read<B: IoBufMut>(&mut self, mut buf: B) -> (Result<usize, io::Error>, B) {
-        if buf.buf_len() == 0 {
+        if buf.buf_capacity() == 0 {
             return (Ok(0), buf);
         }
 
         if current_driver().is_some() {
             read_in_blocking_pool(buf).await
         } else {
-            let slice = iobufmut_to_slice(&mut buf);
-            (read_stdin_blocking(slice), buf)
+            let result = read_into_buf(&mut buf, read_stdin_blocking);
+            (result, buf)
         }
     }
 }

@@ -1,5 +1,5 @@
 use std::io;
-use std::os::fd::RawFd;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::task::{Context, Poll};
 
 use mio::Interest;
@@ -8,17 +8,74 @@ use crate::vibeio::driver::AnyDriver;
 use crate::vibeio::fd_inner::InnerRawHandle;
 use crate::vibeio::op::Op;
 
-/// Wraps a raw pidfd and closes it on drop.
-struct OwnedPidFd(RawFd);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::poll_fn;
+    use std::process::{Command, Stdio};
+    use std::time::Duration;
 
-impl Drop for OwnedPidFd {
-    #[inline]
-    fn drop(&mut self) {
-        if self.0 >= 0 {
-            unsafe {
-                libc::close(self.0);
-            }
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
         }
+    }
+
+    #[test]
+    fn running_child_stays_pending_until_exit() {
+        let runtime = crate::vibeio::executor::Runtime::new(AnyDriver::new_mio().unwrap());
+        runtime.block_on(async {
+            for completion in [false, true] {
+                // The pipe, not a delay, keeps the child alive until explicitly released.
+                let mut child = ChildGuard(
+                    Command::new("sh")
+                        .args(["-c", "read line; exit 7"])
+                        .stdin(Stdio::piped())
+                        .spawn()
+                        .unwrap(),
+                );
+                let mut op = WaitPidOp::new(child.0.id());
+                let driver = crate::vibeio::executor::current_driver().unwrap();
+                let mut cx = Context::from_waker(std::task::Waker::noop());
+                let first = if completion {
+                    op.poll_completion(&mut cx, &driver)
+                } else {
+                    op.poll_poll(&mut cx, &driver)
+                };
+                assert!(
+                    first.is_pending(),
+                    "running child must remain pending: {first:?}"
+                );
+                // A spurious wake must not complete the operation either.
+                let second = if completion {
+                    op.poll_completion(&mut cx, &driver)
+                } else {
+                    op.poll_poll(&mut cx, &driver)
+                };
+                assert!(
+                    second.is_pending(),
+                    "spurious wake completed wait: {second:?}"
+                );
+                drop(child.0.stdin.take());
+                let raw = crate::vibeio::time::timeout(
+                    Duration::from_secs(5),
+                    poll_fn(|cx| {
+                        if completion {
+                            op.poll_completion(cx, &driver)
+                        } else {
+                            op.poll_poll(cx, &driver)
+                        }
+                    }),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                use std::os::unix::process::ExitStatusExt;
+                assert_eq!(std::process::ExitStatus::from_raw(raw).code(), Some(7));
+            }
+        });
     }
 }
 
@@ -29,8 +86,9 @@ enum WaitPidState {
     /// The pidfd is open and registered with the driver; waiting for readability.
     Polling {
         pid: libc::pid_t,
-        pidfd: OwnedPidFd,
+        // Deregister before closing the descriptor (fields drop in order).
         handle: InnerRawHandle,
+        _pidfd: OwnedFd,
     },
     /// Terminal state after the result has been consumed.
     Done,
@@ -57,42 +115,34 @@ impl WaitPidOp {
 
     /// Open a pidfd for `pid` via the `pidfd_open` syscall (Linux 5.3+).
     #[inline]
-    fn open_pidfd(pid: libc::pid_t) -> io::Result<RawFd> {
+    fn open_pidfd(pid: libc::pid_t) -> io::Result<OwnedFd> {
+        // SAFETY: pidfd_open takes integer arguments and returns a new descriptor.
+        // The kernel sets CLOEXEC; no read or blocking waitid is performed here.
         let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0 as libc::c_uint) };
         if fd < 0 {
             Err(io::Error::last_os_error())
         } else {
-            let raw = fd as RawFd;
-            // Set non-blocking + close-on-exec atomically via a single fcntl
-            // call chain. O_NONBLOCK is required so that read() on the pidfd
-            // returns EAGAIN instead of blocking when the child hasn't exited
-            // yet, and FD_CLOEXEC prevents leaking across exec.
-            let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
-            if flags != -1 {
-                unsafe {
-                    libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK);
-                }
-            }
-            let fd_flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
-            if fd_flags != -1 {
-                unsafe {
-                    libc::fcntl(raw, libc::F_SETFD, fd_flags | libc::FD_CLOEXEC);
-                }
-            }
-            Ok(raw)
+            // SAFETY: the successful syscall returned a fresh, owned descriptor.
+            Ok(unsafe { OwnedFd::from_raw_fd(fd as _) })
         }
     }
 
-    /// Reap the child with `waitpid` after the pidfd signalled readability.
+    /// Check for exit and reap without blocking, before arming pidfd readiness.
     #[inline]
     fn reap(pid: libc::pid_t) -> io::Result<i32> {
         let mut status: libc::c_int = 0;
-        let rc = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        let rc = loop {
+            // SAFETY: status is writable; waitpid takes an integer process ID.
+            let rc = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if rc >= 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                break rc;
+            }
+        };
         if rc < 0 {
             return Err(io::Error::last_os_error());
         }
         if rc == 0 {
-            // Shouldn't happen after pidfd is readable, but be defensive.
+            // Still running: the caller must arm readiness and remain pending.
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "child has not exited yet",
@@ -103,61 +153,44 @@ impl WaitPidOp {
 }
 
 impl Op for WaitPidOp {
-    type Output = i32; // raw waitpid status
+    type Output = i32;
 
-    #[inline]
     fn poll_poll(
         &mut self,
         cx: &mut Context<'_>,
         driver: &AnyDriver,
     ) -> Poll<io::Result<Self::Output>> {
+        use std::os::fd::AsRawFd;
         loop {
             match &self.state {
                 WaitPidState::Init { pid } => {
                     let pid = *pid;
-                    let raw_fd = Self::open_pidfd(pid)?;
-                    let pidfd = OwnedPidFd(raw_fd);
+                    let pidfd = Self::open_pidfd(pid)?;
                     let handle = InnerRawHandle::new_with_mode(
-                        raw_fd,
+                        pidfd.as_raw_fd(),
                         Interest::READABLE,
                         crate::vibeio::driver::RegistrationMode::Poll,
                     )?;
-                    self.state = WaitPidState::Polling { pid, pidfd, handle };
-                    // Fall through to the Polling arm.
-                }
-                WaitPidState::Polling {
-                    pid,
-                    pidfd: _,
-                    handle,
-                } => {
-                    // Try a non-blocking read on the pidfd. If it's readable the
-                    // child has exited.
-                    let mut buf = [0u8; 8];
-                    let n = unsafe {
-                        libc::read(
-                            handle.handle,
-                            buf.as_mut_ptr().cast::<libc::c_void>(),
-                            buf.len(),
-                        )
+                    self.state = WaitPidState::Polling {
+                        pid,
+                        handle,
+                        _pidfd: pidfd,
                     };
-                    if n < 0 {
-                        let err = io::Error::last_os_error();
-                        if err.kind() == io::ErrorKind::WouldBlock {
-                            // Not ready yet — register for readability and pend.
-                            if let Err(submit_err) =
-                                driver.submit_poll(handle, cx.waker().clone(), Interest::READABLE)
-                            {
-                                return Poll::Ready(Err(submit_err));
-                            }
+                }
+                WaitPidState::Polling { pid, handle, .. } => {
+                    // A pidfd is pollable but not readable: read(pidfd) always
+                    // fails with EINVAL. Check waitpid without blocking, then
+                    // arm readiness if still alive, including on spurious wakes.
+                    match Self::reap(*pid) {
+                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                            driver.submit_poll(handle, cx.waker().clone(), Interest::READABLE)?;
                             return Poll::Pending;
                         }
-                        // EBADF or similar — try reaping anyway
+                        result => {
+                            self.state = WaitPidState::Done;
+                            return Poll::Ready(result);
+                        }
                     }
-
-                    let pid = *pid;
-                    let status = Self::reap(pid);
-                    self.state = WaitPidState::Done;
-                    return Poll::Ready(status);
                 }
                 WaitPidState::Done => {
                     return Poll::Ready(Err(io::Error::other("WaitPidOp already completed")));
@@ -166,68 +199,12 @@ impl Op for WaitPidOp {
         }
     }
 
-    #[inline]
     fn poll_completion(
         &mut self,
         cx: &mut Context<'_>,
         driver: &AnyDriver,
     ) -> Poll<io::Result<Self::Output>> {
-        // We need to take ownership to transition states. Use a temporary Done.
-        match std::mem::replace(&mut self.state, WaitPidState::Done) {
-            WaitPidState::Init { pid } => {
-                let raw_fd = Self::open_pidfd(pid)?;
-                let pidfd = OwnedPidFd(raw_fd);
-                // For io_uring we register in Poll mode so we can use PollAdd
-                // to wait for readability on the pidfd.
-                let handle = InnerRawHandle::new_with_mode(
-                    raw_fd,
-                    Interest::READABLE,
-                    crate::vibeio::driver::RegistrationMode::Poll,
-                )?;
-                // Submit the poll via the driver (which uses io_uring PollAdd
-                // on uring, or mio on poll-based).
-                if let Err(submit_err) =
-                    driver.submit_poll(&handle, cx.waker().clone(), Interest::READABLE)
-                {
-                    self.state = WaitPidState::Polling { pid, pidfd, handle };
-                    return Poll::Ready(Err(submit_err));
-                }
-                self.state = WaitPidState::Polling { pid, pidfd, handle };
-                Poll::Pending
-            }
-            WaitPidState::Polling { pid, pidfd, handle } => {
-                // Check if the pidfd is readable (child exited).
-                let mut buf = [0u8; 8];
-                let n = unsafe {
-                    libc::read(
-                        handle.handle,
-                        buf.as_mut_ptr().cast::<libc::c_void>(),
-                        buf.len(),
-                    )
-                };
-                if n < 0 {
-                    let err = io::Error::last_os_error();
-                    if err.kind() == io::ErrorKind::WouldBlock {
-                        // Re-arm poll.
-                        if let Err(submit_err) =
-                            driver.submit_poll(&handle, cx.waker().clone(), Interest::READABLE)
-                        {
-                            self.state = WaitPidState::Polling { pid, pidfd, handle };
-                            return Poll::Ready(Err(submit_err));
-                        }
-                        self.state = WaitPidState::Polling { pid, pidfd, handle };
-                        return Poll::Pending;
-                    }
-                    // Other error — try reaping anyway.
-                }
-
-                let status = Self::reap(pid);
-                drop(handle);
-                drop(pidfd);
-                self.state = WaitPidState::Done;
-                Poll::Ready(status)
-            }
-            WaitPidState::Done => Poll::Ready(Err(io::Error::other("WaitPidOp already completed"))),
-        }
+        // pidfd readiness uses a poll-mode registration on every driver.
+        self.poll_poll(cx, driver)
     }
 }

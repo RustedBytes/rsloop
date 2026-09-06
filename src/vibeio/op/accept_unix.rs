@@ -1,10 +1,9 @@
 use std::io;
-use std::os::fd::RawFd;
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::task::{Context, Poll};
 
 use mio::Interest;
 
-use crate::vibeio::current_driver;
 use crate::vibeio::driver::{AnyDriver, CompletionIoResult};
 use crate::vibeio::fd_inner::InnerRawHandle;
 use crate::vibeio::op::Op;
@@ -42,6 +41,10 @@ impl<'a> AcceptUnixOp<'a> {
 }
 
 impl Op for AcceptUnixOp<'_> {
+    #[cfg(target_os = "linux")]
+    fn completion_returns_fd(&self) -> bool {
+        true
+    }
     type Output = RawFd;
 
     #[inline]
@@ -81,6 +84,8 @@ impl Op for AcceptUnixOp<'_> {
         }
 
         let fd = accepted_fd as RawFd;
+        // SAFETY: accept returned a new descriptor; errors below must close it.
+        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
         // On non-Linux Unix, set close-on-exec manually.
         // Linux accept4() above already set it atomically.
         #[cfg(not(syscall_accept4))]
@@ -88,7 +93,7 @@ impl Op for AcceptUnixOp<'_> {
             return Poll::Ready(Err(err));
         }
 
-        Poll::Ready(Ok(fd))
+        Poll::Ready(Ok(owned.into_raw_fd()))
     }
 
     #[inline]
@@ -124,11 +129,13 @@ impl Op for AcceptUnixOp<'_> {
         }
 
         let fd = result as RawFd;
+        // SAFETY: the driver transferred this successful accept result.
+        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
         if let Err(err) = set_cloexec(fd) {
             return Poll::Ready(Err(err));
         }
 
-        Poll::Ready(Ok(fd))
+        Poll::Ready(Ok(owned.into_raw_fd()))
     }
 
     #[cfg(target_os = "linux")]
@@ -154,9 +161,8 @@ impl Drop for AcceptUnixOp<'_> {
     #[inline]
     fn drop(&mut self) {
         if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = current_driver() {
-                driver.ignore_completion(completion_token, Box::new(()));
-            }
+            self.handle
+                .cancel_completion(completion_token, Box::new(()));
         }
     }
 }

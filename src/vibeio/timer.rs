@@ -175,7 +175,44 @@ impl Timer {
 
     #[inline]
     pub fn cancel(&self, handle: TimerHandle) {
-        let _ = self.deadlines.borrow_mut().remove(handle);
+        let waker = self.deadlines.borrow_mut().remove(handle);
+        // A waker destructor may reenter the timer.
+        drop(waker);
+    }
+
+    /// Replace a live registration's waiter without changing its heap position.
+    /// Returns false if the handle has expired, been cancelled, or been reused.
+    pub(crate) fn update_waker(&self, handle: TimerHandle, waker: &Waker) -> bool {
+        {
+            let deadlines = self.deadlines.borrow();
+            let Some(entry) = deadlines
+                .entries
+                .get(handle.slab_index)
+                .filter(|entry| entry.generation == handle.generation)
+            else {
+                return false;
+            };
+            if entry.waker.will_wake(waker) {
+                return true;
+            }
+        }
+        // Custom clone/drop callbacks may reenter the timer. Revalidate after
+        // cloning and keep discarded ownership outside the heap borrow.
+        let mut incoming = waker.clone();
+        let mut deadlines = self.deadlines.borrow_mut();
+        let updated = if let Some(entry) = deadlines
+            .entries
+            .get_mut(handle.slab_index)
+            .filter(|entry| entry.generation == handle.generation)
+        {
+            std::mem::swap(&mut entry.waker, &mut incoming);
+            true
+        } else {
+            false
+        };
+        drop(deadlines);
+        drop(incoming);
+        updated
     }
 
     /// Wakes every expired timer and returns the exact duration until the next
@@ -184,16 +221,24 @@ impl Timer {
     #[inline]
     pub fn spin_and_get_deadline(&self) -> (Option<Duration>, bool) {
         let now = Instant::now();
-        let mut expired = self.expired.borrow_mut();
-        let deadline = {
+        let mut expired = std::mem::take(&mut *self.expired.borrow_mut());
+        {
             let mut deadlines = self.deadlines.borrow_mut();
             deadlines.pop_expired(now, &mut expired);
-            deadlines.deadline()
-        };
+        }
         let woken_up = !expired.is_empty();
         for waker in expired.drain(..) {
             waker.wake();
         }
+        // Keep reusable capacity without holding a RefMut through callbacks.
+        // A nested spin may have returned its own allocation in the meantime.
+        let mut cache = self.expired.borrow_mut();
+        if expired.capacity() > cache.capacity() {
+            *cache = expired;
+        }
+        // Callbacks may have inserted/cancelled deadlines or taken time to run.
+        let deadline = self.deadlines.borrow().deadline();
+        let now = Instant::now();
         (
             deadline.map(|deadline| deadline.saturating_duration_since(now)),
             woken_up,
@@ -212,6 +257,140 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    thread_local! {
+        static REENTER: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
+    }
+    struct ReentryScope;
+    impl Drop for ReentryScope {
+        fn drop(&mut self) {
+            let callback = REENTER.with(|slot| slot.borrow_mut().take());
+            drop(callback);
+        }
+    }
+    fn reenter() {
+        REENTER.with(|slot| {
+            if let Some(callback) = slot.borrow().as_ref() {
+                callback();
+            }
+        });
+    }
+    struct ReenterOnWake;
+    impl std::task::Wake for ReenterOnWake {
+        fn wake(self: Arc<Self>) {
+            reenter();
+        }
+    }
+    struct ReenterOnDrop;
+    #[allow(
+        clippy::manual_noop_waker,
+        reason = "This waker must own a reentrant destructor; Waker::noop cannot exercise cancellation cleanup"
+    )]
+    impl std::task::Wake for ReenterOnDrop {
+        fn wake(self: Arc<Self>) {}
+    }
+    impl Drop for ReenterOnDrop {
+        fn drop(&mut self) {
+            reenter();
+        }
+    }
+
+    #[test]
+    fn updating_waiter_preserves_heap_and_rejects_stale_handles() {
+        let timer = Timer::new();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let first = Arc::new(AtomicUsize::new(0));
+        let second = Arc::new(AtomicUsize::new(0));
+        let handle = timer.submit(deadline, test_waker(&first)).unwrap();
+        let layout = timer.deadlines.borrow().heap.clone();
+        assert!(timer.update_waker(handle, &test_waker(&second)));
+        assert_eq!(timer.deadlines.borrow().heap, layout);
+        assert_eq!(timer.deadlines.borrow().deadline(), Some(deadline));
+        timer.cancel(handle);
+        let next = timer.submit(deadline, test_waker(&first)).unwrap();
+        assert_eq!(handle.slab_index, next.slab_index);
+        assert!(!timer.update_waker(handle, &test_waker(&second)));
+        let mut expired = Vec::new();
+        timer
+            .deadlines
+            .borrow_mut()
+            .pop_expired(deadline, &mut expired);
+        for waker in expired {
+            waker.wake();
+        }
+        assert_eq!(first.load(Ordering::SeqCst), 1);
+        assert_eq!(second.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn updating_waiter_drops_replaced_waker_outside_heap_borrow() {
+        let timer = std::rc::Rc::new(Timer::new());
+        let inner = timer.clone();
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let called = calls.clone();
+        REENTER.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move || {
+                assert!(inner.spin_and_get_deadline().0.is_some());
+                called.set(called.get() + 1);
+            }));
+        });
+        let _scope = ReentryScope;
+        let handle = timer
+            .submit(
+                Instant::now() + Duration::from_secs(60),
+                Waker::from(Arc::new(ReenterOnDrop)),
+            )
+            .unwrap();
+        assert!(timer.update_waker(handle, Waker::noop()));
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn cancellation_drops_wakers_outside_heap_borrow() {
+        let timer = std::rc::Rc::new(Timer::new());
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let inner = timer.clone();
+        let called = calls.clone();
+        REENTER.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move || {
+                assert_eq!(inner.spin_and_get_deadline(), (None, false));
+                called.set(called.get() + 1);
+            }))
+        });
+        let _scope = ReentryScope;
+        let handle = timer
+            .submit(
+                Instant::now() + Duration::from_secs(60),
+                Waker::from(Arc::new(ReenterOnDrop)),
+            )
+            .unwrap();
+        timer.cancel(handle);
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn expiry_allows_nested_spin_and_returns_callback_inserted_deadline() {
+        let timer = std::rc::Rc::new(Timer::new());
+        let inner = timer.clone();
+        let next = Instant::now() + Duration::from_secs(60);
+        REENTER.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move || {
+                assert_eq!(inner.spin_and_get_deadline(), (None, false));
+                inner.submit(next, Waker::noop().clone()).unwrap();
+            }))
+        });
+        let _scope = ReentryScope;
+        // Insert directly to model an expired registration without sleeping.
+        timer
+            .deadlines
+            .borrow_mut()
+            .insert(Instant::now(), Waker::from(Arc::new(ReenterOnWake)));
+        let (deadline, woke) = timer.spin_and_get_deadline();
+        assert!(woke);
+        assert!(deadline.is_some());
+        assert_eq!(timer.deadlines.borrow().deadline(), Some(next));
+        assert!(timer.expired.borrow().is_empty());
+    }
 
     fn test_waker(counter: &Arc<AtomicUsize>) -> Waker {
         struct WakeCounter(Arc<AtomicUsize>);

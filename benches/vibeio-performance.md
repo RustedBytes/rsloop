@@ -1,5 +1,95 @@
 # Embedded vibeio performance comparison — 2026-09-06
 
+## Cleanup update: in-place timer waiter updates
+
+Pending Sleep repolls now update a live timer's waiter in place instead of
+canceling and reinserting its heap entry. Unchanged wakers avoid cloning as well.
+The new `cargo bench --bench timer --locked` target measures this path directly.
+
+| Workload | Before median (ms) | After median (ms) | Elapsed reduction | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| One timer, unchanged waker | 52.132 | 17.520 | 66.4% | 2.98× |
+| One timer, changing waker | 51.081 | 27.080 | 47.0% | 1.89× |
+| 1,024 timers, unchanged waker | 146.206 | 17.320 | 88.2% | 8.44× |
+| 1,024 timers, changing waker | 144.017 | 27.334 | 81.0% | 5.27× |
+
+Both binaries use the same current source except that the baseline disables
+Sleep's in-place update branch, retaining the previous cancel/reinsert path.
+The optimized branch was restored in the worktree after building the baseline.
+Build command: `cargo bench --bench timer --locked --no-run`, Rust 1.98.1,
+optimized default features. Saved binaries were run before/after three times
+using `taskset -c 2`, with no concurrent builds or tests. Each run discards three
+warmups and measures seven samples per workload; the table pools 21 samples per
+version. Raw outputs: `target/vibeio-timer-{before,after}-{1,2,3}.csv`.
+
+Single-timer samples perform 1,000,000 pending repolls; heap samples perform
+1,000 rounds over 1,024 timers (1,024,000 repolls). All timers share a distant
+deadline. Changed-waker cases alternate between two distinct wakers every round.
+Elapsed time includes runtime/timer setup and teardown. The mock I/O driver is
+used and no deadlines expire, so this isolates registration maintenance rather
+than OS waiting, timer firing latency, or overall application throughput.
+
+Per-pair elapsed reductions were 65.8–66.8%, 45.7–47.1%, 87.6–88.2%, and
+80.9–81.1% in table order. CPU frequency and other host activity were not
+controlled, and no confidence intervals were calculated. The shared-deadline
+heap is a targeted stress workload, not an application workload distribution.
+These results do not imply Python or uvloop speedups.
+
+## Cleanup update: checked local ready queue
+
+The local ready queue now uses a directly owned `RefCell<VecDeque<_>>` instead
+of `Rc<UnsafeCell<VecDeque<_>>>`. This removes three raw-pointer access sites
+and an unnecessary shared allocation. It adds runtime borrow checking; it is
+a safety cleanup, not an established speed improvement.
+
+The following compares only that queue change, with the earlier safe-waker
+changes present in both binaries. Values are median elapsed milliseconds:
+
+| Workload | Before 1 | After 1 | Before 2 | After 2 |
+| --- | ---: | ---: | ---: | ---: |
+| Spawn/join | 24.468 | 26.563 | 24.377 | 24.575 |
+| Single-task yield | 43.162 | 44.053 | 42.472 | 42.776 |
+| Batch yield | 34.142 | 33.843 | 33.195 | 33.123 |
+
+Built with `cargo bench --bench runtime --locked`, Rust 1.98.1. Saved the original
+binary, then alternated original/candidate/original/candidate on CPU 2 using
+`taskset -c 2`, without concurrent builds or tests. Each binary discards three
+warmups and reports seven samples per workload. Raw outputs are
+`target/vibeio-queue-pinned-{before,after}-{1,2}.csv`. CPU frequency and other
+host activity were not controlled; there are no confidence intervals.
+
+Single-task yield medians increased by 2.1% and 0.7%; spawn/join varied more
+(8.6% and 0.8% increases), while batch yields decreased slightly. These short
+runs do not establish equivalence or a stable regression magnitude. An initial
+unpinned before/after/baseline-recheck run was also mixed and is retained in
+`target/vibeio-queue-{before,after,baseline-recheck}.csv`. No Python or uvloop
+performance conclusion follows from these scheduler-only measurements.
+
+## Cleanup update: local task ownership
+
+After separating thread-safe wake proxies from local tasks, task ownership now
+uses `Rc`; only wake proxies use `Arc`. This removes atomic reference counting
+from local ready queues and join-handle task references. Cross-thread final waker
+release cannot destroy local futures, and proxy identity rejects stale wakes.
+
+The following compares the worktree immediately before/after **only this Rc
+conversion**, with the wake-proxy safety fix present in both versions:
+
+| Scheduler workload | Arc median (ms) | Rc median (ms) | Lower elapsed time |
+| --- | ---: | ---: | ---: |
+| Spawn/join | 26.603 | 24.680 | 7.2% |
+| Single-task yield | 48.714 | 43.681 | 10.3% |
+| Batch yield | 41.286 | 33.319 | 19.3% |
+
+Command: `cargo bench --bench runtime --locked`, Rust 1.98.1, optimized default
+features, same local Linux host. Each workload discards three warmups and reports
+seven samples. Raw local outputs are `target/vibeio-local-arc-before.csv` and
+`target/vibeio-local-rc-after.csv`. This is one sequential, unpinned comparison;
+it does not establish statistical significance, the total impact of the earlier
+wake-proxy redesign, Python performance, or a comparison with uvloop.
+
+## Earlier borrowed-waker comparison (historical)
+
 The task-polling optimization reduces median elapsed time by 18% for repeated
 self-wakes and 25% for batches of ready tasks on this host. A second run of the
 unchanged baseline supports improvements of 18% and 22%, respectively. Network

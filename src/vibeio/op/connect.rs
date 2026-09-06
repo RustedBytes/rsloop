@@ -70,7 +70,7 @@ fn ensure_connectex_bound(socket: SOCKET, addr: *const SOCKADDR) -> Result<(), i
     let bind_result = match family {
         x if x == AF_INET as i32 => {
             let local = SOCKADDR_IN {
-                sin_family: AF_INET as u16,
+                sin_family: AF_INET,
                 ..Default::default()
             };
             unsafe {
@@ -83,7 +83,7 @@ fn ensure_connectex_bound(socket: SOCKET, addr: *const SOCKADDR) -> Result<(), i
         }
         x if x == AF_INET6 as i32 => {
             let local = SOCKADDR_IN6 {
-                sin6_family: AF_INET6 as u16,
+                sin6_family: AF_INET6,
                 ..Default::default()
             };
             unsafe {
@@ -152,8 +152,8 @@ fn set_connect_context(socket: SOCKET) -> Result<(), io::Error> {
     let result = unsafe {
         WinSock::setsockopt(
             socket,
-            SOL_SOCKET as i32,
-            SO_UPDATE_CONNECT_CONTEXT as i32,
+            SOL_SOCKET,
+            SO_UPDATE_CONNECT_CONTEXT,
             std::ptr::null(),
             0,
         )
@@ -165,12 +165,60 @@ fn set_connect_context(socket: SOCKET) -> Result<(), io::Error> {
     Ok(())
 }
 
+#[cfg(unix)]
+type NativeAddress = libc::sockaddr_storage;
+#[cfg(windows)]
+type NativeAddress = SOCKADDR_STORAGE;
+#[cfg(unix)]
+type AddressPointer = *const libc::sockaddr;
+#[cfg(windows)]
+type AddressPointer = *const SOCKADDR;
+#[cfg(unix)]
+type AddressLength = libc::socklen_t;
+#[cfg(windows)]
+type AddressLength = i32;
+
+enum AddressStorage {
+    Inet(Box<NativeAddress>),
+    #[cfg(unix)]
+    Unix(Box<libc::sockaddr_un>),
+}
+
+struct ConnectAddress {
+    storage: AddressStorage,
+    len: AddressLength,
+}
+
+impl ConnectAddress {
+    fn raw(&self) -> (AddressPointer, AddressLength) {
+        let ptr = match &self.storage {
+            AddressStorage::Inet(addr) => std::ptr::from_ref(addr.as_ref()).cast(),
+            #[cfg(unix)]
+            AddressStorage::Unix(addr) => std::ptr::from_ref(addr.as_ref()).cast(),
+        };
+        (ptr, self.len)
+    }
+
+    fn validate_len(len: AddressLength, capacity: usize) -> io::Result<()> {
+        let len = usize::try_from(len).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "negative socket address length",
+            )
+        })?;
+        if !(2..=capacity).contains(&len) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "socket address length exceeds owned storage or omits its family",
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub struct ConnectOp<'a> {
     handle: &'a InnerRawHandle,
-    #[cfg(unix)]
-    addr: (*const libc::sockaddr, libc::socklen_t),
-    #[cfg(windows)]
-    addr: (*const SOCKADDR, i32),
+    addr: Option<ConnectAddress>,
     #[cfg(windows)]
     connect_ex: Option<WinSock::LPFN_CONNECTEX>,
     #[cfg(windows)]
@@ -181,16 +229,42 @@ pub struct ConnectOp<'a> {
 }
 
 impl<'a> ConnectOp<'a> {
-    #[cfg(unix)]
-    #[inline]
+    /// Own aligned address storage; callers cannot submit a dangling raw pointer.
     pub fn new(
         handle: &'a InnerRawHandle,
-        addr: *const libc::sockaddr,
-        addrlen: libc::socklen_t,
-    ) -> Self {
+        addr: NativeAddress,
+        len: AddressLength,
+    ) -> io::Result<Self> {
+        ConnectAddress::validate_len(len, std::mem::size_of::<NativeAddress>())?;
+        Ok(Self::with_address(
+            handle,
+            ConnectAddress {
+                storage: AddressStorage::Inet(Box::new(addr)),
+                len,
+            },
+        ))
+    }
+
+    #[cfg(unix)]
+    pub fn new_unix(
+        handle: &'a InnerRawHandle,
+        addr: libc::sockaddr_un,
+        len: libc::socklen_t,
+    ) -> io::Result<Self> {
+        ConnectAddress::validate_len(len, std::mem::size_of::<libc::sockaddr_un>())?;
+        Ok(Self::with_address(
+            handle,
+            ConnectAddress {
+                storage: AddressStorage::Unix(Box::new(addr)),
+                len,
+            },
+        ))
+    }
+
+    fn with_address(handle: &'a InnerRawHandle, addr: ConnectAddress) -> Self {
         Self {
             handle,
-            addr: (addr, addrlen),
+            addr: Some(addr),
             completion_token: None,
             #[cfg(windows)]
             connect_ex: None,
@@ -200,17 +274,8 @@ impl<'a> ConnectOp<'a> {
         }
     }
 
-    #[cfg(windows)]
-    #[inline]
-    pub fn new(handle: &'a InnerRawHandle, addr: *const SOCKADDR, addrlen: i32) -> Self {
-        Self {
-            handle,
-            addr: (addr, addrlen),
-            completion_token: None,
-            connect_ex: None,
-            completion_bound: false,
-            poll_connect_started: false,
-        }
+    fn address(&self) -> (AddressPointer, AddressLength) {
+        self.addr.as_ref().expect("connect address missing").raw()
     }
 }
 
@@ -235,7 +300,8 @@ impl Op for ConnectOp<'_> {
                 )));
             };
 
-            if let Err(err) = start_nonblocking_connect(handle, self.addr.0, self.addr.1) {
+            if let Err(err) = start_nonblocking_connect(handle, self.address().0, self.address().1)
+            {
                 return Poll::Ready(Err(err));
             };
 
@@ -331,8 +397,8 @@ impl Op for ConnectOp<'_> {
             let getsockopt_result = unsafe {
                 WinSock::getsockopt(
                     socket,
-                    SOL_SOCKET as i32,
-                    WinSock::SO_ERROR as i32,
+                    SOL_SOCKET,
+                    WinSock::SO_ERROR,
                     (&mut socket_error as *mut i32).cast(),
                     &mut socket_error_len,
                 )
@@ -458,7 +524,7 @@ impl Op for ConnectOp<'_> {
         let socket = socket as SOCKET;
 
         if !self.completion_bound {
-            ensure_connectex_bound(socket, self.addr.0)?;
+            ensure_connectex_bound(socket, self.address().0)?;
             self.completion_bound = true;
         }
 
@@ -480,8 +546,8 @@ impl Op for ConnectOp<'_> {
         let connect_result = unsafe {
             connect_ex_fn(
                 socket,
-                self.addr.0,
-                self.addr.1,
+                self.address().0,
+                self.address().1,
                 std::ptr::null(),
                 0,
                 std::ptr::null_mut(),
@@ -509,7 +575,7 @@ impl Op for ConnectOp<'_> {
     ) -> Result<io_uring::squeue::Entry, io::Error> {
         use io_uring::{opcode, types};
 
-        let (addr, addrlen) = self.addr;
+        let (addr, addrlen) = self.address();
 
         let entry = opcode::Connect::new(types::Fd(self.handle.handle), addr, addrlen)
             .build()
@@ -520,12 +586,154 @@ impl Op for ConnectOp<'_> {
 }
 
 impl Drop for ConnectOp<'_> {
-    #[inline]
     fn drop(&mut self) {
-        if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = crate::vibeio::current_driver() {
-                driver.ignore_completion(completion_token, Box::new(()));
+        if let Some(token) = self.completion_token.take() {
+            // Retain the original allocation, not a copy: the kernel may still
+            // dereference the submitted pointer after this future is cancelled.
+            self.handle
+                .cancel_completion(token, Box::new(self.addr.take()));
+        }
+    }
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+    use std::rc::Rc;
+
+    fn inet_address() -> NativeAddress {
+        // SAFETY: native sockaddr_storage is an integer-only C structure.
+        let mut addr: NativeAddress = unsafe { std::mem::zeroed() };
+        #[cfg(unix)]
+        {
+            addr.ss_family = libc::AF_INET as _;
+        }
+        #[cfg(windows)]
+        {
+            addr.ss_family = AF_INET as _;
+        }
+        addr
+    }
+
+    #[test]
+    fn address_survives_moves_and_cancellation_on_original_driver() {
+        for entered in [false, true] {
+            let owner = Rc::new(AnyDriver::new_mock());
+            let handle = InnerRawHandle::for_mock_completion(owner.clone());
+            let mut op = ConnectOp::new(&handle, inet_address(), 16).unwrap();
+            let original = op.address();
+            // Moving the operation cannot invalidate its submitted address.
+            let mut moved = Box::new(op);
+            assert_eq!(moved.address(), original);
+            moved.completion_token = Some(41);
+            op = *moved;
+            assert_eq!(op.address(), original);
+            drop(op);
+            // Also verify cancellation under a different entered runtime.
+            if entered {
+                let runtime = crate::vibeio::executor::Runtime::new(AnyDriver::new_mock());
+                let handle = InnerRawHandle::for_mock_completion(owner.clone());
+                runtime.block_on(async move {
+                    let mut op = ConnectOp::new(&handle, inet_address(), 16).unwrap();
+                    op.completion_token = Some(42);
+                    drop(op);
+                });
+            }
+            let AnyDriver::Mock(driver) = owner.as_ref() else {
+                unreachable!()
+            };
+            let held = driver.ignored.take();
+            assert_eq!(held.len(), if entered { 2 } else { 1 });
+            for (token, data) in held {
+                let address = data.downcast::<Option<ConnectAddress>>().unwrap().unwrap();
+                if token == 41 {
+                    assert_eq!(address.raw(), original);
+                }
+                assert_eq!(address.len, 16);
+                let storage = match address.storage {
+                    AddressStorage::Inet(storage) => storage,
+                    #[cfg(unix)]
+                    AddressStorage::Unix(_) => panic!("expected internet address"),
+                };
+                #[cfg(unix)]
+                assert_eq!(i32::from(storage.ss_family), libc::AF_INET);
+                #[cfg(windows)]
+                assert_eq!(storage.ss_family, AF_INET);
             }
         }
+    }
+
+    #[test]
+    fn tcp_connect_uses_owned_address_on_live_driver() {
+        use crate::vibeio::net::{PollTcpStream, TcpStream};
+        use std::time::Duration;
+
+        #[cfg(unix)]
+        let driver = AnyDriver::new_mio().unwrap();
+        #[cfg(windows)]
+        let driver = AnyDriver::new_iocp().unwrap();
+        let runtime = crate::vibeio::executor::Runtime::new(driver);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        runtime.block_on(async move {
+            let stream =
+                crate::vibeio::time::timeout(Duration::from_secs(5), TcpStream::connect(address))
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(stream.peer_addr().unwrap(), address);
+            let (_, peer) = listener.accept().unwrap();
+            assert_eq!(peer, stream.local_addr().unwrap());
+
+            let stream = crate::vibeio::time::timeout(
+                Duration::from_secs(5),
+                PollTcpStream::connect(address),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(stream.peer_addr().unwrap(), address);
+            let (_, peer) = listener.accept().unwrap();
+            assert_eq!(peer, stream.local_addr().unwrap());
+        });
+    }
+
+    #[test]
+    fn invalid_address_lengths_are_rejected() {
+        let owner = Rc::new(AnyDriver::new_mock());
+        let handle = InnerRawHandle::for_mock_completion(owner);
+        for len in [
+            0,
+            1,
+            (std::mem::size_of::<NativeAddress>() + 1) as AddressLength,
+        ] {
+            assert!(
+                matches!(ConnectOp::new(&handle, inet_address(), len), Err(e) if e.kind() == io::ErrorKind::InvalidInput)
+            );
+        }
+        #[cfg(windows)]
+        assert!(ConnectOp::new(&handle, inet_address(), -1).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_address_storage_remains_stable() {
+        let owner = Rc::new(AnyDriver::new_mock());
+        let handle = InnerRawHandle::for_mock_completion(owner);
+        // SAFETY: sockaddr_un is an integer-only C structure; zeroing initializes
+        // its path terminator and any platform length/padding fields.
+        let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        addr.sun_family = libc::AF_UNIX as _;
+        addr.sun_path[0] = b'x' as _;
+        let len = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + 2) as libc::socklen_t;
+        let op = ConnectOp::new_unix(&handle, addr, len).unwrap();
+        let original = op.address();
+        let moved = Box::new(op);
+        assert_eq!(moved.address(), original);
+        let AddressStorage::Unix(addr) = &moved.addr.as_ref().unwrap().storage else {
+            panic!("expected Unix address")
+        };
+        assert_eq!(addr.sun_path[0], b'x' as libc::c_char);
     }
 }

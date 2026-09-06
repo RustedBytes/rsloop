@@ -82,9 +82,8 @@ impl Drop for FsyncOp<'_> {
     #[inline]
     fn drop(&mut self) {
         if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = crate::vibeio::current_driver() {
-                driver.ignore_completion(completion_token, Box::new(()));
-            }
+            self.handle
+                .cancel_completion(completion_token, Box::new(()));
         }
     }
 }

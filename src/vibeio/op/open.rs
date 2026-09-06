@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::io;
 use std::os::fd::RawFd;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use crate::vibeio::driver::AnyDriver;
@@ -10,7 +11,8 @@ use crate::vibeio::op::Op;
 pub type OpenRawHandle = RawFd;
 
 pub struct OpenOp {
-    path: CString,
+    driver: Rc<AnyDriver>,
+    path: Option<CString>,
     flags: i32,
     mode: libc::mode_t,
     completion_token: Option<usize>,
@@ -18,9 +20,10 @@ pub struct OpenOp {
 
 impl OpenOp {
     #[inline]
-    pub fn new(path: CString, flags: i32, mode: libc::mode_t) -> Self {
+    pub fn new(driver: Rc<AnyDriver>, path: CString, flags: i32, mode: libc::mode_t) -> Self {
         Self {
-            path,
+            driver,
+            path: Some(path),
             flags,
             mode,
             completion_token: None,
@@ -31,12 +34,22 @@ impl OpenOp {
 impl Op for OpenOp {
     type Output = OpenRawHandle;
 
+    fn completion_returns_fd(&self) -> bool {
+        true
+    }
+
     #[inline]
     fn poll_completion(
         &mut self,
         cx: &mut Context<'_>,
         driver: &AnyDriver,
     ) -> Poll<io::Result<Self::Output>> {
+        if !std::ptr::eq(self.driver.as_ref(), driver) {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "operation belongs to a different driver",
+            )));
+        }
         let result = if let Some(completion_token) = self.completion_token {
             match driver.get_completion_result(completion_token) {
                 Some(result) => {
@@ -73,23 +86,75 @@ impl Op for OpenOp {
     ) -> Result<io_uring::squeue::Entry, io::Error> {
         use io_uring::{opcode, types};
 
-        let entry = opcode::OpenAt::new(types::Fd(libc::AT_FDCWD), self.path.as_ptr())
-            .flags(self.flags)
-            .mode(self.mode)
-            .build()
-            .user_data(user_data);
+        let entry = opcode::OpenAt::new(
+            types::Fd(libc::AT_FDCWD),
+            self.path.as_ref().expect("operation path missing").as_ptr(),
+        )
+        .flags(self.flags)
+        .mode(self.mode)
+        .build()
+        .user_data(user_data);
 
         Ok(entry)
     }
 }
 
 impl Drop for OpenOp {
-    #[inline]
     fn drop(&mut self) {
-        if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = crate::vibeio::current_driver() {
-                driver.ignore_completion(completion_token, Box::new(()));
+        if let Some(token) = self.completion_token.take() {
+            // Paths and result storage remain owned until the kernel acknowledges
+            // completion, even if cancellation runs outside the submitting runtime.
+            self.driver
+                .ignore_completion(token, Box::new((self.path.take(),)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn paths_are_retained_by_the_submitting_driver() {
+        for entered in [false, true] {
+            let owner = Rc::new(AnyDriver::new_mock());
+            let mut op = OpenOp::new(
+                owner.clone(),
+                CString::new("from").unwrap(),
+                libc::O_RDONLY,
+                0,
+            );
+            let wrong = AnyDriver::new_mock();
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            assert!(
+                matches!(op.poll_completion(&mut cx, &wrong), Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::InvalidInput)
+            );
+            assert!(op.completion_token.is_none());
+            op.build_completion_entry(41).unwrap();
+            let addresses = [op.path.as_ref().unwrap().as_ptr()];
+            op.completion_token = Some(41);
+            if entered {
+                let runtime = crate::vibeio::executor::Runtime::new(AnyDriver::new_mock());
+                runtime.block_on(async move { drop(op) });
+            } else {
+                assert!(crate::vibeio::current_driver().is_none());
+                drop(op);
             }
+            assert_eq!(
+                Rc::strong_count(&owner),
+                1,
+                "cancelled storage must not form a driver cycle"
+            );
+            let AnyDriver::Mock(driver) = owner.as_ref() else {
+                unreachable!()
+            };
+            let mut held = driver.ignored.take();
+            assert_eq!(held.len(), 1);
+            let (token, data) = held.pop().unwrap();
+            assert_eq!(token, 41);
+            let payload = data.downcast::<(Option<CString>,)>().unwrap();
+            assert_eq!(payload.0.as_ref().unwrap().as_ptr(), addresses[0]);
+            assert_eq!(payload.0.as_ref().unwrap().to_bytes(), b"from");
         }
     }
 }

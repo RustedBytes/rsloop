@@ -150,7 +150,7 @@ fn socket_addr_to_raw(address: SocketAddr) -> (i32, SOCKADDR_STORAGE, i32) {
             sockaddr.sin6_port = address.port().to_be();
             sockaddr.sin6_flowinfo = address.flowinfo();
             sockaddr.sin6_addr.u.Byte = address.ip().octets();
-            sockaddr.Anonymous.sin6_scope_id = address.scope_id() as u32;
+            sockaddr.Anonymous.sin6_scope_id = address.scope_id();
 
             let mut storage = SOCKADDR_STORAGE::default();
             unsafe {
@@ -275,12 +275,8 @@ impl TcpStream {
         let (inner, raw_addr, raw_addr_len) = new_socket(address)?;
         let stream = Self::from_std(inner)?;
 
-        #[cfg(unix)]
-        let raw_addr_ptr = (&raw_addr as *const libc::sockaddr_storage).cast::<libc::sockaddr>();
-        #[cfg(windows)]
-        let raw_addr_ptr = (&raw_addr as *const SOCKADDR_STORAGE).cast::<SOCKADDR>();
         let handle = &stream.handle;
-        let mut op = ConnectOp::new(handle, raw_addr_ptr, raw_addr_len);
+        let mut op = ConnectOp::new(handle, raw_addr, raw_addr_len)?;
         poll_fn(move |cx| handle.poll_op(cx, &mut op)).await?;
 
         Ok(stream)
@@ -387,18 +383,19 @@ impl TcpStream {
         mode: RegistrationMode,
     ) -> Result<Self, io::Error> {
         #[cfg(unix)]
-        let handle = ManuallyDrop::new(InnerRawHandle::new_with_mode(
+        let handle = InnerRawHandle::new_with_mode(
             inner.as_raw_fd(),
             Interest::READABLE | Interest::WRITABLE,
             mode,
-        )?);
+        )?;
         #[cfg(windows)]
-        let handle = ManuallyDrop::new(InnerRawHandle::new_with_mode(
+        let handle = InnerRawHandle::new_with_mode(
             crate::vibeio::fd_inner::RawOsHandle::Socket(inner.as_raw_socket()),
             Interest::READABLE | Interest::WRITABLE,
             mode,
-        )?);
+        )?;
         inner.set_nonblocking(!handle.uses_completion())?;
+        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 
@@ -441,13 +438,8 @@ impl PollTcpStream {
         let (inner, raw_addr, raw_addr_len) = new_socket(address)?;
         let stream = Self::from_std(inner)?;
 
-        #[cfg(unix)]
-        let raw_addr_ptr = (&raw_addr as *const libc::sockaddr_storage).cast::<libc::sockaddr>();
-        #[cfg(windows)]
-        let raw_addr_ptr = (&raw_addr as *const SOCKADDR_STORAGE).cast::<SOCKADDR>();
-
         let handle = &stream.stream.handle;
-        let mut op = ConnectOp::new(handle, raw_addr_ptr, raw_addr_len);
+        let mut op = ConnectOp::new(handle, raw_addr, raw_addr_len)?;
         poll_fn(move |cx| handle.poll_op(cx, &mut op)).await?;
 
         Ok(stream)

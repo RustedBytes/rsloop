@@ -294,7 +294,7 @@ pub async fn hard_link(
         })?;
 
         let driver = driver.expect("invalid driver state");
-        let mut op = HardLinkOp::new(src_cstr, dst_cstr);
+        let mut op = HardLinkOp::new(driver.clone(), src_cstr, dst_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
         let src = src.to_owned();
@@ -424,7 +424,7 @@ pub async fn symlink_dir(
             )
         })?;
         let driver = driver.expect("invalid driver state");
-        let mut op = SymlinkOp::new(src_cstr, dst_cstr);
+        let mut op = SymlinkOp::new(driver.clone(), src_cstr, dst_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
         let src = src.to_owned();
@@ -554,7 +554,7 @@ pub async fn symlink_file(
             )
         })?;
         let driver = driver.expect("invalid driver state");
-        let mut op = SymlinkOp::new(src_cstr, dst_cstr);
+        let mut op = SymlinkOp::new(driver.clone(), src_cstr, dst_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
         let src = src.to_owned();
@@ -660,7 +660,7 @@ pub async fn rename(
             )
         })?;
         let driver = driver.expect("invalid driver state");
-        let mut op = RenameOp::new(from_cstr, to_cstr);
+        let mut op = RenameOp::new(driver.clone(), from_cstr, to_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
         let from = from.to_owned();
@@ -735,7 +735,7 @@ pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
             )
         })?;
         let driver = driver.expect("invalid driver state");
-        let mut op = UnlinkOp::new(path_cstr, true);
+        let mut op = UnlinkOp::new(driver.clone(), path_cstr, true);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
         let path = path.to_owned();
@@ -803,7 +803,7 @@ pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<(
             )
         })?;
         let driver = driver.expect("invalid driver state");
-        let mut op = UnlinkOp::new(path_cstr, false);
+        let mut op = UnlinkOp::new(driver.clone(), path_cstr, false);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
         let path = path.to_owned();
@@ -872,7 +872,7 @@ pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
         })?;
         let driver = driver.expect("invalid driver state");
         // mode 0o777 is standard for mkdir, umask will be applied
-        let mut op = MkDirOp::new(path_cstr, 0o777);
+        let mut op = MkDirOp::new(driver.clone(), path_cstr, 0o777);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
         let path = path.to_owned();
@@ -1006,7 +1006,13 @@ pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Meta
             )
         })?;
         let driver = driver.expect("invalid driver state");
-        let mut op = crate::vibeio::op::StatxOp::new(libc::AT_FDCWD, path_cstr, 0, libc::STATX_ALL);
+        let mut op = crate::vibeio::op::StatxOp::new(
+            driver.clone(),
+            libc::AT_FDCWD,
+            path_cstr,
+            0,
+            libc::STATX_ALL,
+        );
         let statx = std::future::poll_fn(move |cx| op.poll_completion(cx, &driver)).await?;
         Ok(Metadata::from_statx(statx))
     } else if crate::vibeio::executor::offload_fs() {
@@ -1079,6 +1085,7 @@ pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Res
         })?;
         let driver = driver.expect("invalid driver state");
         let mut op = crate::vibeio::op::StatxOp::new(
+            driver.clone(),
             libc::AT_FDCWD,
             path_cstr,
             libc::AT_SYMLINK_NOFOLLOW,
@@ -1193,6 +1200,41 @@ mod tests {
 
             let _ = std::fs::remove_file(path);
         });
+    }
+
+    #[cfg(feature = "blocking-default")]
+    #[test]
+    fn file_reads_use_spare_capacity_in_direct_and_offloaded_paths() {
+        for offload in [false, true] {
+            let path = unique_path("spare_capacity");
+            std::fs::write(&path, b"abcdef").unwrap();
+            let runtime = crate::vibeio::RuntimeBuilder::new()
+                .driver(crate::vibeio::DriverKind::Mock)
+                .enable_fs_offload(offload)
+                .default_blocking_pool(1)
+                .build()
+                .unwrap();
+            let input = path.clone();
+            runtime.block_on(async move {
+                let file = File::open(input).await.unwrap();
+                let (result, buf) = file.read_at(Vec::with_capacity(3), 1).await;
+                assert_eq!(result.unwrap(), 3);
+                assert_eq!(buf, b"bcd");
+                let (result, buf) = file.read_exact_at(Vec::with_capacity(4), 2).await;
+                result.unwrap();
+                assert_eq!(buf, b"cdef");
+                let (result, buf) = file.read_exact_at(Vec::with_capacity(8), 4).await;
+                assert_eq!(
+                    result.unwrap_err().kind(),
+                    std::io::ErrorKind::UnexpectedEof
+                );
+                assert_eq!(buf, b"ef");
+                let (result, buf) = file.read_at(vec![7; 4], 6).await;
+                assert_eq!(result.unwrap(), 0);
+                assert!(buf.is_empty());
+            });
+            std::fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]

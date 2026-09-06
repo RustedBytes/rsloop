@@ -1,16 +1,17 @@
 use std::ffi::CString;
 use std::io;
 use std::mem::MaybeUninit;
+use std::rc::Rc;
 use std::task::{Context, Poll};
 
-use crate::vibeio::current_driver;
 use crate::vibeio::driver::AnyDriver;
 use crate::vibeio::driver::CompletionIoResult;
 use crate::vibeio::op::Op;
 
 pub struct StatxOp {
+    driver: Rc<AnyDriver>,
     dirfd: libc::c_int,
-    pathname: CString,
+    pathname: Option<CString>,
     flags: libc::c_int,
     mask: libc::c_uint,
     statxbuf: Option<Box<MaybeUninit<libc::statx>>>,
@@ -20,14 +21,16 @@ pub struct StatxOp {
 impl StatxOp {
     #[inline]
     pub fn new(
+        driver: Rc<AnyDriver>,
         dirfd: libc::c_int,
         pathname: CString,
         flags: libc::c_int,
         mask: libc::c_uint,
     ) -> Self {
         Self {
+            driver,
             dirfd,
-            pathname,
+            pathname: Some(pathname),
             flags,
             mask,
             statxbuf: None,
@@ -45,6 +48,12 @@ impl Op for StatxOp {
         cx: &mut Context<'_>,
         driver: &AnyDriver,
     ) -> Poll<io::Result<Self::Output>> {
+        if !std::ptr::eq(self.driver.as_ref(), driver) {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "operation belongs to a different driver",
+            )));
+        }
         let result = if let Some(completion_token) = self.completion_token {
             match driver.get_completion_result(completion_token) {
                 Some(result) => {
@@ -92,7 +101,10 @@ impl Op for StatxOp {
 
         let entry = opcode::Statx::new(
             types::Fd(self.dirfd),
-            self.pathname.as_ptr(),
+            self.pathname
+                .as_ref()
+                .expect("operation path missing")
+                .as_ptr(),
             statxbuf.as_mut_ptr() as *mut types::statx,
         )
         .flags(self.flags as _)
@@ -107,13 +119,68 @@ impl Op for StatxOp {
 }
 
 impl Drop for StatxOp {
-    #[inline]
     fn drop(&mut self) {
-        if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = current_driver() {
-                let statxbuf = self.statxbuf.take();
-                driver.ignore_completion(completion_token, Box::new(statxbuf));
+        if let Some(token) = self.completion_token.take() {
+            // Paths and result storage remain owned until the kernel acknowledges
+            // completion, even if cancellation runs outside the submitting runtime.
+            self.driver.ignore_completion(
+                token,
+                Box::new((self.pathname.take(), self.statxbuf.take())),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn paths_are_retained_by_the_submitting_driver() {
+        for entered in [false, true] {
+            let owner = Rc::new(AnyDriver::new_mock());
+            let mut op = StatxOp::new(
+                owner.clone(),
+                libc::AT_FDCWD,
+                CString::new("from").unwrap(),
+                0,
+                libc::STATX_ALL,
+            );
+            let wrong = AnyDriver::new_mock();
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            assert!(
+                matches!(op.poll_completion(&mut cx, &wrong), Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::InvalidInput)
+            );
+            assert!(op.completion_token.is_none());
+            op.build_completion_entry(41).unwrap();
+            let addresses = [op.pathname.as_ref().unwrap().as_ptr()];
+            let result_address = op.statxbuf.as_ref().unwrap().as_ptr();
+            op.completion_token = Some(41);
+            if entered {
+                let runtime = crate::vibeio::executor::Runtime::new(AnyDriver::new_mock());
+                runtime.block_on(async move { drop(op) });
+            } else {
+                assert!(crate::vibeio::current_driver().is_none());
+                drop(op);
             }
+            assert_eq!(
+                Rc::strong_count(&owner),
+                1,
+                "cancelled storage must not form a driver cycle"
+            );
+            let AnyDriver::Mock(driver) = owner.as_ref() else {
+                unreachable!()
+            };
+            let mut held = driver.ignored.take();
+            assert_eq!(held.len(), 1);
+            let (token, data) = held.pop().unwrap();
+            assert_eq!(token, 41);
+            let payload = data
+                .downcast::<(Option<CString>, Option<Box<MaybeUninit<libc::statx>>>)>()
+                .unwrap();
+            assert_eq!(payload.0.as_ref().unwrap().as_ptr(), addresses[0]);
+            assert_eq!(payload.0.as_ref().unwrap().to_bytes(), b"from");
+            assert_eq!(payload.1.as_ref().unwrap().as_ptr(), result_address);
         }
     }
 }

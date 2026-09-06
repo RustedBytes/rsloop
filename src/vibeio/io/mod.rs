@@ -11,22 +11,10 @@
 //!
 //! # Examples
 //!
-//! ```ignore
-//! use vibeio::io::{AsyncRead, AsyncWrite};
-//!
-//! async fn echo<R: AsyncRead, W: AsyncWrite>(reader: &mut R, writer: &mut W) {
-//!     let mut buf = vec![0u8; 1024];
-//!     loop {
-//!         let (read, buf) = reader.read(buf).await;
-//!         let read = read?;
-//!         if read == 0 {
-//!             break;
-//!         }
-//!         let (written, buf) = writer.write(buf).await;
-//!         written?;
-//!     }
-//! }
-//! ```
+//! See the executable examples in `tools/vibeio-check/EXAMPLES.md` for buffer
+//! ownership, pipes, and copying through EOF. Prefer [`copy`] for a transfer loop:
+//! it writes only bytes actually read and handles partial writes before reusing
+//! the buffer.
 //!
 //! # Implementation notes
 //! - The `AsyncRead` and `AsyncWrite` traits are similar to tokio's but return
@@ -66,6 +54,11 @@ use std::io::{self, ErrorKind};
 /// `(Result<usize, Error>, Buffer)` to support buffer reuse.
 pub trait AsyncRead {
     /// Read data into the buffer, returning the number of bytes read and the buffer.
+    ///
+    /// Reads may use the full writable capacity, including spare capacity in an
+    /// empty vector. On success, the first returned-count bytes must be initialized.
+    /// The buffer may contain additional initialized bytes; those are not part
+    /// of this read. A zero count indicates EOF unless capacity was zero.
     async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<usize, io::Error>, B);
 
     /// Read data into vectored buffers.
@@ -90,6 +83,7 @@ pub trait AsyncRead {
 /// `(Result<usize, Error>, Buffer)` to support buffer reuse.
 pub trait AsyncWrite {
     /// Write data from the buffer, returning the number of bytes written and the buffer.
+    /// The returned count must not exceed the supplied initialized length.
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, io::Error>, B);
 
     /// Write data from vectored buffers.

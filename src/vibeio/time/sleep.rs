@@ -23,10 +23,8 @@ pub enum ZeroBehavior {
 
 /// Sleep is a future that completes after the given `Duration`.
 ///
-/// Usage:
-/// ```ignore
-/// Sleep::new(Duration::from_millis(100)).await;
-/// ```
+/// Polling requires a runtime built with `enable_timer(true)`.
+/// See `tools/vibeio-check/EXAMPLES.md` for an executable sleep example.
 pub struct Sleep {
     /// The timer handle returned by the timer driver when the timer was scheduled.
     /// `None` means we haven't scheduled yet.
@@ -46,42 +44,39 @@ pub struct Sleep {
 
 impl Sleep {
     /// Create a new Sleep instance for the provided `duration`.
+    /// Deadlines beyond the platform's Instant range saturate at its upper limit.
     #[inline]
     pub fn new(duration: Duration) -> Self {
-        Self {
-            handle: None,
-            fired: Cell::new(false),
-            yield_scheduled: Cell::new(false),
-            zero_behavior: ZeroBehavior::Immediate,
-            deadline: Instant::now() + duration,
-            timer: None,
-        }
+        Self::sleep_until(super::deadline_after(Instant::now(), duration))
     }
 
     /// Create a Sleep with custom behavior for zero-length waits.
     #[inline]
     pub fn new_with_zero_behavior(duration: Duration, zero_behavior: ZeroBehavior) -> Self {
+        Self::sleep_until_with_zero_behavior(
+            super::deadline_after(Instant::now(), duration),
+            zero_behavior,
+        )
+    }
+
+    /// Create a Sleep that completes at the specified absolute `deadline`.
+    ///
+    /// Preserves the absolute deadline without converting through a duration.
+    #[inline]
+    pub fn sleep_until(deadline: Instant) -> Self {
+        Self::sleep_until_with_zero_behavior(deadline, ZeroBehavior::Immediate)
+    }
+
+    #[inline]
+    pub(crate) fn sleep_until_with_zero_behavior(
+        deadline: Instant,
+        zero_behavior: ZeroBehavior,
+    ) -> Self {
         Self {
             handle: None,
             fired: Cell::new(false),
             yield_scheduled: Cell::new(false),
             zero_behavior,
-            deadline: Instant::now() + duration,
-            timer: None,
-        }
-    }
-
-    /// Create a Sleep that completes at the specified absolute `deadline`.
-    ///
-    /// This is a convenience constructor that computes the relative duration
-    /// from `Instant::now()` to the provided `deadline`.
-    #[inline]
-    pub fn sleep_until(deadline: Instant) -> Self {
-        Self {
-            handle: None,
-            fired: Cell::new(false),
-            yield_scheduled: Cell::new(false),
-            zero_behavior: ZeroBehavior::Immediate,
             deadline,
             timer: None,
         }
@@ -114,8 +109,7 @@ impl Future for Sleep {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Safety: Sleep is !self-referential; it's safe to get a mutable reference.
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = self.get_mut();
 
         if this.fired.get() {
             return Poll::Ready(());
@@ -165,13 +159,24 @@ impl Future for Sleep {
             // Check if the deadline has actually been reached
             if Instant::now() >= this.deadline {
                 this.fired.set(true);
-                // Drop the handle (we'll also attempt to cancel it in Drop if it remains).
-                this.handle = None;
+                // A caller can poll after the deadline before the timer driver
+                // drains its heap. Release that registration and its waker now.
+                if let Some(handle) = this.handle.take()
+                    && let Some(timer) = this.timer.as_ref()
+                {
+                    timer.cancel(handle);
+                }
                 Poll::Ready(())
             } else {
-                // Spurious wakeup, we need to wait more.
-                // The timer might have woken us up early, or another waker woke the task.
-                // Re-register the waker to ensure we get woken up again.
+                // A spurious poll usually only needs a waiter update, not heap
+                // removal/reinsertion. Unchanged wakers need no clone either.
+                if let Some(handle) = this.handle
+                    && let Some(timer) = this.timer.as_ref()
+                    && timer.update_waker(handle, cx.waker())
+                {
+                    return Poll::Pending;
+                }
+                // A retired handle needs a fresh registration.
                 if let Some(handle) = this.handle.take() {
                     if let Some(timer_rc) = this.timer.as_ref() {
                         timer_rc.cancel(handle);
@@ -205,5 +210,75 @@ impl Drop for Sleep {
                 timer_rc.cancel(handle);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absolute_deadline_constructor_preserves_expired_targets() {
+        let deadline = Instant::now() - Duration::from_secs(1);
+        let sleep = Sleep::sleep_until_with_zero_behavior(deadline, ZeroBehavior::Yield);
+        assert_eq!(sleep.deadline, deadline);
+        assert!(matches!(sleep.zero_behavior, ZeroBehavior::Yield));
+    }
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Wake, Waker};
+
+    struct WakeCounter(AtomicUsize);
+    impl Wake for WakeCounter {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn spurious_polls_preserve_registration_and_replace_waiter() {
+        let timer = Rc::new(Timer::new());
+        let mut sleep = Sleep::new(Duration::from_secs(60));
+        sleep.timer = Some(timer);
+        let first = Arc::new(WakeCounter(AtomicUsize::new(0)));
+        let second = Arc::new(WakeCounter(AtomicUsize::new(0)));
+        let first_waker = Waker::from(first.clone());
+        let second_waker = Waker::from(second.clone());
+        let mut cx = Context::from_waker(&first_waker);
+        assert!(Pin::new(&mut sleep).poll(&mut cx).is_pending());
+        let handle = sleep.handle;
+        for _ in 0..10 {
+            assert!(Pin::new(&mut sleep).poll(&mut cx).is_pending());
+            assert_eq!(sleep.handle, handle);
+        }
+        assert!(
+            Pin::new(&mut sleep)
+                .poll(&mut Context::from_waker(&second_waker))
+                .is_pending()
+        );
+        assert_eq!(sleep.handle, handle);
+        assert_eq!(Arc::strong_count(&first), 2);
+        assert_eq!(Arc::strong_count(&second), 3);
+        drop(sleep);
+        assert_eq!(Arc::strong_count(&second), 2);
+    }
+
+    #[test]
+    fn completed_sleep_releases_registration_before_timer_is_drained() {
+        let timer = Rc::new(Timer::new());
+        let mut sleep = Sleep::new(Duration::from_secs(60));
+        sleep.timer = Some(timer.clone());
+        let owner = Arc::new(WakeCounter(AtomicUsize::new(0)));
+        let waker = Waker::from(owner.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert!(Pin::new(&mut sleep).poll(&mut cx).is_pending());
+        assert_eq!(Arc::strong_count(&owner), 3);
+        // Deterministically model deadline passage without draining the timer.
+        sleep.deadline = Instant::now();
+        assert!(Pin::new(&mut sleep).poll(&mut cx).is_ready());
+        assert_eq!(Arc::strong_count(&owner), 2);
+        assert!(timer.spin_and_get_deadline().0.is_none());
+        assert!(Pin::new(&mut sleep).poll(&mut cx).is_ready());
+        assert_eq!(owner.0.load(Ordering::Relaxed), 0);
     }
 }

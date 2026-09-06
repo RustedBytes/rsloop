@@ -77,6 +77,10 @@ impl<'a, B: IoBuf> SendOp<'a, B> {
 
     #[inline]
     pub fn take_bufs(mut self) -> B {
+        assert!(
+            self.completion_token.is_none(),
+            "cannot reclaim a buffer while I/O is pending"
+        );
         self.buf.take().unwrap().into_inner()
     }
 }
@@ -236,21 +240,42 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
 impl<B: IoBuf> Drop for SendOp<'_, B> {
     #[inline]
     fn drop(&mut self) {
-        if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = crate::vibeio::current_driver() {
-                #[cfg(windows)]
-                let completion_state = self.socket_buf.take();
-                #[cfg(not(windows))]
-                let completion_state = ();
-
-                driver.ignore_completion(
-                    completion_token,
-                    Box::new((
-                        completion_state,
-                        self.buf.take().map(CompletionBuffer::into_stable_box),
-                    )),
-                );
-            }
+        if let Some(token) = self.completion_token.take() {
+            #[cfg(windows)]
+            let completion_state = self.socket_buf.take();
+            #[cfg(not(windows))]
+            let completion_state = ();
+            // The owning driver, not the currently entered runtime, must retain
+            // every kernel-visible allocation until completion is acknowledged.
+            self.handle.cancel_completion(
+                token,
+                Box::new((
+                    completion_state,
+                    self.buf.take().map(CompletionBuffer::into_stable_box),
+                )),
+            );
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn pending_buffer_is_retained_by_owning_driver() {
+        crate::vibeio::op::io_util::cancellation_tests::check_cancellation(
+            |handle, buffer, reclaim| {
+                let mut op = SendOp::new(handle, buffer);
+                op.completion_token = Some(41);
+                if reclaim {
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op.take_bufs()));
+                    assert!(result.is_err(), "pending storage must not be reclaimed");
+                } else {
+                    drop(op);
+                }
+            },
+        );
     }
 }

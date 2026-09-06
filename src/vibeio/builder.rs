@@ -1,3 +1,6 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 #[cfg(feature = "blocking-default")]
 use crate::vibeio::blocking::DefaultBlockingThreadPool;
 use crate::vibeio::{blocking::BlockingThreadPool, driver::AnyDriver};
@@ -12,11 +15,11 @@ fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
 
 #[cfg(target_os = "macos")]
 fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
-    use std::ffi::CStr;
-
     let name = c"kern.osproductversion";
-    let mut buffer = [0_i8; 64];
+    let mut buffer = [0_u8; 64];
     let mut length = buffer.len();
+    // SAFETY: the name is NUL-terminated, buffer/length are exclusively borrowed
+    // writable storage, and null newp with zero length requests only a read.
     if unsafe {
         libc::sysctlbyname(
             name.as_ptr(),
@@ -29,12 +32,27 @@ fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
     {
         return Err(std::io::Error::last_os_error());
     }
-    let release = unsafe { CStr::from_ptr(buffer.as_ptr()) }.to_string_lossy();
+    ensure_supported_macos_release(&buffer, length)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn ensure_supported_macos_release(buffer: &[u8], length: usize) -> std::io::Result<()> {
+    let invalid = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid macOS version response",
+        )
+    };
+    let bytes = buffer.get(..length).ok_or_else(invalid)?;
+    let release = std::ffi::CStr::from_bytes_with_nul(bytes)
+        .map_err(|_| invalid())?
+        .to_str()
+        .map_err(|_| invalid())?;
     let major = release
         .split('.')
         .next()
         .and_then(|part| part.parse::<u32>().ok())
-        .unwrap_or(0);
+        .ok_or_else(invalid)?;
     if major < 13 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
@@ -62,8 +80,16 @@ fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
         fn RtlGetVersion(info: *mut OsVersionInfo) -> i32;
     }
 
-    let mut info: OsVersionInfo = unsafe { std::mem::zeroed() };
-    info.dwOSVersionInfoSize = std::mem::size_of::<OsVersionInfo>() as u32;
+    let mut info = OsVersionInfo {
+        dwOSVersionInfoSize: std::mem::size_of::<OsVersionInfo>() as u32,
+        dwMajorVersion: 0,
+        dwMinorVersion: 0,
+        dwBuildNumber: 0,
+        dwPlatformId: 0,
+        szCSDVersion: [0; 128],
+    };
+    // SAFETY: the repr(C) structure has the OSVERSIONINFOW field layout and
+    // initialized size expected by RtlGetVersion, with exclusive writable storage.
     let status = unsafe { RtlGetVersion(&mut info) };
     if status < 0 {
         return Err(std::io::Error::other(format!(
@@ -249,7 +275,37 @@ impl Default for RuntimeBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_supported_windows_version;
+    use super::{ensure_supported_macos_release, ensure_supported_windows_version};
+
+    #[test]
+    fn macos_version_parsing_uses_only_reported_bytes() {
+        assert!(ensure_supported_macos_release(b"13.0\0ignored", 5).is_ok());
+        assert!(ensure_supported_macos_release(b"26.1\0", 5).is_ok());
+        let error = ensure_supported_macos_release(b"12.7\0", 5).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        assert!(error.to_string().contains("12.7"));
+    }
+
+    #[test]
+    fn malformed_macos_version_responses_are_rejected() {
+        for (buffer, length) in [
+            (&b"13\0"[..], 0),
+            (&b"13\0"[..], 2), // The terminator is outside the reported bytes.
+            (&b"13\0"[..], 4), // The reported size exceeds the allocation.
+            (&b"13\0x\0"[..], 5),
+            (&b"\xff\0"[..], 2),
+            (&b"\0"[..], 1),
+            (&b"invalid\0"[..], 8),
+            (&b"99999999999999999999\0"[..], 21),
+        ] {
+            assert_eq!(
+                ensure_supported_macos_release(buffer, length)
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::InvalidData
+            );
+        }
+    }
 
     #[test]
     fn windows_10_releases_are_supported() {

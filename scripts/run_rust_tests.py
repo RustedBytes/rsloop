@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -37,6 +38,10 @@ print(json.dumps({
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--all-features", action="store_true")
+    parser.add_argument("--features", help="Comma-separated Cargo features")
+    args = parser.parse_args()
     project_root = Path(__file__).resolve().parent.parent
     interpreter = project_python(project_root)
     python_home, libdir = python_link_config(interpreter)
@@ -50,8 +55,13 @@ def main() -> int:
         rpath = f"-C link-arg=-Wl,-rpath,{libdir}"
         env["RUSTFLAGS"] = f"{env.get('RUSTFLAGS', '')} {rpath}".strip()
 
+    command = ["cargo", "test", "--lib", "--locked"]
+    if args.all_features:
+        command.append("--all-features")
+    if args.features:
+        command.extend(["--features", args.features])
     return subprocess.run(
-        ["cargo", "test", "--lib"],
+        command,
         cwd=project_root,
         env=env,
         check=False,

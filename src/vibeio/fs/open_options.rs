@@ -184,7 +184,7 @@ impl OpenOptions {
             #[cfg(target_os = "linux")]
             {
                 if driver.supports_completion() {
-                    let mut op = self.build_open_op(path)?;
+                    let mut op = self.build_open_op(driver.clone(), path)?;
                     let raw = poll_fn(move |cx| op.poll(cx, &driver)).await?;
                     unsafe { std::fs::File::from_raw_fd(raw) }
                 } else if crate::vibeio::offload_fs() {
@@ -274,7 +274,11 @@ impl OpenOptions {
     /// This is an internal method used on Linux with io_uring support.
     #[cfg(target_os = "linux")]
     #[inline]
-    fn build_open_op(&self, path: &Path) -> io::Result<OpenOp> {
+    fn build_open_op(
+        &self,
+        driver: std::rc::Rc<crate::vibeio::driver::AnyDriver>,
+        path: &Path,
+    ) -> io::Result<OpenOp> {
         let writing = self.write || self.append;
         let mut flags = match (self.read, writing) {
             (true, false) => libc::O_RDONLY,
@@ -313,7 +317,7 @@ impl OpenOptions {
             io::Error::new(ErrorKind::InvalidInput, "path contains interior NUL byte")
         })?;
 
-        Ok(OpenOp::new(path, flags, 0o666))
+        Ok(OpenOp::new(driver, path, flags, 0o666))
     }
 }
 

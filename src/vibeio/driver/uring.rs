@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::Arc as StdArc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
@@ -55,18 +55,20 @@ fn build_with_memory_fallback<T>(
 }
 
 pub struct UringInterruptor {
-    eventfd: std::sync::Weak<RawFd>,
+    eventfd: std::sync::Weak<OwnedFd>,
 }
 
 impl Interruptor for UringInterruptor {
     #[inline]
     fn interrupt(&self) {
         if let Some(eventfd) = self.eventfd.upgrade() {
-            // Write to the eventfd to wake up the driver
+            // SAFETY: the upgraded Arc owns the descriptor throughout write,
+            // including when the driver is concurrently shutting down. value is
+            // initialized for the required eight-byte eventfd write.
             let value: u64 = 1;
             let _ = unsafe {
                 libc::write(
-                    *eventfd,
+                    eventfd.as_raw_fd(),
                     &value as *const u64 as *const std::ffi::c_void,
                     std::mem::size_of::<u64>(),
                 )
@@ -116,6 +118,20 @@ struct Completion {
     waiter: Option<Waker>,
     completed: Option<i32>,
     ignored_data: Option<Box<dyn std::any::Any>>,
+    returns_fd: bool,
+}
+
+impl Drop for Completion {
+    fn drop(&mut self) {
+        if self.returns_fd
+            && let Some(fd) = self.completed.take().filter(|fd| *fd >= 0)
+        {
+            // SAFETY: fd-producing operations transfer a new descriptor to this
+            // registration. A consumer takes completed before removing it; any
+            // result left here is unclaimed and must be closed exactly once.
+            unsafe { libc::close(fd) };
+        }
+    }
 }
 
 struct DriverState {
@@ -124,24 +140,132 @@ struct DriverState {
     next_registration_generation: u32,
 }
 
+struct CompletionBatch {
+    interrupt: bool,
+    fast_wakers: [Option<Waker>; 8],
+    overflow_wakers: Vec<Waker>,
+    retired: Vec<Completion>,
+}
+
+impl CompletionBatch {
+    fn dispatch(self) {
+        // Arbitrary payload destructors and wakers must run outside ring/state
+        // borrows; either can reenter the driver or submit another operation.
+        drop(self.retired);
+        for waker in self.fast_wakers.into_iter().flatten() {
+            waker.wake();
+        }
+        for waker in self.overflow_wakers {
+            waker.wake();
+        }
+    }
+}
+
+impl DriverState {
+    fn ignore_completion(
+        &mut self,
+        token: usize,
+        data: Box<dyn std::any::Any>,
+    ) -> Option<Completion> {
+        let completion = self.completions.get_mut(token)?;
+        completion.ignored_data = Some(data);
+        if completion.completed.is_some() {
+            // The CQE may have arrived just before cancellation. No further
+            // completion will arrive to release this entry and its storage.
+            Some(self.completions.remove(token))
+        } else {
+            None
+        }
+    }
+}
+
 pub struct UringDriver {
     ring: RefCell<IoUring>,
     state: RefCell<DriverState>,
-    interrupt_eventfd: Option<StdArc<RawFd>>,
+    interrupt_eventfd: StdArc<OwnedFd>,
     interrupt_buffer: RefCell<Box<[u8; 8]>>,
     pending_submissions: AtomicBool,
 }
 
 impl Drop for UringDriver {
     fn drop(&mut self) {
-        if let Some(eventfd) = self.interrupt_eventfd.take() {
-            // Close eventfd
-            unsafe { libc::close(*eventfd) };
+        if self.quiesce().is_err() {
+            // Ring close can defer cancellation. If the kernel cannot confirm
+            // quiescence, retain all potentially kernel-visible allocations.
+            // This exceptional-path leak is preferable to freeing live pointers.
+            let state = self.state.get_mut();
+            std::mem::forget(std::mem::take(&mut state.completions));
+            std::mem::forget(std::mem::take(&mut state.registrations));
+            let buffer = std::mem::replace(self.interrupt_buffer.get_mut(), Box::new([0; 8]));
+            std::mem::forget(buffer);
         }
     }
 }
 
 impl UringDriver {
+    /// Stop all submitted work before retained operation storage is released.
+    fn quiesce(&mut self) -> io::Result<()> {
+        let ring = self.ring.get_mut();
+        let state = self.state.get_mut();
+        // Sync cancellation does not cover SQEs still waiting in userspace.
+        // Bound retries: an unconsumed SQ must take the retention fallback.
+        for _ in 0..4 {
+            Self::drain_shutdown_cq(ring, state);
+            if ring.submission().is_empty() {
+                break;
+            }
+            ring.submit()?;
+        }
+        if !ring.submission().is_empty() {
+            return Err(io::Error::other(
+                "io_uring shutdown left pending submissions",
+            ));
+        }
+        match ring.submitter().register_sync_cancel(
+            Some(Timespec::from(Duration::from_secs(1))),
+            types::CancelBuilder::any().all(),
+        ) {
+            Ok(()) => {}
+            Err(err) if err.raw_os_error() == Some(libc::ENOENT) => {}
+            Err(err) => return Err(err),
+        }
+
+        // No user callbacks or rearming during shutdown. Preserve successful
+        // descriptor results so their registration destructors can close them.
+        loop {
+            Self::drain_shutdown_cq(ring, state);
+            if !ring.submission().cq_overflow() {
+                break;
+            }
+            // With NODROP, CQEs can remain in the kernel overflow list after
+            // cancellation. Publish consumed slots, then flush that list before
+            // discarding the ring (otherwise successful open/accept fds leak).
+            ring.submit_and_wait(0)?;
+        }
+        Ok(())
+    }
+
+    fn drain_shutdown_cq(ring: &mut IoUring, state: &mut DriverState) {
+        for cqe in ring.completion() {
+            let key = cqe.user_data();
+            if key == u64::MAX {
+                continue;
+            }
+            match Self::decode_key_kind(key) {
+                ACCEPT_KEY_KIND if cqe.result() >= 0 => {
+                    // SAFETY: an unconsumed successful accept CQE owns a fresh fd.
+                    unsafe { libc::close(cqe.result()) };
+                }
+                COMPLETION_KEY_KIND => {
+                    if let Some(completion) = state.completions.get_mut(Self::decode_token(key).0) {
+                        completion.completed = Some(cqe.result());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     #[inline]
     pub(crate) fn new(entries: u32, builder: io_uring::Builder) -> Result<Self, io::Error> {
         // Ring teardown is deferred by the kernel. Rapid runtime churn can
@@ -169,7 +293,8 @@ impl UringDriver {
                 completions: Slab::with_capacity(ring_entries as usize),
                 next_registration_generation: 0,
             }),
-            interrupt_eventfd: Some(StdArc::new(eventfd)),
+            // SAFETY: eventfd returned a fresh descriptor owned by this driver.
+            interrupt_eventfd: StdArc::new(unsafe { OwnedFd::from_raw_fd(eventfd) }),
             interrupt_buffer: RefCell::new(Box::new([0; 8])),
             pending_submissions: AtomicBool::new(false),
         };
@@ -180,12 +305,14 @@ impl UringDriver {
     }
 
     #[inline]
-    fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) {
+    fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) -> Option<Waker> {
         if !waiter_slot
             .as_ref()
             .is_some_and(|waiter| waiter.will_wake(&waker))
         {
-            *waiter_slot = Some(waker);
+            waiter_slot.replace(waker)
+        } else {
+            Some(waker)
         }
     }
 
@@ -314,21 +441,22 @@ impl UringDriver {
         }
 
         // Drain any new completions produced by the submit above.
-        let need_interrupt = {
+        let batch = {
             let mut ring = self.ring.borrow_mut();
             let mut state = self.state.borrow_mut();
             Self::drain_cq(&mut ring, &mut state)
         };
-        if need_interrupt {
+        if batch.interrupt {
             self.submit_interrupt();
         }
+        batch.dispatch();
 
         Ok(())
     }
 
-    /// Drain the completion queue and wake any registered waiters.
+    /// Drain the completion queue, deferring user callbacks until borrows end.
     #[inline]
-    fn drain_cq(ring: &mut IoUring, state: &mut DriverState) -> bool {
+    fn drain_cq(ring: &mut IoUring, state: &mut DriverState) -> CompletionBatch {
         let mut interrupt = false;
 
         // Collect wakers in a small inline array to avoid heap allocation
@@ -337,6 +465,7 @@ impl UringDriver {
         let mut fast_wakers: [Option<Waker>; 8] = Default::default();
         let mut fast_count = 0;
         let mut overflow_wakers: Vec<Waker> = Vec::new();
+        let mut retired = Vec::new();
 
         {
             let cq = ring.completion();
@@ -416,7 +545,7 @@ impl UringDriver {
                     None => None,
                 };
                 if remove_completion {
-                    state.completions.remove(token.0);
+                    retired.push(state.completions.remove(token.0));
                 }
                 if let Some(waiter) = waiter {
                     if fast_count < fast_wakers.len() {
@@ -429,16 +558,12 @@ impl UringDriver {
             }
         }
 
-        for waker in fast_wakers.iter_mut().take(fast_count) {
-            if let Some(w) = waker.take() {
-                w.wake();
-            }
+        CompletionBatch {
+            interrupt,
+            fast_wakers,
+            overflow_wakers,
+            retired,
         }
-        for waker in overflow_wakers {
-            waker.wake();
-        }
-
-        interrupt
     }
 
     #[inline]
@@ -447,13 +572,7 @@ impl UringDriver {
         // Submit a read operation to the eventfd to wake up the driver
         let mut buffer = self.interrupt_buffer.borrow_mut();
         let entry = opcode::Read::new(
-            types::Fd(
-                *self
-                    .interrupt_eventfd
-                    .as_ref()
-                    .expect("interrupt_eventfd is not initialized")
-                    .as_ref(),
-            ),
+            types::Fd(self.interrupt_eventfd.as_raw_fd()),
             buffer.as_mut_ptr(),
             buffer.len() as u32,
         )
@@ -470,6 +589,159 @@ impl UringDriver {
 
 #[cfg(test)]
 mod memory_fallback_tests {
+    #[test]
+    fn live_shutdown_drains_overflowed_descriptor_results() {
+        use super::*;
+        let mut builder = IoUring::builder();
+        builder.setup_cqsize(2);
+        let mut driver = match UringDriver::new(2, builder) {
+            Ok(driver) => driver,
+            Err(err)
+                if matches!(
+                    err.raw_os_error(),
+                    Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                ) =>
+            {
+                eprintln!("live io_uring overflow test unavailable: {err}");
+                return;
+            }
+            Err(err) => panic!("io_uring initialization failed: {err}"),
+        };
+        assert!(driver.ring.get_mut().params().is_feature_nodrop());
+        // Three open results exceed this deliberately tiny CQ without consuming
+        // completions. The initial eventfd read may remain internally poll-armed.
+        driver.ring.get_mut().submit().unwrap();
+        let mut tokens = Vec::new();
+        for _ in 0..3 {
+            let path = std::ffi::CString::new("/dev/null").unwrap();
+            let ptr = path.as_ptr();
+            let token = driver.state.get_mut().completions.insert(Completion {
+                waiter: None,
+                completed: None,
+                ignored_data: Some(Box::new(path)),
+                returns_fd: true,
+            });
+            driver
+                .push_entry(
+                    opcode::OpenAt::new(types::Fd(libc::AT_FDCWD), ptr)
+                        .flags(libc::O_RDONLY | libc::O_CLOEXEC)
+                        .build()
+                        .user_data(UringDriver::encode_completion_key(token)),
+                )
+                .unwrap();
+            tokens.push(token);
+        }
+        driver.ring.get_mut().submit().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !driver.ring.get_mut().submission().cq_overflow() {
+            assert!(std::time::Instant::now() < deadline, "CQ did not overflow");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        driver.quiesce().unwrap();
+        assert!(!driver.ring.get_mut().submission().cq_overflow());
+        for token in tokens {
+            assert!(driver.state.get_mut().completions[token].completed.unwrap() >= 0);
+        }
+        // Registration destructors own and close all successful descriptors.
+        drop(driver);
+    }
+
+    #[test]
+    fn live_shutdown_cancels_queued_and_submitted_reads() {
+        use super::*;
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Buffer {
+            bytes: Box<[u8; 8]>,
+            dropped: Rc<Cell<bool>>,
+        }
+        impl Drop for Buffer {
+            fn drop(&mut self) {
+                self.dropped.set(true);
+            }
+        }
+        for submit_first in [false, true] {
+            let mut driver = match UringDriver::new(8, IoUring::builder()) {
+                Ok(driver) => driver,
+                Err(err)
+                    if matches!(
+                        err.raw_os_error(),
+                        Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                    ) =>
+                {
+                    eprintln!("live io_uring shutdown test unavailable: {err}");
+                    return;
+                }
+                Err(err) => panic!("io_uring initialization failed: {err}"),
+            };
+            let (reader, _writer) = std::os::unix::net::UnixStream::pair().unwrap();
+            let dropped = Rc::new(Cell::new(false));
+            let mut buffer = Buffer {
+                bytes: Box::new([0; 8]),
+                dropped: dropped.clone(),
+            };
+            let ptr = buffer.bytes.as_mut_ptr();
+            let token = driver.state.get_mut().completions.insert(Completion {
+                waiter: None,
+                completed: None,
+                ignored_data: Some(Box::new(buffer)),
+                returns_fd: false,
+            });
+            let entry = opcode::Read::new(types::Fd(reader.as_raw_fd()), ptr, 8)
+                .build()
+                .user_data(UringDriver::encode_completion_key(token));
+            driver.push_entry(entry).unwrap();
+            if submit_first {
+                driver.ring.get_mut().submit().unwrap();
+            }
+            assert!(!dropped.get());
+            driver.quiesce().unwrap();
+            assert_eq!(
+                driver.state.get_mut().completions[token].completed,
+                Some(-libc::ECANCELED)
+            );
+            assert!(
+                !dropped.get(),
+                "storage must survive cancellation acknowledgement"
+            );
+            drop(driver);
+            assert!(dropped.get(), "confirmed shutdown should release storage");
+        }
+    }
+
+    #[test]
+    fn interrupt_descriptor_survives_in_flight_wake_owner() {
+        use super::*;
+        // SAFETY: eventfd takes only integer arguments and returns a fresh fd.
+        let raw = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
+        assert!(raw >= 0);
+        // SAFETY: the successful syscall transfers ownership exactly once.
+        let owner = StdArc::new(unsafe { OwnedFd::from_raw_fd(raw) });
+        let weak = StdArc::downgrade(&owner);
+        let interruptor = UringInterruptor {
+            eventfd: weak.clone(),
+        };
+        // Model an interrupt thread upgrading just before driver teardown.
+        let in_flight = weak.upgrade().unwrap();
+        drop(owner);
+        interruptor.interrupt();
+        let mut count = 0u64;
+        // SAFETY: in_flight owns the fd and count is an eight-byte writable value.
+        let read = unsafe {
+            libc::read(
+                in_flight.as_raw_fd(),
+                std::ptr::from_mut(&mut count).cast(),
+                std::mem::size_of_val(&count),
+            )
+        };
+        assert_eq!(read, 8);
+        assert_eq!(count, 1);
+        drop(in_flight);
+        assert!(weak.upgrade().is_none());
+        // A wake after final ownership release is a no-op, not a raw-fd write.
+        interruptor.interrupt();
+    }
     use super::*;
 
     #[test]
@@ -532,11 +804,7 @@ impl Driver for UringDriver {
     #[inline]
     fn get_interruptor(&self) -> Self::Interruptor {
         UringInterruptor {
-            eventfd: StdArc::downgrade(
-                self.interrupt_eventfd
-                    .as_ref()
-                    .expect("interrupt_eventfd is not initialized"),
-            ),
+            eventfd: StdArc::downgrade(&self.interrupt_eventfd),
         }
     }
 
@@ -622,8 +890,12 @@ impl Driver for UringDriver {
             );
         }
 
-        let mut state = self.state.borrow_mut();
-        if state.registrations.try_remove(handle.token.0).is_none() {
+        let registration = self
+            .state
+            .borrow_mut()
+            .registrations
+            .try_remove(handle.token.0);
+        if registration.is_none() {
             return Err(io::Error::new(
                 ErrorKind::NotFound,
                 format!(
@@ -632,7 +904,7 @@ impl Driver for UringDriver {
                 ),
             ));
         }
-
+        drop(registration);
         Ok(())
     }
 
@@ -649,6 +921,7 @@ impl Driver for UringDriver {
         interest: Interest,
     ) -> Result<(), io::Error> {
         let token = handle.token();
+        let old_waker;
         let poll_spec = {
             let mut state = self.state.borrow_mut();
             let registration = match state.registrations.get_mut(token.0) {
@@ -670,7 +943,7 @@ impl Driver for UringDriver {
                 }
             };
 
-            Self::update_waiter(&mut registration.waiter, waker);
+            old_waker = Self::update_waiter(&mut registration.waiter, waker);
             let desired_mask = Self::interest_to_poll_mask(interest);
             registration.poll_mask = desired_mask;
 
@@ -685,16 +958,21 @@ impl Driver for UringDriver {
         if let Some((generation, fd, poll_mask)) = poll_spec {
             if let Err(submit_err) = self.push_poll_add(token, generation, fd, poll_mask) {
                 let mut state = self.state.borrow_mut();
-                if let Some(HandleRegistration::Poll(registration)) =
+                let failed_waker = if let Some(HandleRegistration::Poll(registration)) =
                     state.registrations.get_mut(token.0)
                 {
                     registration.poll_armed = false;
-                    registration.waiter = None;
-                }
+                    registration.waiter.take()
+                } else {
+                    None
+                };
+                drop(state);
+                drop(failed_waker);
                 return Err(submit_err);
             }
         }
 
+        drop(old_waker);
         Ok(())
     }
 
@@ -724,6 +1002,7 @@ impl Driver for UringDriver {
             waiter: Some(waker),
             completed: None,
             ignored_data: None,
+            returns_fd: op.completion_returns_fd(),
         });
 
         CompletionIoResult::Retry(token)
@@ -732,10 +1011,13 @@ impl Driver for UringDriver {
     #[inline]
     fn get_completion_result(&self, token: usize) -> Option<i32> {
         let mut state = self.state.borrow_mut();
-        let completed = state.completions.get(token).and_then(|c| c.completed);
-        if completed.is_some() {
-            state.completions.remove(token);
-        }
+        let completed = state
+            .completions
+            .get_mut(token)
+            .and_then(|c| c.completed.take());
+        let retired = completed.map(|_| state.completions.remove(token));
+        drop(state);
+        drop(retired);
         completed
     }
 
@@ -744,6 +1026,8 @@ impl Driver for UringDriver {
         handle: &InnerRawHandle,
         cx: &mut Context<'_>,
     ) -> Poll<io::Result<i32>> {
+        let waker = cx.waker().clone();
+        let old_waker;
         let submission = {
             let mut state = self.state.borrow_mut();
             let registration = match state.registrations.get_mut(handle.token.0) {
@@ -775,7 +1059,7 @@ impl Driver for UringDriver {
                     Poll::Ready(Err(io::Error::from_raw_os_error(-result)))
                 };
             }
-            Self::update_waiter(&mut accept.waiter, cx.waker().clone());
+            old_waker = Self::update_waiter(&mut accept.waiter, waker);
             if accept.armed {
                 None
             } else {
@@ -790,36 +1074,267 @@ impl Driver for UringDriver {
                 .build()
                 .user_data(Self::encode_accept_key(handle.token, generation));
             if let Err(err) = self.push_entry(entry) {
-                if let Some(HandleRegistration::Completion(registration)) = self
-                    .state
-                    .borrow_mut()
-                    .registrations
-                    .get_mut(handle.token.0)
+                let mut state = self.state.borrow_mut();
+                let failed_waker = if let Some(HandleRegistration::Completion(registration)) =
+                    state.registrations.get_mut(handle.token.0)
                 {
                     if let Some(accept) = registration.accept.as_mut() {
                         accept.armed = false;
-                        accept.waiter = None;
+                        accept.waiter.take()
+                    } else {
+                        None
                     }
-                }
+                } else {
+                    None
+                };
+                drop(state);
+                drop(failed_waker);
                 return Poll::Ready(Err(err));
             }
         }
+        drop(old_waker);
         Poll::Pending
     }
 
     #[inline]
     fn set_completion_waker(&self, token: usize, waker: Waker) {
         let mut state = self.state.borrow_mut();
-        if let Some(c) = state.completions.get_mut(token) {
-            Self::update_waiter(&mut c.waiter, waker);
-        }
+        let old_waker = if let Some(c) = state.completions.get_mut(token) {
+            Self::update_waiter(&mut c.waiter, waker)
+        } else {
+            Some(waker)
+        };
+        drop(state);
+        drop(old_waker);
     }
 
     #[inline]
     fn ignore_completion(&self, token: usize, data: Box<dyn std::any::Any>) {
-        let mut state = self.state.borrow_mut();
-        if let Some(c) = state.completions.get_mut(token) {
-            c.ignored_data = Some(data);
+        let retired = self.state.borrow_mut().ignore_completion(token, data);
+        // Drop user-owned storage outside the state borrow.
+        drop(retired);
+    }
+}
+
+#[cfg(test)]
+mod completion_cleanup_tests {
+    use super::*;
+    use std::io::Read;
+    use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
+    use std::os::unix::net::UnixStream;
+    use std::sync::Arc;
+
+    thread_local! {
+        static WAKER_DROP_DRIVER: RefCell<Option<std::rc::Rc<UringDriver>>> = const { RefCell::new(None) };
+    }
+    struct WakerDropScope;
+    impl Drop for WakerDropScope {
+        fn drop(&mut self) {
+            let driver = WAKER_DROP_DRIVER.with(|slot| slot.borrow_mut().take());
+            drop(driver);
         }
+    }
+    struct CheckWakerDrop(Arc<std::sync::atomic::AtomicUsize>);
+    #[allow(
+        clippy::manual_noop_waker,
+        reason = "The custom destructor verifies replacement cleanup, unlike Waker::noop"
+    )]
+    impl std::task::Wake for CheckWakerDrop {
+        fn wake(self: Arc<Self>) {}
+    }
+    impl Drop for CheckWakerDrop {
+        fn drop(&mut self) {
+            WAKER_DROP_DRIVER.with(|slot| {
+                let slot = slot.borrow();
+                let driver = slot.as_ref().unwrap();
+                assert!(driver.state.try_borrow_mut().is_ok());
+                assert!(driver.ring.try_borrow_mut().is_ok());
+            });
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn completion_waker_replacement_and_unknown_token_drop_outside_borrows() {
+        let driver = match UringDriver::new(8, IoUring::builder()) {
+            Ok(driver) => std::rc::Rc::new(driver),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                ) =>
+            {
+                eprintln!("io_uring waker replacement test unavailable: {error}");
+                return;
+            }
+            Err(error) => panic!("io_uring initialization failed: {error}"),
+        };
+        WAKER_DROP_DRIVER.with(|slot| *slot.borrow_mut() = Some(driver.clone()));
+        let _scope = WakerDropScope;
+        let drops = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = driver.state.borrow_mut().completions.insert(Completion {
+            waiter: Some(Waker::from(Arc::new(CheckWakerDrop(drops.clone())))),
+            completed: Some(0),
+            ignored_data: None,
+            returns_fd: false,
+        });
+        driver.set_completion_waker(token, Waker::noop().clone());
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert_eq!(driver.get_completion_result(token), Some(0));
+        driver.set_completion_waker(token, Waker::from(Arc::new(CheckWakerDrop(drops.clone()))));
+        assert_eq!(drops.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn live_completion_retires_payload_outside_driver_borrows_before_waking() {
+        let driver = match UringDriver::new(8, IoUring::builder()) {
+            Ok(driver) => std::rc::Rc::new(driver),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                ) =>
+            {
+                eprintln!("live io_uring reentrancy test unavailable: {error}");
+                return;
+            }
+            Err(error) => panic!("io_uring initialization failed: {error}"),
+        };
+        struct Payload {
+            driver: std::rc::Weak<UringDriver>,
+            retired: Arc<AtomicBool>,
+        }
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                let driver = self.driver.upgrade().unwrap();
+                assert!(driver.state.try_borrow_mut().is_ok());
+                assert!(driver.ring.try_borrow_mut().is_ok());
+                driver.collect_completions(false, None).unwrap();
+                self.retired.store(true, Ordering::SeqCst);
+            }
+        }
+        struct WakeAfterRetirement {
+            retired: Arc<AtomicBool>,
+            woke: Arc<AtomicBool>,
+        }
+        impl std::task::Wake for WakeAfterRetirement {
+            fn wake(self: Arc<Self>) {
+                assert!(self.retired.load(Ordering::SeqCst));
+                self.woke.store(true, Ordering::SeqCst);
+            }
+        }
+        let retired = Arc::new(AtomicBool::new(false));
+        let woke = Arc::new(AtomicBool::new(false));
+        let token = driver.state.borrow_mut().completions.insert(Completion {
+            waiter: Some(Waker::from(Arc::new(WakeAfterRetirement {
+                retired: retired.clone(),
+                woke: woke.clone(),
+            }))),
+            completed: None,
+            ignored_data: Some(Box::new(Payload {
+                driver: std::rc::Rc::downgrade(&driver),
+                retired: retired.clone(),
+            })),
+            returns_fd: false,
+        });
+        driver
+            .push_entry(
+                opcode::Nop::new()
+                    .build()
+                    .user_data(UringDriver::encode_completion_key(token)),
+            )
+            .unwrap();
+        driver
+            .collect_completions(true, Some(Duration::from_secs(1)))
+            .unwrap();
+        assert!(retired.load(Ordering::SeqCst));
+        assert!(woke.load(Ordering::SeqCst));
+        assert!(!driver.state.borrow().completions.contains(token));
+    }
+
+    fn registration(result: Option<i32>, returns_fd: bool) -> Completion {
+        Completion {
+            waiter: None,
+            completed: result,
+            ignored_data: None,
+            returns_fd,
+        }
+    }
+
+    fn state() -> DriverState {
+        DriverState {
+            registrations: Slab::new(),
+            completions: Slab::new(),
+            next_registration_generation: 0,
+        }
+    }
+
+    #[test]
+    fn unclaimed_fd_is_closed_after_completion() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let completion = registration(Some(socket.into_raw_fd()), true);
+        drop(completion);
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+    }
+
+    #[test]
+    fn claimed_fd_survives_registration_removal() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let mut completion = registration(Some(socket.into_raw_fd()), true);
+        let fd = completion.completed.take().unwrap();
+        // SAFETY: taking the successful result transfers its descriptor to us.
+        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+        drop(completion);
+        assert_eq!(
+            peer.read(&mut [0; 1]).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        drop(owned);
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+    }
+
+    #[test]
+    fn byte_count_completion_does_not_close_matching_descriptor() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        use std::os::fd::AsRawFd;
+        drop(registration(Some(socket.as_raw_fd()), false));
+        assert_eq!(
+            peer.read(&mut [0; 1]).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn cancellation_after_cqe_releases_storage_and_unclaimed_fd() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let mut state = state();
+        let token = state
+            .completions
+            .insert(registration(Some(socket.into_raw_fd()), true));
+        let lifetime = Arc::new(());
+        let weak = Arc::downgrade(&lifetime);
+        let retired = state.ignore_completion(token, Box::new(lifetime));
+        assert!(state.completions.is_empty());
+        assert!(weak.upgrade().is_some());
+        drop(retired);
+        assert!(weak.upgrade().is_none());
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+    }
+
+    #[test]
+    fn cancellation_before_cqe_keeps_storage_until_acknowledgement() {
+        let mut state = state();
+        let token = state.completions.insert(registration(None, false));
+        let lifetime = Arc::new(());
+        let weak = Arc::downgrade(&lifetime);
+        assert!(state.ignore_completion(token, Box::new(lifetime)).is_none());
+        assert!(weak.upgrade().is_some());
+        state.completions[token].completed = Some(-libc::ECANCELED);
+        drop(state.completions.remove(token));
+        assert!(weak.upgrade().is_none());
     }
 }

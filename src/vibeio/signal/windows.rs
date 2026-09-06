@@ -120,20 +120,12 @@ mod tests {
     use crate::vibeio::driver::AnyDriver;
     use std::time::Duration;
 
-    #[cfg(feature = "time")]
     async fn await_ctrl_c_with_timeout(
         fut: impl Future<Output = io::Result<()>>,
     ) -> io::Result<()> {
         crate::vibeio::time::timeout(Duration::from_secs(1), fut)
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "ctrl-c timeout"))?
-    }
-
-    #[cfg(not(feature = "time"))]
-    async fn await_ctrl_c_with_timeout(
-        fut: impl Future<Output = io::Result<()>>,
-    ) -> io::Result<()> {
-        fut.await
     }
 
     #[test]

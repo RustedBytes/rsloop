@@ -49,6 +49,21 @@ cargo fmt --all --check
 
 ## Run tests
 
+Run Rust library tests with the repository's Python linking configuration:
+
+```bash
+uv run python scripts/run_rust_tests.py
+uv run python scripts/run_rust_tests.py --all-features
+```
+
+CI runs both configurations. Networking and timers are always compiled; embedded
+`fs`, `process`, `signal`, `pipe`, `stdio`, `splice`, and `blocking-default`
+modules are opt-in Cargo features. They do not change the default wheel build.
+To check an individual module, use `--features fs` (or another feature name)
+with the test runner. Some modules have platform-specific implementations.
+
+Run the Python compatibility suite:
+
 ```bash
 uv run python -m unittest discover -s tests
 ```

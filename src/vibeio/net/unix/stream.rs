@@ -159,9 +159,8 @@ impl UnixStream {
         let (inner, raw_addr, raw_addr_len) = new_socket(path.as_ref())?;
         let stream = Self::from_std(inner)?;
 
-        let raw_addr_ptr = (&raw_addr as *const libc::sockaddr_un).cast::<libc::sockaddr>();
         let handle = &stream.handle;
-        let mut op = ConnectOp::new(handle, raw_addr_ptr, raw_addr_len);
+        let mut op = ConnectOp::new_unix(handle, raw_addr, raw_addr_len)?;
         poll_fn(move |cx| handle.poll_op(cx, &mut op)).await?;
 
         Ok(stream)
@@ -213,12 +212,13 @@ impl UnixStream {
         inner: StdUnixStream,
         mode: RegistrationMode,
     ) -> Result<Self, io::Error> {
-        let handle = ManuallyDrop::new(InnerRawHandle::new_with_mode(
+        let handle = InnerRawHandle::new_with_mode(
             inner.as_raw_fd(),
             Interest::READABLE | Interest::WRITABLE,
             mode,
-        )?);
+        )?;
         inner.set_nonblocking(!handle.uses_completion())?;
+        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 
@@ -247,9 +247,8 @@ impl PollUnixStream {
         let (inner, raw_addr, raw_addr_len) = new_socket(path.as_ref())?;
         let stream = Self::from_std(inner)?;
 
-        let raw_addr_ptr = (&raw_addr as *const libc::sockaddr_un).cast::<libc::sockaddr>();
         let handle = &stream.stream.handle;
-        let mut op = ConnectOp::new(handle, raw_addr_ptr, raw_addr_len);
+        let mut op = ConnectOp::new_unix(handle, raw_addr, raw_addr_len)?;
         poll_fn(move |cx| handle.poll_op(cx, &mut op)).await?;
 
         Ok(stream)
@@ -433,13 +432,8 @@ impl UnixStream {
     /// This is useful when you want to create a Unix stream that uses poll-based I/O.
     #[inline]
     pub fn from_std_poll(inner: StdUnixStream) -> Result<PollUnixStream, io::Error> {
-        let handle = ManuallyDrop::new(InnerRawHandle::new(
-            inner.as_raw_fd(),
-            Interest::READABLE | Interest::WRITABLE,
-        )?);
-        inner.set_nonblocking(!handle.uses_completion())?;
         Ok(PollUnixStream {
-            stream: Self { inner, handle },
+            stream: Self::from_std_with_mode(inner, RegistrationMode::Poll)?,
             read_ready: RefCell::new(false),
             write_ready: RefCell::new(false),
         })
@@ -568,5 +562,37 @@ impl Drop for UnixStream {
         unsafe {
             ManuallyDrop::drop(&mut self.handle);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vibeio::{driver::AnyDriver, executor::Runtime};
+
+    #[test]
+    fn from_std_poll_stays_nonblocking_on_a_completion_capable_driver() {
+        let mut driver = AnyDriver::new_mock();
+        let AnyDriver::Mock(mock) = &mut driver else {
+            unreachable!()
+        };
+        mock.registrations = Some(Default::default());
+        mock.registrations
+            .as_ref()
+            .unwrap()
+            .results
+            .borrow_mut()
+            .push_back(Ok(mio::Token(0)));
+        Runtime::new(driver).block_on(async {
+            let (socket, _peer) = StdUnixStream::pair().unwrap();
+            let stream = UnixStream::from_std_poll(socket).unwrap();
+            assert_eq!(stream.stream.handle.mode(), RegistrationMode::Poll);
+            assert!(!stream.stream.handle.uses_completion());
+            // SAFETY: the stream owns this live descriptor; F_GETFL takes no
+            // pointer arguments and does not alter its ownership.
+            let flags = unsafe { libc::fcntl(stream.stream.inner.as_raw_fd(), libc::F_GETFL) };
+            assert_ne!(flags, -1);
+            assert_ne!(flags & libc::O_NONBLOCK, 0);
+        });
     }
 }

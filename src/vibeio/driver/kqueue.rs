@@ -71,7 +71,6 @@ struct Registration {
     write_waiter: Option<Waker>,
     read_ready: bool,
     write_ready: bool,
-    interest: Interest,
     registered_read: bool,
     registered_write: bool,
     generation: u32,
@@ -219,8 +218,7 @@ impl KqueueDriver {
             };
         }
 
-        let mut wakers = self.ready_wakers.borrow_mut();
-        wakers.clear();
+        let mut wakers = std::mem::take(&mut *self.ready_wakers.borrow_mut());
         let mut state = self.state.borrow_mut();
         for event in &events[..count as usize] {
             let event = unsafe { event.assume_init_ref() };
@@ -256,6 +254,10 @@ impl KqueueDriver {
         for waker in wakers.drain(..) {
             waker.wake();
         }
+        let mut cache = self.ready_wakers.borrow_mut();
+        if wakers.capacity() > cache.capacity() {
+            *cache = wakers;
+        }
         Ok(())
     }
 
@@ -266,6 +268,73 @@ impl KqueueDriver {
         } else {
             libc::EVFILT_WRITE
         }
+    }
+
+    fn reregister_with(
+        &self,
+        handle: &InnerRawHandle,
+        interest: Interest,
+        mut change: impl FnMut(RawFd, i16, bool, usize) -> io::Result<()>,
+    ) -> io::Result<()> {
+        // Keep retired wakers outside the state borrow, including on errors.
+        let mut retired = [None, None];
+        let mut state = self.state.borrow_mut();
+        let registration = state.registrations.get_mut(handle.token.0).ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::NotFound,
+                format!("I/O token {} is not registered", handle.token.0),
+            )
+        })?;
+        let key = Self::encode_key(handle.token, registration.generation);
+        // Install new filters first, so a failed addition cannot remove an
+        // existing waiter. Record each successful syscall individually: kqueue
+        // changes are not atomic, and a later failure must remain retryable.
+        for (filter, wanted, installed) in [
+            (
+                libc::EVFILT_READ,
+                interest.is_readable(),
+                &mut registration.registered_read,
+            ),
+            (
+                libc::EVFILT_WRITE,
+                interest.is_writable(),
+                &mut registration.registered_write,
+            ),
+        ] {
+            if wanted && !*installed {
+                change(registration.fd, filter, true, key)?;
+                *installed = true;
+            }
+        }
+        for (index, (filter, wanted, installed, waiter, ready)) in [
+            (
+                libc::EVFILT_READ,
+                interest.is_readable(),
+                &mut registration.registered_read,
+                &mut registration.read_waiter,
+                &mut registration.read_ready,
+            ),
+            (
+                libc::EVFILT_WRITE,
+                interest.is_writable(),
+                &mut registration.registered_write,
+                &mut registration.write_waiter,
+                &mut registration.write_ready,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if !wanted && *installed {
+                change(registration.fd, filter, false, key)?;
+                *installed = false;
+                retired[index] = waiter.take();
+                *ready = false;
+            }
+        }
+        drop(state);
+        drop(retired);
+        Ok(())
     }
 }
 
@@ -300,7 +369,6 @@ impl Driver for KqueueDriver {
                 write_waiter: None,
                 read_ready: false,
                 write_ready: false,
-                interest,
                 registered_read: interest.is_readable(),
                 registered_write: interest.is_writable(),
                 generation,
@@ -333,62 +401,18 @@ impl Driver for KqueueDriver {
     }
 
     fn reregister_handle(&self, handle: &InnerRawHandle, interest: Interest) -> io::Result<()> {
-        let (fd, generation, old_read, old_write) = {
-            let mut state = self.state.borrow_mut();
-            let registration = state.registrations.get_mut(handle.token.0).ok_or_else(|| {
-                io::Error::new(
-                    ErrorKind::NotFound,
-                    format!("I/O token {} is not registered", handle.token.0),
-                )
-            })?;
-            let old_read = registration.registered_read;
-            let old_write = registration.registered_write;
-            registration.interest = interest;
-            registration.registered_read = interest.is_readable();
-            registration.registered_write = interest.is_writable();
-            if !interest.is_readable() {
-                registration.read_waiter = None;
-                registration.read_ready = false;
+        self.reregister_with(handle, interest, |fd, filter, add, key| {
+            if add {
+                self.apply_change(Self::change(
+                    fd,
+                    filter,
+                    libc::EV_ADD | libc::EV_ENABLE | libc::EV_CLEAR,
+                    key,
+                ))
+            } else {
+                self.delete_filter(fd, filter)
             }
-            if !interest.is_writable() {
-                registration.write_waiter = None;
-                registration.write_ready = false;
-            }
-            (
-                registration.fd,
-                registration.generation,
-                old_read,
-                old_write,
-            )
-        };
-        if old_read && !interest.is_readable() {
-            self.delete_filter(fd, libc::EVFILT_READ)?;
-        }
-        if old_write && !interest.is_writable() {
-            self.delete_filter(fd, libc::EVFILT_WRITE)?;
-        }
-        let key = Self::encode_key(handle.token, generation);
-        let mut additions = Vec::with_capacity(2);
-        if !old_read && interest.is_readable() {
-            additions.push(Self::change(
-                fd,
-                libc::EVFILT_READ,
-                libc::EV_ADD | libc::EV_ENABLE | libc::EV_CLEAR,
-                key,
-            ));
-        }
-        if !old_write && interest.is_writable() {
-            additions.push(Self::change(
-                fd,
-                libc::EVFILT_WRITE,
-                libc::EV_ADD | libc::EV_ENABLE | libc::EV_CLEAR,
-                key,
-            ));
-        }
-        if !additions.is_empty() {
-            self.apply_changes(&additions)?;
-        }
-        Ok(())
+        })
     }
 
     fn deregister_handle(&self, handle: &InnerRawHandle) -> io::Result<()> {
@@ -419,6 +443,8 @@ impl Driver for KqueueDriver {
         interest: Interest,
     ) -> io::Result<()> {
         let filter = Self::filter(interest);
+        let mut incoming = Some(waker);
+        let mut replaced = None;
         let wake_now = {
             let mut state = self.state.borrow_mut();
             let registration = state.registrations.get_mut(handle.token.0).ok_or_else(|| {
@@ -441,15 +467,16 @@ impl Driver for KqueueDriver {
             } else {
                 if !waiter
                     .as_ref()
-                    .is_some_and(|current| current.will_wake(&waker))
+                    .is_some_and(|current| current.will_wake(incoming.as_ref().unwrap()))
                 {
-                    *waiter = Some(waker.clone());
+                    replaced = std::mem::replace(waiter, incoming.take());
                 }
                 false
             }
         };
+        drop(replaced);
         if wake_now {
-            waker.wake();
+            incoming.take().unwrap().wake();
         }
         Ok(())
     }
@@ -473,7 +500,166 @@ mod tests {
     use super::*;
     use crate::vibeio::driver::{AnyDriver, RegistrationMode};
 
+    thread_local! {
+        static REENTER: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
+    }
+    struct ReentryScope;
+    impl Drop for ReentryScope {
+        fn drop(&mut self) {
+            let callback = REENTER.with(|slot| slot.borrow_mut().take());
+            drop(callback);
+        }
+    }
+    fn reenter() {
+        REENTER.with(|slot| {
+            if let Some(callback) = slot.borrow().as_ref() {
+                callback();
+            }
+        });
+    }
+    struct ReentrantWake;
+    impl std::task::Wake for ReentrantWake {
+        fn wake(self: Arc<Self>) {
+            reenter();
+        }
+    }
+    impl Drop for ReentrantWake {
+        fn drop(&mut self) {
+            reenter();
+        }
+    }
+
+    #[test]
+    fn callbacks_can_reenter_on_replacement_interest_removal_and_readiness() {
+        for action in 0..3 {
+            let driver = Rc::new(AnyDriver::Kqueue(KqueueDriver::new().unwrap()));
+            let (reader, mut writer) = std::os::unix::net::UnixStream::pair().unwrap();
+            reader.set_nonblocking(true).unwrap();
+            let handle = InnerRawHandle::new_with_driver_and_mode(
+                &driver,
+                reader.as_raw_fd(),
+                Interest::READABLE,
+                RegistrationMode::Poll,
+            )
+            .unwrap();
+            let inner = driver.clone();
+            let calls = Rc::new(std::cell::Cell::new(0));
+            let called = calls.clone();
+            REENTER.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move || {
+                    let AnyDriver::Kqueue(driver) = inner.as_ref() else {
+                        unreachable!()
+                    };
+                    assert!(driver.state.try_borrow_mut().is_ok());
+                    driver.wait_events(Some(Duration::ZERO)).unwrap();
+                    called.set(called.get() + 1);
+                }))
+            });
+            let _scope = ReentryScope;
+            let AnyDriver::Kqueue(kqueue) = driver.as_ref() else {
+                unreachable!()
+            };
+            kqueue
+                .submit_poll(
+                    &handle,
+                    Waker::from(Arc::new(ReentrantWake)),
+                    Interest::READABLE,
+                )
+                .unwrap();
+            match action {
+                0 => kqueue
+                    .submit_poll(&handle, Waker::noop().clone(), Interest::READABLE)
+                    .unwrap(),
+                1 => kqueue
+                    .reregister_handle(&handle, Interest::WRITABLE)
+                    .unwrap(),
+                _ => {
+                    writer.write_all(b"x").unwrap();
+                    kqueue.wait_events(Some(Duration::from_secs(1))).unwrap();
+                }
+            }
+            assert!(calls.get() > 0);
+            assert!(kqueue.ready_wakers.borrow().is_empty());
+        }
+    }
+
     struct WakeCount(AtomicUsize);
+
+    #[test]
+    fn failed_interest_changes_preserve_waiters_and_retry_remaining_changes() {
+        for fail_add in [true, false] {
+            let driver = Rc::new(AnyDriver::Kqueue(KqueueDriver::new().unwrap()));
+            let (reader, _writer) = std::os::unix::net::UnixStream::pair().unwrap();
+            let handle = InnerRawHandle::new_with_driver_and_mode(
+                &driver,
+                reader.as_raw_fd(),
+                Interest::READABLE,
+                RegistrationMode::Poll,
+            )
+            .unwrap();
+            let AnyDriver::Kqueue(kqueue) = driver.as_ref() else {
+                unreachable!()
+            };
+            kqueue
+                .submit_poll(&handle, Waker::noop().clone(), Interest::READABLE)
+                .unwrap();
+            kqueue.state.borrow_mut().registrations[handle.token.0].read_ready = true;
+            let mut attempted = Vec::new();
+            let error = kqueue
+                .reregister_with(&handle, Interest::WRITABLE, |fd, filter, add, key| {
+                    attempted.push((filter, add));
+                    if add == fail_add {
+                        return Err(io::Error::from_raw_os_error(libc::EIO));
+                    }
+                    assert!(add);
+                    kqueue.apply_change(KqueueDriver::change(
+                        fd,
+                        filter,
+                        libc::EV_ADD | libc::EV_ENABLE | libc::EV_CLEAR,
+                        key,
+                    ))
+                })
+                .unwrap_err();
+            assert_eq!(error.raw_os_error(), Some(libc::EIO));
+            assert_eq!(attempted.len(), if fail_add { 1 } else { 2 });
+            {
+                let state = kqueue.state.borrow();
+                let registration = &state.registrations[handle.token.0];
+                assert!(registration.registered_read);
+                assert_eq!(registration.registered_write, !fail_add);
+                assert!(registration.read_waiter.is_some());
+                assert!(registration.read_ready);
+            }
+            let mut retried = Vec::new();
+            kqueue
+                .reregister_with(&handle, Interest::WRITABLE, |fd, filter, add, key| {
+                    retried.push((filter, add));
+                    if add {
+                        kqueue.apply_change(KqueueDriver::change(
+                            fd,
+                            filter,
+                            libc::EV_ADD | libc::EV_ENABLE | libc::EV_CLEAR,
+                            key,
+                        ))
+                    } else {
+                        kqueue.delete_filter(fd, filter)
+                    }
+                })
+                .unwrap();
+            let expected = if fail_add {
+                vec![(libc::EVFILT_WRITE, true), (libc::EVFILT_READ, false)]
+            } else {
+                vec![(libc::EVFILT_READ, false)]
+            };
+            assert_eq!(retried, expected);
+            let state = kqueue.state.borrow();
+            let registration = &state.registrations[handle.token.0];
+            assert!(!registration.registered_read);
+            assert!(registration.registered_write);
+            assert!(registration.read_waiter.is_none());
+            assert!(!registration.read_ready);
+        }
+    }
 
     impl std::task::Wake for WakeCount {
         fn wake(self: Arc<Self>) {

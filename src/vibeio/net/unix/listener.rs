@@ -78,8 +78,9 @@ impl UnixListener {
     /// This function will return an error if registration with the async driver fails.
     #[inline]
     pub fn from_std(inner: StdUnixListener) -> Result<Self, io::Error> {
-        let handle = ManuallyDrop::new(InnerRawHandle::new(inner.as_raw_fd(), Interest::READABLE)?);
+        let handle = InnerRawHandle::new(inner.as_raw_fd(), Interest::READABLE)?;
         inner.set_nonblocking(!handle.uses_completion())?;
+        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 

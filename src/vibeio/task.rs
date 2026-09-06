@@ -1,135 +1,82 @@
-use std::cell::{RefCell, UnsafeCell};
-use std::collections::VecDeque;
-use std::mem::ManuallyDrop;
-use std::rc::Weak;
+#![forbid(unsafe_code)]
+
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{RawWaker, RawWakerVTable, Waker};
+use std::task::Waker;
 
 use crossbeam_queue::SegQueue;
 use futures_util::future::LocalBoxFuture;
-use futures_util::task::WakerRef;
+use futures_util::task::{ArcWake, WakerRef, waker, waker_ref};
 
 use crate::vibeio::driver::AnyInterruptor;
 
 pub(crate) struct RemoteWakeContext {
-    pub(crate) queue: Arc<SegQueue<usize>>,
+    pub(crate) queue: Arc<SegQueue<Arc<TaskWake>>>,
     pub(crate) interruptor: AnyInterruptor,
     pub(crate) waiting: Arc<AtomicBool>,
     pub(crate) interrupt_pending: Arc<AtomicBool>,
 }
 
+/// Only this Send + Sync proxy crosses threads through a Waker.
+pub(crate) struct TaskWake {
+    pub(crate) remote_wake: std::sync::Weak<RemoteWakeContext>,
+    pub(crate) queued: AtomicBool,
+    pub(crate) thread_id: std::thread::ThreadId,
+    pub(crate) token: usize,
+}
+
 pub struct Task {
     pub future: RefCell<Option<LocalBoxFuture<'static, ()>>>,
-    pub queue: Weak<UnsafeCell<VecDeque<Arc<Task>>>>,
-    pub next_task: Weak<RefCell<Option<Arc<Task>>>>,
-    pub remote_wake: std::sync::Weak<RemoteWakeContext>,
-    pub queued: AtomicBool,
-    pub thread_id: std::thread::ThreadId,
+    pub(crate) wake: Arc<TaskWake>,
     pub token: usize,
 }
 
 impl Task {
-    /// Borrow the polling task's reference instead of incrementing its Arc count.
     #[inline]
-    pub fn waker_ref(self: &Arc<Self>) -> WakerRef<'_> {
-        // SAFETY: the returned lifetime keeps `self` alive. WakerRef suppresses
-        // the borrowed waker's destructor and only exposes &Waker. Cloning it
-        // uses our normal vtable to acquire an owned Arc, so futures may retain
-        // cloned wakers or send them to other threads after this borrow ends.
-        let waker = unsafe { Waker::from_raw(Self::raw_waker(Arc::as_ptr(self).cast())) };
-        WakerRef::new_unowned(ManuallyDrop::new(waker))
+    pub fn waker_ref(self: &Rc<Self>) -> WakerRef<'_> {
+        // Borrowing the proxy does not increment its reference count. Only
+        // cloning the resulting Waker takes an owned proxy reference.
+        waker_ref(&self.wake)
     }
 
     #[inline]
-    pub fn waker(self: &Arc<Self>) -> Waker {
-        // SAFETY: the vtable methods correctly clone/drop the Arc reference count.
-        unsafe { Waker::from_raw(Self::raw_waker(Arc::into_raw(Arc::clone(self)) as *const ())) }
-    }
-
-    #[inline]
-    unsafe fn raw_waker(ptr: *const ()) -> RawWaker {
-        RawWaker::new(ptr, &Self::VTABLE)
-    }
-
-    const VTABLE: RawWakerVTable = RawWakerVTable::new(
-        Self::raw_waker_clone,
-        Self::raw_waker_wake,
-        Self::raw_waker_wake_by_ref,
-        Self::raw_waker_drop,
-    );
-
-    #[inline]
-    unsafe fn raw_waker_clone(ptr: *const ()) -> RawWaker {
-        let task = Arc::<Self>::from_raw(ptr as *const Self);
-        let cloned = Arc::clone(&task);
-        let _ = Arc::into_raw(task);
-        Self::raw_waker(Arc::into_raw(cloned) as *const ())
-    }
-
-    #[inline]
-    unsafe fn raw_waker_wake(ptr: *const ()) {
-        let task = Arc::<Self>::from_raw(ptr as *const Self);
-        Self::enqueue_if_needed(&task);
-    }
-
-    #[inline]
-    unsafe fn raw_waker_wake_by_ref(ptr: *const ()) {
-        let task = Arc::<Self>::from_raw(ptr as *const Self);
-        Self::enqueue_if_needed(&task);
-        let _ = Arc::into_raw(task);
-    }
-
-    #[inline]
-    unsafe fn raw_waker_drop(ptr: *const ()) {
-        drop(Arc::<Self>::from_raw(ptr as *const Self));
-    }
-
-    #[inline]
-    fn enqueue_if_needed(task: &Arc<Self>) {
-        if std::thread::current().id() == task.thread_id {
-            if !task.queued.swap(true, Ordering::Relaxed) {
-                let mut pushed_next = false;
-                if let Some(next_task) = task.next_task.upgrade() {
-                    let mut next_task = next_task.borrow_mut();
-                    if next_task.is_none() {
-                        *next_task = Some(Arc::clone(task));
-                        pushed_next = true;
-                    }
-                }
-                if !pushed_next {
-                    if let Some(queue) = task.queue.upgrade() {
-                        // SAFETY: the runtime is single-threaded and only mutates the ready
-                        // queue from that thread. We also never hold a mutable queue borrow
-                        // while polling task futures, so re-entrant wakes do not alias.
-                        unsafe {
-                            (&mut *queue.get()).push_back(Arc::clone(task));
-                        }
-                    }
-                }
-            }
-            return;
-        }
-
-        let Some(remote) = task.remote_wake.upgrade() else {
-            return;
-        };
-        if !task.queued.swap(true, Ordering::Relaxed) {
-            remote.queue.push(task.token);
-        }
-
-        // Interrupt the driver if it's waiting.
-        if remote.waiting.load(Ordering::Acquire) {
-            let should_interrupt = !remote.interrupt_pending.swap(true, Ordering::AcqRel);
-            if should_interrupt {
-                remote.interruptor.interrupt();
-            }
-        }
+    pub fn waker(self: &Rc<Self>) -> Waker {
+        waker(self.wake.clone())
     }
 
     #[inline]
     pub fn mark_dequeued(&self) {
-        self.queued.store(false, Ordering::Relaxed);
+        self.wake.queued.store(false, Ordering::Relaxed);
+    }
+}
+
+impl ArcWake for TaskWake {
+    #[inline]
+    fn wake_by_ref(wake: &Arc<Self>) {
+        Self::enqueue_if_needed(wake);
+    }
+}
+
+impl TaskWake {
+    fn enqueue_if_needed(wake: &Arc<Self>) {
+        let Some(remote) = wake.remote_wake.upgrade() else {
+            return;
+        };
+        if !wake.queued.swap(true, Ordering::Relaxed) {
+            if std::thread::current().id() == wake.thread_id
+                && crate::vibeio::executor::enqueue_local_wake(wake, &remote)
+            {
+                return;
+            }
+            remote.queue.push(wake.clone());
+        }
+        if remote.waiting.load(Ordering::Acquire)
+            && !remote.interrupt_pending.swap(true, Ordering::AcqRel)
+        {
+            remote.interruptor.interrupt();
+        }
     }
 }
 
@@ -137,50 +84,98 @@ impl Task {
 mod tests {
     use super::*;
 
-    fn task() -> Arc<Task> {
-        #[allow(
-            clippy::arc_with_non_send_sync,
-            reason = "Match the executor's Arc-backed waker storage for this local task"
-        )]
-        Arc::new(Task {
+    fn task() -> Rc<Task> {
+        Rc::new(Task {
             future: RefCell::new(None),
-            queue: Weak::new(),
-            next_task: Weak::new(),
-            remote_wake: std::sync::Weak::new(),
-            queued: AtomicBool::new(false),
-            thread_id: std::thread::current().id(),
+            wake: Arc::new(TaskWake {
+                remote_wake: std::sync::Weak::new(),
+                queued: AtomicBool::new(false),
+                thread_id: std::thread::current().id(),
+                token: 0,
+            }),
             token: 0,
         })
     }
 
     #[test]
-    fn borrowed_waker_only_owns_references_when_cloned() {
+    fn borrowed_waker_only_clones_thread_safe_proxy() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TaskWake>();
         let task = task();
         let owned = {
             let borrowed = task.waker_ref();
-            assert_eq!(Arc::strong_count(&task), 1);
-            let owned = borrowed.clone();
-            assert_eq!(Arc::strong_count(&task), 2);
+            assert_eq!(Arc::strong_count(&task.wake), 1);
             borrowed.wake_by_ref();
-            assert!(task.queued.load(Ordering::Relaxed));
+            assert_eq!(Arc::strong_count(&task.wake), 1);
+            let owned = borrowed.clone();
+            assert_eq!(Arc::strong_count(&task.wake), 2);
+            assert_eq!(Rc::strong_count(&task), 1);
             owned
         };
-        assert_eq!(Arc::strong_count(&task), 2);
-        task.mark_dequeued();
-        owned.wake();
-        assert!(task.queued.load(Ordering::Relaxed));
-        assert_eq!(Arc::strong_count(&task), 1);
+        drop(owned);
+        assert_eq!(Arc::strong_count(&task.wake), 1);
     }
 
     #[test]
-    fn cloned_borrowed_waker_outlives_task_owner_and_wakes_remotely() {
+    fn remote_waker_cannot_retain_local_task() {
         let task = task();
-        let weak = Arc::downgrade(&task);
+        let local = Rc::downgrade(&task);
+        let proxy = Arc::downgrade(&task.wake);
         let owned = task.waker_ref().clone();
         drop(task);
-        assert!(weak.upgrade().is_some());
+        assert!(local.upgrade().is_none());
+        assert!(proxy.upgrade().is_some());
         std::thread::spawn(move || owned.wake()).join().unwrap();
-        assert!(weak.upgrade().is_none());
+        assert!(proxy.upgrade().is_none());
+    }
+
+    #[test]
+    fn borrowed_wakes_enqueue_one_proxy_until_dequeued() {
+        let driver = crate::vibeio::driver::AnyDriver::new_mock();
+        let remote = Arc::new(RemoteWakeContext {
+            queue: Arc::new(SegQueue::new()),
+            interruptor: driver.get_interruptor(),
+            waiting: Arc::new(AtomicBool::new(false)),
+            interrupt_pending: Arc::new(AtomicBool::new(false)),
+        });
+        let mut task = task();
+        Arc::get_mut(&mut Rc::get_mut(&mut task).unwrap().wake)
+            .unwrap()
+            .remote_wake = Arc::downgrade(&remote);
+        let borrowed = task.waker_ref();
+        for _ in 0..2 {
+            borrowed.wake_by_ref();
+            borrowed.wake_by_ref();
+            assert_eq!(Arc::strong_count(&task.wake), 2);
+            let queued = remote.queue.pop().unwrap();
+            assert!(Arc::ptr_eq(&queued, &task.wake));
+            assert!(remote.queue.pop().is_none());
+            drop(queued);
+            assert_eq!(Arc::strong_count(&task.wake), 1);
+            task.mark_dequeued();
+        }
+    }
+
+    #[test]
+    fn local_future_is_dropped_on_owner_thread_despite_remote_waker() {
+        struct ThreadBoundDrop(std::thread::ThreadId, std::rc::Rc<std::cell::Cell<bool>>);
+        impl Drop for ThreadBoundDrop {
+            fn drop(&mut self) {
+                assert_eq!(std::thread::current().id(), self.0);
+                self.1.set(true);
+            }
+        }
+        let task = task();
+        let dropped = std::rc::Rc::new(std::cell::Cell::new(false));
+        let guard = ThreadBoundDrop(std::thread::current().id(), dropped.clone());
+        *task.future.borrow_mut() = Some(Box::pin(async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        }));
+        let owned = task.waker();
+        drop(task);
+        assert!(dropped.get());
+        std::thread::spawn(move || drop(owned)).join().unwrap();
     }
 
     #[test]
@@ -191,6 +186,6 @@ mod tests {
             panic!("poll panicked");
         }));
         assert!(result.is_err());
-        assert_eq!(Arc::strong_count(&task), 1);
+        assert_eq!(Arc::strong_count(&task.wake), 1);
     }
 }

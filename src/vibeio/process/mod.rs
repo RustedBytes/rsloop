@@ -13,11 +13,11 @@
 //! - On Unix, the module uses `mio`/`io_uring` drivers to register child process
 //!   file descriptors for async I/O when possible. Falls back to a blocking pool
 //!   when the driver is unavailable or registration fails.
-//! - A background `ZombieReaper` task runs per runtime to reap exited child processes
-//!   and avoid leaving zombies. This is started automatically when the runtime is
-//!   created.
-//! - Calling any process API outside a runtime will panic (matching the library's
-//!   general behavior for runtime-only APIs).
+//! - Child drop retains reaping ownership through a runtime reaper when available
+//!   or a background-thread fallback otherwise.
+//! - Construction and child waiting can run outside a runtime. Async stdio's
+//!   blocking fallback requires a runtime with a blocking pool and reports an
+//!   I/O error when that pool is unavailable.
 
 mod reaper;
 
@@ -45,9 +45,7 @@ use crate::vibeio::driver::RegistrationMode;
 use crate::vibeio::executor::current_driver;
 #[cfg(unix)]
 use crate::vibeio::fd_inner::InnerRawHandle;
-use crate::vibeio::io::{
-    AsyncRead, AsyncWrite, IoBuf, IoBufMut, iobuf_to_slice, iobufmut_to_slice,
-};
+use crate::vibeio::io::{AsyncRead, AsyncWrite, IoBuf, IoBufMut, iobuf_to_slice, read_into_buf};
 #[cfg(unix)]
 use crate::vibeio::op::{ReadOp, WriteOp};
 
@@ -89,28 +87,7 @@ fn blocking_pool_io_error() -> io::Error {
 
 #[cfg(unix)]
 #[inline]
-fn configure_nonblocking(fd: RawFd, uses_completion: bool) {
-    // On Linux, pipe2() already sets O_NONBLOCK at creation time, so
-    // we only need to adjust flags when the mode doesn't match.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags == -1 {
-        return;
-    }
-
-    let mut new_flags = flags | libc::O_NONBLOCK;
-    if uses_completion {
-        new_flags &= !libc::O_NONBLOCK;
-    }
-    if new_flags != flags {
-        unsafe {
-            libc::fcntl(fd, libc::F_SETFL, new_flags);
-        }
-    }
-}
-
-#[cfg(unix)]
-#[inline]
-fn make_child_io(fd: RawFd, interest: Interest) -> ChildIo {
+fn make_child_io(fd: RawFd, interest: Interest) -> io::Result<ChildIo> {
     if let Some(driver) = current_driver() {
         match InnerRawHandle::new_with_driver_and_mode(
             &driver,
@@ -119,14 +96,14 @@ fn make_child_io(fd: RawFd, interest: Interest) -> ChildIo {
             RegistrationMode::Completion,
         ) {
             Ok(handle) => {
+                crate::vibeio::fd_inner::set_nonblocking(fd, !handle.uses_completion())?;
                 let handle = ManuallyDrop::new(handle);
-                configure_nonblocking(fd, handle.uses_completion());
-                ChildIo::Async(handle)
+                Ok(ChildIo::Async(handle))
             }
-            Err(_) => ChildIo::Blocking,
+            Err(_) => Ok(ChildIo::Blocking),
         }
     } else {
-        ChildIo::Blocking
+        Ok(ChildIo::Blocking)
     }
 }
 
@@ -144,8 +121,7 @@ where
             .ok()
             .and_then(|rc| rc.take())
             .expect("inner/buf is none");
-        let temp_slice = iobufmut_to_slice(&mut buf);
-        let result = inner.read(temp_slice);
+        let result = read_into_buf(&mut buf, |slice| inner.read(slice));
         (result, inner, buf)
     })
     .await;
@@ -254,7 +230,7 @@ impl ChildStdin {
     #[inline]
     pub(crate) fn from_std(inner: std::process::ChildStdin) -> io::Result<Self> {
         #[cfg(unix)]
-        let io = make_child_io(inner.as_raw_fd(), Interest::WRITABLE);
+        let io = make_child_io(inner.as_raw_fd(), Interest::WRITABLE)?;
         #[cfg(windows)]
         let io = ChildIo::Blocking;
 
@@ -297,7 +273,7 @@ impl ChildStdout {
     #[inline]
     pub(crate) fn from_std(inner: std::process::ChildStdout) -> io::Result<Self> {
         #[cfg(unix)]
-        let io = make_child_io(inner.as_raw_fd(), Interest::READABLE);
+        let io = make_child_io(inner.as_raw_fd(), Interest::READABLE)?;
         #[cfg(windows)]
         let io = ChildIo::Blocking;
 
@@ -340,7 +316,7 @@ impl ChildStderr {
     #[inline]
     pub(crate) fn from_std(inner: std::process::ChildStderr) -> io::Result<Self> {
         #[cfg(unix)]
-        let io = make_child_io(inner.as_raw_fd(), Interest::READABLE);
+        let io = make_child_io(inner.as_raw_fd(), Interest::READABLE)?;
         #[cfg(windows)]
         let io = ChildIo::Blocking;
 
@@ -481,7 +457,7 @@ impl AsyncWrite for ChildStdin {
 impl AsyncRead for ChildStdout {
     #[inline]
     async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<usize, io::Error>, B) {
-        if buf.buf_len() == 0 {
+        if buf.buf_capacity() == 0 {
             return (Ok(0), buf);
         }
 
@@ -506,8 +482,8 @@ impl AsyncRead for ChildStdout {
                 None => return (Err(stdio_closed_error()), buf),
             };
             let mut buf = buf;
-            let temp_slice = iobufmut_to_slice(&mut buf);
-            (inner.read(temp_slice), buf)
+            let result = read_into_buf(&mut buf, |slice| inner.read(slice));
+            (result, buf)
         }
     }
 }
@@ -515,7 +491,7 @@ impl AsyncRead for ChildStdout {
 impl AsyncRead for ChildStderr {
     #[inline]
     async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<usize, io::Error>, B) {
-        if buf.buf_len() == 0 {
+        if buf.buf_capacity() == 0 {
             return (Ok(0), buf);
         }
 
@@ -540,8 +516,8 @@ impl AsyncRead for ChildStderr {
                 None => return (Err(stdio_closed_error()), buf),
             };
             let mut buf = buf;
-            let temp_slice = iobufmut_to_slice(&mut buf);
-            (inner.read(temp_slice), buf)
+            let result = read_into_buf(&mut buf, |slice| inner.read(slice));
+            (result, buf)
         }
     }
 }
@@ -686,20 +662,37 @@ pub struct Child {
 impl Child {
     /// Create a new `Child` from a standard library `Child`.
     #[inline]
-    pub(crate) fn from_std(mut child: std::process::Child) -> io::Result<Self> {
-        let stdin = child.stdin.take().map(ChildStdin::from_std).transpose()?;
-        let stdout = child.stdout.take().map(ChildStdout::from_std).transpose()?;
-        let stderr = child.stderr.take().map(ChildStderr::from_std).transpose()?;
+    pub(crate) fn from_std(child: std::process::Child) -> io::Result<Self> {
         let id = child.id();
-
-        Ok(Self {
+        // Install reaping ownership before any fallible stdio setup. Dropping
+        // std::process::Child alone would not reap a partially wrapped child.
+        let mut wrapped = Self {
             inner: Some(child),
             id,
-            stdin,
-            stdout,
-            stderr,
+            stdin: None,
+            stdout: None,
+            stderr: None,
             reaper: ZombieReaper::new(),
-        })
+        };
+        wrapped.stdin = wrapped
+            .inner_mut()?
+            .stdin
+            .take()
+            .map(ChildStdin::from_std)
+            .transpose()?;
+        wrapped.stdout = wrapped
+            .inner_mut()?
+            .stdout
+            .take()
+            .map(ChildStdout::from_std)
+            .transpose()?;
+        wrapped.stderr = wrapped
+            .inner_mut()?
+            .stderr
+            .take()
+            .map(ChildStderr::from_std)
+            .transpose()?;
+        Ok(wrapped)
     }
 
     /// Returns the OS-assigned process identifier.
@@ -983,8 +976,50 @@ mod tests {
     use crate::vibeio::executor::Runtime;
     use crate::vibeio::io::{AsyncRead, AsyncWrite, IoBufWithCursor};
 
+    #[cfg(unix)]
+    #[test]
+    fn failed_child_io_configuration_releases_registration() {
+        let mut driver = AnyDriver::new_mock();
+        let AnyDriver::Mock(mock) = &mut driver else {
+            unreachable!()
+        };
+        mock.registrations = Some(Default::default());
+        mock.registrations
+            .as_ref()
+            .unwrap()
+            .results
+            .borrow_mut()
+            .push_back(Ok(mio::Token(0)));
+        Runtime::new(driver).block_on(async {
+            let result = make_child_io(-1, Interest::READABLE);
+            assert!(matches!(result, Err(ref error) if error.raw_os_error() == Some(libc::EBADF)));
+            let driver = current_driver().unwrap();
+            let AnyDriver::Mock(mock) = driver.as_ref() else {
+                unreachable!()
+            };
+            assert_eq!(
+                *mock.registrations.as_ref().unwrap().deregistered.borrow(),
+                [mio::Token(0)]
+            );
+        });
+    }
+
     fn make_runtime() -> Runtime {
         Runtime::new(AnyDriver::new_best().expect("driver should initialize"))
+    }
+
+    #[cfg(feature = "blocking-default")]
+    #[test]
+    fn blocking_child_reader_fills_empty_vector_and_clears_it_at_eof() {
+        Runtime::new(AnyDriver::new_mock()).block_on(async {
+            let reader = std::io::Cursor::new(b"hello".to_vec());
+            let (result, reader, buf) = read_in_blocking_pool(reader, Vec::with_capacity(8)).await;
+            assert_eq!(result.unwrap(), 5);
+            assert_eq!(buf, b"hello");
+            let (result, _, buf) = read_in_blocking_pool(reader, buf).await;
+            assert_eq!(result.unwrap(), 0);
+            assert!(buf.is_empty());
+        });
     }
 
     async fn write_all<W: AsyncWrite>(writer: &mut W, buf: &[u8]) -> io::Result<()> {
@@ -1007,7 +1042,7 @@ mod tests {
     async fn read_line<R: AsyncRead>(reader: &mut R) -> io::Result<String> {
         let mut output = Vec::new();
         loop {
-            let (result, buf) = reader.read(vec![0u8; 64]).await;
+            let (result, buf) = reader.read(Vec::with_capacity(64)).await;
             let read = result?;
             if read == 0 {
                 break;

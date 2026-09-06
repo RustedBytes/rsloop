@@ -7,24 +7,15 @@
 //!
 //! # Examples
 //!
-//! ```ignore
-//! use vibeio::io::{AsyncRead, AsyncWrite, pipe};
-//!
-//! async fn pipe_example() {
-//!     let (mut reader, mut writer) = pipe().unwrap();
-//!
-//!     writer.write(b"hello").await.0.unwrap();
-//!     let mut buf = [0u8; 5];
-//!     reader.read(buf).await.0.unwrap();
-//!     assert_eq!(&buf, b"hello");
-//! }
-//! ```
+//! See the executable "Pipe buffer ownership" example in
+//! `tools/vibeio-check/EXAMPLES.md`. Reads return the owned buffer alongside
+//! their result; inspect that returned buffer, not an original array copy.
 
 use std::future::poll_fn;
 use std::io::{self, IoSlice};
 use std::mem::ManuallyDrop;
 use std::os::fd::OwnedFd;
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -38,24 +29,91 @@ use crate::vibeio::io::{
 use crate::vibeio::op::{ReadOp, ReadvOp, WriteOp, WritevOp};
 use crate::vibeio::{
     driver::RegistrationMode,
-    fd_inner::InnerRawHandle,
+    fd_inner::{InnerRawHandle, set_nonblocking},
     io::{AsyncRead, AsyncWrite},
 };
 
 fn pipe_inner() -> std::io::Result<(OwnedFd, OwnedFd)> {
-    let mut fds: [RawFd; 2] = [-1; 2];
-    let result = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if result == -1 {
-        return Err(std::io::Error::last_os_error());
+    let (reader, writer) = std::io::pipe()?;
+    Ok((reader.into(), writer.into()))
+}
+
+#[cfg(test)]
+mod setup_tests {
+    use super::*;
+    use crate::vibeio::{driver::AnyDriver, executor::Runtime};
+
+    #[test]
+    fn pipe_endpoints_are_close_on_exec() {
+        let (reader, writer) = pipe_inner().unwrap();
+        for fd in [reader.as_raw_fd(), writer.as_raw_fd()] {
+            // SAFETY: F_GETFD queries the live owned endpoint without pointers.
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            assert_ne!(flags, -1);
+            assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        }
     }
-    Ok((unsafe { OwnedFd::from_raw_fd(fds[0]) }, unsafe {
-        OwnedFd::from_raw_fd(fds[1])
-    }))
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pipe_endpoints_are_not_inherited_across_exec() {
+        const CHILD_FDS: &str = "VIBEIO_PIPE_EXEC_TEST_FDS";
+        if let Ok(endpoints) = std::env::var(CHILD_FDS) {
+            for endpoint in endpoints.split(',') {
+                let (fd, original_target) = endpoint.split_once('=').unwrap();
+                let target = std::fs::read_link(format!("/proc/self/fd/{fd}"));
+                // The test runner may reuse the numeric descriptor, but it must
+                // not retain this pipe (which is still alive in the parent).
+                match target {
+                    Ok(target) => assert_ne!(target, std::path::Path::new(original_target)),
+                    Err(error) => assert_eq!(error.kind(), io::ErrorKind::NotFound),
+                }
+            }
+            return;
+        }
+        let (reader, writer) = pipe_inner().unwrap();
+        let endpoints = [reader.as_raw_fd(), writer.as_raw_fd()]
+            .map(|fd| {
+                let target = std::fs::read_link(format!("/proc/self/fd/{fd}")).unwrap();
+                format!("{fd}={}", target.display())
+            })
+            .join(",");
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "vibeio::io::pipe::setup_tests::pipe_endpoints_are_not_inherited_across_exec",
+            ])
+            .env(CHILD_FDS, endpoints)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn pipe_roundtrip_and_mode_conversion_on_readiness_driver() {
+        Runtime::new(AnyDriver::new_mio().unwrap()).block_on(async {
+            let (reader, mut writer) = pipe().unwrap();
+            let mut reader = reader.into_poll().unwrap().into_completion().unwrap();
+            // Completion requests fall back to poll mode on this driver.
+            assert!(!reader.handle.uses_completion());
+            for fd in [reader.as_raw_fd(), writer.as_raw_fd()] {
+                // SAFETY: both pipe endpoints are live; F_GETFL has no pointers.
+                let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+                assert_ne!(flags, -1);
+                assert_ne!(flags & libc::O_NONBLOCK, 0);
+            }
+            assert_eq!(writer.write(b"abc".to_vec()).await.0.unwrap(), 3);
+            let (result, buffer) = reader.read(vec![0; 3]).await;
+            assert_eq!(result.unwrap(), 3);
+            assert_eq!(buffer, b"abc");
+        });
+    }
 }
 
 /// Create a new async-aware pipe.
 ///
 /// Returns a tuple of `(reader, writer)` pipe endpoints.
+/// Both endpoints are close-on-exec to prevent unintended child inheritance.
 pub fn pipe() -> std::io::Result<(Pipe, Pipe)> {
     let (read, write) = pipe_inner()?;
     Ok((
@@ -83,19 +141,13 @@ impl Pipe {
         mode: RegistrationMode,
     ) -> Result<Self, io::Error> {
         #[cfg(unix)]
-        let handle = ManuallyDrop::new(InnerRawHandle::new_with_mode(
+        let handle = InnerRawHandle::new_with_mode(
             inner.as_raw_fd(),
             Interest::READABLE | Interest::WRITABLE,
             mode,
-        )?);
-        let flags = unsafe { libc::fcntl(inner.as_raw_fd(), libc::F_GETFL) };
-        if flags != -1 {
-            let mut new_flags = flags | libc::O_NONBLOCK;
-            if handle.uses_completion() {
-                new_flags &= !libc::O_NONBLOCK;
-            }
-            unsafe { libc::fcntl(inner.as_raw_fd(), libc::F_SETFL, new_flags) };
-        }
+        )?;
+        set_nonblocking(inner.as_raw_fd(), !handle.uses_completion())?;
+        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 
@@ -104,14 +156,7 @@ impl Pipe {
     pub fn into_poll(self) -> Result<PollPipe, io::Error> {
         let mut stream = self;
         stream.handle.rebind_mode(RegistrationMode::Poll)?;
-        let flags = unsafe { libc::fcntl(stream.inner.as_raw_fd(), libc::F_GETFL) };
-        if flags != -1 {
-            let mut new_flags = flags | libc::O_NONBLOCK;
-            if stream.handle.uses_completion() {
-                new_flags &= !libc::O_NONBLOCK;
-            }
-            unsafe { libc::fcntl(stream.inner.as_raw_fd(), libc::F_SETFL, new_flags) };
-        }
+        set_nonblocking(stream.inner.as_raw_fd(), !stream.handle.uses_completion())?;
         Ok(PollPipe { stream })
     }
 }
@@ -128,14 +173,7 @@ impl PollPipe {
     pub fn into_completion(self) -> Result<Pipe, io::Error> {
         let mut stream = self.stream;
         stream.handle.rebind_mode(RegistrationMode::Completion)?;
-        let flags = unsafe { libc::fcntl(stream.inner.as_raw_fd(), libc::F_GETFL) };
-        if flags != -1 {
-            let mut new_flags = flags | libc::O_NONBLOCK;
-            if stream.handle.uses_completion() {
-                new_flags &= !libc::O_NONBLOCK;
-            }
-            unsafe { libc::fcntl(stream.inner.as_raw_fd(), libc::F_SETFL, new_flags) };
-        }
+        set_nonblocking(stream.inner.as_raw_fd(), !stream.handle.uses_completion())?;
         Ok(stream)
     }
 }

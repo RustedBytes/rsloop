@@ -4,13 +4,16 @@
 //! and `AsyncWrite` traits to the `tokio::io` traits. This enables using
 //! `vibeio` types with tokio-based libraries that expect the tokio I/O traits.
 //!
-//! The wrapper buffers read operations and ensures write operations complete
-//! fully (like `write_all`), making it suitable for bridging async runtimes.
+//! The wrapper buffers reads and accepts writes into bounded owned storage.
+//! Flush (or shut down) explicitly to drain accepted bytes to the inner writer.
 //!
 //! # Implementation notes
 //! - Read operations are buffered with a 4KB buffer size.
-//! - Write operations are completed fully before returning, splitting the
-//!   buffer if necessary.
+//! - Writes accept at most 4KB per call; subsequent writes drain the previous batch.
+//! - A pending write accepts no bytes from its caller, so cancellation and a
+//!   different buffer on the next call cannot misattribute an old completion.
+//! - Errors writing accepted bytes are reported by the next write, read, flush,
+//!   or shutdown that drains them. Dropping the wrapper does not flush.
 //! - Concurrent operations are rejected with an error.
 //! - The wrapper is `Unpin` regardless of the inner type.
 
@@ -31,6 +34,14 @@ const BUFFER_SIZE: usize = 4096;
 /// This type bridges the gap between `vibeio`'s async I/O traits and tokio's
 /// `AsyncRead`/`AsyncWrite` traits, allowing `vibeio` types to be used with
 /// tokio-based libraries.
+///
+/// An in-flight operation owns the inner object until completion. This adapter
+/// does not support concurrent full-duplex operations; prefer native poll-based
+/// stream types for that use case.
+/// Writes are buffered: successful counts acknowledge owned bytes, not completed
+/// kernel writes. Call flush or shutdown before drop to finish delivery. Shutdown
+/// flushes but cannot half-close the inner stream: the buffer-owning trait has no
+/// shutdown operation.
 ///
 /// # Examples
 /// ```ignore
@@ -56,7 +67,7 @@ pub struct AsyncWrap<T> {
         clippy::type_complexity,
         reason = "Spell out the owned write state returned by the in-flight future"
     )]
-    write_fut: Option<Pin<Box<dyn Future<Output = (Result<usize, std::io::Error>, T)>>>>,
+    write_fut: Option<Pin<Box<dyn Future<Output = (Result<(), std::io::Error>, T)>>>>,
     #[allow(
         clippy::type_complexity,
         reason = "Spell out the owned flush state returned by the in-flight future"
@@ -65,6 +76,26 @@ pub struct AsyncWrap<T> {
 }
 
 impl<T> AsyncWrap<T> {
+    fn poll_pending_write(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let Some(future) = self.write_fut.as_mut() else {
+            return Poll::Ready(Ok(()));
+        };
+        let (result, inner) = futures_util::ready!(future.poll_unpin(cx));
+        self.write_fut = None;
+        self.inner = Some(inner);
+        Poll::Ready(result)
+    }
+
+    fn poll_pending_flush(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let Some(future) = self.flush_fut.as_mut() else {
+            return Poll::Ready(Ok(()));
+        };
+        let (result, inner) = futures_util::ready!(future.poll_unpin(cx));
+        self.flush_fut = None;
+        self.inner = Some(inner);
+        Poll::Ready(result)
+    }
+
     /// Create a new `AsyncWrap` wrapping the given inner value.
     #[inline]
     pub fn new(inner: T) -> Self {
@@ -95,6 +126,8 @@ where
         let this = self.get_mut();
 
         if this.read_fut.is_none() {
+            futures_util::ready!(this.poll_pending_flush(cx))?;
+            futures_util::ready!(this.poll_pending_write(cx))?;
             let buf_read = this.read_buf.take();
             if let Some((buf_read, advanced, n)) = buf_read {
                 let copy_len = (n - advanced).min(buf.remaining());
@@ -159,63 +192,47 @@ where
         }
 
         let this = self.get_mut();
-
-        if this.write_fut.is_none() {
-            let buf: Vec<u8> = buf.into();
+        futures_util::ready!(this.poll_pending_flush(cx))?;
+        futures_util::ready!(this.poll_pending_write(cx))?;
+        {
+            let accepted = buf.len().min(BUFFER_SIZE);
+            let buf = buf[..accepted].to_vec();
             let Some(mut inner) = this.inner.take() else {
                 return Poll::Ready(Err(std::io::Error::other(
                     "another operation is already in progress",
                 )));
             };
             let fut = Box::pin(async move {
-                // write_all
-                let mut buf = buf;
-                let mut total_written = 0;
-                while !buf.is_empty() {
-                    let (written, mut buf_written) =
+                use crate::vibeio::io::{IoBuf, IoBufWithCursor};
+                let mut buf = IoBufWithCursor::new(buf);
+                while buf.buf_len() > 0 {
+                    let supplied = buf.buf_len();
+                    let (written, mut returned) =
                         crate::vibeio::io::AsyncWrite::write(&mut inner, buf).await;
-                    match written {
-                        Ok(n) => {
-                            if n == 0 {
-                                return (
-                                    Err(std::io::Error::new(
-                                        std::io::ErrorKind::WriteZero,
-                                        "failed to write the buffered data",
-                                    )),
-                                    inner,
-                                );
-                            }
-                            if n > buf_written.len() {
-                                return (
-                                    Err(std::io::Error::new(
-                                        std::io::ErrorKind::InvalidData,
-                                        "writer returned more bytes than it was given",
-                                    )),
-                                    inner,
-                                );
-                            }
-                            total_written += n;
-                            buf = buf_written.split_off(n);
+                    let count = match written {
+                        Err(error) => return (Err(error), inner),
+                        Ok(0) => return (Err(std::io::ErrorKind::WriteZero.into()), inner),
+                        Ok(count) if count > supplied || count > returned.buf_len() => {
+                            return (Err(std::io::ErrorKind::InvalidData.into()), inner);
                         }
-                        Err(e) => {
-                            return (Err(e), inner);
-                        }
-                    }
+                        Ok(count) => count,
+                    };
+                    returned.advance(count);
+                    buf = returned;
                 }
-                (Ok(total_written), inner)
+                (Ok(()), inner)
             });
             this.write_fut = Some(fut);
+            // This batch is accepted now, not when its future completes. A
+            // later Pending poll consumes no bytes from that later caller.
+            Poll::Ready(Ok(accepted))
         }
-        let write_fut = this.write_fut.as_mut().expect("read_fut is None");
-        let (written, inner) = futures_util::ready!(write_fut.poll_unpin(cx));
-        this.write_fut = None;
-        this.inner = Some(inner);
-        Poll::Ready(written)
     }
 
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         let this = self.get_mut();
+        futures_util::ready!(this.poll_pending_write(cx))?;
 
         if this.flush_fut.is_none() {
             let Some(mut inner) = this.inner.take() else {
@@ -229,17 +246,12 @@ where
             });
             this.flush_fut = Some(fut);
         }
-        let flush_fut = this.flush_fut.as_mut().expect("read_fut is None");
-        let (flush, inner) = futures_util::ready!(flush_fut.poll_unpin(cx));
-        this.flush_fut = None;
-        this.inner = Some(inner);
-        Poll::Ready(flush)
+        this.poll_pending_flush(cx)
     }
 
     #[inline]
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        // No-op
-        Poll::Ready(Ok(()))
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        self.poll_flush(cx)
     }
 }
 
@@ -440,9 +452,12 @@ mod tests {
             let writer = ChunkedWriter::new(state.clone(), 2);
             let mut wrap = AsyncWrap::new(writer);
 
-            let payload = b"hello world";
-            let n = wrap.write(payload).await.expect("write should succeed");
-            assert_eq!(n, payload.len());
+            let payload: Vec<u8> = (0..super::BUFFER_SIZE * 2 + 7)
+                .map(|index| (index % 251) as u8)
+                .collect();
+            wrap.write_all(&payload)
+                .await
+                .expect("write_all should succeed");
             wrap.flush().await.expect("flush should succeed");
 
             let guard = state.lock().expect("lock writer state");
@@ -478,11 +493,118 @@ mod tests {
             crate::vibeio::executor::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
         runtime.block_on(async {
             let mut wrap = AsyncWrap::new(ZeroWriter);
+            wrap.write_all(b"data").await.unwrap();
             let err = wrap
-                .write(b"data")
+                .flush()
                 .await
                 .expect_err("a zero-length write must not be retried forever");
             assert_eq!(err.kind(), io::ErrorKind::WriteZero);
         });
+    }
+
+    struct PartialThenError {
+        calls: usize,
+    }
+
+    impl AsyncWrite for PartialThenError {
+        async fn write<B: IoBuf>(&mut self, buf: B) -> (io::Result<usize>, B) {
+            self.calls += 1;
+            if self.calls == 1 {
+                (Ok(1), buf)
+            } else {
+                (Err(io::ErrorKind::BrokenPipe.into()), buf)
+            }
+        }
+    }
+
+    #[test]
+    fn async_wrap_reports_accepted_bytes_before_a_later_drain_error() {
+        let mut wrap = AsyncWrap::new(PartialThenError { calls: 0 });
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        assert!(matches!(
+            Pin::new(&mut wrap).poll_write(&mut cx, b"abc"),
+            Poll::Ready(Ok(3))
+        ));
+        assert!(matches!(Pin::new(&mut wrap).poll_write(&mut cx, b"bc"),
+            Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::BrokenPipe));
+    }
+
+    #[test]
+    fn async_wrap_bounds_accepted_buffer_size() {
+        let mut wrap = AsyncWrap::new(ZeroWriter);
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        assert!(matches!(
+            Pin::new(&mut wrap).poll_write(&mut cx, &[0; super::BUFFER_SIZE + 1]),
+            Poll::Ready(Ok(super::BUFFER_SIZE))
+        ));
+    }
+
+    struct GatedWriter {
+        enabled: Arc<std::sync::atomic::AtomicBool>,
+        state: Arc<Mutex<WriterState>>,
+    }
+
+    impl AsyncWrite for GatedWriter {
+        async fn write<B: IoBuf>(&mut self, buf: B) -> (io::Result<usize>, B) {
+            std::future::poll_fn(|_| {
+                // Test polls explicitly after opening the gate; no task sleeps.
+                if self.enabled.load(Ordering::SeqCst) {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+            // SAFETY: each invocation has at least one initialized byte.
+            self.state
+                .lock()
+                .unwrap()
+                .data
+                .push(unsafe { *buf.as_buf_ptr() });
+            (Ok(1), buf)
+        }
+        async fn flush(&mut self) -> io::Result<()> {
+            self.state.lock().unwrap().flushed = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cancelled_pending_write_does_not_consume_replacement_buffer() {
+        let enabled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let state = Arc::new(Mutex::new(WriterState {
+            data: Vec::new(),
+            writes: 0,
+            flushed: false,
+        }));
+        let mut wrap = AsyncWrap::new(GatedWriter {
+            enabled: enabled.clone(),
+            state: state.clone(),
+        });
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        assert!(matches!(
+            Pin::new(&mut wrap).poll_write(&mut cx, b"old"),
+            Poll::Ready(Ok(3))
+        ));
+        assert!(Pin::new(&mut wrap).poll_flush(&mut cx).is_pending());
+        assert!(
+            Pin::new(&mut wrap)
+                .poll_write(&mut cx, b"discarded")
+                .is_pending()
+        );
+        // Cancel the pending caller and use a smaller, different buffer.
+        enabled.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            Pin::new(&mut wrap).poll_write(&mut cx, b"z"),
+            Poll::Ready(Ok(1))
+        ));
+        assert_eq!(state.lock().unwrap().data, b"old");
+        assert!(matches!(
+            Pin::new(&mut wrap).poll_shutdown(&mut cx),
+            Poll::Ready(Ok(()))
+        ));
+        let state = state.lock().unwrap();
+        assert_eq!(state.data, b"oldz");
+        assert!(state.flushed);
     }
 }

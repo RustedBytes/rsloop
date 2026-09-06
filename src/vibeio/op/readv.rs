@@ -12,6 +12,7 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
+use crate::vibeio::driver::AnyDriver;
 use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
@@ -19,7 +20,6 @@ use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::io::IoVec;
 use crate::vibeio::op::Op;
 use crate::vibeio::op::io_util::poll_result_or_wait;
-use crate::vibeio::{current_driver, driver::AnyDriver};
 use crate::vibeio::{driver::CompletionIoResult, io::IoVectoredBufMut};
 
 /// Converts a slice of `IoSlice` to a system iovec buffer.
@@ -110,6 +110,10 @@ impl<'a, B: IoVectoredBufMut> ReadvOp<'a, B> {
 
     #[inline]
     pub fn take_bufs(mut self) -> B {
+        assert!(
+            self.completion_token.is_none(),
+            "cannot reclaim a buffer while I/O is pending"
+        );
         self.bufs.take().unwrap()
     }
 }
@@ -228,7 +232,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
         let bufs = self.bufs.as_mut().unwrap();
         match self.handle.handle {
             RawOsHandle::Socket(socket) => {
-                let iovecs = bufs.as_iovecs();
+                let iovecs = bufs.as_iovecs_mut();
                 let mut wsabufs = Vec::with_capacity(iovecs.len());
                 for iovec in iovecs {
                     let len = u32::try_from(iovec.len).map_err(|_| {
@@ -275,7 +279,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                 }
             }
             RawOsHandle::Handle(handle) => {
-                let iovecs = bufs.as_iovecs();
+                let iovecs = bufs.as_iovecs_mut();
                 let total_len = (iovecs.iter()).try_fold(0usize, |acc, iovec| {
                     acc.checked_add(iovec.len).ok_or_else(|| {
                         io::Error::new(io::ErrorKind::InvalidInput, "writev buffer length overflow")
@@ -355,17 +359,42 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
 impl<B: IoVectoredBufMut> Drop for ReadvOp<'_, B> {
     #[inline]
     fn drop(&mut self) {
-        if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = current_driver() {
-                #[cfg(target_os = "linux")]
-                let bufs = self.completion_system_iovecs.take();
-                #[cfg(windows)]
-                let bufs = self.completion_wsabufs.take();
-                #[cfg(not(any(target_os = "linux", windows)))]
-                let bufs = ();
-
-                driver.ignore_completion(completion_token, Box::new((bufs, self.bufs.take())));
-            }
+        if let Some(token) = self.completion_token.take() {
+            #[cfg(target_os = "linux")]
+            let completion_state = self.completion_system_iovecs.take();
+            #[cfg(windows)]
+            let completion_state = (
+                self.completion_wsabufs.take(),
+                self.completion_staging.take(),
+            );
+            #[cfg(not(any(target_os = "linux", windows)))]
+            let completion_state = ();
+            // The owning driver, not the currently entered runtime, must retain
+            // every kernel-visible allocation until completion is acknowledged.
+            self.handle
+                .cancel_completion(token, Box::new((completion_state, self.bufs.take())));
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn pending_buffer_is_retained_by_owning_driver() {
+        crate::vibeio::op::io_util::cancellation_tests::check_cancellation(
+            |handle, buffer, reclaim| {
+                let mut op = ReadvOp::new(handle, buffer);
+                op.completion_token = Some(41);
+                if reclaim {
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op.take_bufs()));
+                    assert!(result.is_err(), "pending storage must not be reclaimed");
+                } else {
+                    drop(op);
+                }
+            },
+        );
     }
 }

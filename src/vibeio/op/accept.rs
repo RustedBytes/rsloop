@@ -5,7 +5,9 @@ use std::io;
 use std::mem::{self, MaybeUninit};
 use std::net::SocketAddr;
 #[cfg(unix)]
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+#[cfg(windows)]
+use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket, OwnedSocket};
 #[cfg(windows)]
 use std::ptr;
 use std::task::{Context, Poll};
@@ -21,11 +23,11 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
+use crate::vibeio::driver::AnyDriver;
 #[cfg(not(target_os = "linux"))]
 use crate::vibeio::driver::CompletionIoResult;
 use crate::vibeio::fd_inner::{InnerRawHandle, RawOsHandle};
 use crate::vibeio::op::Op;
-use crate::vibeio::{current_driver, driver::AnyDriver};
 
 #[cfg(unix)]
 fn set_cloexec(fd: RawFd) -> Result<(), io::Error> {
@@ -213,8 +215,8 @@ fn create_accept_socket(listener_socket: SOCKET) -> Result<SOCKET, io::Error> {
     let accept_socket = unsafe {
         WinSock::WSASocketW(
             family,
-            SOCK_STREAM as i32,
-            IPPROTO_TCP as i32,
+            SOCK_STREAM,
+            IPPROTO_TCP,
             ptr::null_mut(),
             0,
             WSA_FLAG_OVERLAPPED,
@@ -233,8 +235,8 @@ fn set_accept_context(listener_socket: SOCKET, accepted_socket: SOCKET) -> Resul
     let result = unsafe {
         WinSock::setsockopt(
             accepted_socket,
-            SOL_SOCKET as i32,
-            SO_UPDATE_ACCEPT_CONTEXT as i32,
+            SOL_SOCKET,
+            SO_UPDATE_ACCEPT_CONTEXT,
             (&listener_socket as *const SOCKET).cast(),
             std::mem::size_of::<SOCKET>() as i32,
         )
@@ -251,6 +253,31 @@ const ACCEPTEX_ADDR_LEN: usize = std::mem::size_of::<SOCKADDR_STORAGE>() + 16;
 #[cfg(windows)]
 const ACCEPTEX_OUTPUT_BUFFER_LEN: usize = ACCEPTEX_ADDR_LEN * 2;
 
+#[cfg(unix)]
+fn finish_unix_accept(owned: OwnedFd, set_flags: bool) -> io::Result<(RawOsHandle, SocketAddr)> {
+    let fd = owned.as_raw_fd();
+    if set_flags {
+        set_cloexec(fd)?;
+    }
+    let mut peer = MaybeUninit::<libc::sockaddr_storage>::zeroed();
+    let mut peer_len = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    // SAFETY: peer and peer_len are valid writable storage; owned keeps fd open.
+    let result = unsafe {
+        libc::getpeername(
+            fd,
+            peer.as_mut_ptr().cast::<libc::sockaddr>(),
+            &mut peer_len,
+        )
+    };
+    if result == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the storage was zero-initialized before the kernel filled it.
+    let peer = unsafe { peer.assume_init() };
+    let address = sockaddr_storage_to_socketaddr(&peer)?;
+    Ok((owned.into_raw_fd(), address))
+}
+
 pub struct AcceptOp<'a> {
     handle: &'a InnerRawHandle,
     #[cfg(windows)]
@@ -258,9 +285,9 @@ pub struct AcceptOp<'a> {
     #[cfg(windows)]
     get_accept_ex_sockaddrs: Option<WinSock::LPFN_GETACCEPTEXSOCKADDRS>,
     #[cfg(windows)]
-    accept_socket: Option<SOCKET>,
+    accept_socket: Option<OwnedSocket>,
     #[cfg(windows)]
-    bytes_received: u32,
+    bytes_received: Option<Box<u32>>,
     #[cfg(windows)]
     accept_output_buffer: Option<Box<[u8]>>,
     completion_token: Option<usize>,
@@ -278,7 +305,7 @@ impl<'a> AcceptOp<'a> {
             #[cfg(windows)]
             accept_socket: None,
             #[cfg(windows)]
-            bytes_received: 0,
+            bytes_received: None,
             #[cfg(windows)]
             accept_output_buffer: None,
             completion_token: None,
@@ -287,6 +314,10 @@ impl<'a> AcceptOp<'a> {
 }
 
 impl Op for AcceptOp<'_> {
+    #[cfg(target_os = "linux")]
+    fn completion_returns_fd(&self) -> bool {
+        true
+    }
     type Output = (RawOsHandle, SocketAddr);
 
     #[cfg(any(unix, windows))]
@@ -328,42 +359,9 @@ impl Op for AcceptOp<'_> {
                 return Poll::Ready(Err(error));
             }
 
-            let fd = accepted_fd as RawFd;
-
-            // On non-Linux Unix, set close-on-exec + non-blocking manually.
-            // Linux accept4() above already set these atomically.
-            #[cfg(not(syscall_accept4))]
-            if let Err(err) = set_cloexec(fd) {
-                return Poll::Ready(Err(err));
-            }
-
-            // Obtain peer address via getpeername into a sockaddr_storage
-            let mut peer = MaybeUninit::<libc::sockaddr_storage>::zeroed();
-            let mut peer_len = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-            let getpeername_result = unsafe {
-                libc::getpeername(
-                    fd,
-                    peer.as_mut_ptr().cast::<libc::sockaddr>(),
-                    &mut peer_len,
-                )
-            };
-
-            if getpeername_result == -1 {
-                let error = io::Error::last_os_error();
-                if error.kind() == io::ErrorKind::WouldBlock {
-                    if let Err(err) =
-                        driver.submit_poll(self.handle, cx.waker().clone(), Interest::READABLE)
-                    {
-                        return Poll::Ready(Err(err));
-                    }
-                    return Poll::Pending;
-                }
-                return Poll::Ready(Err(error));
-            }
-
-            let peer = unsafe { peer.assume_init() };
-            let address = sockaddr_storage_to_socketaddr(&peer)?;
-            Poll::Ready(Ok((fd as RawOsHandle, address)))
+            // SAFETY: accept transferred a new descriptor to this operation.
+            let owned = unsafe { OwnedFd::from_raw_fd(accepted_fd) };
+            Poll::Ready(finish_unix_accept(owned, !cfg!(syscall_accept4)))
         }
 
         #[cfg(windows)]
@@ -462,39 +460,15 @@ impl Op for AcceptOp<'_> {
         };
         if result < 0 {
             #[cfg(windows)]
-            if let Some(accept_socket) = self.accept_socket.take() {
-                unsafe { WinSock::closesocket(accept_socket) };
-            }
+            drop(self.accept_socket.take());
             return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
         }
 
         #[cfg(unix)]
         {
-            let fd = result as RawFd;
-
-            // Ensure close-on-exec for the accepted fd (io_uring may have already set them)
-            if let Err(err) = set_cloexec(fd) {
-                return Poll::Ready(Err(err));
-            }
-
-            // Get peer address via getpeername
-            let mut peer = MaybeUninit::<libc::sockaddr_storage>::zeroed();
-            let mut peer_len = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-            let getpeername_result = unsafe {
-                libc::getpeername(
-                    fd,
-                    peer.as_mut_ptr().cast::<libc::sockaddr>(),
-                    &mut peer_len,
-                )
-            };
-
-            if getpeername_result == -1 {
-                return Poll::Ready(Err(io::Error::last_os_error()));
-            }
-
-            let peer = unsafe { peer.assume_init() };
-            let address = sockaddr_storage_to_socketaddr(&peer)?;
-            Poll::Ready(Ok((fd as RawOsHandle, address)))
+            // SAFETY: the driver transferred its successful accept result.
+            let owned = unsafe { OwnedFd::from_raw_fd(result as RawFd) };
+            Poll::Ready(finish_unix_accept(owned, true))
         }
 
         #[cfg(windows)]
@@ -513,8 +487,10 @@ impl Op for AcceptOp<'_> {
                 )));
             };
 
-            if let Err(err) = set_accept_context(listener_socket as SOCKET, accept_socket) {
-                unsafe { WinSock::closesocket(accept_socket) };
+            if let Err(err) = set_accept_context(
+                listener_socket as SOCKET,
+                accept_socket.as_raw_socket() as SOCKET,
+            ) {
                 return Poll::Ready(Err(err));
             }
 
@@ -571,12 +547,14 @@ impl Op for AcceptOp<'_> {
             ) {
                 Ok(address) => address,
                 Err(err) => {
-                    unsafe { WinSock::closesocket(accept_socket) };
                     return Poll::Ready(Err(err));
                 }
             };
 
-            return Poll::Ready(Ok((RawOsHandle::Socket(accept_socket as _), address)));
+            return Poll::Ready(Ok((
+                RawOsHandle::Socket(accept_socket.into_raw_socket()),
+                address,
+            )));
         }
     }
 
@@ -605,11 +583,15 @@ impl Op for AcceptOp<'_> {
         })?;
 
         if self.accept_socket.is_none() {
-            self.accept_socket = Some(create_accept_socket(listener_socket)?);
+            let socket = create_accept_socket(listener_socket)?;
+            // SAFETY: create_accept_socket returns a new, valid owned socket.
+            self.accept_socket = Some(unsafe { OwnedSocket::from_raw_socket(socket as _) });
         }
         let accept_socket = self
             .accept_socket
-            .expect("accept_socket must be initialized");
+            .as_ref()
+            .expect("accept_socket must be initialized")
+            .as_raw_socket() as SOCKET;
         if self.accept_output_buffer.is_none() {
             self.accept_output_buffer =
                 Some(vec![0u8; ACCEPTEX_OUTPUT_BUFFER_LEN].into_boxed_slice());
@@ -626,6 +608,7 @@ impl Op for AcceptOp<'_> {
             ));
         };
 
+        let bytes_received = self.bytes_received.get_or_insert_with(|| Box::new(0));
         let accept_result = unsafe {
             accept_ex_fn(
                 listener_socket,
@@ -634,7 +617,7 @@ impl Op for AcceptOp<'_> {
                 0,
                 ACCEPTEX_ADDR_LEN as u32,
                 ACCEPTEX_ADDR_LEN as u32,
-                &mut self.bytes_received,
+                bytes_received.as_mut(),
                 overlapped,
             )
         };
@@ -646,9 +629,7 @@ impl Op for AcceptOp<'_> {
         if err_code == WSA_IO_PENDING {
             Ok(())
         } else {
-            if let Some(socket) = self.accept_socket.take() {
-                unsafe { WinSock::closesocket(socket) };
-            }
+            drop(self.accept_socket.take());
             Err(io::Error::from_raw_os_error(err_code))
         }
     }
@@ -677,14 +658,83 @@ impl Op for AcceptOp<'_> {
 impl Drop for AcceptOp<'_> {
     #[inline]
     fn drop(&mut self) {
-        if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = current_driver() {
-                driver.ignore_completion(completion_token, Box::new(()));
-            }
+        if let Some(token) = self.completion_token.take() {
+            #[cfg(windows)]
+            let storage = (
+                self.accept_socket.take(),
+                self.accept_output_buffer.take(),
+                self.bytes_received.take(),
+            );
+            #[cfg(not(windows))]
+            let storage = ();
+            self.handle.cancel_completion(token, Box::new(storage));
         }
-        #[cfg(windows)]
-        if let Some(socket) = self.accept_socket.take() {
-            unsafe { WinSock::closesocket(socket) };
+    }
+}
+
+#[cfg(all(test, unix))]
+mod ownership_tests {
+    use super::*;
+    use std::io::Read;
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn unsupported_peer_address_closes_accepted_socket() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let owned: OwnedFd = socket.into();
+        assert_eq!(
+            finish_unix_accept(owned, true).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+    }
+
+    #[test]
+    fn successful_accept_transfers_descriptor_and_peer_address() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        let (fd, address) = finish_unix_accept(socket.into(), true).unwrap();
+        // SAFETY: finish_unix_accept transferred sole ownership of this fd.
+        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+        assert_eq!(address, peer.local_addr().unwrap());
+        // SAFETY: owned keeps this descriptor valid during the query.
+        assert_ne!(
+            unsafe { libc::fcntl(owned.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        assert_eq!(
+            peer.read(&mut [0; 1]).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        drop(owned);
+    }
+
+    #[test]
+    fn cancelled_accept_uses_the_owning_driver() {
+        use std::rc::Rc;
+        for entered in [false, true] {
+            let owner = Rc::new(AnyDriver::new_mock());
+            let handle = InnerRawHandle::for_mock_completion(owner.clone());
+            let cancel = move || {
+                let mut op = AcceptOp::new(&handle);
+                op.completion_token = Some(41);
+                drop(op);
+            };
+            if entered {
+                let runtime = crate::vibeio::executor::Runtime::new(AnyDriver::new_mock());
+                runtime.block_on(async move { cancel() });
+            } else {
+                cancel();
+            }
+            let AnyDriver::Mock(driver) = owner.as_ref() else {
+                unreachable!()
+            };
+            let held = driver.ignored.take();
+            assert_eq!(held.len(), 1);
+            assert_eq!(held[0].0, 41);
         }
     }
 }

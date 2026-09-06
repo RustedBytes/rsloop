@@ -125,6 +125,7 @@ pub struct MioDriver {
     poll: RefCell<Poll>,
     registry: Registry,
     events: RefCell<Events>,
+    ready_wakers: RefCell<Vec<Waker>>,
     state: RefCell<DriverState>,
     waker: Arc<DriverWaker>,
 }
@@ -140,6 +141,7 @@ impl MioDriver {
             poll: RefCell::new(poll),
             registry,
             events: RefCell::new(Events::with_capacity(1024)),
+            ready_wakers: RefCell::new(Vec::with_capacity(64)),
             state: RefCell::new(DriverState {
                 registrations: Slab::with_capacity(1024),
             }),
@@ -148,12 +150,14 @@ impl MioDriver {
     }
 
     #[inline]
-    fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) {
+    fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) -> Option<Waker> {
         if !waiter_slot
             .as_ref()
             .is_some_and(|waiter| waiter.will_wake(&waker))
         {
-            *waiter_slot = Some(waker);
+            waiter_slot.replace(waker)
+        } else {
+            Some(waker)
         }
     }
 
@@ -167,6 +171,7 @@ impl MioDriver {
             Err(e) => panic!("mio poll failed while waiting for I/O events: {}", e),
         };
 
+        let mut ready = std::mem::take(&mut *self.ready_wakers.borrow_mut());
         {
             let mut state = self.state.borrow_mut();
             for event in events.iter() {
@@ -178,10 +183,19 @@ impl MioDriver {
 
                 if let Some(registration) = state.registrations.get_mut(event.token().0) {
                     if let Some(task) = registration.waiter.take() {
-                        task.wake();
+                        ready.push(task);
                     }
                 }
             }
+        }
+        drop(events);
+        drop(poll);
+        for waker in ready.drain(..) {
+            waker.wake();
+        }
+        let mut cache = self.ready_wakers.borrow_mut();
+        if ready.capacity() > cache.capacity() {
+            *cache = ready;
         }
     }
 }
@@ -285,8 +299,12 @@ impl Driver for MioDriver {
         let mut source = mio::unix::SourceFd(&fd);
         self.registry.deregister(&mut source)?;
 
-        let mut state = self.state.borrow_mut();
-        let _ = state.registrations.try_remove(handle.token.0);
+        let registration = self
+            .state
+            .borrow_mut()
+            .registrations
+            .try_remove(handle.token.0);
+        drop(registration);
         Ok(())
     }
 
@@ -317,7 +335,9 @@ impl Driver for MioDriver {
             registration.interest = interest;
         }
 
-        Self::update_waiter(&mut registration.waiter, waker);
+        let old_waker = Self::update_waiter(&mut registration.waiter, waker);
+        drop(state);
+        drop(old_waker);
         Ok(())
     }
 }
@@ -329,6 +349,91 @@ mod tests {
 
     use super::{MAX_POLL_TIMEOUT, MioDriver, bounded_poll_timeout};
     use crate::vibeio::driver::{Driver, Interruptor};
+
+    thread_local! {
+        static REENTER: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    }
+    struct ReentryScope;
+    impl Drop for ReentryScope {
+        fn drop(&mut self) {
+            let callback = REENTER.with(|slot| slot.borrow_mut().take());
+            drop(callback);
+        }
+    }
+    fn reenter() {
+        REENTER.with(|slot| {
+            if let Some(callback) = slot.borrow().as_ref() {
+                callback();
+            }
+        });
+    }
+    struct ReentrantWake;
+    impl std::task::Wake for ReentrantWake {
+        fn wake(self: Arc<Self>) {
+            reenter();
+        }
+    }
+    impl Drop for ReentrantWake {
+        fn drop(&mut self) {
+            reenter();
+        }
+    }
+
+    #[test]
+    fn waiter_callbacks_can_reenter_on_replace_remove_and_readiness() {
+        use crate::vibeio::{
+            driver::{AnyDriver, RegistrationMode},
+            fd_inner::InnerRawHandle,
+        };
+        use std::{io::Write, os::fd::AsRawFd, rc::Rc, task::Waker, time::Duration};
+        for action in 0..3 {
+            let driver = Rc::new(AnyDriver::Mio(MioDriver::new().unwrap()));
+            let (socket, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            socket.set_nonblocking(true).unwrap();
+            let handle = InnerRawHandle::new_with_driver_and_mode(
+                &driver,
+                socket.as_raw_fd(),
+                mio::Interest::READABLE,
+                RegistrationMode::Poll,
+            )
+            .unwrap();
+            let inner = driver.clone();
+            let calls = Rc::new(std::cell::Cell::new(0));
+            let called = calls.clone();
+            REENTER.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move || {
+                    let AnyDriver::Mio(driver) = inner.as_ref() else {
+                        unreachable!()
+                    };
+                    let _ = driver.state.borrow().registrations.len();
+                    driver.wait_timeout(Some(Duration::ZERO));
+                    called.set(called.get() + 1);
+                }))
+            });
+            let _scope = ReentryScope;
+            let AnyDriver::Mio(mio) = driver.as_ref() else {
+                unreachable!()
+            };
+            mio.submit_poll(
+                &handle,
+                Waker::from(Arc::new(ReentrantWake)),
+                mio::Interest::READABLE,
+            )
+            .unwrap();
+            match action {
+                0 => mio
+                    .submit_poll(&handle, Waker::noop().clone(), mio::Interest::READABLE)
+                    .unwrap(),
+                1 => drop(handle),
+                _ => {
+                    peer.write_all(b"x").unwrap();
+                    mio.wait_timeout(Some(Duration::from_secs(1)));
+                }
+            }
+            assert!(calls.get() > 0);
+            assert!(mio.ready_wakers.borrow().is_empty());
+        }
+    }
 
     #[test]
     fn poll_timeout_is_bounded_for_platform_selectors() {

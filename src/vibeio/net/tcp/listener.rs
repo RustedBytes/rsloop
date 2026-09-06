@@ -241,8 +241,8 @@ fn bind_one(address: SocketAddr) -> Result<StdTcpListener, io::Error> {
         let ipv6_only_result = unsafe {
             WinSock::setsockopt(
                 socket,
-                IPPROTO_IPV6 as i32,
-                IPV6_V6ONLY as i32,
+                IPPROTO_IPV6,
+                IPV6_V6ONLY,
                 (&ipv6_only as *const i32).cast(),
                 std::mem::size_of_val(&ipv6_only) as i32,
             )
@@ -339,13 +339,14 @@ impl TcpListener {
     #[inline]
     pub fn from_std(inner: std::net::TcpListener) -> Result<Self, io::Error> {
         #[cfg(unix)]
-        let handle = ManuallyDrop::new(InnerRawHandle::new(inner.as_raw_fd(), Interest::READABLE)?);
+        let handle = InnerRawHandle::new(inner.as_raw_fd(), Interest::READABLE)?;
         #[cfg(windows)]
-        let handle = ManuallyDrop::new(InnerRawHandle::new(
+        let handle = InnerRawHandle::new(
             crate::vibeio::fd_inner::RawOsHandle::Socket(inner.as_raw_socket()),
             Interest::READABLE,
-        )?);
+        )?;
         inner.set_nonblocking(!handle.uses_completion())?;
+        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 
@@ -359,12 +360,13 @@ impl TcpListener {
     #[cfg(windows)]
     #[inline]
     pub fn from_std_poll(inner: std::net::TcpListener) -> Result<Self, io::Error> {
-        let handle = ManuallyDrop::new(InnerRawHandle::new_with_mode(
+        let handle = InnerRawHandle::new_with_mode(
             crate::vibeio::fd_inner::RawOsHandle::Socket(inner.as_raw_socket()),
             Interest::READABLE,
             crate::vibeio::driver::RegistrationMode::Poll,
-        )?);
+        )?;
         inner.set_nonblocking(!handle.uses_completion())?;
+        let handle = ManuallyDrop::new(handle);
         Ok(Self { inner, handle })
     }
 

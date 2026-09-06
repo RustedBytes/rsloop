@@ -123,7 +123,7 @@ fn socket_addr_to_raw(address: SocketAddr) -> (SOCKADDR_STORAGE, i32) {
             sockaddr.sin6_port = address.port().to_be();
             sockaddr.sin6_flowinfo = address.flowinfo();
             sockaddr.sin6_addr.u.Byte = address.ip().octets();
-            sockaddr.Anonymous.sin6_scope_id = address.scope_id() as u32;
+            sockaddr.Anonymous.sin6_scope_id = address.scope_id();
 
             let mut storage = SOCKADDR_STORAGE::default();
             unsafe {
@@ -222,6 +222,10 @@ impl<'a, B: IoBuf> SendtoOp<'a, B> {
 
     #[inline]
     pub fn take_bufs(mut self) -> B {
+        assert!(
+            self.completion_token.is_none(),
+            "cannot reclaim a buffer while I/O is pending"
+        );
         self.buf.take().unwrap().into_inner()
     }
 }
@@ -422,21 +426,42 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
 impl<B: IoBuf> Drop for SendtoOp<'_, B> {
     #[inline]
     fn drop(&mut self) {
-        if let Some(completion_token) = self.completion_token {
-            if let Some(driver) = crate::vibeio::current_driver() {
-                #[cfg(any(windows, target_os = "linux"))]
-                let completion_state = self.completion_state.take();
-                #[cfg(not(any(windows, target_os = "linux")))]
-                let completion_state = ();
-
-                driver.ignore_completion(
-                    completion_token,
-                    Box::new((
-                        completion_state,
-                        self.buf.take().map(CompletionBuffer::into_stable_box),
-                    )),
-                );
-            }
+        if let Some(token) = self.completion_token.take() {
+            #[cfg(any(windows, target_os = "linux"))]
+            let completion_state = self.completion_state.take();
+            #[cfg(not(any(windows, target_os = "linux")))]
+            let completion_state = ();
+            // The owning driver, not the currently entered runtime, must retain
+            // every kernel-visible allocation until completion is acknowledged.
+            self.handle.cancel_completion(
+                token,
+                Box::new((
+                    completion_state,
+                    self.buf.take().map(CompletionBuffer::into_stable_box),
+                )),
+            );
         }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn pending_buffer_is_retained_by_owning_driver() {
+        crate::vibeio::op::io_util::cancellation_tests::check_cancellation(
+            |handle, buffer, reclaim| {
+                let mut op = SendtoOp::new(handle, buffer, "127.0.0.1:1234".parse().unwrap());
+                op.completion_token = Some(41);
+                if reclaim {
+                    let result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| op.take_bufs()));
+                    assert!(result.is_err(), "pending storage must not be reclaimed");
+                } else {
+                    drop(op);
+                }
+            },
+        );
     }
 }

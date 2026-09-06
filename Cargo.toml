@@ -16,8 +16,19 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 profiler = ["dep:tracy-client", "dep:tracy-client-sys"]
+# Embedded-runtime modules are opt-in; production wheels retain the default
+# networking/timer build unless a feature is explicitly requested.
+fs = []
+process = ["dep:async-channel"]
+signal = ["dep:once_cell", "dep:errno"]
+pipe = []
+stdio = []
+splice = []
+blocking-default = ["dep:rusty_pool"]
 
 [dependencies]
+errno = { version = "0.3", optional = true }
+async-channel = { version = "2", optional = true }
 async-io = "2"
 async-std = "1"
 crossbeam-channel = "0.5"
@@ -28,11 +39,13 @@ libc = "0.2"
 memchr = "2"
 mio = "1"
 oneshot = { version = "0.2", features = ["async", "std"] }
+once_cell = { version = "1", optional = true }
 pyo3 = { version = "0.29.2" }
 pyo3-async-runtimes = { version = "0.29", features = ["async-std-runtime"] }
 rustls = "0.23"
 rustls-native-certs = "0.8"
 rustls-pemfile = "2"
+rusty_pool = { version = "0.7", default-features = false, optional = true }
 signal-hook = "0.4"
 slab = "0.4"
 socket2 = "0.6"
@@ -71,7 +84,7 @@ await_holding_lock = "warn"
 await_holding_refcell_ref = "warn"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(musl_v1_2_3)", "cfg(syscall_accept4)", "cfg(syscall_pipe2)", "cfg(feature, values(\"blocking-default\", \"fs\", \"pipe\", \"process\", \"signal\", \"splice\", \"stdio\"))"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(musl_v1_2_3)", "cfg(syscall_accept4)", "cfg(feature, values(\"blocking-default\", \"fs\", \"pipe\", \"process\", \"signal\", \"splice\", \"stdio\"))"] }
 
 [package.metadata.kani.flags]
 # Force every proof that reaches a loop to state and review its own bound.
@@ -89,4 +102,8 @@ inherits = "release"
 
 [[bench]]
 name = "runtime"
+harness = false
+
+[[bench]]
+name = "timer"
 harness = false

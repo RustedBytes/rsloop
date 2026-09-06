@@ -25,9 +25,17 @@ concurrency:
 
 jobs:
   rust-test:
-    name: rust tests
+    name: rust tests (${{ matrix.features }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - features: default
+            test_args: ""
+          - features: all
+            test_args: "--all-features"
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -51,7 +59,44 @@ jobs:
         run: python3 scripts/generate_test_tls_certs.py
 
       - name: Run Rust tests
-        run: python3 scripts/run_rust_tests.py
+        run: python3 scripts/run_rust_tests.py ${{ matrix.test_args }}
+
+  vibeio-native:
+    name: embedded runtime (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+          components: clippy, rustfmt
+
+      - name: Cache runtime harness build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/vibeio-check
+
+      - name: Check embedded runtime formatting
+        run: cargo fmt --manifest-path tools/vibeio-check/Cargo.toml --all -- --check
+
+      - name: Lint embedded runtime on the native target
+        run: cargo clippy --manifest-path tools/vibeio-check/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Run default-feature embedded runtime tests
+        run: cargo test --manifest-path tools/vibeio-check/Cargo.toml --locked
+
+      - name: Run all-feature embedded runtime tests
+        run: cargo test --manifest-path tools/vibeio-check/Cargo.toml --all-features --locked
 
   clippy:
     name: clippy (risk-focused)
@@ -78,7 +123,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
   type-check:
     name: pyright

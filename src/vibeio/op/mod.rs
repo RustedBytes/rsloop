@@ -93,6 +93,13 @@ pub trait Op {
     /// I/O operation return type
     type Output;
 
+    /// Whether a successful Linux completion transfers ownership of a new fd.
+    /// The driver must close an unclaimed result after cancellation.
+    #[cfg(target_os = "linux")]
+    fn completion_returns_fd(&self) -> bool {
+        false
+    }
+
     /// Polls the operation for readiness (poll-based I/O).
     #[inline]
     fn poll_poll(
@@ -162,6 +169,7 @@ pub trait Op {
 #[cfg(all(test, target_os = "linux"))]
 mod vectored_uring_tests {
     use std::future::poll_fn;
+    use std::os::fd::AsRawFd;
 
     use mio::Interest;
 
@@ -176,17 +184,11 @@ mod vectored_uring_tests {
         let runtime = crate::vibeio::executor::Runtime::new(driver);
 
         runtime.block_on(async {
-            // create a pipe (pair of fds)
-            let mut fds: [libc::c_int; 2] = [0, 0];
-            #[cfg(syscall_pipe2)]
-            let res =
-                unsafe { libc::pipe2(fds.as_mut_ptr() as *mut libc::c_int, libc::O_NONBLOCK) };
-            #[cfg(not(syscall_pipe2))]
-            let res = unsafe { libc::pipe(fds.as_mut_ptr() as *mut libc::c_int) };
-            assert_eq!(res, 0, "pipe() failed");
-
-            let rfd = fds[0];
-            let wfd = fds[1];
+            // Own endpoints before creating registrations: reverse local drop
+            // order deregisters first, even if an assertion below unwinds.
+            let (reader, writer) = std::io::pipe().unwrap();
+            let rfd = reader.as_raw_fd();
+            let wfd = writer.as_raw_fd();
 
             // Register both ends with the runtime. Since the current driver supports
             // completion and the InnerRawHandle default chooses completion mode, these
@@ -200,14 +202,8 @@ mod vectored_uring_tests {
             let a = b"hello ";
             let b = b"world!";
             let bufs = vec![
-                libc::iovec {
-                    iov_base: a.as_ptr() as *mut libc::c_void,
-                    iov_len: a.len(),
-                },
-                libc::iovec {
-                    iov_base: b.as_ptr() as *mut libc::c_void,
-                    iov_len: b.len(),
-                },
+                Box::<[u8]>::from(a.as_slice()),
+                Box::<[u8]>::from(b.as_slice()),
             ];
             let total_len = a.len() + b.len();
 
@@ -223,24 +219,19 @@ mod vectored_uring_tests {
             );
 
             // Prepare vectored read buffers (split sizes arbitrarily)
-            let mut dst1 = vec![0u8; 3]; // will receive "hel"
-            let mut dst2 = vec![0u8; total_len - 3]; // rest
             let rd_bufs = vec![
-                libc::iovec {
-                    iov_base: dst1.as_mut_ptr() as *mut libc::c_void,
-                    iov_len: dst1.len(),
-                },
-                libc::iovec {
-                    iov_base: dst2.as_mut_ptr() as *mut libc::c_void,
-                    iov_len: dst2.len(),
-                },
+                vec![0u8; 3].into_boxed_slice(), // will receive "hel"
+                vec![0u8; total_len - 3].into_boxed_slice(),
             ];
 
             // Read using vectored read. poll_readv will choose completion-path when available.
             let rhandle_ref = &rhandle;
             let mut readv_op = ReadvOp::new(rhandle_ref, rd_bufs);
-            let read_res = poll_fn(move |cx| rhandle_ref.poll_op(cx, &mut readv_op)).await;
+            let read_res = poll_fn(|cx| rhandle_ref.poll_op(cx, &mut readv_op)).await;
             let read = read_res.expect("readv failed");
+            let received_bufs = readv_op.take_bufs();
+            let dst1 = &received_bufs[0];
+            let dst2 = &received_bufs[1];
 
             // We expect to read at least as many bytes as were written (pipe semantics
             // on local write -> read without closing may give the bytes).
@@ -263,12 +254,6 @@ mod vectored_uring_tests {
                 expected[..received.len()],
                 "received bytes don't match expected prefix"
             );
-
-            // Close fds to avoid leaking
-            unsafe {
-                let _ = libc::close(rfd);
-                let _ = libc::close(wfd);
-            }
         });
     }
 }

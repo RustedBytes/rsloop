@@ -1,5 +1,10 @@
 # Event Loop Benchmark
 
+For embedded timer repoll costs, run `cargo bench --bench timer --locked`.
+It measures unchanged/changing wakers with one or 1,024 pending timers, without
+OS waiting. See [vibeio performance results](vibeio-performance.md) for measured
+before/after results and limitations; these are not Python event-loop comparisons.
+
 This benchmark compares:
 
 - stdlib `asyncio`
