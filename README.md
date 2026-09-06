@@ -24,7 +24,7 @@ The package exposes:
   `rsloop.build_info()`
 
 Repository metadata currently targets Python `>=3.10`.
-The native runtime requires Linux 6.1+, macOS 13+, or Windows 11+ so its hot
+The native runtime requires Linux 6.1+, macOS 13+, or Windows 10+ so its hot
 paths can rely on modern completion, timer, and scheduler primitives.
 Free-threaded CPython (`3.14t`) is supported: the extension declares
 `gil_used = false`, so importing it no longer re-enables the GIL. See

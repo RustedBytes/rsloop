@@ -85,6 +85,13 @@ class RunTests(unittest.TestCase):
             if sys.platform.startswith("linux")
             else "kqueue"
         )
+        expected_minimum_os = (
+            "Windows 10"
+            if sys.platform == "win32"
+            else "Linux 6.1"
+            if sys.platform.startswith("linux")
+            else "macOS 13"
+        )
 
         self.assertEqual(
             set(info),
@@ -108,7 +115,7 @@ class RunTests(unittest.TestCase):
         self.assertIsInstance(info["free_threaded"], bool)
         self.assertEqual(info["reactor"], expected_reactor)
         self.assertEqual(info["runtime_profile"], "rsloop")
-        self.assertTrue(info["minimum_os"])
+        self.assertEqual(info["minimum_os"], expected_minimum_os)
         self.assertEqual(info["tls_backend"], "rustls")
         self.assertEqual(info["profiler"], rsloop.profiler_compiled())
 

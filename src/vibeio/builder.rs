@@ -70,13 +70,19 @@ fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
             "RtlGetVersion failed with NTSTATUS {status:#x}"
         )));
     }
-    if info.dwMajorVersion < 10 || (info.dwMajorVersion == 10 && info.dwBuildNumber < 22_000) {
+    ensure_supported_windows_version(info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber)
+}
+
+#[cfg(any(windows, test))]
+fn ensure_supported_windows_version(
+    major: u32,
+    minor: u32,
+    build: u32,
+) -> Result<(), std::io::Error> {
+    if major < 10 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            format!(
-                "rsloop requires Windows 11 or newer; detected {}.{}.{}",
-                info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber
-            ),
+            format!("rsloop requires Windows 10 or newer; detected {major}.{minor}.{build}"),
         ));
     }
     Ok(())
@@ -238,5 +244,28 @@ impl RuntimeBuilder {
 impl Default for RuntimeBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_supported_windows_version;
+
+    #[test]
+    fn windows_10_releases_are_supported() {
+        assert!(ensure_supported_windows_version(10, 0, 10_240).is_ok());
+        assert!(ensure_supported_windows_version(10, 0, 19_045).is_ok());
+    }
+
+    #[test]
+    fn windows_versions_before_10_are_rejected() {
+        let error = ensure_supported_windows_version(6, 3, 9_600)
+            .expect_err("Windows 8.1 must remain unsupported");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        assert_eq!(
+            error.to_string(),
+            "rsloop requires Windows 10 or newer; detected 6.3.9600"
+        );
     }
 }

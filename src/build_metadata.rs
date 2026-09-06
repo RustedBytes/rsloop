@@ -37,7 +37,7 @@ pub(crate) fn build_info(py: Python<'_>) -> PyResult<Py<PyDict>> {
         } else if cfg!(target_os = "macos") {
             "macOS 13"
         } else if cfg!(windows) {
-            "Windows 11"
+            "Windows 10"
         } else {
             "unsupported"
         },
