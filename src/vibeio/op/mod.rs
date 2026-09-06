@@ -87,6 +87,8 @@ pub use waitpid::WaitPidOp;
 pub use write::WriteOp;
 #[cfg(feature = "fs")]
 pub use writeat::WriteAtOp;
+#[cfg(all(windows, feature = "fs"))]
+pub(crate) use writeat::validate_windows_write_offset;
 pub use writev::WritevOp;
 
 use crate::vibeio::driver::AnyDriver;

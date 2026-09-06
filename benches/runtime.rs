@@ -1,5 +1,8 @@
 //! Benchmarks the embedded runtime without exposing it in rsloop's public API.
 #[path = "../src/vibeio/lib.rs"]
+// Harness-free benches compile cfg(test) modules but omit their #[test]
+// functions, leaving test-only imports unused. Normal test targets lint them.
+#[allow(unused_imports)]
 mod vibeio;
 
 use std::future::poll_fn;

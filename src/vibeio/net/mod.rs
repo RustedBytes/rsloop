@@ -3,7 +3,14 @@
 //! This module provides async versions of common networking operations:
 //! - TCP: [`TcpListener`], [`TcpStream`], [`PollTcpStream`]
 //! - UDP: [`UdpSocket`]
-//! - Unix domain sockets: [`UnixListener`], [`UnixStream`], [`PollUnixStream`]
+#![cfg_attr(
+    unix,
+    doc = "- Unix domain sockets: [`UnixListener`], [`UnixStream`], [`PollUnixStream`]"
+)]
+#![cfg_attr(
+    not(unix),
+    doc = "- Unix domain socket wrappers are available on Unix targets only."
+)]
 //!
 //! Implementation notes:
 //! - On Linux with io_uring support, some operations use native async syscalls (e.g. `accept4`, `sendto`)
@@ -50,6 +57,8 @@ mod udp;
 mod unix;
 
 pub use tcp::*;
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use udp::*;
 #[cfg(unix)]
 pub use unix::*;

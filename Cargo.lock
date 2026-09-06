@@ -951,6 +951,7 @@ dependencies = [
  "mio",
  "once_cell",
  "oneshot",
+ "pin-project-lite",
  "proptest",
  "pyo3",
  "pyo3-async-runtimes",

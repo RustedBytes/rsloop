@@ -7,7 +7,7 @@
 //! # Examples
 //! ```ignore
 //! // Wait for Ctrl-C (cross-platform)
-//! let _ = vibeio::signal::ctrl_c().await?;
+//! vibeio::signal::ctrl_c()?.await?;
 //!
 //! // Wait for SIGTERM (Unix only)
 //! # #[cfg(unix)]
@@ -26,7 +26,17 @@ mod unix;
 #[cfg(windows)]
 mod windows;
 
+// Execute Windows listener bookkeeping tests on Unix as well. Only console
+// registration/FFI is Windows-gated; the tested state machine is not a copy.
+#[cfg(all(test, not(windows)))]
+#[path = "windows.rs"]
+mod windows_state_tests;
+
 #[cfg(unix)]
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use unix::{CtrlC, Signal, SignalKind, ctrl_c, signal};
 #[cfg(windows)]
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use windows::{CtrlC, ctrl_c};

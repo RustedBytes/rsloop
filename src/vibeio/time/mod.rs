@@ -56,8 +56,12 @@ fn saturating_deadline(
 }
 
 // Re-export public types and functions
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use interval::{Interval, MissedTickBehavior};
 pub use sleep::{Sleep, ZeroBehavior};
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use timeout::{Timeout, TimeoutError, timeout};
 
 /// Convenience builder: returns a `Sleep` future.

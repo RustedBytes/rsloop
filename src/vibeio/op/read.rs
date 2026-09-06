@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 use mio::Interest;
 #[cfg(windows)]
 use windows_sys::Win32::{
-    Foundation::{ERROR_HANDLE_EOF, ERROR_IO_PENDING, HANDLE},
+    Foundation::{ERROR_IO_PENDING, HANDLE},
     Networking::WinSock::{self, SOCKET, WSA_IO_PENDING, WSABUF},
     Storage::FileSystem::ReadFile,
     System::IO::OVERLAPPED,
@@ -19,7 +19,9 @@ use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::op::Op;
-use crate::vibeio::op::io_util::{CompletionBuffer, completion_len, poll_result_or_wait};
+#[cfg(any(target_os = "linux", windows))]
+use crate::vibeio::op::io_util::completion_len;
+use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]
@@ -177,19 +179,16 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
                     self.completion_token = Some(token);
                     return Poll::Pending;
                 }
-                CompletionIoResult::SubmitErr(err) => return Poll::Ready(Err(err)),
+                CompletionIoResult::SubmitErr(err) => {
+                    crate::vibeio::op::io_util::read_error_result(err)?
+                }
             }
         };
-        if result < 0 {
-            #[cfg(windows)]
-            if -result == ERROR_HANDLE_EOF as i32 {
-                let buf = self.buf.as_mut().unwrap().as_mut();
-                // SAFETY: the empty prefix is initialized for every buffer.
-                unsafe { buf.set_buf_init(0) };
-                return Poll::Ready(Ok(0));
-            }
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
-        }
+        let result = if result < 0 {
+            crate::vibeio::op::io_util::read_error_result(io::Error::from_raw_os_error(-result))?
+        } else {
+            result
+        };
         let read = result as usize;
         let buf = self.buf.as_mut().unwrap().as_mut();
         // SAFETY: the successful completion acknowledges this initialized prefix

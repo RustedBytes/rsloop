@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::io;
 use std::task::{Context, Poll};
 
@@ -31,7 +33,7 @@ fn socket_read_vectored<B: IoVectoredBufMut>(socket: SOCKET, bufs: &mut B) -> io
         let len = u32::try_from(iovec.len).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "writev buffer is too large for Windows socket I/O",
+                "readv buffer is too large for Windows socket I/O",
             )
         })?;
         wsabufs.push(WSABUF {
@@ -42,6 +44,9 @@ fn socket_read_vectored<B: IoVectoredBufMut>(socket: SOCKET, bufs: &mut B) -> io
 
     let mut bytes: u32 = 0;
     let mut flags: u32 = 0;
+    // SAFETY: IoVectoredBufMut owns stable, disjoint writable regions. The
+    // checked WSABUF descriptors and output integers live through this
+    // non-overlapped call, which does not retain their addresses afterward.
     let recv_result = unsafe {
         WinSock::WSARecv(
             socket,
@@ -54,6 +59,7 @@ fn socket_read_vectored<B: IoVectoredBufMut>(socket: SOCKET, bufs: &mut B) -> io
         )
     };
     if recv_result == SOCKET_ERROR {
+        // SAFETY: reads the calling thread's Winsock error without pointer access.
         return Err(io::Error::from_raw_os_error(unsafe {
             WinSock::WSAGetLastError()
         }));
@@ -110,6 +116,9 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
         #[cfg(unix)]
         let result = {
             let mut iovecs = iovec_to_system(&bufs.as_iovecs_mut());
+            // SAFETY: the owned buffer provides disjoint writable regions;
+            // descriptors remain live through this synchronous call and their
+            // count is checked before conversion to the native integer type.
             let read = unsafe {
                 libc::readv(
                     self.handle.handle,
@@ -164,16 +173,20 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                     self.completion_token = Some(token);
                     return Poll::Pending;
                 }
-                CompletionIoResult::SubmitErr(err) => return Poll::Ready(Err(err)),
+                CompletionIoResult::SubmitErr(err) => {
+                    crate::vibeio::op::io_util::read_error_result(err)?
+                }
             }
         };
-        if result < 0 {
+        let result = if result < 0 {
             #[cfg(windows)]
             {
                 self.completion_staging = None;
             }
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
-        }
+            crate::vibeio::op::io_util::read_error_result(io::Error::from_raw_os_error(-result))?
+        } else {
+            result
+        };
 
         #[cfg(windows)]
         {
@@ -219,7 +232,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                     let len = u32::try_from(iovec.len).map_err(|_| {
                         io::Error::new(
                             io::ErrorKind::InvalidInput,
-                            "writev buffer is too large for Windows socket I/O",
+                            "readv buffer is too large for Windows socket I/O",
                         )
                     })?;
                     wsabufs.push(WSABUF {
@@ -250,6 +263,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                     return Ok(());
                 }
 
+                // SAFETY: reads thread-local Winsock error after failed submission.
                 let err = unsafe { WinSock::WSAGetLastError() };
                 if err == WSA_IO_PENDING {
                     self.completion_staging = None;
@@ -263,7 +277,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                 let iovecs = bufs.as_iovecs_mut();
                 let total_len = (iovecs.iter()).try_fold(0usize, |acc, iovec| {
                     acc.checked_add(iovec.len).ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidInput, "writev buffer length overflow")
+                        io::Error::new(io::ErrorKind::InvalidInput, "readv buffer length overflow")
                     })
                 })?;
                 let total_len_u32 = u32::try_from(total_len).map_err(|_| {
@@ -274,6 +288,9 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                 })?;
 
                 let mut staging = vec![0u8; total_len];
+                // SAFETY: staging owns total_len writable bytes and is retained
+                // below on success or pending submission. The driver retains
+                // OVERLAPPED; cancellation retains staging until acknowledgement.
                 let read_result = unsafe {
                     ReadFile(
                         handle as HANDLE,

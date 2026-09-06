@@ -89,8 +89,20 @@ jobs:
       - name: Check embedded runtime formatting
         run: cargo fmt --manifest-path tools/vibeio-check/Cargo.toml --all -- --check
 
+      - name: Check embedded runtime documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --manifest-path tools/vibeio-check/Cargo.toml --all-features --no-deps --locked
+
       - name: Lint embedded runtime on the native target
         run: cargo clippy --manifest-path tools/vibeio-check/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
+      - name: Check isolated embedded runtime features
+        shell: bash
+        run: |
+          for feature in '' fs process signal pipe stdio splice blocking-default; do
+            cargo clippy --manifest-path tools/vibeio-check/Cargo.toml --all-targets --no-default-features --features "$feature" --locked -- -D warnings
+          done
 
       - name: Run default-feature embedded runtime tests
         run: cargo test --manifest-path tools/vibeio-check/Cargo.toml --locked

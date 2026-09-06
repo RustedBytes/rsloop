@@ -22,18 +22,21 @@ impl fmt::Display for TimeoutError {
 
 impl std::error::Error for TimeoutError {}
 
-/// Timeout future that races the provided future against a timeout duration.
-///
-/// If the inner future completes first, `Timeout` yields `Ok(T)`.
-/// If the timeout elapses first, `Timeout` yields `Err(TimeoutError)` and the
-/// inner future is dropped.
-/// The inner future is polled first, so a ready result wins even at an expired
-/// deadline. Timeout cancellation occurs when the wrapper is polled.
-pub struct Timeout<F> {
-    future: Option<F>,
-    sleep: Option<Sleep>,
-    /// If true, the timeout has already fired (and future should be treated as timed out).
-    timed_out: bool,
+pin_project_lite::pin_project! {
+    /// Timeout future that races the provided future against a timeout duration.
+    ///
+    /// If the inner future completes first, `Timeout` yields `Ok(T)`.
+    /// If the timeout elapses first, `Timeout` yields `Err(TimeoutError)` and the
+    /// inner future is dropped.
+    /// The inner future is polled first, so a ready result wins even at an expired
+    /// deadline. Timeout cancellation occurs when the wrapper is polled.
+    pub struct Timeout<F> {
+        #[pin]
+        future: Option<F>,
+        sleep: Option<Sleep>,
+        // If true, the timeout has already fired (and future should be treated as timed out).
+        timed_out: bool,
+    }
 }
 
 impl<F> Timeout<F> {
@@ -61,17 +64,13 @@ where
     type Output = Result<F::Output, TimeoutError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: `future` is structurally pinned: it is never moved out, and
-        // is cleared only with Pin::set, which drops its value in place. Sleep
-        // and the flag are Unpin. No API or Drop implementation moves future.
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = self.project();
 
-        if this.timed_out {
+        if *this.timed_out {
             return Poll::Ready(Err(TimeoutError));
         }
 
-        // SAFETY: this field remains pinned for the lifetime of the wrapper.
-        let mut future_pin = unsafe { Pin::new_unchecked(&mut this.future) };
+        let mut future_pin = this.future;
         match future_pin
             .as_mut()
             .as_pin_mut()
@@ -79,7 +78,7 @@ where
             .poll(cx)
         {
             Poll::Ready(output) => {
-                this.sleep = None;
+                *this.sleep = None;
                 future_pin.set(None);
                 return Poll::Ready(Ok(output));
             }
@@ -90,8 +89,8 @@ where
         // return Err. Otherwise remain Pending.
         match Pin::new(this.sleep.as_mut().expect("Timeout missing timer")).poll(cx) {
             Poll::Ready(()) => {
-                this.timed_out = true;
-                this.sleep = None;
+                *this.timed_out = true;
+                *this.sleep = None;
                 // Cancel even if the caller retains the completed Timeout.
                 future_pin.set(None);
                 Poll::Ready(Err(TimeoutError))

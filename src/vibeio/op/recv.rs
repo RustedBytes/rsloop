@@ -15,7 +15,9 @@ use crate::vibeio::fd_inner::InnerRawHandle;
 use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::io::IoBufMut;
 use crate::vibeio::op::Op;
-use crate::vibeio::op::io_util::{CompletionBuffer, completion_len, poll_result_or_wait};
+#[cfg(target_os = "linux")]
+use crate::vibeio::op::io_util::completion_len;
+use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]

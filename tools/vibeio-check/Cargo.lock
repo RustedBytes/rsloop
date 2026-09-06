@@ -296,6 +296,7 @@ dependencies = [
  "mio",
  "once_cell",
  "oneshot",
+ "pin-project-lite",
  "rusty_pool",
  "slab",
  "socket2",

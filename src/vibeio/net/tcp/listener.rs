@@ -175,10 +175,7 @@ impl TcpListener {
         };
         #[cfg(windows)]
         let std_stream = unsafe { std::net::TcpStream::from_raw_socket(raw) };
-        match TcpStream::from_std(std_stream) {
-            Ok(stream) => Ok((stream, address)),
-            Err(err) => Err(err),
-        }
+        TcpStream::from_std(std_stream).map(|stream| (stream, address))
     }
 }
 

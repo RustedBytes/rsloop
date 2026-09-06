@@ -6,6 +6,30 @@ use mio::Interest;
 use crate::vibeio::driver::AnyDriver;
 use crate::vibeio::fd_inner::InnerRawHandle;
 
+/// Normalize EOF reported either during submission or by a completed read.
+pub(super) fn read_error_result(error: io::Error) -> io::Result<i32> {
+    // Overlapped ReadFile can report EOF immediately or through its completion.
+    // https://learn.microsoft.com/en-us/windows/win32/fileio/testing-for-the-end-of-a-file
+    #[cfg(windows)]
+    if error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_HANDLE_EOF as i32) {
+        return Ok(0);
+    }
+    Err(error)
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn positional_offset(offset: u64) -> io::Result<u64> {
+    // Linux file offsets are signed. In particular, io_uring treats all-one
+    // bits as a request to use AND advance the shared cursor, not a position.
+    i64::try_from(offset).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "file offset exceeds signed 64-bit range",
+        )
+    })?;
+    Ok(offset)
+}
+
 pub(super) fn iovec_count<T: TryFrom<usize>>(count: usize) -> io::Result<T> {
     T::try_from(count).map_err(|_| {
         io::Error::new(
@@ -61,6 +85,180 @@ pub(crate) enum CompletionBuffer<B> {
 #[cfg(test)]
 mod storage_tests {
     use super::*;
+
+    #[cfg(all(target_os = "linux", feature = "fs"))]
+    #[test]
+    fn positional_entries_reject_negative_offsets_and_current_position_sentinel() {
+        use crate::vibeio::op::{Op, ReadAtOp, WriteAtOp};
+        let handle = InnerRawHandle::for_mock_completion(std::rc::Rc::new(AnyDriver::new_mock()));
+        for offset in [i64::MAX as u64 + 1, u64::MAX - 1, u64::MAX] {
+            let mut read = ReadAtOp::new(&handle, vec![7u8; 4], offset);
+            assert_eq!(
+                read.build_completion_entry(1).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+            assert_eq!(read.take_bufs(), vec![7; 4]);
+            let mut write = WriteAtOp::new(&handle, vec![7u8; 4], offset);
+            assert_eq!(
+                write.build_completion_entry(2).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+            assert_eq!(write.take_bufs(), vec![7; 4]);
+        }
+        for offset in [0, 1, i64::MAX as u64] {
+            assert!(
+                ReadAtOp::new(&handle, vec![0u8; 1], offset)
+                    .build_completion_entry(1)
+                    .is_ok()
+            );
+            assert!(
+                WriteAtOp::new(&handle, vec![0u8; 1], offset)
+                    .build_completion_entry(2)
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn read_errors_preserve_non_eof_failures() {
+        let error = read_error_result(io::Error::new(io::ErrorKind::PermissionDenied, "denied"))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(error.to_string(), "denied");
+        let error = read_error_result(io::Error::from_raw_os_error(6)).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(6));
+        #[cfg(windows)]
+        assert_eq!(
+            read_error_result(io::Error::from_raw_os_error(38)).unwrap(),
+            0
+        );
+        #[cfg(not(windows))]
+        assert_eq!(
+            read_error_result(io::Error::from_raw_os_error(38))
+                .unwrap_err()
+                .raw_os_error(),
+            Some(38)
+        );
+    }
+
+    #[cfg(all(windows, feature = "fs"))]
+    #[test]
+    fn windows_overlapped_file_reads_return_zero_at_eof() {
+        use crate::vibeio::fd_inner::RawOsHandle;
+        use crate::vibeio::op::{ReadAtOp, ReadOp, ReadvOp};
+        use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OVERLAPPED,
+        };
+
+        let path = std::env::temp_dir().join(format!(
+            "vibeio-eof-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .custom_flags(FILE_FLAG_OVERLAPPED | FILE_FLAG_DELETE_ON_CLOSE)
+            .open(path)
+            .unwrap();
+        let runtime = crate::vibeio::RuntimeBuilder::new()
+            .driver(crate::vibeio::DriverKind::Iocp)
+            .build()
+            .unwrap();
+        runtime.block_on(async move {
+            let handle = InnerRawHandle::new(
+                RawOsHandle::Handle(file.as_raw_handle()),
+                Interest::READABLE,
+            )
+            .unwrap();
+            let mut scalar = ReadOp::new(&handle, vec![7u8; 4]);
+            assert_eq!(
+                crate::vibeio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    std::future::poll_fn(|cx| handle.poll_op(cx, &mut scalar))
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                0
+            );
+            assert!(scalar.take_bufs().is_empty());
+            for offset in [0, 10] {
+                let mut positional = ReadAtOp::new(&handle, vec![7u8; 4], offset);
+                assert_eq!(
+                    crate::vibeio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        std::future::poll_fn(|cx| handle.poll_op(cx, &mut positional))
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                    0
+                );
+                assert!(positional.take_bufs().is_empty());
+            }
+            let buffers = vec![
+                vec![7u8; 2].into_boxed_slice(),
+                vec![9u8; 2].into_boxed_slice(),
+            ];
+            let mut vectored = ReadvOp::new(&handle, buffers.clone());
+            assert_eq!(
+                crate::vibeio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    std::future::poll_fn(|cx| handle.poll_op(cx, &mut vectored))
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                0
+            );
+            assert_eq!(vectored.take_bufs(), buffers);
+            let buffers = vec![
+                vec![].into_boxed_slice(),
+                b"ab".to_vec().into_boxed_slice(),
+                vec![].into_boxed_slice(),
+                b"cd".to_vec().into_boxed_slice(),
+            ];
+            let mut write = crate::vibeio::op::WritevOp::new(&handle, buffers.clone());
+            assert_eq!(
+                crate::vibeio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    std::future::poll_fn(|cx| handle.poll_op(cx, &mut write))
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                4
+            );
+            assert_eq!(write.take_bufs(), buffers);
+            let mut read = ReadAtOp::new(&handle, Vec::<u8>::with_capacity(4), 0);
+            assert_eq!(
+                crate::vibeio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    std::future::poll_fn(|cx| handle.poll_op(cx, &mut read))
+                )
+                .await
+                .unwrap()
+                .unwrap(),
+                4
+            );
+            assert_eq!(read.take_bufs(), b"abcd");
+            let mut invalid = crate::vibeio::op::WriteAtOp::new(&handle, b"BAD".to_vec(), u64::MAX);
+            let result = std::future::poll_fn(|cx| handle.poll_op(cx, &mut invalid)).await;
+            assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+            assert_eq!(invalid.take_bufs(), b"BAD");
+            assert_eq!(
+                file.metadata().unwrap().len(),
+                4,
+                "invalid offset must not append"
+            );
+        });
+    }
 
     #[cfg(windows)]
     #[test]

@@ -74,12 +74,16 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
                     self.completion_token = Some(token);
                     return Poll::Pending;
                 }
-                CompletionIoResult::SubmitErr(err) => return Poll::Ready(Err(err)),
+                CompletionIoResult::SubmitErr(err) => {
+                    crate::vibeio::op::io_util::read_error_result(err)?
+                }
             }
         };
-        if result < 0 {
-            return Poll::Ready(Err(io::Error::from_raw_os_error(-result)));
-        }
+        let result = if result < 0 {
+            crate::vibeio::op::io_util::read_error_result(io::Error::from_raw_os_error(-result))?
+        } else {
+            result
+        };
         let read = result as usize;
         let buf = self.buf.as_mut().unwrap().as_mut();
         unsafe { buf.set_buf_init(read) };
@@ -152,7 +156,7 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
             buf.as_buf_mut_ptr(),
             read_len,
         )
-        .offset(self.offset)
+        .offset(crate::vibeio::op::io_util::positional_offset(self.offset)?)
         .build()
         .user_data(user_data);
 

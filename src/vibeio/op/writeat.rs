@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::io;
 use std::task::{Context, Poll};
 
@@ -16,6 +18,19 @@ use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::io::IoBuf;
 use crate::vibeio::op::Op;
 use crate::vibeio::op::io_util::CompletionBuffer;
+
+#[cfg(any(windows, test))]
+pub(crate) fn validate_windows_write_offset(offset: u64) -> io::Result<()> {
+    // WriteFile interprets both offset words set to all-one bits as append.
+    // A positional operation must not silently select that separate behavior.
+    if offset == u64::MAX {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "positional offset is the Windows append sentinel",
+        ));
+    }
+    Ok(())
+}
 
 #[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 pub struct WriteAtOp<'a, B: IoBuf> {
@@ -87,6 +102,7 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
+        validate_windows_write_offset(self.offset)?;
         let RawOsHandle::Handle(handle) = self.handle.handle else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -102,11 +118,15 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
             )
         })?;
 
+        // SAFETY: the driver provides exclusive writable OVERLAPPED storage
+        // before submission. Splitting the offset preserves both 32-bit words.
         unsafe {
             (*overlapped).Anonymous.Anonymous.Offset = self.offset as u32;
             (*overlapped).Anonymous.Anonymous.OffsetHigh = (self.offset >> 32) as u32;
         }
 
+        // SAFETY: the initialized buffer is stable and retained through I/O;
+        // the driver retains OVERLAPPED, including cancellation acknowledgement.
         let write_result = unsafe {
             WriteFile(
                 handle as HANDLE,
@@ -146,7 +166,7 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
         })?;
 
         let entry = opcode::Write::new(types::Fd(self.handle.handle), buf.as_buf_ptr(), write_len)
-            .offset(self.offset)
+            .offset(crate::vibeio::op::io_util::positional_offset(self.offset)?)
             .build()
             .user_data(user_data);
 
@@ -175,6 +195,24 @@ impl<B: IoBuf> Drop for WriteAtOp<'_, B> {
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;
+
+    #[test]
+    fn windows_append_sentinel_is_not_a_positional_offset() {
+        for offset in [
+            0,
+            1,
+            u32::MAX as u64,
+            1 << 32,
+            i64::MAX as u64,
+            u64::MAX - 1,
+        ] {
+            validate_windows_write_offset(offset).unwrap();
+        }
+        assert_eq!(
+            validate_windows_write_offset(u64::MAX).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
 
     #[test]
     fn pending_buffer_is_retained_by_owning_driver() {

@@ -1475,3 +1475,373 @@ The Windows metadata-retention change below is superseded by the later
   strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
   formatting and whitespace checks pass. Native Windows execution and overlapped
   peek behavior remain open, as does wider package cleanup.
+
+## Windows file-read EOF normalization
+
+- Audited ReadOp, ReadAtOp and ReadvOp against Microsoft's asynchronous EOF
+  contract. ReadAtOp and ReadvOp propagated EOF as an error; ReadOp normalized
+  completion EOF but still propagated EOF reported during submission.
+- All three now normalize ERROR_HANDLE_EOF from either path to zero bytes.
+  Scalar buffers expose an empty initialized prefix; vectored destinations stay
+  unchanged and completed file staging is released. Other errors are preserved,
+  including the same numeric error code on non-Windows platforms.
+  Source: https://learn.microsoft.com/en-us/windows/win32/fileio/testing-for-the-end-of-a-file
+- Added error-preservation coverage and a Windows-only native IOCP regression
+  for scalar, positional (at and beyond EOF), and vectored empty-file reads.
+  The native test has bounded awaits and uses a create-new, delete-on-close
+  temporary file. It compiles here but has not been executed on Windows; it
+  does not force both immediate and delayed EOF delivery independently.
+- Validation: 318 root tests, 201 harness tests, 6 doctests (44 ignored), root
+  strict Clippy and Linux/Windows-target/macOS-target strict harness Clippy pass.
+  Formatting and whitespace checks pass. Native Windows verification, overlapped
+  peek semantics and the broader cleanup remain open. Changes are uncommitted.
+
+## Linux positional-I/O sentinel validation
+
+- ReadAtOp and WriteAtOp passed unsigned offsets directly to io_uring. Linux
+  interprets u64::MAX as its current-position sentinel, so a positional request
+  could read or overwrite unrelated data and advance the shared file cursor.
+  Source: https://www.man7.org/linux/man-pages/man3/io_uring_prep_read.3.html
+  Source: https://www.man7.org/linux/man-pages/man3/io_uring_prep_write.3.html
+- Added shared signed-64-bit offset validation before either SQE is returned.
+  Negative encodings, including the sentinel, now return InvalidInput without
+  submitting I/O or changing the caller's buffer. Valid offsets are unchanged.
+  This guard is Linux-specific; Windows offset semantics remain a separate audit.
+- Added boundary coverage and a live file regression covering both the blocking
+  fallback and io_uring. Independently bypassing each new guard reproduced an
+  unexpected successful three-byte read/write at u64::MAX. Both guards were
+  restored; the test now verifies rejection, intact file contents and unchanged
+  shared cursor, alongside successful ordinary positional reads and writes.
+- Validation: 320 root tests, 203 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. Broader cleanup remains open.
+
+## Append/truncate option validation
+
+- OpenOptions allowed append+truncate through its common validation. Standard
+  blocking open rejected that combination unless create_new was enabled, but
+  the io_uring flags allowed opening and truncating an existing file. Added the
+  common validation check before either backend can touch the path.
+- A live regression failed on the previous io_uring path with unexpected
+  success. It now verifies InvalidInput and unchanged file contents on both
+  blocking and io_uring paths. The create_new exception is also checked: an
+  existing file returns AlreadyExists and remains intact.
+- Validation: 336 root tests, 219 harness tests, 7 doctests (44 ignored), root
+  strict Clippy and Linux/Windows-target/macOS-target strict harness Clippy pass.
+  Formatting and whitespace checks pass. Changes remain uncommitted and the
+  full package audit remains incomplete.
+
+## Exact positional-I/O retry loop
+
+- Centralized read_exact_at and write_exact_at's partial-transfer loop. Both
+  now retry Interrupted without advancing the offset or buffer cursor. Zero
+  writes return WriteZero instead of UnexpectedEof; short reads ending at EOF
+  continue to return UnexpectedEof. Updated the public method documentation.
+- Replaced saturating offset advancement with checked arithmetic when another
+  operation is needed, and reject impossible byte counts before advancing the
+  buffer cursor. The caller's owned buffer is returned on every error path.
+- Four deterministic scripted tests exercise both modes: interruptions before
+  and after partial progress, offset/remaining-capacity tracking, zero progress,
+  overflow, ordinary error preservation, oversized counts and empty buffers.
+  Existing live-file and spare-capacity tests also pass. Scripted tests do not
+  simulate the kernel writing into uninitialized read buffers.
+- Validation: 324 root tests, 207 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. Changes remain uncommitted; native
+  platform verification and broader package cleanup remain open.
+
+## Integration verification and per-location dispositions
+
+- Rebuilt the release CPython 3.14 extension with `maturin develop --release
+  --locked`. The repository Python runner completed 109 tests in 3.593 seconds,
+  with 2 skipped. Log: `target/vibeio-cleanup-python-tests.log`. This is the
+  unittest discovery suite, not every optional framework's standalone smoke
+  script or the complete supported-Python-version matrix.
+- Refreshed Qualirs: 265 remaining vibeio findings (Q0069: 1, Q0078: 8,
+  Q0082: 3, Q0084: 2, Q0085: 1, Q0087: 137, Q0089: 1, Q0090: 63,
+  Q0094: 1, Q0095: 48). Counts are not an audit completion metric.
+- Q0074, `net/tcp/listener.rs::TcpListener::accept`: replaced the manual
+  success/error mapping with Result::map. Ownership transfer and error cleanup
+  are unchanged. The refreshed report no longer includes this finding.
+- Q0069, `executor.rs::spawn`: retained the documented panic outside a runtime.
+  Returning Result would change this API's contract; silently abandoning the
+  task would be incorrect. Added a regression verifying the specific panic and
+  that the unpolled future's capture is dropped. This is an intentional API
+  precondition, not a suppressed diagnostic.
+- Q0089, `io/buf.rs::read_into_buf`, pointer addition at the initialized-prefix
+  boundary: retained. IoBuf's unsafe implementation contract guarantees
+  initialized length <= capacity and a valid stable allocation; the helper
+  zeroes only the spare suffix before constructing a safe mutable byte slice.
+  A safe slice cannot first be formed over uninitialized bytes. Existing
+  `blocking_read_initializes_spare_capacity_and_tracks_result_length` and
+  `blocking_read_errors_do_not_expose_unreported_bytes` tests cover this path.
+- Q0082 in `process/reaper.rs::ReapChild::drop`: the normal worker takes the
+  mutex on its own thread; the synchronous wait is restricted to worker-spawn
+  failure. The resource-exhaustion fallback remains a real blocking tradeoff,
+  not a fully resolved finding. Q0082 in `signal/unix.rs::Signal::drop` also
+  remains open for contention/lifecycle review.
+- The release integration build above preceded the equivalent listener mapping
+  simplification and the test-only spawn regression. Final source validation:
+  325 root tests, 208 harness tests, 6 doctests (44 ignored), root strict Clippy,
+  and Linux/Windows-target/macOS-target strict harness Clippy pass. Native
+  Windows/macOS execution and other ledger requirements remain outstanding.
+- Networking smoke command: `.venv/bin/python -u benches/workload_matrix.py
+  --loops rsloop,uvloop --cpu-affinity 2,3 --json-output
+  target/vibeio-cleanup-matrix-smoke.json`. All 13 scenarios completed for both
+  loops (26 combinations, three measured runs each), including all idle blocks.
+  Log: `target/vibeio-cleanup-matrix-smoke.log`. This was not sustained mode;
+  build activity overlapped part of the run, and three process blocks cannot
+  establish the idle benchmark's confidence interval. These artifacts establish
+  successful workload execution, not a before/after speedup or a README update.
+
+## Unix signal waker clone reentrancy
+
+- Signal::poll_recv cloned a caller-provided waker while holding the listener
+  slab mutex. RawWaker clone callbacks can execute arbitrary user code, so
+  reentering this state could deadlock even though wake/drop already ran outside
+  the lock. Cloning now runs unlocked; polling rechecks the notification counter
+  under the lock before installing the new waker. Matching wakers still avoid
+  cloning, and replacement/retirement continues to release callbacks unlocked.
+- Added an isolated custom-RawWaker regression that checks lock availability
+  during clone and drop, publishes a notification during clone, verifies that
+  the same poll observes it, and checks unchanged-waker reuse and capture
+  release. It uses private signal state without installing a process handler.
+- Validation: 326 root tests, 209 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux and macOS-target strict harness Clippy, formatting and
+  whitespace checks pass. macOS is compilation-only. The signal Drop mutex
+  contention finding, process-wide handler races and wider cleanup remain open.
+
+## Windows Ctrl-C listener ownership and notification race
+
+- Windows CtrlC checked its counter before locking for waker registration.
+  Dispatch in that interval could leave a pending listener unwoken. Its global
+  Vec also retained cancelled listeners and accumulated obsolete wakers when
+  a listener moved between tasks; matching wakers were replaced under the lock.
+- Each listener now owns one slab slot, removes it on Drop, and retires replaced
+  wakers outside the mutex. Counter checking and registration are serialized
+  with dispatch. Cloning happens unlocked with a counter recheck afterward.
+  Dispatch takes live wakers without invalidating slots and wakes them unlocked.
+  Removed unnecessary unchecked pin projection from the Unpin CtrlC future.
+- Windows listener-state tests now also compile and execute on Unix by including
+  the production Windows module under a test-only module name. Console FFI and
+  registration stay Windows-only; no fake Windows API or copied state machine is
+  substituted. Tests cover replacement, cancellation, independent listeners
+  sharing a waker, broadcast, slot reuse, ownership release, and notification
+  during a custom clone callback.
+- Validation: 328 root tests, 211 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. Native console-handler execution,
+  process-wide initialization behavior and wider cleanup remain open.
+
+## Signal FFI boundary checks
+
+- Enabled local unsafe-operation and undocumented-unsafe diagnostics in both
+  signal platform modules. Unix sigaction setup now uses individually justified
+  unsafe blocks, validates sigemptyset failure, and exposes a safe private
+  installation wrapper. Restoration retains its unsafe contract: the saved
+  handler must remain valid. Documented that contract explicitly.
+- Removed the test-only raw getpid call and documented remaining signal-test
+  FFI. Both signal future implementations already use safe pin projection.
+- Added repeated SIGKILL/SIGSTOP registration-failure coverage: the OS rejects
+  each request with EINVAL and no registry entry remains. The test never sends
+  either signal. Existing signal-delivery and pipe tests continue to pass.
+- Validation: 329 root tests, 212 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. Platform compilation is not native
+  execution; external handler replacement and lifecycle races remain open.
+
+## Isolated-feature regression and CI coverage
+
+- A fresh default-feature Clippy check found a regression in the recent
+  positional-I/O tests: Linux and Windows test functions imported ReadAtOp
+  without requiring the fs feature. Added fs gates to both tests. Production
+  feature wiring was unchanged; all-features validation had hidden the error.
+- Verified strict all-target Clippy for the default configuration and each of
+  fs, process, signal, pipe, stdio, splice and blocking-default independently,
+  on x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu and aarch64-apple-darwin:
+  24 configurations passed. This covers isolated builds, not all 128 feature
+  combinations or native execution on the cross targets.
+- Added the same eight isolated checks to each existing native-runtime CI job
+  alongside all-feature Clippy and default/all-feature tests. Parsed the workflow
+  YAML and checked the new Bash step's syntax. CI has not been dispatched.
+- Default root tests pass (260); default/all-feature harness tests, formatting
+  and whitespace checks pass. Broader audit requirements remain outstanding.
+
+## Structural pin projection
+
+- Replaced the remaining handwritten get_unchecked_mut/Pin::new_unchecked
+  projections in SpawnFuture and Timeout with pin-project-lite projections.
+  Both generic futures remain structurally pinned; Timeout still clears its
+  Option with Pin::set so cancellation drops the inner future in place.
+  This adds no box or allocation to either wrapper.
+- Declared the already-locked pin-project-lite 0.2.17 dependency explicitly in
+  the root and embedded harness manifests; synchronized the example lockfile.
+  No dependency versions were upgraded. Added a spawned !Unpin-future regression
+  checking address stability between polling and cancellation drop. Existing
+  timeout tests retain their !Unpin and prompt resource-release coverage.
+- Validation: 330 root tests, 213 harness tests, 6 doctests (44 ignored), root
+  strict Clippy and Linux/Windows-target/macOS-target strict harness Clippy pass.
+  Formatting and whitespace checks pass. A source search finds no remaining
+  handwritten unchecked pin projections in vibeio; this is not a claim that
+  all unsafe code or the package-wide cleanup has been resolved.
+
+## Package-wide lint allowance reduction
+
+- Replaced the embedded module's unsafe_op_in_unsafe_fn allowance with deny.
+  Linux, Windows-target and macOS-target all-target/all-feature checks pass;
+  the runtime no longer permits implicit unsafe operations inside unsafe bodies.
+- Removed its broad unused_imports allowance. Deleted obsolete raw-handle
+  conversion imports, restricted completion-length helpers to their platform
+  users and moved the read-buffer trait import behind cfg(test).
+- Kept explicit allowances on individual public re-exports that private rsloop
+  embedding does not consume. Harness-free runtime/timer benchmark inclusions
+  have a documented import-only exception: Cargo builds their cfg(test) modules
+  but omits #[test] functions. Normal library and test compilation still checks
+  those imports. The dead_code allowance remains for the embedded API surface.
+- Validation: strict Clippy passes for root default/all-feature all-target builds
+  and 24 isolated-feature/platform harness configurations. All-feature harness
+  tests (213 plus 6 doctests, 44 ignored), formatting and whitespace checks pass.
+  Cross-target checks do not establish native platform behavior. Changes remain
+  uncommitted and broader cleanup requirements remain open.
+
+## Documentation verification
+
+- Corrected the signal module example: ctrl_c returns a Result containing the
+  future, so registration must be unwrapped before awaiting it. Added a harness
+  example with a zero-duration timeout, exercising listener cancellation without
+  waiting for external signals. Its body runs with signal enabled; otherwise it
+  is gated out. Corrected four stale positional readv/writev syscall claims to
+  describe the actual io_uring Read/Write operations.
+- Strict all-feature documentation builds pass for Linux, Windows and macOS
+  targets after fixing seven Windows broken links: Unix network types are now
+  documented conditionally and Unix symlink references use cross-platform
+  external documentation links. Added the warning-as-error check to the existing native
+  CI jobs; validated the YAML locally, without dispatching remote CI.
+- Default and all-feature doctest suites pass with 7 executable examples. The
+  remaining ignored example counts are 16 and 44 respectively; those examples
+  are not verified by a successful documentation build. Native Windows/macOS
+  example execution and broader documentation/API cleanup remain outstanding.
+
+## Vectored operation unsafe boundaries
+
+- Enabled local undocumented-unsafe checks in ReadvOp and WritevOp after
+  reviewing synchronous descriptor lifetimes, writable-region ownership,
+  Windows staging and completion/cancellation retention. Safety comments now
+  identify those contracts at each native call and pointer-to-slice conversion.
+- Corrected ReadvOp's copy-pasted writev error labels and clarified the vectored
+  buffer traits: readable memory feeds output operations, writable memory
+  receives input, and methods return owned descriptors rather than raw arrays.
+- Windows file-write staging skips empty segments before constructing slices.
+  Extended the Windows IOCP empty-file regression to write nonempty segments
+  interspersed with empty ones and read back the exact concatenation. It is
+  cross-compiled here, not executed; existing Linux live vectored I/O tests pass.
+- Validation: 213 harness tests, 7 doctests (44 ignored), root strict Clippy,
+  Linux/Windows-target/macOS-target strict harness Clippy, formatting and
+  whitespace checks pass. No measured performance claim; broader cleanup and
+  native Windows verification remain open.
+
+## Windows positional-write append sentinel
+
+- Microsoft's WriteFile contract assigns Offset=OffsetHigh=0xFFFFFFFF the
+  special meaning "append at EOF". WriteAtOp previously encoded u64::MAX
+  unchanged, so a positional request could append rather than fail.
+  Source: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-writefile
+- Added a shared Windows sentinel guard in both low-level submission and
+  File::write_at before choosing completion/offloaded/blocking paths. Invalid
+  requests retain their input buffer; empty public writes still perform no I/O.
+  This guard rejects only the special sentinel, leaving other offsets to the OS.
+- The boundary test executes on Linux as well. Extended the Windows native-file
+  regression to check the error, returned bytes and unchanged file length after
+  attempting a sentinel write. That native regression compiles but has not run
+  on Windows. Existing owning-driver cancellation coverage is unchanged.
+- Enabled local undocumented-unsafe checks in WriteAtOp and documented offset
+  splitting and payload/OVERLAPPED lifetime boundaries. Validation: 331 root
+  tests, 214 harness tests, 7 doctests (44 ignored), root strict Clippy and
+  Linux/Windows-target/macOS-target strict harness Clippy pass. Formatting and
+  whitespace checks pass. Broader cleanup remains open and changes uncommitted.
+
+## Vectored emptiness contract
+
+- Reviewed the high-level vectored read early-return checks. IoVectoredBuf's
+  is_empty intentionally describes the absence of descriptors, not a zero sum
+  of initialized lengths: IoVectoredBufMut may provide spare writable capacity
+  through different descriptor lengths. Changing the check to initialized-byte
+  emptiness would silently skip valid reads. Kept behavior and clarified docs.
+- Added a custom owned buffer regression with zero readable bytes and eight
+  spare writable bytes. Its default is_empty returns false, and a live Mio
+  Unix-stream read receives and verifies three bytes. Also checked absent
+  descriptors versus a collection of empty segments. This is contract coverage,
+  not a claim that a previously observed runtime defect was fixed.
+- Validation: 215 harness tests and 7 doctests (44 ignored) pass; the extended
+  live regression passes separately. Linux/Windows-target/macOS-target strict
+  harness Clippy and whitespace checks pass. Windows compiles the portable
+  descriptor checks; the socket portion is Unix-only. Cleanup remains open.
+
+## Copy interruption handling
+
+- copy previously propagated Interrupted immediately from reads, partial writes
+  and its final flush. It now retries those operations, retaining the returned
+  read buffer or current write cursor without claiming progress. Other errors
+  still terminate the copy; previously written data is not rolled back.
+- Added a scripted regression that interrupts every read/write attempt before
+  allowing the next attempt, including between single-byte writes, and interrupts
+  the first flush. The old implementation failed with Interrupted; the new one
+  verifies exactly abc, three copied bytes and exact read/write/flush call counts.
+- Validation: 333 root tests, 216 harness tests, 7 doctests (44 ignored), root
+  strict Clippy and Linux/Windows-target/macOS-target strict harness Clippy pass.
+  Formatting and whitespace checks pass. This does not address every remaining
+  runtime or platform audit item; changes remain uncommitted.
+
+## Vectored forwarding through adapters
+
+- Box, mutable-reference and owned split-half adapters forwarded scalar I/O but
+  inherited the Unsupported defaults for vectored methods. Added direct
+  read_vectored/write_vectored forwarding to all six implementations. Underlying
+  results and owned buffers are returned without copying or scalar fallback.
+- Added a vectored-only test object whose scalar methods panic. Through each
+  adapter, the test verifies the underlying read error, successful byte count,
+  buffer contents and original allocation identity. It failed on the old boxed
+  read with Unsupported instead of PermissionDenied; all paths now pass.
+- Split halves still serialize access through their documented whole-object
+  async mutex; forwarding does not claim to fix that full-duplex limitation.
+- Validation: 334 root tests, 217 harness tests, 7 doctests (44 ignored), root
+  strict Clippy and Linux/Windows-target/macOS-target strict harness Clippy pass.
+  Formatting and whitespace checks pass. Changes remain uncommitted; broader
+  package cleanup remains open.
+
+## File write helper reuse
+
+- fs::write allocated a fresh copy of the remaining slice after every partial
+  write and maintained a separate loop that returned Interrupted immediately.
+  It now copies the input once and delegates to File::write_exact_at at offset
+  zero. The newly created/truncated file's internal cursor is not observable
+  after this helper returns. Creation, truncation and final flush are preserved.
+- Added live blocking-fallback and io_uring coverage for a 128 KiB binary
+  payload, overwrite with shorter NUL-containing bytes, and empty truncation.
+  Test-created files have scoped cleanup. Interruption and partial-write behavior
+  is covered by the exact-write loop's existing scripted tests.
+- Validation: 335 root tests, 218 harness tests, 7 doctests (44 ignored), root
+  strict Clippy and Linux/Windows-target/macOS-target strict harness Clippy pass.
+  Formatting and whitespace checks pass. No wall-clock speedup is claimed;
+  broader cleanup remains open and changes are uncommitted.
+
+## Windows symlink paths and argument order
+
+- The cross-platform Windows symlink functions passed (source, destination)
+  into helpers whose native argument order was (link, target), and converted
+  OsStr paths through lossy UTF-8 strings. Replaced those paths with standard
+  Windows symlink_dir/symlink_file calls using their (original, link) order.
+  Offloaded operations own PathBuf values without lossy conversion.
+  Source: https://doc.rust-lang.org/std/os/windows/fs/fn.symlink_file.html
+- Retained the legacy string helpers' link-first signature, delegating safely
+  with reversed arguments to std. Removed manual UTF-16 termination and raw
+  CreateSymbolicLinkW calls; standard path conversion rejects embedded NULs.
+- Windows tests cover NUL rejection plus actual file/directory link placement,
+  unchanged source contents and an unpaired-surrogate source path. The live test
+  first probes standard-library capability and explicitly reports an unavailable
+  check for ERROR_PRIVILEGE_NOT_HELD; other probe failures remain failures.
+  Native tests are cross-compiled, not executed here; offload execution remains
+  unverified on Windows.
+- Validation: 218 Linux harness tests, 7 doctests (44 ignored), root strict
+  Clippy, Windows/macOS-target strict harness Clippy, strict Windows documentation,
+  formatting and whitespace checks pass. Broader cleanup remains open.

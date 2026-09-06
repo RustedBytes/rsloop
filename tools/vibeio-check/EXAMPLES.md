@@ -92,6 +92,35 @@ runtime.block_on(async {
 # Ok::<(), std::io::Error>(())
 ```
 
+## Registering and cancelling a Ctrl-C wait
+
+`ctrl_c()` registers a listener and returns a `Result`; apply `?` before
+awaiting the returned future. Its completion is also fallible. This example
+uses an immediate timeout to exercise cancellation without requiring a user
+to send a console signal. It runs with the `signal` feature; other feature
+configurations compile an empty block.
+
+```rust
+# #[cfg(feature = "signal")]
+# {
+use rsloop_vibeio_check::vibeio::{DriverKind, RuntimeBuilder, signal, time};
+use std::time::Duration;
+
+let runtime = RuntimeBuilder::new()
+    .driver(DriverKind::Mock)
+    .enable_timer(true)
+    .build()?;
+runtime.block_on(async {
+    let listener = signal::ctrl_c()?;
+    let wait = async move { listener.await };
+    // No signal is sent: expiry drops the listener and its pending waker.
+    assert!(time::timeout(Duration::ZERO, wait).await.is_err());
+    Ok::<(), std::io::Error>(())
+})?;
+# }
+# Ok::<(), std::io::Error>(())
+```
+
 ## Sleep
 
 Timers must be enabled explicitly when using the builder. The mock I/O driver

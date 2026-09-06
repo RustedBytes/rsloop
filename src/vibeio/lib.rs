@@ -1,5 +1,6 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(dead_code, unsafe_op_in_unsafe_fn, unused_imports)]
+#![allow(dead_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 //! # vibeio
 //!
@@ -68,5 +69,7 @@ mod timer;
 pub mod util;
 
 pub use crate::vibeio::builder::*;
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use crate::vibeio::driver::RegistrationMode;
 pub use crate::vibeio::executor::*;

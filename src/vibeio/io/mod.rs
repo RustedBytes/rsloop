@@ -39,11 +39,19 @@ use crate::vibeio::fd_inner::InnerRawHandle;
 
 pub use self::buf::*;
 #[cfg(all(unix, feature = "pipe"))]
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use self::pipe::*;
 #[cfg(all(target_os = "linux", feature = "splice"))]
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use self::splice::*;
 #[cfg(feature = "stdio")]
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use self::stdio::*;
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use self::util::*;
 
 use std::io::{self, ErrorKind};

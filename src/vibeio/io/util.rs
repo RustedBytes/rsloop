@@ -17,12 +17,16 @@ use std::sync::Arc;
 use futures_util::lock::Mutex as AsyncMutex;
 
 use super::{AsyncRead, AsyncWrite};
-use crate::vibeio::io::{IoBuf, IoBufMut, IoBufWithCursor};
+#[cfg(test)]
+use crate::vibeio::io::IoBufMut;
+use crate::vibeio::io::{IoBuf, IoBufWithCursor};
 
 /// Copy data from a reader to a writer.
 ///
 /// This function reads from `reader` and writes to `writer` until EOF is reached.
 /// Returns the number of bytes copied.
+/// Interrupted reads, writes and the final flush are retried; other errors
+/// terminate the copy. Already-written bytes are not rolled back on error.
 pub async fn copy<R, W>(reader: &mut R, writer: &mut W) -> Result<u64, io::Error>
 where
     R: AsyncRead + ?Sized,
@@ -33,7 +37,13 @@ where
 
     loop {
         let (read, mut returned_buf) = reader.read(buffer).await;
-        let read = read?;
+        let read = match read {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                buffer = returned_buf;
+                continue;
+            }
+            result => result?,
+        };
 
         if read > returned_buf.len() {
             return Err(io::Error::new(
@@ -52,7 +62,13 @@ where
         while cursor_buf.buf_len() > 0 {
             let remaining = cursor_buf.buf_len();
             let (w, mut returned_buf) = writer.write(cursor_buf).await;
-            let w = w?;
+            let w = match w {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                    cursor_buf = returned_buf;
+                    continue;
+                }
+                result => result?,
+            };
             if w > remaining || w > returned_buf.buf_len() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -74,7 +90,15 @@ where
         copied = copied.saturating_add(read as u64);
     }
 
-    writer.flush().await?;
+    loop {
+        match writer.flush().await {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            result => {
+                result?;
+                break;
+            }
+        }
+    }
     Ok(copied)
 }
 
@@ -148,6 +172,13 @@ where
         // Forward the call to the underlying object.
         (*guard).read(buf).await
     }
+
+    async fn read_vectored<B: crate::vibeio::io::IoVectoredBufMut>(
+        &mut self,
+        bufs: B,
+    ) -> (io::Result<usize>, B) {
+        self.inner.lock().await.read_vectored(bufs).await
+    }
 }
 
 impl<T> AsyncWrite for WriteHalf<T>
@@ -162,6 +193,13 @@ where
         (*guard).write(buf).await
     }
 
+    async fn write_vectored<B: crate::vibeio::io::IoVectoredBuf>(
+        &mut self,
+        bufs: B,
+    ) -> (io::Result<usize>, B) {
+        self.inner.lock().await.write_vectored(bufs).await
+    }
+
     async fn flush(&mut self) -> Result<(), io::Error> {
         let mut guard = self.inner.lock().await;
         (*guard).flush().await
@@ -169,6 +207,13 @@ where
 }
 
 impl<R: AsyncRead + ?Sized> AsyncRead for Box<R> {
+    #[inline]
+    async fn read_vectored<B: crate::vibeio::io::IoVectoredBufMut>(
+        &mut self,
+        bufs: B,
+    ) -> (io::Result<usize>, B) {
+        (**self).read_vectored(bufs).await
+    }
     #[inline]
     async fn read<B: crate::vibeio::io::IoBufMut>(
         &mut self,
@@ -180,6 +225,13 @@ impl<R: AsyncRead + ?Sized> AsyncRead for Box<R> {
 
 impl<R: AsyncRead + ?Sized> AsyncRead for &mut R {
     #[inline]
+    async fn read_vectored<B: crate::vibeio::io::IoVectoredBufMut>(
+        &mut self,
+        bufs: B,
+    ) -> (io::Result<usize>, B) {
+        (**self).read_vectored(bufs).await
+    }
+    #[inline]
     async fn read<B: crate::vibeio::io::IoBufMut>(
         &mut self,
         buf: B,
@@ -189,6 +241,13 @@ impl<R: AsyncRead + ?Sized> AsyncRead for &mut R {
 }
 
 impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
+    #[inline]
+    async fn write_vectored<B: crate::vibeio::io::IoVectoredBuf>(
+        &mut self,
+        bufs: B,
+    ) -> (io::Result<usize>, B) {
+        (**self).write_vectored(bufs).await
+    }
     #[inline]
     async fn write<B: crate::vibeio::io::IoBuf>(
         &mut self,
@@ -204,6 +263,13 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
 }
 
 impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
+    #[inline]
+    async fn write_vectored<B: crate::vibeio::io::IoVectoredBuf>(
+        &mut self,
+        bufs: B,
+    ) -> (io::Result<usize>, B) {
+        (**self).write_vectored(bufs).await
+    }
     #[inline]
     async fn write<B: crate::vibeio::io::IoBuf>(
         &mut self,
@@ -298,6 +364,61 @@ mod copy_tests {
     }
 
     #[test]
+    fn copy_retries_interruptions_without_losing_or_repeating_bytes() {
+        struct Interrupted<T> {
+            inner: T,
+            calls: usize,
+            flushes: usize,
+        }
+        impl<T: AsyncRead> AsyncRead for Interrupted<T> {
+            async fn read<B: IoBufMut>(&mut self, buf: B) -> (io::Result<usize>, B) {
+                self.calls += 1;
+                if self.calls % 2 == 1 {
+                    return (Err(io::ErrorKind::Interrupted.into()), buf);
+                }
+                self.inner.read(buf).await
+            }
+        }
+        impl<T: AsyncWrite> AsyncWrite for Interrupted<T> {
+            async fn write<B: IoBuf>(&mut self, buf: B) -> (io::Result<usize>, B) {
+                self.calls += 1;
+                if self.calls % 2 == 1 {
+                    return (Err(io::ErrorKind::Interrupted.into()), buf);
+                }
+                self.inner.write(buf).await
+            }
+            async fn flush(&mut self) -> io::Result<()> {
+                self.flushes += 1;
+                if self.flushes == 1 {
+                    return Err(io::ErrorKind::Interrupted.into());
+                }
+                self.inner.flush().await
+            }
+        }
+        Runtime::new(AnyDriver::new_mock()).block_on(async {
+            let mut reader = Interrupted {
+                inner: Reader {
+                    count: 3,
+                    done: false,
+                },
+                calls: 0,
+                flushes: 0,
+            };
+            let mut writer = Interrupted {
+                inner: Writer::default(),
+                calls: 0,
+                flushes: 0,
+            };
+            assert_eq!(copy(&mut reader, &mut writer).await.unwrap(), 3);
+            assert_eq!(writer.inner.data, b"abc");
+            assert_eq!(reader.calls, 4);
+            assert_eq!(writer.calls, 6);
+            assert_eq!(writer.flushes, 2);
+            assert_eq!(writer.inner.flushes, 1);
+        });
+    }
+
+    #[test]
     fn copy_rejects_invalid_progress_without_panicking_or_flushing() {
         Runtime::new(AnyDriver::new_mock()).block_on(async {
             for (read, write, expected) in [
@@ -320,6 +441,69 @@ mod copy_tests {
                 assert!(writer.data.is_empty());
                 assert_eq!(writer.flushes, 0);
             }
+        });
+    }
+}
+
+#[cfg(test)]
+mod forwarding_tests {
+    use super::*;
+    use crate::vibeio::io::{IoVectoredBuf, IoVectoredBufMut};
+    use crate::vibeio::{driver::AnyDriver, executor::Runtime};
+
+    struct VectoredOnly;
+    impl AsyncRead for VectoredOnly {
+        async fn read<B: IoBufMut>(&mut self, _: B) -> (io::Result<usize>, B) {
+            panic!("scalar fallback must not replace vectored I/O")
+        }
+        async fn read_vectored<B: IoVectoredBufMut>(&mut self, buf: B) -> (io::Result<usize>, B) {
+            (Err(io::ErrorKind::PermissionDenied.into()), buf)
+        }
+    }
+    impl AsyncWrite for VectoredOnly {
+        async fn write<B: IoBuf>(&mut self, _: B) -> (io::Result<usize>, B) {
+            panic!("scalar fallback must not replace vectored I/O")
+        }
+        async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> (io::Result<usize>, B) {
+            (Ok(buf.as_iovecs().iter().map(|v| v.len).sum()), buf)
+        }
+    }
+
+    async fn check_read(reader: &mut impl AsyncRead) {
+        let buffers = vec![
+            b"ab".to_vec().into_boxed_slice(),
+            b"c".to_vec().into_boxed_slice(),
+        ];
+        let pointer = buffers[0].as_ptr();
+        let (result, returned) = reader.read_vectored(buffers).await;
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(returned[0].as_ptr(), pointer);
+        assert_eq!(&*returned[0], b"ab");
+    }
+    async fn check_write(writer: &mut impl AsyncWrite) {
+        let buffers = vec![
+            b"ab".to_vec().into_boxed_slice(),
+            b"c".to_vec().into_boxed_slice(),
+        ];
+        let pointer = buffers[0].as_ptr();
+        let (result, returned) = writer.write_vectored(buffers).await;
+        assert_eq!(result.unwrap(), 3);
+        assert_eq!(returned[0].as_ptr(), pointer);
+        assert_eq!(&*returned[1], b"c");
+    }
+    #[test]
+    fn wrappers_preserve_vectored_operations_and_owned_buffers() {
+        Runtime::new(AnyDriver::new_mock()).block_on(async {
+            let mut boxed = Box::new(VectoredOnly);
+            check_read(&mut boxed).await;
+            check_write(&mut boxed).await;
+            let mut raw = VectoredOnly;
+            let mut borrowed = &mut raw;
+            check_read(&mut borrowed).await;
+            check_write(&mut borrowed).await;
+            let (mut read, mut write) = split(VectoredOnly);
+            check_read(&mut read).await;
+            check_write(&mut write).await;
         });
     }
 }

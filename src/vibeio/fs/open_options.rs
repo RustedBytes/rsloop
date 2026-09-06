@@ -133,6 +133,12 @@ impl OpenOptions {
                 "truncate/create options require write or append access",
             ));
         }
+        if self.append && self.truncate && !self.create_new {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "append and truncate cannot be combined without create_new",
+            ));
+        }
 
         Ok(())
     }

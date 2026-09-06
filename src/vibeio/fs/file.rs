@@ -217,7 +217,7 @@ impl File {
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this uses the `readv` syscall directly.
+    /// - On Linux with io_uring support, this submits positional `Read` operations.
     /// - On other platforms, this either offloads to a blocking thread pool or falls back
     ///   to synchronous reading.
     ///
@@ -262,10 +262,12 @@ impl File {
     /// This method fills the provided buffer's writable capacity starting at the
     /// given offset, including spare capacity in an empty Vec. The cursor
     /// position of the file is not modified.
+    /// Interrupted reads are retried. Reaching EOF before filling the buffer
+    /// returns [`io::ErrorKind::UnexpectedEof`].
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this uses the `readv` syscall directly.
+    /// - On Linux with io_uring support, this submits positional `Read` operations.
     /// - On other platforms, this either offloads to a blocking thread pool or falls back
     ///   to synchronous reading.
     ///
@@ -287,32 +289,11 @@ impl File {
     /// result?;
     /// ```
     #[inline]
-    pub async fn read_exact_at<B: IoBufMut>(&self, buf: B, mut offset: u64) -> (io::Result<()>, B) {
-        let mut buf = IoBufWithCursor::new(buf);
-        while buf.buf_capacity() > 0 {
-            let (read, mut buf_returned) = self.read_at(buf, offset).await;
-            let read = match read {
-                Ok(read) => read,
-                Err(err) => {
-                    return (Err(err), buf_returned.into_inner());
-                }
-            };
-            if read == 0 {
-                return (
-                    Err(io::Error::new(
-                        ErrorKind::UnexpectedEof,
-                        "failed to fill whole buffer",
-                    )),
-                    buf_returned.into_inner(),
-                );
-            }
-
-            offset = offset.saturating_add(read as u64);
-            buf_returned.advance(read);
-            buf = buf_returned
-        }
-
-        (Ok(()), buf.into_inner())
+    pub async fn read_exact_at<B: IoBufMut>(&self, buf: B, offset: u64) -> (io::Result<()>, B) {
+        exact_at(buf, offset, ExactAt::Read, |buf, offset| {
+            self.read_at(buf, offset)
+        })
+        .await
     }
 
     /// Writes bytes to the file at a specific offset.
@@ -322,7 +303,7 @@ impl File {
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this uses the `writev` syscall directly.
+    /// - On Linux with io_uring support, this submits positional `Write` operations.
     /// - On other platforms, this either offloads to a blocking thread pool or falls back
     ///   to synchronous writing.
     ///
@@ -348,6 +329,11 @@ impl File {
             return (Ok(0), buf);
         }
 
+        #[cfg(windows)]
+        if let Err(error) = crate::vibeio::op::validate_windows_write_offset(offset) {
+            return (Err(error), buf);
+        }
+
         if let Some(handle) = self.completion_handle() {
             let mut op = WriteAtOp::new(handle, buf, offset);
             let result = poll_fn(|cx| handle.poll_op(cx, &mut op)).await;
@@ -364,10 +350,12 @@ impl File {
     ///
     /// This method writes from the provided buffer starting at the given offset,
     /// ensuring the entire buffer is written. The cursor position of the file is not modified.
+    /// Interrupted writes are retried. A write that makes no progress returns
+    /// [`io::ErrorKind::WriteZero`].
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this uses the `writev` syscall directly.
+    /// - On Linux with io_uring support, this submits positional `Write` operations.
     /// - On other platforms, this either offloads to a blocking thread pool or falls back
     ///   to synchronous writing.
     ///
@@ -389,32 +377,11 @@ impl File {
     /// result?;
     /// ```
     #[inline]
-    pub async fn write_exact_at<B: IoBuf>(&self, buf: B, mut offset: u64) -> (io::Result<()>, B) {
-        let mut buf = IoBufWithCursor::new(buf);
-        while buf.buf_len() > 0 {
-            let (written, mut buf_returned) = self.write_at(buf, offset).await;
-            let written = match written {
-                Ok(written) => written,
-                Err(err) => {
-                    return (Err(err), buf_returned.into_inner());
-                }
-            };
-            if written == 0 {
-                return (
-                    Err(io::Error::new(
-                        ErrorKind::UnexpectedEof,
-                        "failed to write whole buffer",
-                    )),
-                    buf_returned.into_inner(),
-                );
-            }
-
-            offset = offset.saturating_add(written as u64);
-            buf_returned.advance(written);
-            buf = buf_returned;
-        }
-
-        (Ok(()), buf.into_inner())
+    pub async fn write_exact_at<B: IoBuf>(&self, buf: B, offset: u64) -> (io::Result<()>, B) {
+        exact_at(buf, offset, ExactAt::Write, |buf, offset| {
+            self.write_at(buf, offset)
+        })
+        .await
     }
 
     /// Synchronizes all data and metadata to disk.
@@ -555,6 +522,174 @@ impl File {
             metadata_blocking(&self.inner)
         }
     }
+}
+
+enum ExactAt {
+    Read,
+    Write,
+}
+
+#[cfg(test)]
+mod exact_at_tests {
+    use super::*;
+
+    fn run_script(
+        mode: ExactAt,
+        len: usize,
+        offset: u64,
+        results: Vec<io::Result<usize>>,
+    ) -> (io::Result<()>, Vec<u8>, Vec<(u64, usize)>) {
+        let runtime =
+            crate::vibeio::executor::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
+        runtime.block_on(async move {
+            let mut results = results.into_iter();
+            let mut calls = Vec::new();
+            let (result, buffer) = exact_at(vec![7u8; len], offset, mode, |buf, offset| {
+                calls.push((offset, buf.buf_capacity()));
+                std::future::ready((results.next().expect("unexpected I/O retry"), buf))
+            })
+            .await;
+            assert!(results.next().is_none(), "unused scripted result");
+            (result, buffer, calls)
+        })
+    }
+
+    #[test]
+    fn exact_io_retries_interruptions_without_advancing_position() {
+        for mode in [ExactAt::Read, ExactAt::Write] {
+            let (result, buffer, calls) = run_script(
+                mode,
+                4,
+                10,
+                vec![
+                    Err(io::ErrorKind::Interrupted.into()),
+                    Ok(1),
+                    Err(io::ErrorKind::Interrupted.into()),
+                    Ok(3),
+                ],
+            );
+            result.unwrap();
+            assert_eq!(buffer, vec![7; 4]);
+            assert_eq!(calls, [(10, 4), (10, 4), (11, 3), (11, 3)]);
+        }
+    }
+
+    #[test]
+    fn exact_io_distinguishes_eof_from_write_zero() {
+        for (mode, kind) in [
+            (ExactAt::Read, ErrorKind::UnexpectedEof),
+            (ExactAt::Write, ErrorKind::WriteZero),
+        ] {
+            let (result, buffer, calls) = run_script(mode, 4, 10, vec![Ok(2), Ok(0)]);
+            assert_eq!(result.unwrap_err().kind(), kind);
+            assert_eq!(buffer, vec![7; 4]);
+            assert_eq!(calls, [(10, 4), (12, 2)]);
+        }
+    }
+
+    #[test]
+    fn exact_io_checks_offset_overflow_only_when_another_io_is_needed() {
+        for mode in [ExactAt::Read, ExactAt::Write] {
+            let (result, buffer, calls) = run_script(mode, 4, u64::MAX, vec![Ok(1)]);
+            assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+            assert_eq!(buffer, vec![7; 4]);
+            assert_eq!(calls, [(u64::MAX, 4)]);
+        }
+        let (result, _, calls) = run_script(ExactAt::Write, 1, u64::MAX, vec![Ok(1)]);
+        result.unwrap();
+        assert_eq!(calls, [(u64::MAX, 1)]);
+    }
+
+    #[test]
+    fn exact_io_preserves_errors_rejects_excess_counts_and_skips_empty_buffers() {
+        for mode in [ExactAt::Read, ExactAt::Write] {
+            let (result, buffer, _) = run_script(
+                mode,
+                4,
+                0,
+                vec![Ok(1), Err(io::Error::from_raw_os_error(5))],
+            );
+            assert_eq!(result.unwrap_err().raw_os_error(), Some(5));
+            assert_eq!(buffer, vec![7; 4]);
+        }
+        for mode in [ExactAt::Read, ExactAt::Write] {
+            let (result, buffer, _) = run_script(mode, 4, 0, vec![Ok(5)]);
+            assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidData);
+            assert_eq!(buffer, vec![7; 4]);
+        }
+        for mode in [ExactAt::Read, ExactAt::Write] {
+            let (result, buffer, calls) = run_script(mode, 0, u64::MAX, vec![]);
+            result.unwrap();
+            assert!(buffer.is_empty());
+            assert!(calls.is_empty());
+        }
+    }
+}
+
+impl ExactAt {
+    fn remaining(&self, buf: &impl IoBuf) -> usize {
+        match self {
+            Self::Read => buf.buf_capacity(),
+            Self::Write => buf.buf_len(),
+        }
+    }
+}
+
+async fn exact_at<B, F, Fut>(
+    buf: B,
+    mut offset: u64,
+    mode: ExactAt,
+    mut operation: F,
+) -> (io::Result<()>, B)
+where
+    B: IoBuf,
+    F: FnMut(IoBufWithCursor<B>, u64) -> Fut,
+    Fut: std::future::Future<Output = (io::Result<usize>, IoBufWithCursor<B>)>,
+{
+    let mut buf = IoBufWithCursor::new(buf);
+    while mode.remaining(&buf) > 0 {
+        let remaining = mode.remaining(&buf);
+        let (result, returned) = operation(buf, offset).await;
+        buf = returned;
+        let count = match result {
+            Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+            Err(error) => return (Err(error), buf.into_inner()),
+            Ok(0) => {
+                let kind = match mode {
+                    ExactAt::Read => ErrorKind::UnexpectedEof,
+                    ExactAt::Write => ErrorKind::WriteZero,
+                };
+                return (
+                    Err(io::Error::new(kind, "failed to complete positional I/O")),
+                    buf.into_inner(),
+                );
+            }
+            Ok(count) if count > remaining => {
+                return (
+                    Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        "I/O count exceeds remaining buffer",
+                    )),
+                    buf.into_inner(),
+                );
+            }
+            Ok(count) => count,
+        };
+        buf.advance(count);
+        if mode.remaining(&buf) > 0 {
+            let Some(next) = offset.checked_add(count as u64) else {
+                return (
+                    Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "file offset overflow",
+                    )),
+                    buf.into_inner(),
+                );
+            };
+            offset = next;
+        }
+    }
+    (Ok(()), buf.into_inner())
 }
 
 #[cfg(unix)]

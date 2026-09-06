@@ -17,9 +17,9 @@ use std::io::{self, IoSlice};
 use std::mem::ManuallyDrop;
 use std::net::{Shutdown, SocketAddr, ToSocketAddrs};
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket, RawSocket};
+use std::os::windows::io::{AsRawSocket, IntoRawSocket, RawSocket};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};

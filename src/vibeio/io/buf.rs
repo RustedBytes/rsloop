@@ -377,31 +377,36 @@ pub struct IoVec {
     pub len: usize,
 }
 
-/// Trait for vectored read buffers.
+/// Owned readable buffers for vectored output operations.
 /// # Safety
 ///
 /// Every returned vector must describe initialized memory that remains valid
 /// and stable for reads for as long as the I/O operation owns this value,
 /// including across moves of the value and asynchronous cancellation.
 pub unsafe trait IoVectoredBuf: 'static {
-    /// Returns a pointer to an array of `iovec` structures and its length.
+    /// Returns owned descriptors for this value's readable memory regions.
     fn as_iovecs(&self) -> Box<[IoVec]>;
 
-    /// Returns `true` if the vectored buffer is empty.
+    /// Returns `true` if there are no vector descriptors.
+    ///
+    /// This does not test the total initialized byte count. Input operations
+    /// also use this check, and an implementation may expose zero readable
+    /// bytes while its writable descriptors provide spare capacity. Collections
+    /// containing empty segments are therefore not necessarily empty here.
     #[inline]
     fn is_empty(&self) -> bool {
         self.as_iovecs().is_empty()
     }
 }
 
-/// Trait for vectored write buffers.
+/// Owned writable buffers for vectored input operations.
 /// # Safety
 ///
 /// Every returned vector must describe exclusively writable memory that remains
 /// valid and stable for as long as the I/O operation owns this value. Writable
 /// regions must not overlap one another or any live references to their bytes.
 pub unsafe trait IoVectoredBufMut: IoVectoredBuf {
-    /// Returns a mutable pointer to an array of `iovec` structures and its length.
+    /// Returns owned descriptors for this value's writable memory regions.
     fn as_iovecs_mut(&mut self) -> Box<[IoVec]>;
 }
 
@@ -546,6 +551,63 @@ pub(crate) fn read_into_buf(
 #[cfg(test)]
 mod tests {
     use super::{IoBuf, IoBufMut, IoBufTemporaryPoll, IoVectoredBuf, IoVectoredBufMut};
+
+    #[test]
+    fn vectored_emptiness_preserves_writable_spare_capacity() {
+        struct Spare(Vec<u8>);
+        // SAFETY: the Vec owns stable memory. The readable descriptor exposes
+        // only initialized bytes, and moving this wrapper does not move them.
+        unsafe impl IoVectoredBuf for Spare {
+            fn as_iovecs(&self) -> Box<[super::IoVec]> {
+                vec![super::IoVec {
+                    ptr: self.0.as_ptr().cast_mut(),
+                    len: self.0.len(),
+                }]
+                .into_boxed_slice()
+            }
+        }
+        // SAFETY: the Vec exclusively owns its full writable capacity; its one
+        // descriptor cannot overlap another. No initialized slice is formed.
+        unsafe impl IoVectoredBufMut for Spare {
+            fn as_iovecs_mut(&mut self) -> Box<[super::IoVec]> {
+                vec![super::IoVec {
+                    ptr: self.0.as_mut_ptr(),
+                    len: self.0.capacity(),
+                }]
+                .into_boxed_slice()
+            }
+        }
+        let mut spare = Spare(Vec::with_capacity(8));
+        assert_eq!(spare.as_iovecs()[0].len, 0);
+        assert!(
+            !spare.is_empty(),
+            "input must not skip uninitialized writable capacity"
+        );
+        assert!(spare.as_iovecs_mut()[0].len >= 8);
+        let empty_segments: Vec<Box<[u8]>> = vec![Box::new([]), Box::new([])];
+        assert!(!IoVectoredBuf::is_empty(&empty_segments));
+        assert!(IoVectoredBuf::is_empty(&Vec::<Box<[u8]>>::new()));
+        #[cfg(unix)]
+        {
+            use crate::vibeio::io::AsyncRead;
+            let (socket, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            std::io::Write::write_all(&mut peer, b"abc").unwrap();
+            let runtime = crate::vibeio::RuntimeBuilder::new()
+                .driver(crate::vibeio::DriverKind::Mio)
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let mut socket = crate::vibeio::net::UnixStream::from_std(socket).unwrap();
+                let (result, buffer) = socket.read_vectored(spare).await;
+                let count = result.unwrap();
+                assert_eq!(count, 3);
+                // SAFETY: the successful read initialized the returned-count
+                // prefix inside the Vec's owned writable capacity.
+                let received = unsafe { std::slice::from_raw_parts(buffer.0.as_ptr(), count) };
+                assert_eq!(received, b"abc");
+            });
+        }
+    }
 
     #[cfg(any(feature = "fs", feature = "process", feature = "stdio"))]
     #[test]

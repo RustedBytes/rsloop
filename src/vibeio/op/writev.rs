@@ -1,4 +1,6 @@
-use std::io::{self};
+#![warn(clippy::undocumented_unsafe_blocks)]
+
+use std::io;
 use std::task::{Context, Poll};
 
 use mio::Interest;
@@ -42,6 +44,9 @@ fn socket_write_vectored<B: IoVectoredBuf>(socket: SOCKET, bufs: &B) -> io::Resu
     }
 
     let mut bytes: u32 = 0;
+    // SAFETY: IoVectoredBuf owns initialized, stable payloads. The checked
+    // descriptors and bytes output remain valid through this non-overlapped
+    // call; neither their addresses nor the payload pointers are retained.
     let send_result = unsafe {
         WinSock::WSASend(
             socket,
@@ -54,6 +59,7 @@ fn socket_write_vectored<B: IoVectoredBuf>(socket: SOCKET, bufs: &B) -> io::Resu
         )
     };
     if send_result == SOCKET_ERROR {
+        // SAFETY: reads the calling thread's Winsock error without pointer access.
         return Err(io::Error::from_raw_os_error(unsafe {
             WinSock::WSAGetLastError()
         }));
@@ -116,6 +122,8 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
         let result = {
             let iovecs = bufs.as_iovecs();
             let iovecs_system = iovec_to_system(&iovecs);
+            // SAFETY: every descriptor refers to initialized memory owned by
+            // bufs, and both payloads and descriptor array outlive this call.
             let written = unsafe {
                 libc::writev(
                     self.handle.handle,
@@ -217,6 +225,9 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
                 }
 
                 let mut wsabufs = wsabufs.into_boxed_slice();
+                // SAFETY: checked descriptors and initialized payloads remain
+                // owned through completion; Drop transfers them to cancellation
+                // storage until acknowledgement. The driver owns OVERLAPPED.
                 let send_result = unsafe {
                     WinSock::WSASend(
                         socket as SOCKET,
@@ -235,6 +246,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
                     return Ok(());
                 }
 
+                // SAFETY: reads thread-local Winsock error after failed submission.
                 let err = unsafe { WinSock::WSAGetLastError() };
                 if err == WSA_IO_PENDING {
                     self.completion_wsabufs = Some(wsabufs);
@@ -262,10 +274,19 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
 
                 let mut staging = Vec::with_capacity(total_len);
                 for iovec in iovecs {
+                    if iovec.len == 0 {
+                        continue;
+                    }
+                    // SAFETY: IoVectoredBuf guarantees initialized, stable
+                    // readable regions throughout this borrow. Copy into a
+                    // separate allocation before submitting the file write.
                     let slice = unsafe { std::slice::from_raw_parts(iovec.ptr, iovec.len) };
                     staging.extend_from_slice(slice);
                 }
 
+                // SAFETY: staging owns the initialized concatenated bytes and
+                // remains retained on successful/pending submission. The driver
+                // keeps OVERLAPPED alive through completion or cancellation.
                 let write_result = unsafe {
                     WriteFile(
                         handle as HANDLE,

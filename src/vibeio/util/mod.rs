@@ -8,6 +8,8 @@
 
 mod async_wrap;
 
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
 pub use async_wrap::*;
 
 use crate::vibeio::current_driver;

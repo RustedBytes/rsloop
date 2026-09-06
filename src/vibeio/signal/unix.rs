@@ -9,6 +9,9 @@
 //! - The dispatch thread wakes registered wakers for received signals.
 //! - Multiple listeners for the same signal share the same handler.
 
+#![deny(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
@@ -215,25 +218,36 @@ impl Signal {
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // Serialize checking the counter and registering with dispatcher wakeup.
         // Each listener owns one slot so its drop can release its waker.
-        let mut wakers = self.state.wakers.lock().unwrap();
-        let current = self.state.counter.load(Ordering::Acquire);
-        if current != self.last_seen {
-            self.last_seen = current;
-            let retired = wakers[self.waker_slot].take();
+        let mut replacement = None;
+        loop {
+            let mut wakers = self.state.wakers.lock().unwrap();
+            let current = self.state.counter.load(Ordering::Acquire);
+            if current != self.last_seen {
+                self.last_seen = current;
+                let retired = wakers[self.waker_slot].take();
+                drop(wakers);
+                drop(retired);
+                return Poll::Ready(Ok(()));
+            }
+            let slot = &mut wakers[self.waker_slot];
+            if slot
+                .as_ref()
+                .is_some_and(|waker| waker.will_wake(cx.waker()))
+            {
+                return Poll::Pending;
+            }
+            if let Some(replacement) = replacement.take() {
+                let retired = slot.replace(replacement);
+                drop(wakers);
+                drop(retired);
+                return Poll::Pending;
+            }
+            // RawWaker clone callbacks are user code and may reenter this state.
+            // Recheck the counter after reacquiring the lock: a signal may arrive
+            // while cloning, before this listener has installed its new waker.
             drop(wakers);
-            drop(retired);
-            return Poll::Ready(Ok(()));
+            replacement = Some(cx.waker().clone());
         }
-        let slot = &mut wakers[self.waker_slot];
-        if !slot
-            .as_ref()
-            .is_some_and(|waker| waker.will_wake(cx.waker()))
-        {
-            let retired = slot.replace(cx.waker().clone());
-            drop(wakers);
-            drop(retired);
-        }
-        Poll::Pending
     }
 }
 
@@ -301,7 +315,7 @@ fn register_signal(kind: SignalKind) -> io::Result<Arc<SignalState>> {
         return Ok(entry.state.clone());
     }
 
-    let prev_action = unsafe { install_handler(kind.0)? };
+    let prev_action = install_handler(kind.0)?;
     let state = Arc::new(SignalState {
         counter: AtomicUsize::new(0),
         wakers: Mutex::new(slab::Slab::new()),
@@ -440,9 +454,9 @@ fn write_signal_notification(fd: RawFd, signum: libc::c_int) {
     // no allocation, locking or formatting may occur on this handler path.
     let saved_errno = errno::errno();
     let bytes = signum.to_ne_bytes();
-    // SAFETY: bytes is initialized for its full length. write is async-signal-safe;
-    // the registry owns the nonblocking descriptor for the process lifetime.
     loop {
+        // SAFETY: bytes is initialized for its full length. write is async-signal-safe;
+        // the registry owns the nonblocking descriptor for the process lifetime.
         let result = unsafe { libc::write(fd, bytes.as_ptr().cast::<libc::c_void>(), bytes.len()) };
         if result >= 0 || errno::errno().0 != libc::EINTR {
             break;
@@ -451,22 +465,36 @@ fn write_signal_notification(fd: RawFd, signum: libc::c_int) {
     errno::set_errno(saved_errno);
 }
 
-unsafe fn install_handler(signum: libc::c_int) -> io::Result<libc::sigaction> {
-    let mut action: libc::sigaction = std::mem::zeroed();
+fn install_handler(signum: libc::c_int) -> io::Result<libc::sigaction> {
+    // SAFETY: sigaction's C fields admit zero initialization. The handler,
+    // flags and mask are set below before the structure is passed to the OS.
+    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
     action.sa_sigaction = signal_handler as extern "C" fn(libc::c_int) as usize;
     action.sa_flags = libc::SA_RESTART;
-    libc::sigemptyset(&mut action.sa_mask);
+    // SAFETY: sa_mask is an aligned, writable sigset_t field owned locally.
+    if unsafe { libc::sigemptyset(&mut action.sa_mask) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
 
-    let mut prev: libc::sigaction = std::mem::zeroed();
-    let rc = libc::sigaction(signum, &action, &mut prev);
+    // SAFETY: sigaction admits zero initialization; the OS fills this output.
+    let mut prev: libc::sigaction = unsafe { std::mem::zeroed() };
+    // SAFETY: action contains our process-lifetime C ABI handler and initialized
+    // mask. Both structures are valid for the call; invalid signal numbers are
+    // reported by the OS rather than used as memory addresses.
+    let rc = unsafe { libc::sigaction(signum, &action, &mut prev) };
     if rc == -1 {
         return Err(io::Error::last_os_error());
     }
     Ok(prev)
 }
 
+/// # Safety
+/// `prev` must be the action saved for this signal, with any handler it refers
+/// to still valid for subsequent signal delivery.
 unsafe fn restore_handler(signum: libc::c_int, prev: &libc::sigaction) -> io::Result<()> {
-    let rc = libc::sigaction(signum, prev, std::ptr::null_mut());
+    // SAFETY: the caller supplies the previous action returned by sigaction;
+    // its handler and flags are restored unchanged. No old-action output is requested.
+    let rc = unsafe { libc::sigaction(signum, prev, std::ptr::null_mut()) };
     if rc == -1 {
         return Err(io::Error::last_os_error());
     }
@@ -484,6 +512,88 @@ mod tests {
     use super::*;
     use crate::vibeio::driver::AnyDriver;
     use std::time::Duration;
+
+    #[test]
+    fn waker_clone_runs_unlocked_and_rechecks_notifications() {
+        use std::task::{RawWaker, RawWakerVTable};
+        struct Probe {
+            state: Arc<SignalState>,
+            notify: bool,
+            clones: AtomicUsize,
+            callback_locked: AtomicBool,
+        }
+        unsafe fn clone(data: *const ()) -> RawWaker {
+            // SAFETY: each raw waker owns one Arc<Probe> reference.
+            let probe = unsafe { &*data.cast::<Probe>() };
+            if probe.state.wakers.try_lock().is_err() {
+                probe.callback_locked.store(true, Ordering::Relaxed);
+            }
+            probe.clones.fetch_add(1, Ordering::Relaxed);
+            if probe.notify {
+                probe.state.counter.fetch_add(1, Ordering::Release);
+            }
+            // SAFETY: the source waker retains a live Arc for this callback.
+            unsafe { Arc::increment_strong_count(data.cast::<Probe>()) };
+            RawWaker::new(data, &VTABLE)
+        }
+        unsafe fn release(data: *const ()) {
+            // SAFETY: consume exactly the reference owned by this raw waker.
+            let probe = unsafe { Arc::from_raw(data.cast::<Probe>()) };
+            if probe.state.wakers.try_lock().is_err() {
+                probe.callback_locked.store(true, Ordering::Relaxed);
+            }
+        }
+        unsafe fn wake_by_ref(_: *const ()) {}
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, release, wake_by_ref, release);
+
+        for notify in [false, true] {
+            let state = Arc::new(SignalState {
+                counter: AtomicUsize::new(0),
+                wakers: Mutex::new(slab::Slab::new()),
+            });
+            let waker_slot = state.wakers.lock().unwrap().insert(None);
+            // No OS handler is installed; this isolated state exercises polling
+            // without racing process-global signal tests.
+            let mut signal = Signal {
+                kind: SignalKind::new(-1),
+                state: state.clone(),
+                last_seen: 0,
+                waker_slot,
+            };
+            let probe = Arc::new(Probe {
+                state: state.clone(),
+                notify,
+                clones: AtomicUsize::new(0),
+                callback_locked: AtomicBool::new(false),
+            });
+            // SAFETY: the vtable retains/releases Arc ownership, and Probe's
+            // shared state is synchronized for thread-safe waker callbacks.
+            let waker = unsafe {
+                Waker::from_raw(RawWaker::new(Arc::into_raw(probe.clone()).cast(), &VTABLE))
+            };
+            let mut cx = Context::from_waker(&waker);
+            if notify {
+                assert!(matches!(signal.poll_recv(&mut cx), Poll::Ready(Ok(()))));
+                assert!(state.wakers.lock().unwrap()[waker_slot].is_none());
+            } else {
+                assert!(signal.poll_recv(&mut cx).is_pending());
+                assert!(signal.poll_recv(&mut cx).is_pending());
+                assert_eq!(
+                    probe.clones.load(Ordering::Relaxed),
+                    1,
+                    "unchanged waker should not be cloned again"
+                );
+            }
+            drop(signal);
+            drop(waker);
+            assert!(state.wakers.lock().unwrap().is_empty());
+            assert_eq!(Arc::strong_count(&probe), 1);
+            assert!(
+                !probe.callback_locked.load(Ordering::Relaxed),
+                "waker callback ran under signal lock"
+            );
+        }
+    }
 
     #[test]
     fn full_pipe_preserves_distinct_pending_signals() {
@@ -524,6 +634,27 @@ mod tests {
         for signum in [-1, 0, SIGNAL_SLOTS as i32, i32::MAX] {
             assert!(matches!(Signal::new(SignalKind::new(signum)),
                 Err(err) if err.kind() == io::ErrorKind::InvalidInput));
+        }
+    }
+
+    #[test]
+    fn failed_handler_installation_leaves_no_registration() {
+        for signum in [libc::SIGKILL, libc::SIGSTOP] {
+            for _ in 0..2 {
+                let error = match Signal::new(SignalKind::new(signum)) {
+                    Ok(_) => panic!("uncatchable signal unexpectedly registered"),
+                    Err(error) => error,
+                };
+                assert_eq!(error.raw_os_error(), Some(libc::EINVAL));
+                assert!(
+                    !registry()
+                        .unwrap()
+                        .signals
+                        .lock()
+                        .unwrap()
+                        .contains_key(&signum)
+                );
+            }
         }
     }
 
@@ -656,9 +787,11 @@ mod tests {
     }
 
     fn spawn_signal_after_delay(signum: libc::c_int) {
-        let pid = unsafe { libc::getpid() };
+        let pid = std::process::id() as libc::pid_t;
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(10));
+            // SAFETY: kill consumes integer identifiers; the test installed a
+            // listener for this signal in our still-running process.
             unsafe {
                 libc::kill(pid, signum);
             }

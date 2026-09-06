@@ -101,9 +101,12 @@ struct JoinState<T> {
     task: std::rc::Weak<Task>,
 }
 
-struct SpawnFuture<F, T> {
-    future: F,
-    state: Rc<RefCell<JoinState<T>>>,
+pin_project_lite::pin_project! {
+    struct SpawnFuture<F, T> {
+        #[pin]
+        future: F,
+        state: Rc<RefCell<JoinState<T>>>,
+    }
 }
 
 impl<F, T> Future for SpawnFuture<F, T>
@@ -114,15 +117,13 @@ where
 
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // SAFETY: once `self` is pinned we never move `future`.
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = self.project();
 
         if this.state.borrow().canceled {
             return Poll::Ready(());
         }
 
-        // SAFETY: `future` is pinned together with `self`.
-        match unsafe { Pin::new_unchecked(&mut this.future) }.poll(cx) {
+        match this.future.poll(cx) {
             Poll::Ready(output) => {
                 let mut state = this.state.borrow_mut();
                 let replaced = state.output.replace(output);
@@ -1114,6 +1115,25 @@ mod tests {
     }
 
     #[test]
+    fn spawn_without_runtime_panics_and_drops_unpolled_future() {
+        let lifetime = std::sync::Arc::new(());
+        let weak = std::sync::Arc::downgrade(&lifetime);
+        let future = async move {
+            let _lifetime = lifetime;
+            panic!("future must not be polled without a runtime");
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| spawn(future)));
+        let panic = result
+            .err()
+            .expect("spawn's documented precondition must be enforced");
+        assert_eq!(
+            panic.downcast_ref::<&str>(),
+            Some(&"can't spawn a task outside runtime")
+        );
+        assert!(weak.upgrade().is_none(), "rejected future must be released");
+    }
+
+    #[test]
     fn stale_remote_wake_cannot_wake_reused_task_slot() {
         let runtime = Runtime::new(AnyDriver::new_mock());
         let first = runtime.spawn(std::future::pending::<()>());
@@ -1246,6 +1266,41 @@ mod tests {
                 .borrow()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn spawned_pinned_future_keeps_its_address_until_cancellation_drop() {
+        struct PinnedFuture {
+            address: Cell<usize>,
+            dropped: Rc<Cell<bool>>,
+            _pin: std::marker::PhantomPinned,
+        }
+        impl Future for PinnedFuture {
+            type Output = ();
+            fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+                let this = self.as_ref().get_ref();
+                let address = this as *const Self as usize;
+                let previous = this.address.replace(address);
+                assert!(previous == 0 || previous == address);
+                Poll::Pending
+            }
+        }
+        impl Drop for PinnedFuture {
+            fn drop(&mut self) {
+                assert_eq!(self.address.get(), self as *const Self as usize);
+                self.dropped.set(true);
+            }
+        }
+        let runtime = Runtime::new(AnyDriver::new_mock());
+        let dropped = Rc::new(Cell::new(false));
+        let handle = runtime.spawn(PinnedFuture {
+            address: Cell::new(0),
+            dropped: dropped.clone(),
+            _pin: std::marker::PhantomPinned,
+        });
+        runtime.poll_once();
+        handle.cancel();
+        assert!(dropped.get());
     }
 
     #[test]
