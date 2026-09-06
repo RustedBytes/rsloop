@@ -197,6 +197,8 @@ mod tests {
 
     #[test]
     fn statx_timestamp_handles_fractional_time_before_epoch() {
+        // SAFETY: statx_timestamp contains only integer fields; zero initializes
+        // its reserved fields before this fixture assigns seconds/nanoseconds.
         let mut ts: libc::statx_timestamp = unsafe { std::mem::zeroed() };
         ts.tv_sec = -1;
         ts.tv_nsec = 500_000_000;

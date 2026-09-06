@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind};
@@ -62,10 +64,10 @@ impl Interruptor for UringInterruptor {
     #[inline]
     fn interrupt(&self) {
         if let Some(eventfd) = self.eventfd.upgrade() {
+            let value: u64 = 1;
             // SAFETY: the upgraded Arc owns the descriptor throughout write,
             // including when the driver is concurrently shutting down. value is
             // initialized for the required eight-byte eventfd write.
-            let value: u64 = 1;
             let _ = unsafe {
                 libc::write(
                     eventfd.as_raw_fd(),
@@ -155,8 +157,17 @@ impl DriverState {
         token: usize,
         data: Box<dyn std::any::Any>,
     ) -> Option<Completion> {
-        let completion = self.completions.get_mut(token)?;
-        completion.ignored_data = Some(data);
+        let Some(completion) = self.completions.get_mut(token) else {
+            // Even an unknown token may carry a destructor that reenters the
+            // driver. Return its storage for retirement outside the state borrow.
+            return Some(Completion {
+                waiter: None,
+                completed: None,
+                ignored_data: Some(data),
+                returns_fd: false,
+            });
+        };
+        super::retain_completion_data(&mut completion.ignored_data, data);
         if completion.completed.is_some() {
             // The CQE may have arrived just before cancellation. No further
             // completion will arrive to release this entry and its storage.
@@ -270,6 +281,8 @@ impl UringDriver {
 
         // Create eventfd only after ring initialization succeeds so failed
         // attempts cannot leak descriptors.
+        // SAFETY: eventfd takes only integer arguments. Success returns a new
+        // descriptor, checked below and immediately acquired by OwnedFd.
         let eventfd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
         if eventfd < 0 {
             return Err(io::Error::last_os_error());
@@ -369,6 +382,11 @@ impl UringDriver {
         }
 
         let mut sq = ring.submission();
+        // SAFETY: callers build entries from driver-owned interrupt/readiness
+        // state or an operation whose storage is retained through completion.
+        // Dropped operations transfer their kernel-visible allocations into
+        // completion retention; shutdown quiesces or retains them on failure.
+        // push copies the entry, so the local SQE itself need not outlive this call.
         unsafe {
             sq.push(&entry)
                 .map_err(|_| io::Error::other("io_uring submission queue is full"))?;
@@ -1355,6 +1373,55 @@ mod completion_cleanup_tests {
             ignored_data: None,
             returns_fd,
         }
+    }
+
+    #[test]
+    fn unknown_completion_payload_drops_outside_driver_state_borrow() {
+        struct Payload {
+            driver: std::rc::Weak<UringDriver>,
+            borrow_available: std::rc::Rc<std::cell::Cell<bool>>,
+        }
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                let driver = self.driver.upgrade().unwrap();
+                self.borrow_available
+                    .set(driver.state.try_borrow_mut().is_ok());
+            }
+        }
+        let driver = std::rc::Rc::new(UringDriver::new(8, IoUring::builder()).unwrap());
+        let available = std::rc::Rc::new(std::cell::Cell::new(false));
+        driver.ignore_completion(
+            usize::MAX,
+            Box::new(Payload {
+                driver: std::rc::Rc::downgrade(&driver),
+                borrow_available: available.clone(),
+            }),
+        );
+        assert!(
+            available.get(),
+            "payload destructor ran under the state borrow"
+        );
+    }
+
+    #[test]
+    fn repeated_ignore_retains_all_payloads_until_completion() {
+        let mut state = state();
+        let token = state.completions.insert(registration(None, false));
+        let first = Arc::new(());
+        let first_weak = Arc::downgrade(&first);
+        let second = Arc::new(());
+        let second_weak = Arc::downgrade(&second);
+        assert!(state.ignore_completion(token, Box::new(first)).is_none());
+        assert!(state.ignore_completion(token, Box::new(second)).is_none());
+        assert!(
+            first_weak.upgrade().is_some(),
+            "first retained payload was freed early"
+        );
+        assert!(second_weak.upgrade().is_some());
+        state.completions[token].completed = Some(-libc::ECANCELED);
+        drop(state.completions.remove(token));
+        assert!(first_weak.upgrade().is_none());
+        assert!(second_weak.upgrade().is_none());
     }
 
     fn state() -> DriverState {

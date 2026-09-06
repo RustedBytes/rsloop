@@ -1,4 +1,5 @@
 //! Async pipe utilities.
+#![warn(clippy::undocumented_unsafe_blocks)]
 //!
 //! This module provides async-aware pipe endpoints:
 //! - `pipe()`: create a pair of async-aware pipe endpoints.
@@ -41,6 +42,70 @@ fn pipe_inner() -> std::io::Result<(OwnedFd, OwnedFd)> {
 mod setup_tests {
     use super::*;
     use crate::vibeio::{driver::AnyDriver, executor::Runtime};
+
+    #[test]
+    fn pending_poll_writes_do_not_retain_borrowed_buffers() {
+        Runtime::new(AnyDriver::new_mio().unwrap()).block_on(async {
+            let (reader, writer) = pipe().unwrap();
+            let mut reader = reader.into_poll().unwrap();
+            let mut writer = writer.into_poll().unwrap();
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            let mut data = vec![b'a'; 4096];
+            let mut filled = 0;
+            loop {
+                match Pin::new(&mut writer).poll_write(&mut cx, &data) {
+                    Poll::Ready(Ok(count)) => {
+                        assert!(count > 0);
+                        filled += count;
+                        assert!(
+                            filled < 16 * 1024 * 1024,
+                            "pipe failed to apply backpressure"
+                        );
+                    }
+                    Poll::Pending => break,
+                    Poll::Ready(Err(error)) => panic!("pipe fill failed: {error}"),
+                }
+            }
+            let vectors = [IoSlice::new(&data), IoSlice::new(&data)];
+            assert!(
+                Pin::new(&mut writer)
+                    .poll_write_vectored(&mut cx, &vectors)
+                    .is_pending()
+            );
+            // Both temporary operations have returned. These borrows may now
+            // end without waiting for readiness or a completion packet.
+            data.fill(b'x');
+            drop(data);
+            let mut drained = 0;
+            loop {
+                let mut storage = [0; 4096];
+                let mut buf = ReadBuf::new(&mut storage);
+                match Pin::new(&mut reader).poll_read(&mut cx, &mut buf) {
+                    Poll::Ready(Ok(())) => {
+                        assert!(!buf.filled().is_empty());
+                        assert!(buf.filled().iter().all(|byte| *byte == b'a'));
+                        drained += buf.filled().len();
+                        assert!(drained <= filled);
+                    }
+                    Poll::Pending => break,
+                    Poll::Ready(Err(error)) => panic!("pipe drain failed: {error}"),
+                }
+            }
+            assert_eq!(drained, filled);
+            let fresh = [IoSlice::new(b"new"), IoSlice::new(b"data")];
+            assert!(matches!(
+                Pin::new(&mut writer).poll_write_vectored(&mut cx, &fresh),
+                Poll::Ready(Ok(7))
+            ));
+            let mut storage = [0; 7];
+            let mut buf = ReadBuf::new(&mut storage);
+            assert!(matches!(
+                Pin::new(&mut reader).poll_read(&mut cx, &mut buf),
+                Poll::Ready(Ok(()))
+            ));
+            assert_eq!(buf.filled(), b"newdata");
+        });
+    }
 
     #[test]
     fn raw_pipe_conversion_releases_registration_and_transfers_live_endpoints() {
@@ -359,6 +424,9 @@ impl TokioAsyncWrite for PollPipe {
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
         let this = self.get_mut();
+        // SAFETY: buf remains initialized and borrowed throughout this call.
+        // WriteOp only reads it; poll_op_poll rejects completion mode, and the
+        // local operation is dropped before this borrow can end, even on Pending.
         let buf = unsafe { IoBufTemporaryPoll::new(buf.as_ptr() as *mut u8, buf.len()) };
         let mut op = WriteOp::new(&this.stream.handle, buf);
         this.stream.handle.poll_op_poll(cx, &mut op)
@@ -374,6 +442,9 @@ impl TokioAsyncWrite for PollPipe {
             return Poll::Ready(Ok(0));
         }
         let this = self.get_mut();
+        // SAFETY: IoSlice data stays borrowed and initialized for this poll.
+        // Only descriptor metadata is copied; WritevOp does synchronous poll I/O
+        // through poll_op_poll and cannot retain these buffers after returning.
         let bufs = unsafe { IoVectoredBufTemporaryPoll::new(bufs) };
         let mut op = WritevOp::new(&this.stream.handle, bufs);
         this.stream.handle.poll_op_poll(cx, &mut op)

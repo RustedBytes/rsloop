@@ -1,4 +1,5 @@
 //! Async I/O wrapper for interoperability with tokio traits.
+#![warn(clippy::undocumented_unsafe_blocks)]
 //!
 //! This module provides `AsyncWrap`, a type that adapts `vibeio`'s `AsyncRead`
 //! and `AsyncWrite` traits to the `tokio::io` traits. This enables using
@@ -312,17 +313,15 @@ mod tests {
             }
 
             let remaining = self.data.len() - self.offset;
-            let cap = buf.buf_capacity();
-            let read_len = remaining.min(cap);
-
-            unsafe {
-                let ptr = buf.as_buf_mut_ptr();
-                std::ptr::copy_nonoverlapping(self.data[self.offset..].as_ptr(), ptr, read_len);
-                buf.set_buf_init(read_len);
+            let result = crate::vibeio::io::read_into_buf(&mut buf, |slice| {
+                let count = remaining.min(slice.len());
+                slice[..count].copy_from_slice(&self.data[self.offset..self.offset + count]);
+                Ok(count)
+            });
+            if let Ok(count) = result {
+                self.offset += count;
             }
-
-            self.offset += read_len;
-            (Ok(read_len), buf)
+            (result, buf)
         }
     }
 
@@ -351,7 +350,7 @@ mod tests {
             }
 
             let write_len = len.min(self.chunk_size.max(1));
-            let slice = unsafe { std::slice::from_raw_parts(buf.as_buf_ptr(), write_len) };
+            let slice = &crate::vibeio::io::iobuf_to_slice(&buf)[..write_len];
 
             let mut guard = self.state.lock().expect("lock writer state");
             guard.writes += 1;

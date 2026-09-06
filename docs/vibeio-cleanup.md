@@ -22,6 +22,330 @@ runtime is safe or that the Qualirs review is finished.
 
 ## Current inventory
 
+### AFD setup ownership review
+
+- Documented NtCreateFile's counted UTF-16 name/object-attribute lifetimes and
+  local writable outputs. Its successful non-null handle is immediately wrapped
+  in OwnedHandle before association/notification setup can fail.
+- Documented that CreateIoCompletionPort associates two live owned handles but
+  returns the existing port, not a new owner. Notification setup skips only
+  event signaling, not successful completion packets needed for retirement.
+- Added a Windows-only test verifying lazy AFD setup, cached handle reuse and
+  non-inheritance. It cross-compiles; native execution and setup-failure injection
+  remain unverified. No production behavior change is claimed.
+- The whole-Windows unsafe-comment probe now reports five sites (four production,
+  one test) in completion association/disassociation, packet batching, cancellation
+  and the modeled-packet test. The Windows-wide gate remains pending that review.
+  Native create/open API reference:
+  https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntcreatefile
+
+### IOCP socket-provider resolution
+
+- Base-socket IOCTL results now require a full SOCKET-sized output and a value
+  other than INVALID_SOCKET. Added local comments for synchronous stack outputs
+  and thread-local WSAGetLastError. The returned handle remains borrowed from the
+  caller's socket; no new owning wrapper is constructed.
+- Factored provider-chain traversal into a Windows/test helper. It now detects
+  multi-node cycles as well as self-loops, preventing a malformed provider from
+  spinning forever during registration. The direct base-handle success path
+  performs no Vec allocation; fallback tracks previously visited handles.
+- Linux-executed scripted tests cover direct and multi-hop success, cycles of
+  lengths 1/2/3/32, invalid returned handles, and preservation of provider errors.
+  Windows-only IPv4/IPv6 live lookup and invalid-socket tests cross-compile but
+  remain unexecuted. No real third-party provider malfunction is claimed.
+- API reference for handle queries and synchronous SIO_BSP_HANDLE_POLL:
+  https://learn.microsoft.com/en-us/windows/win32/winsock/winsock-ioctls
+
+### IOCP error encoding boundary
+
+- Replaced IOCP completion error narrowing/unchecked negation with checked
+  positive-u32 to negative-i32 encoding. Representable nonzero error codes are
+  preserved; zero or values above i32::MAX map to ERROR_ARITHMETIC_OVERFLOW.
+  The previous fallback to negating raw NTSTATUS could yield a positive count
+  or overflow for synthetic edge inputs. No native occurrence is claimed.
+- A Linux-executed pure conversion test covers normal errors, the signed boundary,
+  zero and oversized values, including round trips through completion_error.
+  Added Windows-only native mapping cases for cancellation, EOF and invalid
+  handles; these are cross-compiled, not executed here. Documented both remaining
+  integer-only RtlNtStatusToDosError call sites locally.
+- Microsoft documents ERROR_MR_MID_NOT_FOUND for unmapped NTSTATUS values; the
+  ordinary positive fallback remains preserved:
+  https://learn.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-rtlntstatustodoserror
+  This hardening does not resolve native IOCP packet/lifetime validation.
+
+### IOCP finite-timeout sentinel fix
+
+- IOCP converted finite durations at or above u32::MAX milliseconds into the
+  Windows INFINITE sentinel. Extracted the conversion into a Windows/test helper
+  and capped finite waits at u32::MAX-1; only None produces INFINITE. Existing
+  sub-millisecond truncation is unchanged. Very long finite waits can return
+  early for the runtime to reconsider its deadline, rather than never timing out.
+- A portable regression reproduced the wrong sentinel before the fix and passes
+  afterward. It checks None, zero, one millisecond, the finite/sentinel boundary,
+  u64::MAX milliseconds and Duration::MAX without waiting for those durations.
+  Microsoft API semantics:
+  https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-getqueuedcompletionstatusex
+- Reviewed/commented completion-port creation, checked OwnedHandle acquisition
+  and wake-packet posting while an upgraded Arc holds the port alive. Remaining
+  IOCP unsafe sites and native Windows execution are still open; this does not
+  enable the Windows-wide unsafe-comment gate yet.
+
+### Package-level Unix unsafe-comment gate
+
+- Completed the local-comment review of Unix-stream scalar/vectored writes and
+  enabled that module's lint. Like TCP/pipe adapters, their source slices stay
+  borrowed through synchronous poll-only dispatch and local operation teardown.
+- Removed manual unsafe copy/slice construction from AsyncWrap test fixtures by
+  reusing read_into_buf/iobuf_to_slice; those helpers now compile under cfg(test)
+  even when optional I/O features are disabled. Documented the integer-only
+  statx_timestamp test initialization. AsyncWrap's module lint now passes too.
+- Whole-harness all-feature/all-target undocumented_unsafe_blocks checks pass
+  on Linux and macOS ARM64. Enabled the package-level gate on Unix. Windows still
+  exposes 16 IOCP library/test sites and is not covered by the package-level gate
+  yet; existing module-local Windows gates remain enabled. No blanket suppression
+  was added. Probe logs: target/vibeio-cleanup-unsafe-lint-{linux,macos,windows}.log.
+- Linux tests: 257 all-feature and 169 no-default-feature tests, plus 16
+  documentation checks in each configuration, pass. This establishes comment
+  coverage, not complete unsafe-code soundness or native macOS/Windows validation.
+
+### UDP borrowed polling coverage
+
+- Reviewed all six raw temporary-buffer constructors in PollUdpSocket. Each
+  operation is local to the poll, uses poll_op_poll rather than completion
+  submission, and keeps the caller's initialized read-only or exclusive writable
+  borrow for that call. Added direct safety comments and enabled the module's
+  undocumented_unsafe_blocks lint; no production behavior changed.
+- The existing poll-socket test actually used owned-buffer async methods; renamed
+  it to make that scope explicit. Added direct poll_send, poll_send_to, poll_recv,
+  poll_recv_from, poll_peek and poll_peek_from coverage. The regression verifies
+  Pending does not modify the buffer, later reuse works, peeks preserve the
+  datagram, empty datagrams are consumed exactly once, and unused buffer suffix
+  bytes remain intact after a fresh receive. Linux execution passed.
+- All-feature Linux harness: 257 tests and 16 documentation checks pass. Native
+  Windows and macOS execution remains outstanding; cross-Clippy is compilation.
+
+### TCP borrowed-buffer contracts
+
+- PollTcpStream::peek now constructs its temporary wrapper and RecvOp inside
+  each poll closure, matching the wrapper's poll-only lifetime contract. The
+  previous future retained the operation across polls even though the caller's
+  mutable borrow stayed live; no observed use-after-free is claimed.
+- Added direct safety comments to peek and scalar/vectored writes, and enabled
+  undocumented_unsafe_blocks for the TCP stream module. All borrowed-buffer
+  operations explicitly use poll_op_poll, which rejects completion submission.
+- New loopback regression polls peek to Pending, drops it, reuses the caller's
+  buffer, then verifies incoming data can be peeked and subsequently read without
+  consumption by the cancelled operation. It accepts valid short peeks and
+  verifies untouched bytes beyond the reported count. Linux execution passes;
+  Windows/macOS cross-checks do not constitute native lifecycle validation.
+
+### Borrowed pipe write audit
+
+- Reviewed PollPipe scalar/vectored writes: the borrowed data remains valid
+  throughout each synchronous poll, WriteOp/WritevOp only read it, and
+  poll_op_poll rejects completion-based handles. Local operations are destroyed
+  before returning, including Pending; readiness registration retains the waker,
+  not the temporary caller buffer. Added local safety comments and enabled
+  undocumented_unsafe_blocks for the pipe module.
+- A native Linux backpressure test fills a pipe, obtains Pending from scalar and
+  vectored writes, mutates/drops the original buffer, drains and verifies the
+  previously written bytes, then succeeds with fresh vectored data. It passed;
+  no production behavior change is claimed. This tests data/lifetime behavior,
+  not every possible native readiness race or platform driver.
+- Linux harness: 255 tests and 16 documentation checks pass. Linux strict Clippy
+  passes; macOS-target Clippy checks the Unix-only module without native execution.
+
+### Unsafe-comment gate follow-up
+
+- A temporary package-wide undocumented_unsafe_blocks check exposed 21 Linux
+  all-feature library/test sites, including comments separated from their unsafe
+  block and borrowed polling-buffer adapters still needing local review. The
+  package-wide gate was not retained or replaced with blanket suppressions.
+- Removed raw-slice construction from fs::read: its returned buffer is a fully
+  initialized fixed array, so ordinary bounded slicing preserves the existing
+  clamp and byte-copy behavior. No unsafe operation or IoBuf import is needed.
+- Enabled the lint locally in the io_uring driver and StatxOp after reviewing
+  eventfd ownership, SQE copying versus referenced allocation retention, and
+  successful statx initialization. Moved existing comments directly above the
+  corresponding unsafe calls and clarified the local contracts. Driver shutdown
+  retention remains an explicit broader proof obligation, not solved by comments.
+- Linux all-feature strict Clippy and 254 harness tests plus 16 documentation
+  checks pass. Remaining polling-buffer sites and Windows-only contracts still
+  require review before a package-wide unsafe-comment gate is justified.
+
+### Dead-code checks in the standalone harness
+
+- Removed vibeio's package-wide dead_code allowance. The private Python embedding
+  and two harness-free benchmark module declarations retain documented allowances
+  because they intentionally consume only a subset of the API. The standalone
+  public-API harness now checks dead code throughout the runtime.
+- Added one local exception for Runtime::poll_once, whose production caller is
+  the Python loop, outside the standalone harness. Removed the stale
+  private_interfaces suppression from AsInnerRawHandle.
+- The stricter check exposed over-broad compilation gates. Limited the
+  AnyDriver ignore-completion wrapper to non-Windows (Windows uses cancel),
+  positional_offset to Linux fs, raw nonblocking setup to its feature/test users,
+  and completion-length/address helpers to Linux/Windows or tests.
+- All 24 isolated strict Clippy combinations pass: no features plus fs, process,
+  signal, pipe, stdio, splice and blocking-default, on Linux GNU, Windows GNU and
+  macOS ARM64. Output: target/vibeio-cleanup-lint-matrix-current.log. Root default
+  and all-feature all-target strict Clippy pass; the Linux harness passes 254
+  tests and 16 documentation checks. Cross-checks are not native execution.
+
+### Integration refresh after cancellation-retention changes
+
+- Rebuilt and installed the default-feature release extension with
+  `.venv/bin/maturin develop --release --locked` (CPython 3.14, rsloop 0.1.48;
+  optimized compilation 38.23 seconds). Build output is in
+  `target/vibeio-cleanup-rebuild-current.log`.
+- The rebuilt binary completed `scripts/run_python_tests.py`: 109 tests in
+  3.770 seconds, two skips, no failures. Output is in
+  `target/vibeio-cleanup-python-current.log`.
+- All 13 workload_matrix scenarios completed for rsloop with one warmup and one
+  measured run, CPUs 2,3, and five idle cycles plus one idle warmup cycle. Raw
+  results and output are in `target/vibeio-cleanup-matrix-smoke.json` and `.log`.
+  This is a short functional smoke check, not a matched performance comparison,
+  idle-stability result or evidence of improvement over uvloop. Previous matrix
+  comparison artifacts remain separate; README performance claims are unchanged.
+- This refresh validates the Linux Python integration. Optional embedded-feature
+  coverage and native Windows/macOS lifecycle proof remain separate requirements.
+
+### Flat repeated-cancellation retention
+
+- Replaced the initial nested boxed-pair grouping with a shared flat retention
+  list used by io_uring and IOCP. Repeated cancellation no longer builds a
+  recursively dropped ownership chain. First cancellation still stores the
+  original box directly; subsequent calls keep each payload box stable in a Vec.
+- A portable 100,000-payload stress test verifies that the first allocation's
+  address is unchanged, none are dropped early, and all are released at final
+  retirement. Existing unknown-token reentrancy and repeated-retention tests
+  remain passing. This is a robustness follow-up, not a measured speedup.
+- Linux harness: 254 tests and 16 documentation checks pass. Strict harness
+  Clippy passes on Linux and Windows/macOS cross-targets; native Windows/macOS
+  driver execution remains outstanding.
+
+### Cancellation retirement edge cases
+
+- io_uring's unknown-token ignore path dropped caller storage under the mutable
+  state borrow. It now returns a synthetic retired completion so the existing
+  outer cleanup drops the payload after releasing the borrow. A destructor probe
+  using a live driver failed before the change and passes afterward.
+- Repeated ignore/cancel calls previously replaced and dropped the first retained
+  payload before acknowledgement. io_uring and IOCP now group old and new owners
+  until completion retirement. The ordinary first-ignore path adds no allocation;
+  grouping allocates only for a repeated call. This hardens the edge-case API
+  contract; no normal-operation duplicate-cancellation trace is claimed.
+- Linux state tests reproduce early release before the fix and verify both
+  owners survive until retirement afterward. The equivalent IOCP state test is
+  cross-compiled, not native-executed. IOCP already retired unknown-token payloads
+  outside its state borrow, so only repeated retention needed changing there.
+- Linux harness: 253 tests and 16 documentation checks pass; root strict Clippy
+  passes. Windows strict harness cross-Clippy checks the IOCP change. Broader
+  kernel cancellation/shutdown acknowledgement proofs remain open.
+
+### Positioned-read completion coverage
+
+- Extended the same sparse-file test to ReadAtOp rather than duplicating scratch
+  setup. At each offset, it checks spare-capacity initialization, EOF clearing a
+  populated Vec, zero-capacity success and shared cursor preservation. It also
+  checks unchanged buffers after invalid offsets and an actual EBADF completion
+  from reading a write-only descriptor.
+- Reviewed the ReadFile Q0095 site and `set_buf_init` ordering in the findings
+  ledger. The test executed on Linux; Windows EOF and IOCP cancellation semantics
+  remain native-validation gaps. No production behavior change is claimed.
+
+### Positioned-write audit and live validation
+
+- Reviewed WriteAtOp's Windows WriteFile unsafe scope, initialized-prefix length,
+  stable buffer retention, cancellation handoff and offset-word assignment.
+  Added a specific finding disposition without suppressing the rule; native
+  Windows completion acknowledgement remains part of the open IOCP audit.
+- A real Linux io_uring test now checks offsets 0, 4097 and 2^32+3, sparse file
+  length/data, unchanged shared cursor and returned buffer. It also checks that
+  signed-range violations/append-sentinel offsets are rejected before submission.
+  The test permits legitimate short writes and unlinks its exclusively created
+  scratch file before testing, ensuring cleanup on assertion failure.
+- The targeted test executed successfully on this host. This adds evidence for
+  existing behavior; no production change or performance improvement is claimed.
+
+### ConnectEx bind error handling
+
+- Windows connect setup no longer treats WSAEADDRINUSE as successful binding.
+  Only WSAEINVAL retains the documented already-bound behavior; other errors
+  preserve their native error code. `completion_bound` is set only after this
+  check succeeds, so a bind conflict does not advance to ConnectEx submission.
+- Microsoft documents WSAEINVAL for an already-bound socket, but WSAEADDRINUSE
+  for an address conflict. ConnectEx requires a previously bound socket:
+  https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-bind
+  https://learn.microsoft.com/en-us/windows/win32/api/mswsock/nc-mswsock-lpfn_connectex
+- Added Windows-only tests for the error policy and actual IPv4/IPv6 wildcard
+  binding, preservation of the assigned port on repeated setup, and invalid
+  socket rejection. Strict Windows cross-Clippy compiles these tests; they were
+  not executed here. No live ephemeral-port-exhaustion reproduction is claimed.
+  The Linux suite still passes (250 tests and 16 documentation checks).
+
+### Refreshed findings and connect coverage
+
+- Current vibeio Qualirs inventory: 215 diagnostics (90 Q0087, 63 Q0090,
+  44 Q0095, 18 other), versus the previous 220 snapshot. Rules remain enabled.
+  Added per-location dispositions for the five ConnectOp Q0095 blocks; each
+  encloses a single FFI call. The ledger distinguishes those bounded calls from
+  the still-open Windows completion lifetime and exceptional-bind review.
+- Expanded live connect validation to IPv4 and IPv6 for ordinary and poll-mode
+  streams under both Mio and io_uring. All eight connections executed successfully
+  on Linux; address/move/cancellation tests also pass. Replaced the unsafe IPv4
+  test fixture initialization with the existing socket-address constructor.
+- This is additional audit and test coverage, not a production connect change or
+  a native Windows/macOS lifecycle proof. Full cleanup remains in progress.
+
+### Unix bind without a runtime
+
+- `UnixListener::bind` now rejects a missing runtime before the standard bind
+  creates a filesystem socket. Previously it returned NotConnected after creating
+  the pathname, so retrying in a valid runtime could fail with address-in-use.
+- The regression failed before the fix and passes afterward: no pathname is
+  created, an existing regular file's contents survive, and binding the same
+  scratch path subsequently succeeds inside a Mio runtime. Its cleanup is scoped
+  to the test-owned directory and socket/file, with no recursive deletion.
+- This is not a general bind rollback guarantee. Later registration or setup
+  errors may still leave the pathname; docs now state this and that bind is
+  synchronous. No automatic unlink is added, since a replacement pathname or a
+  listener passed to from_std must not be removed as an error-cleanup side effect.
+- Linux all-feature harness: 250 tests and 16 documentation checks pass. Linux
+  and macOS-target strict harness Clippy pass; native macOS remains unverified.
+
+### Owned accept-operation results
+
+- TCP accept now returns an owned platform socket with its peer address; Unix
+  accept returns `OwnedFd`. Poll accept, io_uring accept and Windows AcceptEx
+  retain ownership through the operation result instead of releasing a raw
+  handle. TCP/Unix listener callers use safe standard-library conversions.
+  Existing high-level callers already claimed raw ownership immediately; the
+  defect was leaking a discarded successful low-level result.
+- New TCP and Unix poll-path discard regressions both failed before the change
+  and pass afterward. A separate real io_uring regression verifies peer EOF
+  after discarding TCP multishot and Unix single-shot accept results. It executed
+  successfully on this Linux host, without an unavailable-io_uring skip.
+- Linux all-feature harness: 249 tests pass. Windows/macOS all-feature strict
+  cross-Clippy passes; native Windows AcceptEx execution remains unverified.
+  No speedup is claimed. Broader ownership and teardown review remains open.
+
+### Owned open-operation results
+
+- Linux `OpenOp` now returns `OwnedFd`, not a bare descriptor. The driver-to-op
+  ownership transfer is documented at the checked successful completion; the
+  filesystem caller converts it safely to `std::fs::File`. Discarding a result
+  now closes it automatically. The existing high-level caller already acquired
+  ownership immediately; this fixes the lower-level operation's discard path.
+- A real io_uring regression opens a pipe writer through `/proc/self/fd`, drops
+  the original writer and operation, verifies the result keeps the writer alive,
+  then drops the result and requires EOF from a nonblocking reader. It failed
+  before the change with WouldBlock and passed afterward on this Linux host.
+  Unsupported io_uring environments explicitly report the unavailable check.
+- Validation: 363 root tests, 246 all-feature harness tests and 16 documentation
+  checks pass, as do root and harness strict Clippy. This is an ownership fix,
+  not evidence of a wall-clock improvement. Broader cleanup remains in progress.
+
 ### Refreshed isolated-feature execution
 
 - All 24 strict Clippy combinations pass: no features and each of fs, process,

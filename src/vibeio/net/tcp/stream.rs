@@ -1,4 +1,5 @@
 //! TCP stream types for async I/O.
+#![warn(clippy::undocumented_unsafe_blocks)]
 //!
 //! This module provides:
 //! - [`TcpStream`]: An async TCP stream that can use either completion-based or poll-based I/O.
@@ -380,9 +381,15 @@ impl PollTcpStream {
     #[inline]
     pub async fn peek(&self, buf: &mut [u8]) -> Result<usize, io::Error> {
         let handle = &self.stream.handle;
-        let buf = unsafe { IoBufTemporaryPoll::new(buf.as_mut_ptr(), buf.len()) };
-        let mut op = RecvOp::new_peek(handle, buf);
-        poll_fn(move |cx| handle.poll_op_poll(cx, &mut op)).await
+        poll_fn(move |cx| {
+            // SAFETY: the caller exclusively lends initialized writable bytes
+            // for this poll. The local operation only uses synchronous poll I/O
+            // and is destroyed before returning, including when it is Pending.
+            let buf = unsafe { IoBufTemporaryPoll::new(buf.as_mut_ptr(), buf.len()) };
+            let mut op = RecvOp::new_peek(handle, buf);
+            handle.poll_op_poll(cx, &mut op)
+        })
+        .await
     }
 
     /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
@@ -606,6 +613,9 @@ impl TokioAsyncWrite for PollTcpStream {
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
         let this = self.get_mut();
+        // SAFETY: the source remains initialized and borrowed for this call.
+        // WriteOp only reads it; poll_op_poll rejects completion submission and
+        // the local operation cannot retain the pointer after returning Pending.
         let buf = unsafe { IoBufTemporaryPoll::new(buf.as_ptr() as *mut u8, buf.len()) };
         let mut op = WriteOp::new(&this.stream.handle, buf);
         this.stream.handle.poll_op_poll(cx, &mut op)
@@ -621,6 +631,9 @@ impl TokioAsyncWrite for PollTcpStream {
             return Poll::Ready(Ok(0));
         }
         let this = self.get_mut();
+        // SAFETY: these initialized IoSlice regions remain borrowed throughout
+        // the synchronous WritevOp poll. Metadata is copied, and the local op is
+        // dropped before this call returns; no completion I/O can retain it.
         let bufs = unsafe { IoVectoredBufTemporaryPoll::new(bufs) };
         let mut op = WritevOp::new(&this.stream.handle, bufs);
         this.stream.handle.poll_op_poll(cx, &mut op)
@@ -675,6 +688,48 @@ impl AsyncWritePoll for PollTcpStream {
 #[cfg(test)]
 mod socket_creation_tests {
     use super::*;
+
+    #[test]
+    fn cancelled_poll_peek_releases_buffer_without_consuming_data() {
+        use crate::vibeio::{Runtime, driver::AnyDriver};
+        use std::future::Future;
+        use std::io::Write;
+        #[cfg(unix)]
+        let driver = AnyDriver::new_mio().unwrap();
+        #[cfg(windows)]
+        let driver = AnyDriver::new_iocp().unwrap();
+        Runtime::new(driver).block_on(async {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let socket = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (mut peer, _) = listener.accept().unwrap();
+            let mut stream = PollTcpStream::from_std(socket).unwrap();
+            let mut buffer = [b'_'; 8];
+            let mut pending = Box::pin(stream.peek(&mut buffer));
+            assert!(
+                pending
+                    .as_mut()
+                    .poll(&mut Context::from_waker(std::task::Waker::noop()))
+                    .is_pending()
+            );
+            drop(pending);
+            assert_eq!(buffer, [b'_'; 8]);
+            buffer.fill(b'x');
+            peer.write_all(b"peek").unwrap();
+            crate::vibeio::time::timeout(std::time::Duration::from_secs(5), async {
+                let count = stream.peek(&mut buffer).await.unwrap();
+                assert!(count > 0 && count <= 4);
+                assert_eq!(&buffer[..count], &b"peek"[..count]);
+                assert!(buffer[count..].iter().all(|byte| *byte == b'x'));
+                let mut received = [0; 4];
+                tokio::io::AsyncReadExt::read_exact(&mut stream, &mut received)
+                    .await
+                    .unwrap();
+                assert_eq!(&received, b"peek");
+            })
+            .await
+            .unwrap();
+        });
+    }
 
     #[test]
     fn created_socket_is_close_on_exec() {

@@ -14,9 +14,8 @@ use mio::Interest;
 #[cfg(windows)]
 use windows_sys::Win32::Networking::WinSock::{
     self as WinSock, AF_INET, AF_INET6, SO_UPDATE_CONNECT_CONTEXT, SOCKADDR, SOCKADDR_IN,
-    SOCKADDR_IN6, SOCKADDR_STORAGE, SOCKET, SOCKET_ERROR, SOL_SOCKET, WSA_IO_PENDING,
-    WSAEADDRINUSE, WSAEALREADY, WSAEINPROGRESS, WSAEINVAL, WSAENOTCONN, WSAEWOULDBLOCK,
-    WSAID_CONNECTEX,
+    SOCKADDR_IN6, SOCKADDR_STORAGE, SOCKET, SOCKET_ERROR, SOL_SOCKET, WSA_IO_PENDING, WSAEALREADY,
+    WSAEINPROGRESS, WSAEINVAL, WSAENOTCONN, WSAEWOULDBLOCK, WSAID_CONNECTEX,
 };
 #[cfg(windows)]
 use windows_sys::Win32::System::IO::OVERLAPPED;
@@ -73,6 +72,18 @@ fn start_nonblocking_connect(
 }
 
 #[cfg(windows)]
+fn connectex_bind_error(err_code: i32) -> io::Result<()> {
+    // bind documents WSAEINVAL as "already bound". WSAEADDRINUSE instead
+    // means an address conflict, not that this socket acquired a local address.
+    // Preserve all other errors instead of attempting ConnectEx unbound.
+    if err_code == WSAEINVAL {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(err_code))
+    }
+}
+
+#[cfg(windows)]
 fn ensure_connectex_bound(socket: SOCKET, address: &ConnectAddress) -> Result<(), io::Error> {
     let AddressStorage::Inet(addr) = &address.storage;
     let family = addr.ss_family as i32;
@@ -118,9 +129,7 @@ fn ensure_connectex_bound(socket: SOCKET, address: &ConnectAddress) -> Result<()
     if bind_result == WinSock::SOCKET_ERROR {
         // SAFETY: reads the calling thread's Winsock error without pointer arguments.
         let err_code = unsafe { WinSock::WSAGetLastError() };
-        if !matches!(err_code, WSAEINVAL | WSAEADDRINUSE) {
-            return Err(io::Error::from_raw_os_error(err_code));
-        }
+        connectex_bind_error(err_code)?;
     }
 
     Ok(())
@@ -301,6 +310,7 @@ impl<'a> ConnectOp<'a> {
         }
     }
 
+    #[cfg(any(target_os = "linux", windows, test))]
     fn address(&self) -> (AddressPointer, AddressLength) {
         self.addr.as_ref().expect("connect address missing").raw()
     }
@@ -639,18 +649,60 @@ mod ownership_tests {
     use super::*;
     use std::rc::Rc;
 
+    #[cfg(windows)]
+    #[test]
+    fn connectex_bind_errors_preserve_address_conflicts() {
+        assert!(connectex_bind_error(WSAEINVAL).is_ok());
+        for error in [
+            WinSock::WSAEADDRINUSE,
+            WinSock::WSAEACCES,
+            WinSock::WSAENOTSOCK,
+            WinSock::WSAENOBUFS,
+            WinSock::WSAEAFNOSUPPORT,
+        ] {
+            assert_eq!(
+                connectex_bind_error(error).unwrap_err().raw_os_error(),
+                Some(error)
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn connectex_binding_assigns_and_preserves_the_local_port() {
+        use std::os::windows::io::AsRawSocket;
+        for destination in ["127.0.0.1:12345", "[::1]:12345"] {
+            let destination: std::net::SocketAddr = destination.parse().unwrap();
+            let socket = socket2::Socket::new(
+                socket2::Domain::for_address(destination),
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            )
+            .unwrap();
+            let handle = InnerRawHandle::for_mock_completion(Rc::new(AnyDriver::new_mock()));
+            let (storage, length) = crate::vibeio::op::socket_addr_to_raw(destination);
+            let op = ConnectOp::new(&handle, storage, length).unwrap();
+            ensure_connectex_bound(socket.as_raw_socket() as SOCKET, op.addr.as_ref().unwrap())
+                .unwrap();
+            let local = socket.local_addr().unwrap().as_socket().unwrap();
+            assert_ne!(local.port(), 0);
+            assert_eq!(local.is_ipv4(), destination.is_ipv4());
+            // The second bind fails with WSAEINVAL; it must preserve the first
+            // binding rather than demand a new ephemeral port.
+            ensure_connectex_bound(socket.as_raw_socket() as SOCKET, op.addr.as_ref().unwrap())
+                .unwrap();
+            assert_eq!(socket.local_addr().unwrap().as_socket().unwrap(), local);
+            assert_eq!(
+                ensure_connectex_bound(WinSock::INVALID_SOCKET, op.addr.as_ref().unwrap())
+                    .unwrap_err()
+                    .raw_os_error(),
+                Some(WinSock::WSAENOTSOCK)
+            );
+        }
+    }
+
     fn inet_address() -> NativeAddress {
-        // SAFETY: native sockaddr_storage is an integer-only C structure.
-        let mut addr: NativeAddress = unsafe { std::mem::zeroed() };
-        #[cfg(unix)]
-        {
-            addr.ss_family = libc::AF_INET as _;
-        }
-        #[cfg(windows)]
-        {
-            addr.ss_family = AF_INET as _;
-        }
-        addr
+        crate::vibeio::op::socket_addr_to_raw("127.0.0.1:0".parse().unwrap()).0
     }
 
     #[test]
@@ -710,31 +762,55 @@ mod ownership_tests {
         let driver = AnyDriver::new_mio().unwrap();
         #[cfg(windows)]
         let driver = AnyDriver::new_iocp().unwrap();
-        let runtime = crate::vibeio::executor::Runtime::new(driver);
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let address = listener.local_addr().unwrap();
-        runtime.block_on(async move {
-            let stream =
-                crate::vibeio::time::timeout(Duration::from_secs(5), TcpStream::connect(address))
+        let drivers = vec![driver];
+        #[cfg(target_os = "linux")]
+        let drivers = {
+            let mut drivers = drivers;
+            match AnyDriver::new_uring_custom(io_uring::IoUring::builder()) {
+                Ok(driver) => drivers.push(driver),
+                Err(error)
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                    ) =>
+                {
+                    eprintln!("io_uring connect check unavailable: {error}")
+                }
+                Err(error) => panic!("io_uring initialization failed: {error}"),
+            }
+            drivers
+        };
+        for driver in drivers {
+            let runtime = crate::vibeio::executor::Runtime::new(driver);
+            for bind_address in ["127.0.0.1:0", "[::1]:0"] {
+                let listener = std::net::TcpListener::bind(bind_address).unwrap();
+                listener.set_nonblocking(true).unwrap();
+                let address = listener.local_addr().unwrap();
+                runtime.block_on(async move {
+                    let stream = crate::vibeio::time::timeout(
+                        Duration::from_secs(5),
+                        TcpStream::connect(address),
+                    )
                     .await
                     .unwrap()
                     .unwrap();
-            assert_eq!(stream.peer_addr().unwrap(), address);
-            let (_, peer) = listener.accept().unwrap();
-            assert_eq!(peer, stream.local_addr().unwrap());
+                    assert_eq!(stream.peer_addr().unwrap(), address);
+                    let (_, peer) = listener.accept().unwrap();
+                    assert_eq!(peer, stream.local_addr().unwrap());
 
-            let stream = crate::vibeio::time::timeout(
-                Duration::from_secs(5),
-                PollTcpStream::connect(address),
-            )
-            .await
-            .unwrap()
-            .unwrap();
-            assert_eq!(stream.peer_addr().unwrap(), address);
-            let (_, peer) = listener.accept().unwrap();
-            assert_eq!(peer, stream.local_addr().unwrap());
-        });
+                    let stream = crate::vibeio::time::timeout(
+                        Duration::from_secs(5),
+                        PollTcpStream::connect(address),
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                    assert_eq!(stream.peer_addr().unwrap(), address);
+                    let (_, peer) = listener.accept().unwrap();
+                    assert_eq!(peer, stream.local_addr().unwrap());
+                });
+            }
+        }
     }
 
     #[test]

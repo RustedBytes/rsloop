@@ -15,9 +15,9 @@ use std::future::poll_fn;
 use std::io;
 use std::net::{SocketAddr, TcpListener as StdTcpListener, ToSocketAddrs};
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket, RawSocket};
+use std::os::windows::io::{AsRawSocket, IntoRawSocket, RawSocket};
 
 use mio::Interest;
 
@@ -155,20 +155,8 @@ impl TcpListener {
     #[inline]
     pub async fn accept(&self) -> Result<(TcpStream, SocketAddr), io::Error> {
         let mut op = AcceptOp::new(&self.handle);
-        let (raw, address) = poll_fn(move |cx| self.handle.poll_op(cx, &mut op)).await?;
-        // Recreate a std TcpStream from the raw fd and convert it into our async TcpStream.
-        // If conversion fails, the std TcpStream will be dropped and the fd closed.
-        #[cfg(unix)]
-        let std_stream = unsafe { std::net::TcpStream::from_raw_fd(raw) };
-        #[cfg(windows)]
-        let crate::vibeio::fd_inner::RawOsHandle::Socket(raw) = raw else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "invalid raw handle",
-            ));
-        };
-        #[cfg(windows)]
-        let std_stream = unsafe { std::net::TcpStream::from_raw_socket(raw) };
+        let (socket, address) = poll_fn(move |cx| self.handle.poll_op(cx, &mut op)).await?;
+        let std_stream = std::net::TcpStream::from(socket);
         TcpStream::from_std(std_stream).map(|stream| (stream, address))
     }
 }

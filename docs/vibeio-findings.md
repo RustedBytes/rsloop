@@ -1,6 +1,11 @@
 # Remaining Qualirs finding dispositions
 
-Current rescan after the kqueue ownership follow-up: **220** diagnostics
+Current rescan after owned open/accept results and the connect review: **215**
+diagnostics (90 Q0087, 63 Q0090, 44 Q0095 and 18 in other rules). No rules were
+disabled. This includes findings with recorded dispositions, not 215 proven bugs
+or an assertion that the full remaining inventory has been reviewed.
+
+Earlier rescan after the kqueue ownership follow-up: **220** diagnostics
 (95 Q0087, 63 Q0090, 44 Q0095 and 18 in other rules). Findings remain enabled;
 the per-location dispositions below do not remove them from analyzer output.
 
@@ -44,6 +49,237 @@ anchors. No rules were disabled for this review.
 | Q0082 | signal/windows.rs:94, CtrlC::drop | Open synchronization constraint: removes its slab entry under a std mutex. Retired waker drops occur after unlocking; cross-thread contention remains possible. Portable state tests are not native console lifecycle verification. |
 
 ## Still requiring per-location review
+
+### AFD creation and association comments
+
+The NtCreateFile call now documents live counted-name/object-attribute inputs
+and writable local outputs, with optional buffers null. The owned conversion
+follows success/non-null checks. ensure_afd_handle keeps both file and port alive
+while associating them, treats the returned port as an alias, and preserves IOCP
+success packets when setting FILE_SKIP_SET_EVENT_ON_HANDLE. Local setup errors
+drop the newly owned AFD handle before publishing it to the cache.
+A Windows-only cached-handle/non-inheritance test cross-compiles. These four
+comment dispositions do not prove native setup failure behavior or AFD request
+cancellation; the latter remains under review.
+
+### IOCP base-socket query and traversal
+
+get_base_socket now documents its synchronous WSAIoctl outputs and validates
+both returned byte count and INVALID_SOCKET before use. WSAGetLastError is an
+integer-only thread-local query. The resolver previously rejected only a
+self-loop; a malformed multi-node fallback cycle could run indefinitely.
+The shared testable traversal tracks visited provider handles and rejects such
+cycles without allocating on the direct-success path. Scripted tests execute
+on Linux; native Winsock lookup tests are Windows-only and cross-compiled.
+This is malformed-provider hardening, not a reproduced native provider defect
+or completion-packet lifecycle proof.
+
+### IOCP integer status conversion
+
+Both RtlNtStatusToDosError calls now document their integer-only FFI contract.
+Completion encoding no longer casts arbitrary ULONG error codes to i32 and
+negates them unchecked or falls back to negating raw NTSTATUS. A shared checked
+encoder preserves positive representable codes; otherwise IOCP returns the
+explicit arithmetic-overflow error instead of a count or panic. Linux boundary
+tests pass and common Windows status-mapping tests cross-compile. This is
+defensive representation hardening: the documented unmapped-status fallback is
+ERROR_MR_MID_NOT_FOUND, and no native abnormal-mapping reproduction is claimed.
+
+### IOCP port ownership and timeout conversion
+
+IocpInterruptor::interrupt now documents that its upgraded Arc keeps the port
+live through PostQueuedCompletionStatus and the reserved wake packet has no
+OVERLAPPED pointer. IocpDriver::new documents creation with INVALID_HANDLE_VALUE
+and no existing port, followed by non-null validation and sole OwnedHandle
+acquisition. These three local comments do not resolve the outstanding AFD and
+completion-packet ownership review.
+
+The adjacent duration conversion had a separate defect: saturating a finite
+duration to u32::MAX selected Windows INFINITE. A shared Windows/test helper now
+caps finite values at u32::MAX-1. The Linux-executed boundary regression failed
+before and passes after the change. This proves arithmetic/sentinel handling,
+not native Windows wait behavior; sub-millisecond rounding remains unchanged.
+
+### Unix-stream and fixture unsafe sites
+
+PollUnixStream's two write constructors now state the initialized borrow and
+poll-only operation lifetime, matching the TCP/pipe adapter review. The module
+enables undocumented_unsafe_blocks. AsyncWrap's CountingReader and ChunkedWriter
+fixtures now use the existing checked buffer helpers instead of duplicating
+unsafe pointer copying/slice construction; helper cfgs include tests independent
+of optional features. statx_timestamp fixture zeroing documents its integer-only
+layout and reserved-field initialization.
+
+Whole-harness Linux/macOS unsafe-comment checks now pass and the package enables
+the lint on Unix. The Windows probe still reports 16 IOCP library/test sites;
+those are not considered reviewed merely because other modules have passed.
+Comment coverage is separate from proof of every pointer lifetime and native
+driver teardown path.
+
+### PollUdpSocket temporary buffers
+
+The six constructor sites in poll_recv, poll_recv_from, poll_send, poll_send_to,
+poll_peek and poll_peek_from now have individual safety comments. Receive/peek
+regions are exclusively borrowed writable slices; send regions are initialized
+read-only slices. Each operation is constructed locally and uses poll_op_poll,
+which rejects completion submission, so a Pending return retains no temporary
+buffer operation. The UDP module now enables undocumented_unsafe_blocks.
+Direct borrowed-method tests supplement the separately named owned-buffer async
+test: Pending preservation, buffer reuse, source addresses, peek non-consumption,
+empty datagrams and fresh connected sends/receives all pass on Linux. This does
+not verify Windows overlapped peek semantics; these methods use poll dispatch.
+
+### PollTcpStream temporary buffers
+
+The missing-comment sites in peek, poll_write and poll_write_vectored now state
+the backing borrow, read/write permissions and poll-only dispatch restrictions.
+Peek creates its temporary wrapper inside each poll rather than retaining the
+operation across Pending, aligning implementation with IoBufTemporaryPoll's
+documented scope. The caller's mutable slice borrow still spans the async peek;
+this is contract tightening, not a reproduced dangling-pointer defect.
+The native Linux cancellation/reuse/peek-then-read regression passes; Windows
+and macOS execution remains unverified. The TCP stream module now enables
+undocumented_unsafe_blocks, including its existing ReadBuf initialization sites.
+
+### PollPipe temporary write buffers
+
+`io/pipe.rs::PollPipe::poll_write` and `poll_write_vectored` now have direct
+constructor safety comments: source bytes are initialized and borrowed for the
+whole call, operations only read them, and poll_op_poll prevents completion
+submission. Pending retains readiness/waker state, not the local temporary
+operation. Vectored metadata is owned but the pointed-to bytes remain borrowed;
+neither can escape this synchronous poll. The module now enables the safety-
+comment lint. The Linux full-pipe regression mutates and drops the original
+buffer after Pending, verifies queued bytes and successfully writes fresh
+vectors after draining. This closes the two missing-comment dispositions but
+does not stand in for the broader borrowed-buffer audit in TCP/UDP/Unix streams.
+
+### Array reads and local driver/statx comment gates
+
+`fs::read` used from_raw_parts on the returned `[u8; 8192]` solely to copy a
+bounded initialized prefix into its output Vec. Ordinary slicing now performs
+that copy with the same min(buffer length, returned count) bound, removing the
+unsafe operation rather than adding a justification for it.
+
+io_uring's eventfd write comment now directly precedes the unsafe call. eventfd
+creation documents its integer-only arguments and checked OwnedFd acquisition;
+push_entry documents SQE copying and the distinct lifetime of referenced
+driver/operation allocations. StatxOp's assume_init comment now immediately
+follows extraction of the owned result box and explains the successful-CQE
+precondition. Both modules now enable undocumented_unsafe_blocks locally.
+These dispositions do not prove the entire shutdown/cancellation graph safe.
+
+### Repeated and unknown cancellation payloads
+
+Inspection of io_uring `DriverState::ignore_completion` found that its early
+missing-token return destroyed `data` while the caller held the state RefMut.
+It now returns that payload in a retired Completion for out-of-borrow disposal.
+The live-driver destructor-borrow regression failed before and passes afterward.
+Both this function and IOCP `DriverState::retain_cancelled` also overwrote an
+existing ignored_data owner on repeated calls. They now retain both boxed owners
+through completion retirement. A shared flat retention list replaces the initial
+nested-pair implementation, avoiding a deep recursive destructor chain. A
+100,000-payload test verifies stable allocation and complete, deferred disposal.
+A Linux state regression proves the previous
+early drop and fixed retention; the corresponding IOCP regression is compiled
+only. These cases do not establish a duplicate-cancellation trace in normal use,
+nor do they close the outstanding native IOCP acknowledgement/teardown audit.
+
+### Positioned-read initialization audit
+
+`op/readat.rs::submit_windows` (Q0095 at line 133 in the 215-finding snapshot)
+contains a single ReadFile call. Its writable length comes from checked capacity,
+not initialized length; CompletionBuffer retains exclusive stable storage and
+Drop transfers pending storage to the owning driver. OVERLAPPED offset-word
+assignment is a separate bounded unsafe block. Retain these calls and their
+local contracts; native IOCP lifetime validation is still outstanding.
+
+In `poll_completion`, errors return before `set_buf_init`; the Windows EOF code
+is explicitly normalized to a successful zero-byte result. For successful reads,
+the kernel's initialized byte count determines the returned buffer length. This
+relies on the driver's completion belonging to the submitted operation, not on
+an independently checked length bound at this layer.
+
+The existing sparse positioned-write fixture now also runs real ReadAtOp calls
+at all three offsets (including above 4 GiB): spare-capacity Vec initialization,
+EOF resetting a reused Vec to empty, zero-capacity reads and unchanged shared
+cursor are verified. Invalid offsets preserve the original buffer. Reopening the
+unlinked scratch file write-only then reading it produces a real EBADF completion
+and preserves buffer contents. These checks executed on Linux; they do not test
+Windows EOF normalization or native cancellation.
+
+### Positioned-write buffer and offset audit
+
+`op/writeat.rs::submit_windows` (Q0095 at line 131 in the 215-finding snapshot)
+contains one WriteFile call, not a broad unsafe algorithm. It submits only the
+initialized IoBuf prefix, with `completion_len` rejecting lengths above i32::MAX
+before submission. The two-word OVERLAPPED offset is assigned in a separate,
+locally documented block; u64::MAX is rejected as the Windows append sentinel.
+The operation retains stable boxed buffer storage until completion, or transfers
+that allocation to the owning driver's cancellation retention on Drop. Retain
+the bounded unsafe calls; native IOCP acknowledgement/teardown remains open.
+
+Linux `build_completion_entry` uses the same checked length and `positional_offset`
+to reject unsigned values outside the signed file-offset range. A new native
+io_uring test verifies writes at 0, 4097 and 2^32+3, unchanged shared cursor,
+returned original buffer, file length and data read back through standard
+positional I/O. It accepts valid short writes, and rejects i64::MAX+1/u64::MAX
+before submission. The scratch file is sparse and unlinked immediately after
+exclusive creation, so unwinding closes/reclaims it. The test executed, without
+an unavailable-io_uring skip, on Linux. Existing mock cancellation tests verify
+buffer retention and rejection of premature reclamation, not native Windows
+cancellation. No production positioned-write defect or speedup is claimed.
+
+### ConnectOp large-unsafe-block findings
+
+The five Q0095 locations below refer to the 215-finding snapshot. Each flagged
+unsafe block contains one FFI invocation; its argument formatting is not a reason
+to extract an additional unsafe wrapper or suppress the rule. Retain the bounded
+calls and existing local safety comments. This resolves the large-block claim,
+not every platform-lifecycle question associated with the operation.
+
+| Location in op/connect.rs | Scope and ownership evidence |
+| --- | --- |
+| 137, load_connect_ex | One synchronous WSAIoctl call; the GUID, optional function-pointer output and returned-byte count are local storage with exact supplied sizes. OVERLAPPED and completion callback are null. Failure and absent extension pointers are checked before use. Native Winsock provider behavior remains unverified here. |
+| 170, set_connect_context | One setsockopt call; SO_UPDATE_CONNECT_CONTEXT supplies no payload (null pointer, zero length). The caller retains its socket handle through the call; no Rust buffer escapes. |
+| 346, Unix poll_poll | One getsockopt(SO_ERROR) call with a live c_int output and its exact capacity. The following getpeername probe uses separate sockaddr_storage and checks only status, not uninitialized address fields. Kernel-reported connection errors are handled before declaring success. |
+| 432, Windows poll_poll | Equivalent SO_ERROR query using an initialized i32 output and i32 capacity. Socket-only handle validation precedes the call. The subsequent peer probe uses initialized SOCKADDR_STORAGE and checks status only. Native execution remains outstanding. |
+| 583, submit_windows | One ConnectEx invocation. The boxed, length-validated address stays at the same allocation through moves; Drop transfers it into cancellation retention. No initial send buffer is supplied. Driver-owned OVERLAPPED retention remains part of the broader IOCP audit, not proven by the local comment or mock test. |
+
+Validation: all five connect tests pass on Linux. The live connect test now runs
+IPv4 and IPv6 with TcpStream and PollTcpStream under both Mio and io_uring (eight
+connections), with no io_uring-unavailable skip on this host. Existing tests cover
+address bounds/families, stable allocations across moves and cancellation routed
+to the original driver. The IPv4 test fixture now uses the existing address
+constructor instead of an unsafe zeroed native struct. Windows/macOS validation
+is cross-compilation only. Follow-up review fixed exceptional ConnectEx binding:
+WSAEADDRINUSE is now propagated, while WSAEINVAL preserves the documented
+already-bound case. The policy and native binding tests are Windows-only and
+cross-compiled, not executed; the broader IOCP lifecycle audit remains open.
+
+### Accept result ownership
+
+`op/accept.rs` finishing helpers and the Windows AcceptEx success branch now
+return their existing `OwnedFd`/`OwnedSocket` directly. `op/accept_unix.rs` does
+the same in its poll and completion branches. This removes the owner-to-raw-to-
+owner round trip, including unsafe reconstruction in both listener callers and
+the TCP ownership test. Error-path RAII and cancellation storage are unchanged.
+Discard tests reproduced both poll-path leaks before the fix; an additional
+native Linux io_uring test verifies closure of discarded TCP and Unix completion
+results. Windows/macOS paths compile under strict Clippy but are not native-tested
+here. This does not resolve the outstanding IOCP teardown audit.
+
+### Open completion ownership
+
+`op/open.rs::OpenOp::poll_completion` now turns a nonnegative OpenAt result into
+`OwnedFd` at the operation boundary. The driver removes a retrieved completion
+and the operation clears its cancellation token before handing ownership out;
+pending cancellation continues to retain the path through `ignore_completion`.
+The remaining `from_raw_fd` has a local safety contract and the module enables
+`undocumented_unsafe_blocks`. `fs/open_options.rs::open` uses the safe owned-fd
+conversion instead of independently acquiring raw ownership. The native Linux
+pipe-EOF regression failed for discarded raw results and passes for owned ones.
+This disposition does not prove every driver teardown/cancellation path safe.
 
 ### Network backend and registration documentation
 

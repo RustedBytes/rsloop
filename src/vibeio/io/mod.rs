@@ -116,7 +116,6 @@ pub trait AsyncWrite {
 /// Trait to get an inner raw handle reference.
 pub trait AsInnerRawHandle<'a> {
     /// Returns a reference to the inner raw handle.
-    #[allow(private_interfaces)]
     fn as_inner_raw_handle(&'a self) -> &'a crate::vibeio::fd_inner::InnerRawHandle;
 }
 

@@ -13,8 +13,6 @@ use crate::vibeio::op::OpenOp;
 #[cfg(target_os = "linux")]
 use std::ffi::CString;
 #[cfg(target_os = "linux")]
-use std::os::fd::FromRawFd;
-#[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStrExt;
 
 use crate::vibeio::fs::file::File;
@@ -170,8 +168,8 @@ impl OpenOptions {
             {
                 if driver.supports_completion() {
                     let mut op = self.build_open_op(driver.clone(), path)?;
-                    let raw = poll_fn(move |cx| op.poll(cx, &driver)).await?;
-                    unsafe { std::fs::File::from_raw_fd(raw) }
+                    let fd = poll_fn(move |cx| op.poll(cx, &driver)).await?;
+                    std::fs::File::from(fd)
                 } else if crate::vibeio::offload_fs() {
                     self.open_in_blocking_pool(path).await?
                 } else {

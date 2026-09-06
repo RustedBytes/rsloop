@@ -2,7 +2,7 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::io;
-use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::task::{Context, Poll};
 
 use mio::Interest;
@@ -33,7 +33,7 @@ impl Op for AcceptUnixOp<'_> {
     fn completion_returns_fd(&self) -> bool {
         true
     }
-    type Output = RawFd;
+    type Output = OwnedFd;
 
     #[inline]
     fn poll_poll(
@@ -85,7 +85,7 @@ impl Op for AcceptUnixOp<'_> {
             return Poll::Ready(Err(err));
         }
 
-        Poll::Ready(Ok(owned.into_raw_fd()))
+        Poll::Ready(Ok(owned))
     }
 
     #[inline]
@@ -129,7 +129,7 @@ impl Op for AcceptUnixOp<'_> {
             return Poll::Ready(Err(err));
         }
 
-        Poll::Ready(Ok(owned.into_raw_fd()))
+        Poll::Ready(Ok(owned))
     }
 
     #[cfg(target_os = "linux")]
@@ -174,6 +174,97 @@ mod tests {
     use std::rc::Rc;
     #[cfg(target_os = "linux")]
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discarding_poll_accept_result_closes_the_connection() {
+        use std::io::Read;
+        let name = format!("vibeio-accept-owned-{}", std::process::id());
+        let address = SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+        let listener = UnixListener::bind_addr(&address).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut peer = UnixStream::connect_addr(&address).unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let driver = Rc::new(AnyDriver::new_mock());
+        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
+        handle.handle = listener.as_raw_fd();
+        let mut op = AcceptUnixOp::new(&handle);
+        let Poll::Ready(Ok(result)) =
+            op.poll_poll(&mut Context::from_waker(std::task::Waker::noop()), &driver)
+        else {
+            panic!("queued connection must be accepted");
+        };
+        drop(result);
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discarding_completion_accept_results_closes_tcp_and_unix_connections() {
+        use crate::vibeio::driver::RegistrationMode;
+        use crate::vibeio::op::AcceptOp;
+        use std::io::Read;
+        use std::time::{Duration, Instant};
+
+        fn complete<O: Op>(op: &mut O, driver: &AnyDriver) -> O::Output {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            loop {
+                if let Poll::Ready(result) = op.poll_completion(&mut cx, driver) {
+                    return result.unwrap();
+                }
+                assert!(Instant::now() < deadline, "accept completion timed out");
+                driver.wait(Some(Duration::from_millis(10)));
+            }
+        }
+
+        let driver = match AnyDriver::new_uring_custom(io_uring::IoUring::builder()) {
+            Ok(driver) => Rc::new(driver),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                ) =>
+            {
+                eprintln!("io_uring unavailable: {error}");
+                return;
+            }
+            Err(error) => panic!("io_uring initialization failed: {error}"),
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let handle = InnerRawHandle::new_with_driver_and_mode(
+            &driver,
+            listener.as_raw_fd(),
+            Interest::READABLE,
+            RegistrationMode::Completion,
+        )
+        .unwrap();
+        let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let mut op = AcceptOp::new(&handle);
+        let accepted = complete(&mut op, &driver);
+        assert_eq!(accepted.1, peer.local_addr().unwrap());
+        drop(accepted);
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+        drop(op);
+        drop(handle);
+
+        let name = format!("vibeio-accept-owned-completion-{}", std::process::id());
+        let address = SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+        let listener = UnixListener::bind_addr(&address).unwrap();
+        let handle = InnerRawHandle::new_with_driver_and_mode(
+            &driver,
+            listener.as_raw_fd(),
+            Interest::READABLE,
+            RegistrationMode::Completion,
+        )
+        .unwrap();
+        let mut peer = UnixStream::connect_addr(&address).unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let mut op = AcceptUnixOp::new(&handle);
+        drop(complete(&mut op, &driver));
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+    }
 
     #[test]
     fn cancelled_accept_uses_the_owning_driver() {

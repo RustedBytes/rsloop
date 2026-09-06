@@ -36,7 +36,7 @@ pub(super) fn read_error_result(error: io::Error) -> io::Result<i32> {
     Err(error)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "fs"))]
 pub(super) fn positional_offset(offset: u64) -> io::Result<u64> {
     // Linux file offsets are signed. In particular, io_uring treats all-one
     // bits as a request to use AND advance the shared cursor, not a position.
@@ -68,6 +68,7 @@ pub(super) fn iovec_to_system(bufs: &[crate::vibeio::io::IoVec]) -> Box<[libc::i
         .collect()
 }
 
+#[cfg(any(target_os = "linux", windows, test))]
 #[inline]
 pub(super) fn completion_len(capacity: usize) -> io::Result<u32> {
     // CompletionIoResult stores successful counts in a signed i32, with

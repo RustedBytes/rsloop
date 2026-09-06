@@ -33,7 +33,16 @@ pub struct InnerRawHandle {
 const UNREGISTERED: Token = Token(usize::MAX);
 
 /// Set the descriptor's blocking mode without changing unrelated status flags.
-#[cfg(unix)]
+#[cfg(all(
+    unix,
+    any(
+        test,
+        feature = "pipe",
+        feature = "process",
+        feature = "signal",
+        all(target_os = "linux", feature = "splice")
+    )
+))]
 pub(crate) fn set_nonblocking(fd: RawOsHandle, nonblocking: bool) -> io::Result<()> {
     fn fcntl(fd: RawOsHandle, command: libc::c_int, value: libc::c_int) -> io::Result<libc::c_int> {
         loop {

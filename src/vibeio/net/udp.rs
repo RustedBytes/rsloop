@@ -1,4 +1,5 @@
 //! UDP socket types for async I/O.
+#![warn(clippy::undocumented_unsafe_blocks)]
 //!
 //! This module provides:
 //! - [`UdpSocket`]: An async UDP socket that can use either completion-based or poll-based I/O.
@@ -988,6 +989,8 @@ impl PollUdpSocket {
     ) -> Poll<Result<usize, io::Error>> {
         let this = self.get_mut();
         let handle = &this.socket.handle;
+        // SAFETY: buf is exclusively borrowed and initialized for this poll.
+        // The local RecvOp uses poll-only dispatch and cannot retain its pointer.
         let buf_temp = unsafe { IoBufTemporaryPoll::new(buf.as_mut_ptr(), buf.len()) };
         let mut op = RecvOp::new(handle, buf_temp);
         handle.poll_op_poll(cx, &mut op)
@@ -1004,6 +1007,8 @@ impl PollUdpSocket {
     ) -> Poll<Result<(usize, SocketAddr), io::Error>> {
         let this = self.get_mut();
         let handle = &this.socket.handle;
+        // SAFETY: buf stays exclusively borrowed through synchronous recvfrom.
+        // poll_op_poll rejects completion mode; op is dropped even on Pending.
         let buf_temp = unsafe { IoBufTemporaryPoll::new(buf.as_mut_ptr(), buf.len()) };
         let mut op = RecvfromOp::new(handle, buf_temp);
         handle.poll_op_poll(cx, &mut op)
@@ -1020,6 +1025,8 @@ impl PollUdpSocket {
     ) -> Poll<Result<usize, io::Error>> {
         let this = self.get_mut();
         let handle = &this.socket.handle;
+        // SAFETY: buf is initialized and borrowed for this synchronous send.
+        // SendOp only reads it and poll-only dispatch cannot retain the pointer.
         let buf_temp = unsafe { IoBufTemporaryPoll::new(buf.as_ptr() as *mut u8, buf.len()) };
         let mut op = SendOp::new(handle, buf_temp);
         handle.poll_op_poll(cx, &mut op)
@@ -1037,6 +1044,9 @@ impl PollUdpSocket {
     ) -> Poll<Result<usize, io::Error>> {
         let this = self.get_mut();
         let handle = &this.socket.handle;
+        // SAFETY: SendtoOp only reads the borrowed initialized bytes during
+        // this poll. Both op and its owned address metadata are local; poll-only
+        // dispatch cannot retain the caller's buffer after returning.
         let buf_temp = unsafe { IoBufTemporaryPoll::new(buf.as_ptr() as *mut u8, buf.len()) };
         let mut op = SendtoOp::new(handle, buf_temp, target);
         handle.poll_op_poll(cx, &mut op)
@@ -1053,6 +1063,8 @@ impl PollUdpSocket {
     ) -> Poll<Result<usize, io::Error>> {
         let this = self.get_mut();
         let handle = &this.socket.handle;
+        // SAFETY: peek may write buf, which is exclusively borrowed for this
+        // poll. The local operation cannot escape through poll-only dispatch.
         let buf_temp = unsafe { IoBufTemporaryPoll::new(buf.as_mut_ptr(), buf.len()) };
         let mut op = RecvOp::new_peek(handle, buf_temp);
         handle.poll_op_poll(cx, &mut op)
@@ -1070,6 +1082,9 @@ impl PollUdpSocket {
     ) -> Poll<Result<(usize, SocketAddr), io::Error>> {
         let this = self.get_mut();
         let handle = &this.socket.handle;
+        // SAFETY: peek_from writes only within this exclusive buffer borrow.
+        // poll_op_poll excludes completion submission; all pointer-bearing
+        // operation state is dropped before returning, including Pending.
         let buf_temp = unsafe { IoBufTemporaryPoll::new(buf.as_mut_ptr(), buf.len()) };
         let mut op = RecvfromOp::new_peek(handle, buf_temp);
         handle.poll_op_poll(cx, &mut op)
@@ -1331,7 +1346,7 @@ mod tests {
     }
 
     #[test]
-    fn poll_udp_send_recv_and_peek_variants_work() {
+    fn poll_udp_owned_buffer_send_recv_and_peek_variants_work() {
         let runtime = crate::vibeio::executor::Runtime::new(
             #[cfg(unix)]
             AnyDriver::new_mio().expect("mio driver should initialize"),
@@ -1426,6 +1441,98 @@ mod tests {
             };
             let poll_socket = socket.into_poll().expect("into_poll should work");
             let _adaptive = poll_socket.into_adaptive();
+        });
+    }
+
+    #[test]
+    fn borrowed_udp_poll_methods_release_buffers_on_pending() {
+        use std::future::poll_fn;
+        use std::task::{Context, Waker};
+        let runtime = crate::vibeio::Runtime::new(
+            #[cfg(unix)]
+            AnyDriver::new_mio().unwrap(),
+            #[cfg(windows)]
+            AnyDriver::new_iocp().unwrap(),
+        );
+        runtime.block_on(async {
+            let mut server = PollUdpSocket::bind("127.0.0.1:0").unwrap();
+            let mut client = PollUdpSocket::bind("127.0.0.1:0").unwrap();
+            let server_addr = server.local_addr().unwrap();
+            let client_addr = client.local_addr().unwrap();
+            server.connect(client_addr).await.unwrap();
+            client.connect(server_addr).await.unwrap();
+            let mut cx = Context::from_waker(Waker::noop());
+            let mut buffer = [b'_'; 16];
+            assert!(
+                Pin::new(&mut server)
+                    .poll_recv(&mut cx, &mut buffer)
+                    .is_pending()
+            );
+            assert!(
+                Pin::new(&mut server)
+                    .poll_recv_from(&mut cx, &mut buffer)
+                    .is_pending()
+            );
+            assert!(
+                Pin::new(&mut server)
+                    .poll_peek(&mut cx, &mut buffer)
+                    .is_pending()
+            );
+            assert!(
+                Pin::new(&mut server)
+                    .poll_peek_from(&mut cx, &mut buffer)
+                    .is_pending()
+            );
+            assert_eq!(buffer, [b'_'; 16]);
+            buffer.fill(b'x');
+
+            crate::vibeio::time::timeout(std::time::Duration::from_secs(5), async {
+                for payload in [&b"ping"[..], &b""[..]] {
+                    let sent =
+                        poll_fn(|cx| Pin::new(&mut client).poll_send_to(cx, payload, server_addr))
+                            .await
+                            .unwrap();
+                    assert_eq!(sent, payload.len());
+                    let (peeked, source) =
+                        poll_fn(|cx| Pin::new(&mut server).poll_peek_from(cx, &mut buffer))
+                            .await
+                            .unwrap();
+                    assert_eq!(source, client_addr);
+                    assert_eq!(peeked, payload.len());
+                    assert_eq!(&buffer[..peeked], payload);
+                    let peeked = poll_fn(|cx| Pin::new(&mut server).poll_peek(cx, &mut buffer))
+                        .await
+                        .unwrap();
+                    assert_eq!(peeked, payload.len());
+                    let (received, source) =
+                        poll_fn(|cx| Pin::new(&mut server).poll_recv_from(cx, &mut buffer))
+                            .await
+                            .unwrap();
+                    assert_eq!(source, client_addr);
+                    assert_eq!(received, payload.len());
+                    assert_eq!(&buffer[..received], payload);
+                    assert!(
+                        Pin::new(&mut server)
+                            .poll_recv_from(&mut Context::from_waker(Waker::noop()), &mut buffer)
+                            .is_pending()
+                    );
+                    buffer.fill(b'x');
+                }
+                assert_eq!(
+                    poll_fn(|cx| Pin::new(&mut client).poll_send(cx, b"fresh"))
+                        .await
+                        .unwrap(),
+                    5
+                );
+                let received = poll_fn(|cx| Pin::new(&mut server).poll_recv(cx, &mut buffer))
+                    .await
+                    .unwrap();
+                assert_eq!(received, 5);
+                assert_eq!(&buffer[..received], b"fresh");
+                assert!(buffer[received..].iter().all(|byte| *byte == b'x'));
+            })
+            .await
+            .unwrap();
         });
     }
 }

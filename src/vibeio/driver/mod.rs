@@ -42,6 +42,208 @@ pub enum CompletionIoResult {
     SubmitErr(std::io::Error),
 }
 
+#[cfg(any(target_os = "linux", windows, test))]
+struct RetainedCompletionData(Vec<Box<dyn std::any::Any>>);
+
+/// Preserve stable payload allocations without building a recursive drop chain.
+#[cfg(any(target_os = "linux", windows, test))]
+fn retain_completion_data(
+    retained: &mut Option<Box<dyn std::any::Any>>,
+    data: Box<dyn std::any::Any>,
+) {
+    if let Some(group) = retained
+        .as_mut()
+        .and_then(|owner| owner.downcast_mut::<RetainedCompletionData>())
+    {
+        group.0.push(data);
+        return;
+    }
+    *retained = Some(match retained.take() {
+        None => data, // Ordinary first cancellation needs no additional allocation.
+        Some(first) => Box::new(RetainedCompletionData(vec![first, data])),
+    });
+}
+
+#[cfg(test)]
+mod retained_completion_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn repeated_retention_preserves_allocations_and_drops_a_flat_list() {
+        struct Tracked(Rc<Cell<usize>>);
+        impl Drop for Tracked {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        let drops = Rc::new(Cell::new(0));
+        let first = Box::new(Tracked(drops.clone()));
+        let first_address = std::ptr::from_ref(first.as_ref());
+        let mut retained = None;
+        retain_completion_data(&mut retained, first);
+        assert!(retained.as_ref().unwrap().is::<Tracked>());
+        for _ in 1..100_000 {
+            retain_completion_data(&mut retained, Box::new(Tracked(drops.clone())));
+        }
+        let group = retained
+            .as_ref()
+            .unwrap()
+            .downcast_ref::<RetainedCompletionData>()
+            .unwrap();
+        assert_eq!(group.0.len(), 100_000);
+        assert!(std::ptr::eq(
+            group.0[0].downcast_ref::<Tracked>().unwrap(),
+            first_address
+        ));
+        assert_eq!(drops.get(), 0);
+        drop(retained);
+        assert_eq!(drops.get(), 100_000);
+    }
+}
+
+/// Follow provider handles without looping forever on a cyclic fallback chain.
+#[cfg(any(windows, test))]
+fn resolve_base_socket_with(
+    mut socket: usize,
+    mut base: impl FnMut(usize) -> io::Result<usize>,
+    mut layered: impl FnMut(usize) -> io::Result<usize>,
+) -> io::Result<usize> {
+    let mut visited = Vec::new();
+    loop {
+        if let Ok(resolved) = base(socket) {
+            if resolved != usize::MAX {
+                return Ok(resolved);
+            }
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "provider returned an invalid base socket",
+            ));
+        }
+        let next = layered(socket)?;
+        if next == usize::MAX || next == socket || visited.contains(&next) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid or cyclic socket provider chain",
+            ));
+        }
+        visited.push(socket);
+        socket = next;
+    }
+}
+
+#[cfg(test)]
+mod base_socket_tests {
+    use super::*;
+
+    #[test]
+    fn resolver_handles_success_errors_and_provider_cycles() {
+        assert_eq!(
+            resolve_base_socket_with(1, |_| Ok(7), |_| panic!("unexpected fallback")).unwrap(),
+            7
+        );
+        let unsupported = |_| Err(io::Error::from(io::ErrorKind::Unsupported));
+        assert_eq!(
+            resolve_base_socket_with(
+                1,
+                |socket| {
+                    if socket == 3 {
+                        Ok(7)
+                    } else {
+                        unsupported(socket)
+                    }
+                },
+                |socket| Ok(socket + 1)
+            )
+            .unwrap(),
+            7
+        );
+        for length in [1, 2, 3, 32] {
+            let error =
+                resolve_base_socket_with(0, unsupported, |socket| Ok((socket + 1) % length))
+                    .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        }
+        assert_eq!(
+            resolve_base_socket_with(
+                1,
+                |_| Ok(usize::MAX),
+                |_| panic!("invalid success must fail")
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            resolve_base_socket_with(1, unsupported, |_| Ok(usize::MAX))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            resolve_base_socket_with(1, unsupported, |_| Err(io::Error::from_raw_os_error(123)))
+                .unwrap_err()
+                .raw_os_error(),
+            Some(123)
+        );
+    }
+}
+
+/// Encode only errors representable by the driver's negative i32 result.
+#[cfg(any(windows, test))]
+fn encode_completion_error(code: u32) -> Option<i32> {
+    i32::try_from(code)
+        .ok()
+        .filter(|code| *code > 0)
+        .map(|code| -code)
+}
+
+#[cfg(test)]
+mod completion_encoding_tests {
+    use super::*;
+
+    #[test]
+    fn native_errors_cannot_become_success_counts_or_overflow() {
+        for code in [1, 6, 38, 317, 534, 995, i32::MAX as u32] {
+            let encoded = encode_completion_error(code).unwrap();
+            assert!(encoded < 0);
+            assert_eq!(completion_error(encoded).raw_os_error(), Some(code as i32));
+        }
+        for code in [0, i32::MAX as u32 + 1, u32::MAX] {
+            assert_eq!(encode_completion_error(code), None);
+        }
+    }
+}
+
+/// Reserve Windows INFINITE for an explicitly unbounded wait.
+#[cfg(any(windows, test))]
+fn iocp_timeout_ms(timeout: Option<Duration>) -> u32 {
+    match timeout {
+        Some(timeout) => timeout.as_millis().min((u32::MAX - 1) as u128) as u32,
+        None => u32::MAX,
+    }
+}
+
+#[cfg(test)]
+mod iocp_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn finite_timeouts_never_select_infinite_wait() {
+        assert_eq!(iocp_timeout_ms(None), u32::MAX);
+        assert_eq!(iocp_timeout_ms(Some(Duration::ZERO)), 0);
+        assert_eq!(iocp_timeout_ms(Some(Duration::from_millis(1))), 1);
+        for millis in [u32::MAX as u64 - 1, u32::MAX as u64, u64::MAX] {
+            assert_eq!(
+                iocp_timeout_ms(Some(Duration::from_millis(millis))),
+                u32::MAX - 1
+            );
+        }
+        assert_eq!(iocp_timeout_ms(Some(Duration::MAX)), u32::MAX - 1);
+    }
+}
+
 /// Decode the driver's negative error representation without signed overflow.
 pub(crate) fn completion_error(result: i32) -> io::Error {
     match result.checked_neg().filter(|code| *code > 0) {
@@ -534,11 +736,10 @@ impl AnyDriver {
         }
     }
 
+    #[cfg(not(windows))]
     #[inline]
     pub(crate) fn ignore_completion(&self, token: usize, data: Box<dyn std::any::Any>) {
         match self {
-            #[cfg(windows)]
-            AnyDriver::Iocp(driver) => driver.ignore_completion(token, data),
             #[cfg(unix)]
             AnyDriver::Mio(driver) => driver.ignore_completion(token, data),
             #[cfg(target_vendor = "apple")]

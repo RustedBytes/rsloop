@@ -8,9 +8,9 @@ use std::io;
 use std::mem::{self, MaybeUninit};
 use std::net::SocketAddr;
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawSocket, FromRawSocket, IntoRawSocket, OwnedSocket};
+use std::os::windows::io::{AsRawSocket, FromRawSocket, OwnedSocket};
 #[cfg(windows)]
 use std::ptr;
 use std::task::{Context, Poll};
@@ -29,12 +29,19 @@ use windows_sys::Win32::{
 use crate::vibeio::driver::AnyDriver;
 #[cfg(not(target_os = "linux"))]
 use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::fd_inner::{InnerRawHandle, RawOsHandle};
+use crate::vibeio::fd_inner::InnerRawHandle;
+#[cfg(windows)]
+use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::op::Op;
 use crate::vibeio::op::socket_addr::sockaddr_storage_to_socketaddr;
 
 #[cfg(unix)]
 use crate::vibeio::op::io_util::set_cloexec;
+
+#[cfg(unix)]
+type OwnedAcceptSocket = OwnedFd;
+#[cfg(windows)]
+type OwnedAcceptSocket = OwnedSocket;
 
 #[cfg(windows)]
 fn load_accept_ex(socket: SOCKET) -> Result<WinSock::LPFN_ACCEPTEX, io::Error> {
@@ -170,7 +177,10 @@ const ACCEPTEX_ADDR_LEN: usize = std::mem::size_of::<SOCKADDR_STORAGE>() + 16;
 const ACCEPTEX_OUTPUT_BUFFER_LEN: usize = ACCEPTEX_ADDR_LEN * 2;
 
 #[cfg(unix)]
-fn finish_unix_accept(owned: OwnedFd, set_flags: bool) -> io::Result<(RawOsHandle, SocketAddr)> {
+fn finish_unix_accept(
+    owned: OwnedFd,
+    set_flags: bool,
+) -> io::Result<(OwnedAcceptSocket, SocketAddr)> {
     let fd = owned.as_raw_fd();
     if set_flags {
         set_cloexec(fd)?;
@@ -191,11 +201,11 @@ fn finish_unix_accept(owned: OwnedFd, set_flags: bool) -> io::Result<(RawOsHandl
     // SAFETY: the storage was zero-initialized before the kernel filled it.
     let peer = unsafe { peer.assume_init() };
     let address = sockaddr_storage_to_socketaddr(&peer, peer_len as usize)?;
-    Ok((owned.into_raw_fd(), address))
+    Ok((owned, address))
 }
 
 #[cfg(windows)]
-fn finish_windows_accept(owned: OwnedSocket) -> io::Result<(RawOsHandle, SocketAddr)> {
+fn finish_windows_accept(owned: OwnedSocket) -> io::Result<(OwnedAcceptSocket, SocketAddr)> {
     let mut peer = SOCKADDR_STORAGE::default();
     let mut peer_len = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
     // SAFETY: owned keeps the socket open; peer and peer_len are live writable
@@ -211,7 +221,7 @@ fn finish_windows_accept(owned: OwnedSocket) -> io::Result<(RawOsHandle, SocketA
         return Err(last_socket_error());
     }
     let address = sockaddr_storage_to_socketaddr(&peer, peer_len as usize)?;
-    Ok((RawOsHandle::Socket(owned.into_raw_socket()), address))
+    Ok((owned, address))
 }
 
 #[cfg(windows)]
@@ -260,7 +270,7 @@ impl Op for AcceptOp<'_> {
     fn completion_returns_fd(&self) -> bool {
         true
     }
-    type Output = (RawOsHandle, SocketAddr);
+    type Output = (OwnedAcceptSocket, SocketAddr);
 
     #[cfg(any(unix, windows))]
     #[inline]
@@ -463,10 +473,7 @@ impl Op for AcceptOp<'_> {
                 remote_sockaddr_len,
             )?;
 
-            return Poll::Ready(Ok((
-                RawOsHandle::Socket(accept_socket.into_raw_socket()),
-                address,
-            )));
+            return Poll::Ready(Ok((accept_socket, address)));
         }
     }
 
@@ -628,24 +635,43 @@ mod ownership_tests {
     }
 
     #[test]
+    fn discarding_poll_accept_result_closes_the_connection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+            .unwrap();
+        let driver = std::rc::Rc::new(AnyDriver::new_mock());
+        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
+        #[cfg(unix)]
+        {
+            handle.handle = listener.as_raw_fd();
+        }
+        #[cfg(windows)]
+        {
+            handle.handle = RawOsHandle::Socket(listener.as_raw_socket());
+        }
+        let mut op = AcceptOp::new(&handle);
+        let Poll::Ready(Ok(result)) =
+            op.poll_poll(&mut Context::from_waker(std::task::Waker::noop()), &driver)
+        else {
+            panic!("queued connection must be accepted");
+        };
+        assert_eq!(result.1, peer.local_addr().unwrap());
+        drop(result);
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+    }
+
+    #[test]
     fn successful_accept_transfers_descriptor_and_peer_address() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         peer.set_nonblocking(true).unwrap();
         let (socket, _) = listener.accept().unwrap();
         #[cfg(unix)]
-        let (fd, address) = finish_unix_accept(socket.into(), true).unwrap();
+        let (owned, address) = finish_unix_accept(socket.into(), true).unwrap();
         #[cfg(windows)]
-        let (RawOsHandle::Socket(fd), address) = finish_windows_accept(socket.into()).unwrap()
-        else {
-            panic!("accepted socket must remain a socket");
-        };
-        // SAFETY: finish_unix_accept transferred sole ownership of this fd.
-        #[cfg(unix)]
-        let owned = unsafe { OwnedFd::from_raw_fd(fd) };
-        // SAFETY: finish_windows_accept transferred sole ownership of this socket.
-        #[cfg(windows)]
-        let owned = unsafe { OwnedSocket::from_raw_socket(fd) };
+        let (owned, address) = finish_windows_accept(socket.into()).unwrap();
         assert_eq!(address, peer.local_addr().unwrap());
         #[cfg(unix)]
         {

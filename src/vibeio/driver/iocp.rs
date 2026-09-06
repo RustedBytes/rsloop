@@ -49,6 +49,75 @@ mod retirement_tests {
     use std::rc::{Rc, Weak};
 
     #[test]
+    fn afd_handle_is_cached_and_not_inheritable() {
+        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
+        let driver = IocpDriver::new().unwrap();
+        assert!(driver.afd.borrow().is_none());
+        let afd = driver.ensure_afd_handle().unwrap();
+        assert_eq!(driver.ensure_afd_handle().unwrap(), afd);
+        assert_eq!(
+            driver.afd.borrow().as_ref().unwrap().as_raw_handle() as HANDLE,
+            afd
+        );
+        let mut flags = 0;
+        // SAFETY: driver owns the live AFD handle and flags is writable output.
+        assert_ne!(unsafe { GetHandleInformation(afd, &mut flags) }, 0);
+        assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+    }
+
+    #[test]
+    fn base_socket_queries_preserve_live_socket_ownership() {
+        use std::os::windows::io::AsRawSocket;
+        for domain in [socket2::Domain::IPV4, socket2::Domain::IPV6] {
+            let socket =
+                socket2::Socket::new(domain, socket2::Type::STREAM, Some(socket2::Protocol::TCP))
+                    .unwrap();
+            let base = IocpDriver::resolve_base_socket(socket.as_raw_socket() as SOCKET).unwrap();
+            assert_ne!(base, INVALID_SOCKET);
+            // Resolution returns a borrowed provider handle, not a new owner.
+            assert_eq!(socket.r#type().unwrap(), socket2::Type::STREAM);
+        }
+        assert_eq!(
+            IocpDriver::resolve_base_socket(INVALID_SOCKET)
+                .unwrap_err()
+                .raw_os_error(),
+            Some(WinSock::WSAENOTSOCK)
+        );
+    }
+
+    #[test]
+    fn repeated_cancellation_retains_both_payloads_until_packet_retirement() {
+        let mut state = DriverState {
+            registrations: Slab::new(),
+            completions: Slab::new(),
+            poll_ops: Slab::new(),
+            next_registration_generation: 0,
+        };
+        let token = state.completions.insert(Completion {
+            waiter: None,
+            completed: None,
+            overlapped: None,
+            ignored_data: None,
+        });
+        let first = Rc::new(());
+        let second = Rc::new(());
+        let first_weak = Rc::downgrade(&first);
+        let second_weak = Rc::downgrade(&second);
+        assert!(state.retain_cancelled(token, Box::new(first)).0.is_none());
+        assert!(state.retain_cancelled(token, Box::new(second)).0.is_none());
+        assert!(first_weak.upgrade().is_some());
+        assert!(second_weak.upgrade().is_some());
+        state.completions[token].completed = Some(0);
+        let retired = state.retain_cancelled(token, Box::new(())).0;
+        assert!(state.completions.is_empty());
+        assert!(first_weak.upgrade().is_some());
+        assert!(second_weak.upgrade().is_some());
+        drop(retired);
+        assert!(first_weak.upgrade().is_none());
+        assert!(second_weak.upgrade().is_none());
+    }
+
+    #[test]
     fn successful_completion_counts_do_not_wrap_into_unrelated_errors() {
         for count in [0, 1, i32::MAX as u32] {
             let entry = OVERLAPPED_ENTRY {
@@ -68,6 +137,29 @@ mod retirement_tests {
             assert_eq!(
                 IocpDriver::completion_result_from_entry(&entry),
                 -(ERROR_ARITHMETIC_OVERFLOW as i32)
+            );
+        }
+    }
+
+    #[test]
+    fn native_completion_statuses_preserve_common_errors() {
+        use windows_sys::Win32::Foundation::{
+            ERROR_HANDLE_EOF, ERROR_INVALID_HANDLE, ERROR_OPERATION_ABORTED, STATUS_CANCELLED,
+            STATUS_END_OF_FILE, STATUS_INVALID_HANDLE,
+        };
+        for (status, expected) in [
+            (STATUS_CANCELLED, ERROR_OPERATION_ABORTED),
+            (STATUS_END_OF_FILE, ERROR_HANDLE_EOF),
+            (STATUS_INVALID_HANDLE, ERROR_INVALID_HANDLE),
+        ] {
+            let entry = OVERLAPPED_ENTRY {
+                Internal: status as usize,
+                dwNumberOfBytesTransferred: 123,
+                ..OVERLAPPED_ENTRY::default()
+            };
+            assert_eq!(
+                IocpDriver::completion_result_from_entry(&entry),
+                -(expected as i32)
             );
         }
     }
@@ -259,6 +351,9 @@ impl Interruptor for IocpInterruptor {
     #[inline]
     fn interrupt(&self) {
         if let Some(port) = self.port.upgrade() {
+            // SAFETY: the upgraded Arc holds a live completion port through the
+            // call. This wake packet uses a reserved key and no OVERLAPPED data;
+            // no Rust memory is passed for asynchronous access.
             let _ = unsafe {
                 PostQueuedCompletionStatus(
                     port.as_raw_handle() as HANDLE,
@@ -335,7 +430,7 @@ impl DriverState {
                 None,
             );
         };
-        completion.ignored_data = Some(data);
+        super::retain_completion_data(&mut completion.ignored_data, data);
         if completion.completed.is_some() {
             // Its packet was already dequeued: no future IOCP notification can
             // release this entry. Return it for destruction outside the borrow.
@@ -424,6 +519,8 @@ impl IocpDriver {
 
     #[inline]
     pub(crate) fn new() -> Result<Self, io::Error> {
+        // SAFETY: INVALID_HANDLE_VALUE plus a null existing port requests a new
+        // port without associating a file. Failure is checked before ownership.
         let port = unsafe {
             CreateIoCompletionPort(INVALID_HANDLE_VALUE as HANDLE, ptr::null_mut(), 0, 0)
         };
@@ -432,6 +529,8 @@ impl IocpDriver {
         }
 
         Ok(Self {
+            // SAFETY: successful creation returned a fresh non-null port handle;
+            // this is its sole owning wrapper, shared only through the Arc.
             port: Arc::new(unsafe { OwnedHandle::from_raw_handle(port as RawHandle) }),
             afd: RefCell::new(None),
             state: RefCell::new(DriverState {
@@ -467,6 +566,8 @@ impl IocpDriver {
 
     #[inline]
     fn ntstatus_to_io_error(status: NTSTATUS) -> io::Error {
+        // SAFETY: this conversion takes only an integer status, with no pointer
+        // arguments or retained storage.
         let mapped = unsafe { RtlNtStatusToDosError(status) } as i32;
         if mapped != 0 {
             io::Error::from_raw_os_error(mapped)
@@ -496,10 +597,7 @@ impl IocpDriver {
 
     #[inline]
     fn duration_to_timeout_ms(timeout: Option<Duration>) -> u32 {
-        match timeout {
-            Some(timeout) => timeout.as_millis().min(u32::MAX as u128) as u32,
-            None => u32::MAX,
-        }
+        super::iocp_timeout_ms(timeout)
     }
 
     #[inline]
@@ -513,13 +611,11 @@ impl IocpDriver {
         }
 
         let ntstatus = entry.Internal as i32;
-        let win32_error = unsafe { RtlNtStatusToDosError(ntstatus) } as i32;
-        let mapped_error = if win32_error == 0 {
-            ntstatus
-        } else {
-            win32_error
-        };
-        -mapped_error
+        // SAFETY: integer-only status conversion; no Rust memory is passed.
+        let win32_error = unsafe { RtlNtStatusToDosError(ntstatus) };
+        // A nonzero native status must not turn into a successful count through
+        // a narrowing cast, negation overflow, or fallback to signed NTSTATUS.
+        super::encode_completion_error(win32_error).unwrap_or(-(ERROR_ARITHMETIC_OVERFLOW as i32))
     }
 
     #[inline]
@@ -544,6 +640,9 @@ impl IocpDriver {
     fn get_base_socket(socket: SOCKET, ioctl: u32) -> Result<SOCKET, io::Error> {
         let mut base_socket: SOCKET = INVALID_SOCKET;
         let mut bytes: u32 = 0;
+        // SAFETY: both outputs are writable locals with the exact SOCKET output
+        // capacity. These handle-query IOCTLs run synchronously with null
+        // OVERLAPPED/callback and do not retain pointers into this stack frame.
         let result = unsafe {
             WinSock::WSAIoctl(
                 socket,
@@ -559,33 +658,27 @@ impl IocpDriver {
         };
 
         if result == SOCKET_ERROR {
+            // SAFETY: reads the calling thread's last Winsock error; no pointers.
             let err = unsafe { WinSock::WSAGetLastError() };
             return Err(io::Error::from_raw_os_error(err));
         }
 
+        if bytes as usize != std::mem::size_of::<SOCKET>() || base_socket == INVALID_SOCKET {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "provider returned an invalid socket handle result",
+            ));
+        }
         Ok(base_socket)
     }
 
     #[inline]
-    fn resolve_base_socket(mut socket: SOCKET) -> Result<SOCKET, io::Error> {
-        loop {
-            if let Ok(base_socket) = Self::get_base_socket(socket, SIO_BASE_HANDLE) {
-                return Ok(base_socket);
-            }
-
-            match Self::get_base_socket(socket, SIO_BSP_HANDLE_POLL) {
-                Ok(base_socket) if base_socket != INVALID_SOCKET && base_socket != socket => {
-                    socket = base_socket;
-                }
-                Ok(_) => {
-                    return Err(io::Error::new(
-                        ErrorKind::Other,
-                        "failed to resolve base socket for AFD polling",
-                    ));
-                }
-                Err(err) => return Err(err),
-            }
-        }
+    fn resolve_base_socket(socket: SOCKET) -> Result<SOCKET, io::Error> {
+        super::resolve_base_socket_with(
+            socket,
+            |socket| Self::get_base_socket(socket, SIO_BASE_HANDLE),
+            |socket| Self::get_base_socket(socket, SIO_BSP_HANDLE_POLL),
+        )
     }
 
     #[inline]
@@ -610,6 +703,10 @@ impl IocpDriver {
 
         let mut afd_handle: HANDLE = ptr::null_mut();
         let mut create_status = IO_STATUS_BLOCK::default();
+        // SAFETY: the counted UTF-16 name, UNICODE_STRING and object attributes
+        // remain live for this create/open call. Their pointers and byte lengths
+        // describe initialized storage; handle/status outputs are writable locals.
+        // Optional allocation-size and EA inputs are null with zero EA length.
         let status = unsafe {
             NtCreateFile(
                 &mut afd_handle,
@@ -636,6 +733,8 @@ impl IocpDriver {
             ));
         }
 
+        // SAFETY: successful NtCreateFile returned a new non-null handle. This
+        // wrapper takes sole ownership before any subsequent setup can fail.
         Ok(unsafe { OwnedHandle::from_raw_handle(afd_handle as RawHandle) })
     }
 
@@ -653,6 +752,8 @@ impl IocpDriver {
             let afd = Self::open_afd_handle()?;
             let afd_handle = afd.as_raw_handle() as HANDLE;
 
+            // SAFETY: afd and self.port keep both handles live during association.
+            // The returned port aliases self.port; it is not a second owned handle.
             let completion_port = unsafe {
                 CreateIoCompletionPort(afd_handle, self.iocp_handle(), AFD_POLL_COMPLETION_KEY, 0)
             };
@@ -660,6 +761,9 @@ impl IocpDriver {
                 return Err(io::Error::last_os_error());
             }
 
+            // SAFETY: afd owns the live file handle; this flag-only call retains
+            // no pointers. Only event signaling is skipped, not successful IOCP
+            // packets, which are required to retire pending operation storage.
             if unsafe {
                 SetFileCompletionNotificationModes(afd_handle, FILE_SKIP_SET_EVENT_ON_HANDLE)
             } == 0

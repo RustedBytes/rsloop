@@ -514,7 +514,7 @@ unsafe impl IoVectoredBufMut for IoVectoredBufTemporaryPoll {
     }
 }
 
-#[cfg(any(feature = "fs", feature = "process", feature = "stdio"))]
+#[cfg(any(test, feature = "fs", feature = "process", feature = "stdio"))]
 #[inline]
 pub(crate) fn iobuf_to_slice(buf: &impl IoBuf) -> &[u8] {
     // SAFETY: IoBuf supplies a stable pointer to buf_len initialized bytes for
@@ -522,7 +522,7 @@ pub(crate) fn iobuf_to_slice(buf: &impl IoBuf) -> &[u8] {
     unsafe { std::slice::from_raw_parts(buf.as_buf_ptr(), buf.buf_len()) }
 }
 
-#[cfg(any(feature = "fs", feature = "process", feature = "stdio"))]
+#[cfg(any(test, feature = "fs", feature = "process", feature = "stdio"))]
 #[inline]
 pub(crate) fn read_into_buf(
     buf: &mut impl IoBufMut,

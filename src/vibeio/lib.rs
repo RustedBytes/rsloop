@@ -1,6 +1,8 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(dead_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
+// Unix sites are audited for local comments; remaining IOCP sites are tracked
+// in docs/vibeio-cleanup.md before extending this gate to Windows.
+#![cfg_attr(unix, warn(clippy::undocumented_unsafe_blocks))]
 
 //! # vibeio
 //!

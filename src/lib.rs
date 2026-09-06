@@ -29,6 +29,10 @@ mod transport;
 #[cfg(kani)]
 mod verification;
 #[path = "vibeio/lib.rs"]
+#[allow(
+    dead_code,
+    reason = "The private Python embedding uses only part of the runtime API; the standalone harness checks dead code"
+)]
 pub(crate) mod vibeio;
 
 pub(crate) use platform::fd as fd_ops;

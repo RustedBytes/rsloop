@@ -1,4 +1,5 @@
 //! Unix domain socket stream types for async I/O.
+#![warn(clippy::undocumented_unsafe_blocks)]
 //!
 //! This module provides:
 //! - [`UnixStream`]: An async Unix domain socket stream that can use either completion-based or poll-based I/O.
@@ -385,6 +386,9 @@ impl TokioAsyncWrite for PollUnixStream {
         buf: &[u8],
     ) -> Poll<Result<usize, io::Error>> {
         let this = self.get_mut();
+        // SAFETY: the initialized bytes remain borrowed throughout this poll.
+        // WriteOp only reads them and poll_op_poll excludes completion I/O;
+        // the local operation is destroyed before returning, including Pending.
         let buf = unsafe { IoBufTemporaryPoll::new(buf.as_ptr() as *mut u8, buf.len()) };
         let mut op = WriteOp::new(&this.stream.handle, buf);
         this.stream.handle.poll_op_poll(cx, &mut op)
@@ -400,6 +404,9 @@ impl TokioAsyncWrite for PollUnixStream {
             return Poll::Ready(Ok(0));
         }
         let this = self.get_mut();
+        // SAFETY: IoSlice regions stay initialized and borrowed for this call.
+        // The local WritevOp copies metadata but uses only synchronous poll I/O,
+        // so no pointer into the caller's buffers survives the return.
         let bufs = unsafe { IoVectoredBufTemporaryPoll::new(bufs) };
         let mut op = WritevOp::new(&this.stream.handle, bufs);
         this.stream.handle.poll_op_poll(cx, &mut op)

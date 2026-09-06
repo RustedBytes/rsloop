@@ -669,6 +669,10 @@ impl Runtime {
 
     /// Service kernel readiness and one bounded task batch without parking.
     /// Used when the embedding Python loop still has runnable callbacks.
+    #[allow(
+        dead_code,
+        reason = "Used by the Python embedding, not the standalone public-API harness"
+    )]
     pub(crate) fn poll_once(&self) {
         let inner = self.inner.as_ref().expect("runtime has been dropped");
         inner.driver.wait(Some(std::time::Duration::ZERO));

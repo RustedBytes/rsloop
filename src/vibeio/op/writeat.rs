@@ -198,6 +198,130 @@ impl<B: IoBuf> Drop for WriteAtOp<'_, B> {
 mod cancellation_tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn positioned_completions_preserve_cursor_offsets_and_buffer_lengths() {
+        use crate::vibeio::driver::RegistrationMode;
+        use crate::vibeio::op::ReadAtOp;
+        use std::io::{Seek, SeekFrom};
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::FileExt;
+        use std::rc::Rc;
+        use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+        fn complete<O: Op>(op: &mut O, driver: &AnyDriver) -> io::Result<O::Output> {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            loop {
+                if let Poll::Ready(result) = op.poll_completion(&mut cx, driver) {
+                    return result;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "positioned I/O completion timed out"
+                );
+                driver.wait(Some(Duration::from_millis(10)));
+            }
+        }
+
+        let driver = match AnyDriver::new_uring_custom(io_uring::IoUring::builder()) {
+            Ok(driver) => Rc::new(driver),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                ) =>
+            {
+                eprintln!("io_uring positioned-write check unavailable: {error}");
+                return;
+            }
+            Err(error) => panic!("io_uring initialization failed: {error}"),
+        };
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("vibeio-writeat-{}-{stamp:x}", std::process::id()));
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        // This uniquely created file remains usable via its descriptor, and its
+        // sparse data is reclaimed even if a later assertion unwinds.
+        std::fs::remove_file(&path).unwrap();
+        file.seek(SeekFrom::Start(19)).unwrap();
+        let handle = InnerRawHandle::new_with_driver_and_mode(
+            &driver,
+            file.as_raw_fd(),
+            mio::Interest::READABLE | mio::Interest::WRITABLE,
+            RegistrationMode::Completion,
+        )
+        .unwrap();
+        for offset in [0, 4097, (1u64 << 32) + 3] {
+            let data = b"positioned".to_vec();
+            let mut op = WriteAtOp::new(&handle, data.clone(), offset);
+            let written = complete(&mut op, &driver).unwrap();
+            assert!(written > 0 && written <= data.len());
+            assert_eq!(op.take_bufs(), data);
+            let mut received = vec![0; written];
+            file.read_exact_at(&mut received, offset).unwrap();
+            assert_eq!(received, data[..written]);
+            assert_eq!(file.metadata().unwrap().len(), offset + written as u64);
+            assert_eq!(file.stream_position().unwrap(), 19);
+
+            let mut read = ReadAtOp::new(&handle, Vec::with_capacity(32), offset);
+            assert_eq!(complete(&mut read, &driver).unwrap(), written);
+            let received = read.take_bufs();
+            assert_eq!(received, data[..written]);
+            // Reusing a populated Vec at EOF must expose no stale bytes.
+            let mut eof = ReadAtOp::new(&handle, received, offset + written as u64);
+            assert_eq!(complete(&mut eof, &driver).unwrap(), 0);
+            let received = eof.take_bufs();
+            assert!(received.is_empty());
+            assert!(received.capacity() >= 32);
+            let mut empty = ReadAtOp::new(&handle, Vec::new(), offset);
+            assert_eq!(complete(&mut empty, &driver).unwrap(), 0);
+            assert!(empty.take_bufs().is_empty());
+            assert_eq!(file.stream_position().unwrap(), 19);
+        }
+        for offset in [i64::MAX as u64 + 1, u64::MAX] {
+            let mut op = WriteAtOp::new(&handle, b"rejected".to_vec(), offset);
+            assert_eq!(
+                op.build_completion_entry(0).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+            assert_eq!(op.take_bufs(), b"rejected");
+            let mut read = ReadAtOp::new(&handle, b"unchanged".to_vec(), offset);
+            assert_eq!(
+                read.build_completion_entry(0).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+            assert_eq!(read.take_bufs(), b"unchanged");
+            assert_eq!(file.stream_position().unwrap(), 19);
+        }
+        // Exercise an actual failed CQE, not only pre-submission validation.
+        let write_only = std::fs::OpenOptions::new()
+            .write(true)
+            .open(format!("/proc/self/fd/{}", file.as_raw_fd()))
+            .unwrap();
+        let write_only_handle = InnerRawHandle::new_with_driver_and_mode(
+            &driver,
+            write_only.as_raw_fd(),
+            mio::Interest::READABLE,
+            RegistrationMode::Completion,
+        )
+        .unwrap();
+        let mut read = ReadAtOp::new(&write_only_handle, b"unchanged".to_vec(), 0);
+        assert_eq!(
+            complete(&mut read, &driver).unwrap_err().raw_os_error(),
+            Some(libc::EBADF)
+        );
+        assert_eq!(read.take_bufs(), b"unchanged");
+    }
+
     #[test]
     fn windows_append_sentinel_is_not_a_positional_offset() {
         for offset in [

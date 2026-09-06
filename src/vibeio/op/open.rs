@@ -1,14 +1,14 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::ffi::CString;
 use std::io;
-use std::os::fd::RawFd;
+use std::os::fd::{FromRawFd, OwnedFd};
 use std::rc::Rc;
 use std::task::{Context, Poll};
 
 use crate::vibeio::driver::AnyDriver;
 use crate::vibeio::driver::CompletionIoResult;
 use crate::vibeio::op::Op;
-
-pub type OpenRawHandle = RawFd;
 
 pub struct OpenOp {
     driver: Rc<AnyDriver>,
@@ -32,7 +32,7 @@ impl OpenOp {
 }
 
 impl Op for OpenOp {
-    type Output = OpenRawHandle;
+    type Output = OwnedFd;
 
     fn completion_returns_fd(&self) -> bool {
         true
@@ -75,7 +75,11 @@ impl Op for OpenOp {
         if result < 0 {
             Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)))
         } else {
-            Poll::Ready(Ok(result as RawFd))
+            // SAFETY: A successful OpenAt completion returns a fresh descriptor.
+            // Taking the completion removes it from the driver's pending state;
+            // clearing our token above prevents cancellation from closing it.
+            // Ownership now transfers to the result, including if it is discarded.
+            Poll::Ready(Ok(unsafe { OwnedFd::from_raw_fd(result) }))
         }
     }
 
@@ -113,6 +117,54 @@ impl Drop for OpenOp {
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;
+
+    #[test]
+    fn dropping_successful_open_result_closes_the_descriptor() {
+        use std::io::Read;
+        use std::os::fd::AsRawFd;
+        use std::time::{Duration, Instant};
+
+        let driver = match AnyDriver::new_uring_custom(io_uring::IoUring::builder()) {
+            Ok(driver) => Rc::new(driver),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                ) =>
+            {
+                eprintln!("io_uring unavailable: {error}");
+                return;
+            }
+            Err(error) => panic!("io_uring initialization failed: {error}"),
+        };
+        let (mut reader, writer) = std::io::pipe().unwrap();
+        crate::vibeio::fd_inner::set_nonblocking(reader.as_raw_fd(), true).unwrap();
+        let mut op = OpenOp::new(
+            driver.clone(),
+            CString::new(format!("/proc/self/fd/{}", writer.as_raw_fd())).unwrap(),
+            libc::O_WRONLY | libc::O_CLOEXEC,
+            0,
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let opened = loop {
+            if let Poll::Ready(result) = op.poll_completion(&mut cx, &driver) {
+                break result.unwrap();
+            }
+            assert!(Instant::now() < deadline, "open completion timed out");
+            driver.wait(Some(Duration::from_millis(10)));
+        };
+        drop(writer);
+        drop(op);
+        let mut byte = [0];
+        assert_eq!(
+            reader.read(&mut byte).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock,
+            "the returned descriptor must keep the pipe writer alive"
+        );
+        drop(opened);
+        assert_eq!(reader.read(&mut byte).unwrap(), 0, "last writer was leaked");
+    }
 
     #[test]
     fn paths_are_retained_by_the_submitting_driver() {

@@ -1,3 +1,5 @@
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::ffi::CString;
 use std::io;
 use std::mem::MaybeUninit;
@@ -79,8 +81,10 @@ impl Op for StatxOp {
         if result < 0 {
             Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)))
         } else {
-            // SAFETY: kernel fills the statx struct on success.
             let statxbuf = self.statxbuf.take().expect("statxbuf is None");
+            // SAFETY: the successful statx completion initialized this submitted
+            // allocation. The operation retained its stable box until the CQE;
+            // errors return above without reading it and the token is cleared.
             let st = unsafe { *statxbuf.assume_init() };
             Poll::Ready(Ok(st))
         }

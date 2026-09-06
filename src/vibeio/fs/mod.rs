@@ -33,7 +33,6 @@ pub use file::*;
 pub use metadata::*;
 pub use open_options::*;
 
-use crate::vibeio::io::IoBuf;
 use crate::vibeio::io::{AsyncRead, AsyncWrite};
 #[cfg(target_os = "linux")]
 use crate::vibeio::op::HardLinkOp;
@@ -144,9 +143,7 @@ pub async fn read(path: impl AsRef<std::path::Path>) -> std::io::Result<Vec<u8>>
             break;
         }
 
-        let slice =
-            unsafe { std::slice::from_raw_parts(buf.as_buf_ptr(), buf.buf_len().min(read)) };
-        bytes.extend_from_slice(slice);
+        bytes.extend_from_slice(&buf[..buf.len().min(read)]);
     }
 
     Ok(bytes)

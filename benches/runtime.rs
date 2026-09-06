@@ -3,6 +3,10 @@
 // Harness-free benches compile cfg(test) modules but omit their #[test]
 // functions, leaving test-only imports unused. Normal test targets lint them.
 #[allow(unused_imports)]
+#[allow(
+    dead_code,
+    reason = "This benchmark includes only a subset of the embedded runtime API"
+)]
 mod vibeio;
 
 use std::future::poll_fn;
