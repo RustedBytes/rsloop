@@ -15,29 +15,11 @@ use crate::vibeio::driver::CompletionIoResult;
 use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
-#[cfg(unix)]
-use crate::vibeio::io::IoVec;
 use crate::vibeio::io::IoVectoredBuf;
 use crate::vibeio::op::Op;
-use crate::vibeio::op::io_util::poll_result_or_wait;
-
-/// Converts a slice of `IoSlice` to a system iovec buffer.
 #[cfg(unix)]
-#[inline]
-fn iovec_to_system(bufs: &[IoVec]) -> Box<[libc::iovec]> {
-    use std::mem::MaybeUninit;
-
-    let mut iovecs_maybeuninit: Box<[MaybeUninit<libc::iovec>]> = Box::new_uninit_slice(bufs.len());
-    for (index, s) in bufs.iter().enumerate() {
-        let iov = libc::iovec {
-            iov_base: s.ptr as *mut libc::c_void,
-            iov_len: s.len,
-        };
-        iovecs_maybeuninit[index].write(iov);
-    }
-    // SAFETY: The boxed slice would have all values initialized after interating over original array
-    unsafe { iovecs_maybeuninit.assume_init() }
-}
+use crate::vibeio::op::io_util::iovec_to_system;
+use crate::vibeio::op::io_util::{iovec_count, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]
@@ -64,7 +46,7 @@ fn socket_write_vectored<B: IoVectoredBuf>(socket: SOCKET, bufs: &B) -> io::Resu
         WinSock::WSASend(
             socket,
             wsabufs.as_mut_ptr(),
-            wsabufs.len() as u32,
+            iovec_count(wsabufs.len())?,
             &mut bytes,
             0,
             std::ptr::null_mut(),
@@ -138,7 +120,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
                 libc::writev(
                     self.handle.handle,
                     iovecs_system.as_ptr(),
-                    iovecs_system.len() as libc::c_int,
+                    iovec_count(iovecs_system.len())?,
                 )
             };
             if written == -1 {
@@ -239,7 +221,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
                     WinSock::WSASend(
                         socket as SOCKET,
                         wsabufs.as_mut_ptr(),
-                        wsabufs.len() as u32,
+                        iovec_count(wsabufs.len())?,
                         std::ptr::null_mut(),
                         0,
                         overlapped,
@@ -334,7 +316,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
         let entry = opcode::Writev::new(
             types::Fd(self.handle.handle),
             iovecs.as_ptr(),
-            iovecs.len() as _,
+            iovec_count(iovecs.len())?,
         )
         .build()
         .user_data(user_data);

@@ -1,3 +1,6 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 #[cfg(windows)]
 use std::ffi::c_void;
 use std::io;
@@ -28,9 +31,11 @@ use crate::vibeio::op::Op;
 #[cfg(unix)]
 fn start_nonblocking_connect(
     fd: std::os::fd::RawFd,
-    raw_addr: *const libc::sockaddr,
-    raw_addr_len: libc::socklen_t,
+    address: &ConnectAddress,
 ) -> Result<(), io::Error> {
+    let (raw_addr, raw_addr_len) = address.raw();
+    // SAFETY: the borrowed address owns aligned initialized storage and a
+    // validated length. connect only reads it during this synchronous call.
     let connect_result = unsafe { libc::connect(fd, raw_addr, raw_addr_len) };
 
     if connect_result == -1 {
@@ -49,12 +54,15 @@ fn start_nonblocking_connect(
 #[cfg(windows)]
 fn start_nonblocking_connect(
     socket: std::os::windows::io::RawSocket,
-    raw_addr: *const SOCKADDR,
-    raw_addr_len: i32,
+    address: &ConnectAddress,
 ) -> Result<(), io::Error> {
+    let (raw_addr, raw_addr_len) = address.raw();
+    // SAFETY: the borrowed address keeps initialized storage of the validated
+    // length alive until this synchronous call returns.
     let connect_result = unsafe { WinSock::connect(socket as SOCKET, raw_addr, raw_addr_len) };
 
     if connect_result == WinSock::SOCKET_ERROR {
+        // SAFETY: reads the calling thread's Winsock error without pointer arguments.
         let err_code = unsafe { WinSock::WSAGetLastError() };
         if !matches!(err_code, WSAEINPROGRESS | WSAEWOULDBLOCK | WSAEALREADY) {
             return Err(io::Error::from_raw_os_error(err_code));
@@ -65,14 +73,17 @@ fn start_nonblocking_connect(
 }
 
 #[cfg(windows)]
-fn ensure_connectex_bound(socket: SOCKET, addr: *const SOCKADDR) -> Result<(), io::Error> {
-    let family = unsafe { (*addr).sa_family as i32 };
+fn ensure_connectex_bound(socket: SOCKET, address: &ConnectAddress) -> Result<(), io::Error> {
+    let AddressStorage::Inet(addr) = &address.storage;
+    let family = addr.ss_family as i32;
     let bind_result = match family {
         x if x == AF_INET as i32 => {
             let local = SOCKADDR_IN {
                 sin_family: AF_INET,
                 ..Default::default()
             };
+            // SAFETY: local is initialized IPv4 storage of the exact supplied
+            // size, borrowed only for the duration of bind.
             unsafe {
                 WinSock::bind(
                     socket,
@@ -86,6 +97,8 @@ fn ensure_connectex_bound(socket: SOCKET, addr: *const SOCKADDR) -> Result<(), i
                 sin6_family: AF_INET6,
                 ..Default::default()
             };
+            // SAFETY: local is initialized IPv6 storage of the exact supplied
+            // size, and bind does not retain the pointer.
             unsafe {
                 WinSock::bind(
                     socket,
@@ -103,6 +116,7 @@ fn ensure_connectex_bound(socket: SOCKET, addr: *const SOCKADDR) -> Result<(), i
     };
 
     if bind_result == WinSock::SOCKET_ERROR {
+        // SAFETY: reads the calling thread's Winsock error without pointer arguments.
         let err_code = unsafe { WinSock::WSAGetLastError() };
         if !matches!(err_code, WSAEINVAL | WSAEADDRINUSE) {
             return Err(io::Error::from_raw_os_error(err_code));
@@ -118,6 +132,8 @@ fn load_connect_ex(socket: SOCKET) -> Result<WinSock::LPFN_CONNECTEX, io::Error>
     let mut connect_ex: WinSock::LPFN_CONNECTEX = None;
     let mut guid = WSAID_CONNECTEX;
 
+    // SAFETY: GUID and function-pointer output have their exact supplied sizes;
+    // all outputs remain live during this synchronous null-OVERLAPPED call.
     let ioctl_result = unsafe {
         WinSock::WSAIoctl(
             socket,
@@ -133,6 +149,7 @@ fn load_connect_ex(socket: SOCKET) -> Result<WinSock::LPFN_CONNECTEX, io::Error>
     };
 
     if ioctl_result == WinSock::SOCKET_ERROR {
+        // SAFETY: reads the calling thread's Winsock error without pointer arguments.
         let err_code = unsafe { WinSock::WSAGetLastError() };
         return Err(io::Error::from_raw_os_error(err_code));
     }
@@ -149,6 +166,7 @@ fn load_connect_ex(socket: SOCKET) -> Result<WinSock::LPFN_CONNECTEX, io::Error>
 
 #[cfg(windows)]
 fn set_connect_context(socket: SOCKET) -> Result<(), io::Error> {
+    // SAFETY: this option requires no payload; null and zero provide none.
     let result = unsafe {
         WinSock::setsockopt(
             socket,
@@ -159,6 +177,7 @@ fn set_connect_context(socket: SOCKET) -> Result<(), io::Error> {
         )
     };
     if result == WinSock::SOCKET_ERROR {
+        // SAFETY: reads the calling thread's Winsock error without pointer arguments.
         let err_code = unsafe { WinSock::WSAGetLastError() };
         return Err(io::Error::from_raw_os_error(err_code));
     }
@@ -220,7 +239,7 @@ pub struct ConnectOp<'a> {
     handle: &'a InnerRawHandle,
     addr: Option<ConnectAddress>,
     #[cfg(windows)]
-    connect_ex: Option<WinSock::LPFN_CONNECTEX>,
+    connect_ex: WinSock::LPFN_CONNECTEX,
     #[cfg(windows)]
     completion_bound: bool,
     completion_token: Option<usize>,
@@ -236,6 +255,8 @@ impl<'a> ConnectOp<'a> {
         len: AddressLength,
     ) -> io::Result<Self> {
         ConnectAddress::validate_len(len, std::mem::size_of::<NativeAddress>())?;
+        crate::vibeio::op::socket_addr::sockaddr_storage_to_socketaddr(&addr, len as usize)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         Ok(Self::with_address(
             handle,
             ConnectAddress {
@@ -252,6 +273,12 @@ impl<'a> ConnectOp<'a> {
         len: libc::socklen_t,
     ) -> io::Result<Self> {
         ConnectAddress::validate_len(len, std::mem::size_of::<libc::sockaddr_un>())?;
+        if addr.sun_family as i32 != libc::AF_UNIX {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "expected Unix socket family",
+            ));
+        }
         Ok(Self::with_address(
             handle,
             ConnectAddress {
@@ -300,8 +327,10 @@ impl Op for ConnectOp<'_> {
                 )));
             };
 
-            if let Err(err) = start_nonblocking_connect(handle, self.address().0, self.address().1)
-            {
+            if let Err(err) = start_nonblocking_connect(
+                handle,
+                self.addr.as_ref().expect("connect address missing"),
+            ) {
                 return Poll::Ready(Err(err));
             };
 
@@ -312,6 +341,8 @@ impl Op for ConnectOp<'_> {
         {
             let mut socket_error: libc::c_int = 0;
             let mut socket_error_len = mem::size_of::<libc::c_int>() as libc::socklen_t;
+            // SAFETY: both outputs are live writable storage, and the option
+            // capacity matches the integer result; no pointer is retained.
             let getsockopt_result = unsafe {
                 libc::getsockopt(
                     self.handle.handle,
@@ -351,6 +382,8 @@ impl Op for ConnectOp<'_> {
 
             let mut peer = MaybeUninit::<libc::sockaddr_storage>::zeroed();
             let mut peer_len = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+            // SAFETY: the supplied peer buffer and length are live writable
+            // outputs. Only success/failure is used; no address fields are read.
             let getpeername_result = unsafe {
                 libc::getpeername(
                     self.handle.handle,
@@ -394,6 +427,8 @@ impl Op for ConnectOp<'_> {
 
             let mut socket_error: i32 = 0;
             let mut socket_error_len = std::mem::size_of::<i32>() as i32;
+            // SAFETY: socket_error and its length are writable initialized
+            // outputs of the supplied capacity, used only during getsockopt.
             let getsockopt_result = unsafe {
                 WinSock::getsockopt(
                     socket,
@@ -404,6 +439,7 @@ impl Op for ConnectOp<'_> {
                 )
             };
             if getsockopt_result == SOCKET_ERROR {
+                // SAFETY: reads the calling thread's Winsock error without pointer arguments.
                 let error = io::Error::from_raw_os_error(unsafe { WinSock::WSAGetLastError() });
                 if error.kind() == io::ErrorKind::WouldBlock {
                     if let Err(err) =
@@ -430,6 +466,8 @@ impl Op for ConnectOp<'_> {
 
             let mut peer = SOCKADDR_STORAGE::default();
             let mut peer_len = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
+            // SAFETY: peer and peer_len are writable initialized output storage
+            // of the supplied capacity; only the call's success status is used.
             let getpeername_result = unsafe {
                 WinSock::getpeername(
                     socket,
@@ -439,6 +477,7 @@ impl Op for ConnectOp<'_> {
             };
 
             if getpeername_result == SOCKET_ERROR {
+                // SAFETY: reads the calling thread's Winsock error without pointer arguments.
                 let err_code = unsafe { WinSock::WSAGetLastError() };
                 if matches!(
                     err_code,
@@ -524,25 +563,23 @@ impl Op for ConnectOp<'_> {
         let socket = socket as SOCKET;
 
         if !self.completion_bound {
-            ensure_connectex_bound(socket, self.address().0)?;
+            ensure_connectex_bound(socket, self.addr.as_ref().expect("connect address missing"))?;
             self.completion_bound = true;
         }
 
-        let connect_ex = if let Some(connect_ex) = self.connect_ex {
-            connect_ex
-        } else {
-            let connect_ex = load_connect_ex(socket)?;
-            self.connect_ex = Some(connect_ex);
-            connect_ex
-        };
-
-        let Some(connect_ex_fn) = connect_ex else {
+        if self.connect_ex.is_none() {
+            self.connect_ex = load_connect_ex(socket)?;
+        }
+        let Some(connect_ex_fn) = self.connect_ex else {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "ConnectEx extension function is unavailable",
             ));
         };
 
+        // SAFETY: boxed address storage stays alive through completion; Drop
+        // transfers it to cancellation retention if necessary. The driver owns
+        // OVERLAPPED through acknowledgement, and no initial send data is supplied.
         let connect_result = unsafe {
             connect_ex_fn(
                 socket,
@@ -559,6 +596,7 @@ impl Op for ConnectOp<'_> {
             return Ok(());
         }
 
+        // SAFETY: reads the calling thread's Winsock error without pointer arguments.
         let err = unsafe { WinSock::WSAGetLastError() };
         if err == WSA_IO_PENDING {
             Ok(())
@@ -706,6 +744,8 @@ mod ownership_tests {
         for len in [
             0,
             1,
+            2,
+            15,
             (std::mem::size_of::<NativeAddress>() + 1) as AddressLength,
         ] {
             assert!(
@@ -714,6 +754,24 @@ mod ownership_tests {
         }
         #[cfg(windows)]
         assert!(ConnectOp::new(&handle, inet_address(), -1).is_err());
+    }
+
+    #[test]
+    fn internet_address_family_and_complete_structure_are_required() {
+        let owner = Rc::new(AnyDriver::new_mock());
+        let handle = InnerRawHandle::for_mock_completion(owner);
+        for address in ["192.0.2.1:1234", "[2001:db8::1]:4321"] {
+            let (storage, length) = crate::vibeio::op::socket_addr_to_raw(address.parse().unwrap());
+            assert!(ConnectOp::new(&handle, storage, length).is_ok());
+            assert!(
+                matches!(ConnectOp::new(&handle, storage, length - 1), Err(error) if error.kind() == io::ErrorKind::InvalidInput)
+            );
+            let mut wrong_family = storage;
+            wrong_family.ss_family = 0;
+            assert!(
+                matches!(ConnectOp::new(&handle, wrong_family, length), Err(error) if error.kind() == io::ErrorKind::InvalidInput)
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -727,6 +785,11 @@ mod ownership_tests {
         addr.sun_family = libc::AF_UNIX as _;
         addr.sun_path[0] = b'x' as _;
         let len = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + 2) as libc::socklen_t;
+        let mut wrong_family = addr;
+        wrong_family.sun_family = libc::AF_INET as _;
+        assert!(
+            matches!(ConnectOp::new_unix(&handle, wrong_family, len), Err(error) if error.kind() == io::ErrorKind::InvalidInput)
+        );
         let op = ConnectOp::new_unix(&handle, addr, len).unwrap();
         let original = op.address();
         let moved = Box::new(op);

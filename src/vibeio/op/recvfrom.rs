@@ -10,8 +10,7 @@ use mio::Interest;
 #[cfg(windows)]
 use windows_sys::Win32::{
     Networking::WinSock::{
-        self as WinSock, AF_INET, AF_INET6, MSG_PEEK, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6,
-        SOCKADDR_STORAGE, SOCKET, WSA_IO_PENDING, WSABUF,
+        self as WinSock, MSG_PEEK, SOCKADDR, SOCKADDR_STORAGE, SOCKET, WSA_IO_PENDING, WSABUF,
     },
     System::IO::OVERLAPPED,
 };
@@ -24,112 +23,7 @@ use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::io::IoBufMut;
 use crate::vibeio::op::Op;
 use crate::vibeio::op::io_util::CompletionBuffer;
-
-fn validate_address_length(length: usize, expected: usize, capacity: usize) -> io::Result<()> {
-    if length < expected || length > capacity {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid source address length",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-#[inline]
-fn sockaddr_storage_to_socketaddr(
-    storage: &libc::sockaddr_storage,
-    length: usize,
-) -> Result<SocketAddr, io::Error> {
-    let family = storage.ss_family as libc::c_int;
-
-    if family == libc::AF_INET {
-        validate_address_length(
-            length,
-            std::mem::size_of::<libc::sockaddr_in>(),
-            std::mem::size_of_val(storage),
-        )?;
-        // SAFETY: sockaddr_storage has sufficient size/alignment for sockaddr_in;
-        // the family and returned length establish that its IPv4 fields are present.
-        let addr_in: &libc::sockaddr_in =
-            unsafe { &*(storage as *const _ as *const libc::sockaddr_in) };
-        let port = u16::from_be(addr_in.sin_port);
-        let ip_u32 = u32::from_be(addr_in.sin_addr.s_addr);
-        let ip = std::net::Ipv4Addr::from(ip_u32);
-        Ok(SocketAddr::V4(std::net::SocketAddrV4::new(ip, port)))
-    } else if family == libc::AF_INET6 {
-        validate_address_length(
-            length,
-            std::mem::size_of::<libc::sockaddr_in6>(),
-            std::mem::size_of_val(storage),
-        )?;
-        // SAFETY: storage is aligned/sized for sockaddr_in6, and both the family
-        // and returned length have been checked before borrowing its fields.
-        let addr_in6: &libc::sockaddr_in6 =
-            unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
-        let port = u16::from_be(addr_in6.sin6_port);
-        let ip = std::net::Ipv6Addr::from(addr_in6.sin6_addr.s6_addr);
-        Ok(SocketAddr::V6(std::net::SocketAddrV6::new(
-            ip,
-            port,
-            addr_in6.sin6_flowinfo,
-            addr_in6.sin6_scope_id,
-        )))
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "unsupported socket family",
-        ))
-    }
-}
-
-#[cfg(windows)]
-#[inline]
-fn sockaddr_storage_to_socketaddr(
-    storage: &SOCKADDR_STORAGE,
-    length: usize,
-) -> Result<SocketAddr, io::Error> {
-    let family = storage.ss_family;
-
-    if family == AF_INET {
-        validate_address_length(
-            length,
-            std::mem::size_of::<SOCKADDR_IN>(),
-            std::mem::size_of_val(storage),
-        )?;
-        // SAFETY: storage is suitably sized/aligned, and the family/length match IPv4.
-        let addr_in: &SOCKADDR_IN = unsafe { &*(storage as *const _ as *const SOCKADDR_IN) };
-        let port = u16::from_be(addr_in.sin_port);
-        // SAFETY: the IPv4 address union contains initialized network-order bytes.
-        let ip_u32 = u32::from_be(unsafe { addr_in.sin_addr.S_un.S_addr });
-        let ip = std::net::Ipv4Addr::from(ip_u32);
-        Ok(SocketAddr::V4(std::net::SocketAddrV4::new(ip, port)))
-    } else if family == AF_INET6 {
-        validate_address_length(
-            length,
-            std::mem::size_of::<SOCKADDR_IN6>(),
-            std::mem::size_of_val(storage),
-        )?;
-        // SAFETY: storage is suitably sized/aligned, and the family/length match IPv6.
-        let addr_in6: &SOCKADDR_IN6 = unsafe { &*(storage as *const _ as *const SOCKADDR_IN6) };
-        let port = u16::from_be(addr_in6.sin6_port);
-        // SAFETY: the IPv6 address union contains sixteen initialized address bytes.
-        let ip = std::net::Ipv6Addr::from(unsafe { addr_in6.sin6_addr.u.Byte });
-        // SAFETY: the validated IPv6 structure includes the initialized scope union.
-        let scope_id = unsafe { addr_in6.Anonymous.sin6_scope_id };
-        Ok(SocketAddr::V6(std::net::SocketAddrV6::new(
-            ip,
-            port,
-            addr_in6.sin6_flowinfo,
-            scope_id,
-        )))
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "unsupported socket family",
-        ))
-    }
-}
+use crate::vibeio::op::socket_addr::sockaddr_storage_to_socketaddr;
 
 #[cfg(windows)]
 #[inline]
@@ -585,43 +479,6 @@ mod cancellation_tests {
         assert_eq!(state.msghdr.msg_flags, 0);
         assert!(state.msghdr.msg_control.is_null());
         assert_eq!(state.msghdr.msg_controllen, 0);
-    }
-
-    #[test]
-    fn source_address_length_is_checked_before_decoding() {
-        #[cfg(unix)]
-        type Storage = libc::sockaddr_storage;
-        #[cfg(windows)]
-        type Storage = SOCKADDR_STORAGE;
-        #[cfg(unix)]
-        let families = [
-            (libc::AF_INET, std::mem::size_of::<libc::sockaddr_in>()),
-            (libc::AF_INET6, std::mem::size_of::<libc::sockaddr_in6>()),
-        ];
-        #[cfg(windows)]
-        let families = [
-            (AF_INET as i32, std::mem::size_of::<SOCKADDR_IN>()),
-            (AF_INET6 as i32, std::mem::size_of::<SOCKADDR_IN6>()),
-        ];
-        for (index, (family, required)) in families.into_iter().enumerate() {
-            // SAFETY: socket address storage consists of integer/byte fields;
-            // zero initializes its entire storage before the family is assigned.
-            let mut storage: Storage = unsafe { std::mem::zeroed() };
-            storage.ss_family = family as _;
-            let capacity = std::mem::size_of::<Storage>();
-            for length in [0, required - 1, capacity + 1, usize::MAX] {
-                assert_eq!(
-                    sockaddr_storage_to_socketaddr(&storage, length)
-                        .unwrap_err()
-                        .kind(),
-                    io::ErrorKind::InvalidData
-                );
-            }
-            let address = sockaddr_storage_to_socketaddr(&storage, required).unwrap();
-            assert_eq!(address.is_ipv4(), index == 0);
-            assert!(address.ip().is_unspecified());
-            assert_eq!(address.port(), 0);
-        }
     }
 
     #[test]

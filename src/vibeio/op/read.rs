@@ -1,3 +1,6 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 use std::io;
 use std::task::{Context, Poll};
 
@@ -16,7 +19,7 @@ use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::op::Op;
-use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
+use crate::vibeio::op::io_util::{CompletionBuffer, completion_len, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]
@@ -37,6 +40,8 @@ fn socket_read(socket: SOCKET, buf: &mut [std::mem::MaybeUninit<u8>]) -> io::Res
     let mut bytes: u32 = 0;
     let mut flags: u32 = 0;
 
+    // SAFETY: wsabuf describes exclusive writable MaybeUninit bytes. All output
+    // locals remain live during this synchronous, null-OVERLAPPED call.
     let recv_result = unsafe {
         WinSock::WSARecv(
             socket,
@@ -49,6 +54,7 @@ fn socket_read(socket: SOCKET, buf: &mut [std::mem::MaybeUninit<u8>]) -> io::Res
         )
     };
     if recv_result == SOCKET_ERROR {
+        // SAFETY: reads this thread's Winsock error without pointer arguments.
         return Err(io::Error::from_raw_os_error(unsafe {
             WinSock::WSAGetLastError()
         }));
@@ -63,8 +69,6 @@ pub struct ReadOp<'a, B: IoBufMut> {
     handle: &'a InnerRawHandle,
     buf: Option<CompletionBuffer<B>>,
     completion_token: Option<usize>,
-    #[cfg(windows)]
-    socket_buf: Option<Box<WSABUF>>,
 }
 
 impl<'a, B: IoBufMut> ReadOp<'a, B> {
@@ -74,8 +78,6 @@ impl<'a, B: IoBufMut> ReadOp<'a, B> {
             handle,
             buf: Some(CompletionBuffer::new(buf, handle.uses_completion())),
             completion_token: None,
-            #[cfg(windows)]
-            socket_buf: None,
         }
     }
 
@@ -103,6 +105,8 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
 
         #[cfg(unix)]
         let result = {
+            // SAFETY: IoBufMut grants exclusive writable capacity. read writes
+            // at most that capacity and retains no pointer after returning.
             let read = unsafe {
                 libc::read(
                     self.handle.handle,
@@ -135,6 +139,8 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
 
         match poll_result_or_wait(result, self.handle, cx, driver, Interest::READABLE) {
             Poll::Ready(Ok(read)) => {
+                // SAFETY: successful synchronous read initialized the reported
+                // prefix within the supplied buffer capacity.
                 unsafe { buf.set_buf_init(read) };
                 Poll::Ready(Ok(read))
             }
@@ -178,6 +184,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
             #[cfg(windows)]
             if -result == ERROR_HANDLE_EOF as i32 {
                 let buf = self.buf.as_mut().unwrap().as_mut();
+                // SAFETY: the empty prefix is initialized for every buffer.
                 unsafe { buf.set_buf_init(0) };
                 return Poll::Ready(Ok(0));
             }
@@ -185,6 +192,8 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
         }
         let read = result as usize;
         let buf = self.buf.as_mut().unwrap().as_mut();
+        // SAFETY: the successful completion acknowledges this initialized prefix
+        // within the stable buffer retained through the read operation.
         unsafe { buf.set_buf_init(read) };
         Poll::Ready(Ok(read))
     }
@@ -195,27 +204,21 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
         let buf = self.buf.as_mut().unwrap().as_mut();
         match self.handle.handle {
             RawOsHandle::Socket(socket) => {
-                let read_len = u32::try_from(buf.buf_capacity()).map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "read buffer is too large for Windows socket I/O",
-                    )
-                })?;
+                let read_len = completion_len(buf.buf_capacity())?;
 
-                let wsabuf = self.socket_buf.get_or_insert_with(|| {
-                    Box::new(WSABUF {
-                        len: 0,
-                        buf: std::ptr::null_mut(),
-                    })
-                });
-                wsabuf.len = read_len;
-                wsabuf.buf = buf.as_buf_mut_ptr().cast();
-
-                let mut flags: u32 = 0;
+                let mut wsabuf = WSABUF {
+                    len: read_len,
+                    buf: buf.as_buf_mut_ptr().cast(),
+                };
+                let mut flags = 0;
+                // SAFETY: WSARecv captures WSABUF before returning; delayed
+                // completion does not update flags. The payload and driver-owned
+                // OVERLAPPED remain retained through acknowledgement.
+                // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsarecv
                 let recv_result = unsafe {
                     WinSock::WSARecv(
                         socket as SOCKET,
-                        wsabuf.as_mut() as *mut WSABUF,
+                        &mut wsabuf,
                         1,
                         std::ptr::null_mut(),
                         &mut flags,
@@ -228,6 +231,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
                     return Ok(());
                 }
 
+                // SAFETY: reads this thread's last Winsock error without pointers.
                 let err = unsafe { WinSock::WSAGetLastError() };
                 if err == WSA_IO_PENDING {
                     Ok(())
@@ -236,13 +240,10 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
                 }
             }
             RawOsHandle::Handle(handle) => {
-                let read_len = u32::try_from(buf.buf_capacity()).map_err(|_| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "read buffer is too large for Windows file I/O",
-                    )
-                })?;
+                let read_len = completion_len(buf.buf_capacity())?;
 
+                // SAFETY: IoBufMut provides writable capacity retained through
+                // completion/cancellation; the driver owns live OVERLAPPED storage.
                 let read_result = unsafe {
                     ReadFile(
                         handle as HANDLE,
@@ -276,10 +277,11 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
         use io_uring::{opcode, types};
 
         let buf = self.buf.as_mut().unwrap().as_mut();
+        let read_len = completion_len(buf.buf_capacity())?;
         let entry = opcode::Read::new(
             types::Fd(self.handle.handle),
             buf.as_buf_mut_ptr(),
-            (buf.buf_capacity()) as _,
+            read_len,
         )
         .build()
         .user_data(user_data);
@@ -292,9 +294,6 @@ impl<B: IoBufMut> Drop for ReadOp<'_, B> {
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
-            #[cfg(windows)]
-            let completion_state = self.socket_buf.take();
-            #[cfg(not(windows))]
             let completion_state = ();
             // The owning driver, not the currently entered runtime, must retain
             // every kernel-visible allocation until completion is acknowledged.
@@ -312,6 +311,35 @@ impl<B: IoBufMut> Drop for ReadOp<'_, B> {
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn short_read_eof_and_error_preserve_initialized_prefix_contract() {
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        use std::rc::Rc;
+        let driver = Rc::new(AnyDriver::new_mock());
+        let (reader, mut writer) = std::io::pipe().unwrap();
+        writer.write_all(b"abc").unwrap();
+        drop(writer);
+        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
+        handle.handle = reader.as_raw_fd();
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let mut op = ReadOp::new(&handle, Vec::<u8>::with_capacity(32));
+        assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(3))));
+        let buffer = op.take_bufs();
+        assert_eq!(buffer, b"abc");
+        let mut op = ReadOp::new(&handle, buffer);
+        assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(0))));
+        assert!(op.take_bufs().is_empty());
+
+        let invalid = InnerRawHandle::for_mock_completion(driver.clone());
+        let mut op = ReadOp::new(&invalid, b"unchanged".to_vec());
+        assert!(
+            matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Err(error)) if error.raw_os_error() == Some(libc::EBADF))
+        );
+        assert_eq!(op.take_bufs(), b"unchanged");
+    }
 
     #[test]
     fn pending_buffer_is_retained_by_owning_driver() {

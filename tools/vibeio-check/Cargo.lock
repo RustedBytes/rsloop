@@ -298,6 +298,7 @@ dependencies = [
  "oneshot",
  "rusty_pool",
  "slab",
+ "socket2",
  "tokio",
  "windows-sys",
 ]
@@ -319,6 +320,16 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "socket2"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
+dependencies = [
+ "libc",
+ "windows-sys",
+]
 
 [[package]]
 name = "syn"

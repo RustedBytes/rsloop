@@ -1,3 +1,6 @@
+#![deny(unsafe_op_in_unsafe_fn)]
+#![warn(clippy::undocumented_unsafe_blocks)]
+
 #[cfg(windows)]
 use std::ffi::c_void;
 use std::io;
@@ -16,9 +19,9 @@ use mio::Interest;
 #[cfg(windows)]
 use windows_sys::Win32::{
     Networking::WinSock::{
-        self as WinSock, AF_INET, AF_INET6, INVALID_SOCKET, IPPROTO_TCP, SO_UPDATE_ACCEPT_CONTEXT,
-        SOCK_STREAM, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6, SOCKADDR_STORAGE, SOCKET, SOL_SOCKET,
-        WSA_FLAG_OVERLAPPED, WSA_IO_PENDING, WSAID_ACCEPTEX, WSAID_GETACCEPTEXSOCKADDRS,
+        self as WinSock, AF_INET, AF_INET6, INVALID_SOCKET, SO_UPDATE_ACCEPT_CONTEXT, SOCKADDR,
+        SOCKADDR_STORAGE, SOCKET, SOL_SOCKET, WSA_IO_PENDING, WSAID_ACCEPTEX,
+        WSAID_GETACCEPTEXSOCKADDRS,
     },
     System::IO::OVERLAPPED,
 };
@@ -28,87 +31,10 @@ use crate::vibeio::driver::AnyDriver;
 use crate::vibeio::driver::CompletionIoResult;
 use crate::vibeio::fd_inner::{InnerRawHandle, RawOsHandle};
 use crate::vibeio::op::Op;
+use crate::vibeio::op::socket_addr::sockaddr_storage_to_socketaddr;
 
 #[cfg(unix)]
-fn set_cloexec(fd: RawFd) -> Result<(), io::Error> {
-    // set FD_CLOEXEC on file descriptor flags
-    let fdflags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-    if fdflags == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    if fdflags & libc::FD_CLOEXEC == 0 {
-        let result = unsafe { libc::fcntl(fd, libc::F_SETFD, fdflags | libc::FD_CLOEXEC) };
-        if result == -1 {
-            return Err(io::Error::last_os_error());
-        }
-    }
-
-    Ok(())
-}
-
-#[cfg(unix)]
-fn sockaddr_storage_to_socketaddr(
-    storage: &libc::sockaddr_storage,
-) -> Result<SocketAddr, io::Error> {
-    // Determine family. ss_family field is platform-dependent type; cast to c_uchar then to c_int for comparison.
-    let family = storage.ss_family as libc::c_int;
-
-    if family == libc::AF_INET {
-        let addr_in: &libc::sockaddr_in =
-            unsafe { &*(storage as *const _ as *const libc::sockaddr_in) };
-        let port = u16::from_be(addr_in.sin_port);
-        // s_addr is in network byte order
-        let ip_u32 = u32::from_be(addr_in.sin_addr.s_addr);
-        let ip = std::net::Ipv4Addr::from(ip_u32);
-        Ok(SocketAddr::V4(std::net::SocketAddrV4::new(ip, port)))
-    } else if family == libc::AF_INET6 {
-        let addr_in6: &libc::sockaddr_in6 =
-            unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
-        let port = u16::from_be(addr_in6.sin6_port);
-        let ip = std::net::Ipv6Addr::from(addr_in6.sin6_addr.s6_addr);
-        Ok(SocketAddr::V6(std::net::SocketAddrV6::new(
-            ip,
-            port,
-            addr_in6.sin6_flowinfo,
-            addr_in6.sin6_scope_id,
-        )))
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "unsupported socket family",
-        ))
-    }
-}
-
-#[cfg(windows)]
-fn sockaddr_storage_to_socketaddr(storage: &SOCKADDR_STORAGE) -> Result<SocketAddr, io::Error> {
-    // Determine family. ss_family field is platform-dependent type; cast to c_uchar then to c_int for comparison.
-    let family = storage.ss_family;
-
-    if family == AF_INET {
-        let addr_in: &SOCKADDR_IN = unsafe { &*(storage as *const _ as *const SOCKADDR_IN) };
-        let port = u16::from_be(addr_in.sin_port);
-        // s_addr is in network byte order
-        let ip_u32 = u32::from_be(unsafe { addr_in.sin_addr.S_un.S_addr });
-        let ip = std::net::Ipv4Addr::from(ip_u32);
-        Ok(SocketAddr::V4(std::net::SocketAddrV4::new(ip, port)))
-    } else if family == AF_INET6 {
-        let addr_in6: &SOCKADDR_IN6 = unsafe { &*(storage as *const _ as *const SOCKADDR_IN6) };
-        let port = u16::from_be(addr_in6.sin6_port);
-        let ip = std::net::Ipv6Addr::from(unsafe { addr_in6.sin6_addr.u.Byte });
-        Ok(SocketAddr::V6(std::net::SocketAddrV6::new(
-            ip,
-            port,
-            addr_in6.sin6_flowinfo,
-            unsafe { addr_in6.Anonymous.sin6_scope_id },
-        )))
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "unsupported socket family",
-        ))
-    }
-}
+use crate::vibeio::op::io_util::set_cloexec;
 
 #[cfg(windows)]
 fn load_accept_ex(socket: SOCKET) -> Result<WinSock::LPFN_ACCEPTEX, io::Error> {
@@ -116,6 +42,8 @@ fn load_accept_ex(socket: SOCKET) -> Result<WinSock::LPFN_ACCEPTEX, io::Error> {
     let mut accept_ex: WinSock::LPFN_ACCEPTEX = None;
     let mut guid = WSAID_ACCEPTEX;
 
+    // SAFETY: the GUID and function-pointer output have their exact supplied
+    // sizes; all outputs remain live for this synchronous (null OVERLAPPED) call.
     let ioctl_result = unsafe {
         WinSock::WSAIoctl(
             socket,
@@ -131,8 +59,7 @@ fn load_accept_ex(socket: SOCKET) -> Result<WinSock::LPFN_ACCEPTEX, io::Error> {
     };
 
     if ioctl_result == WinSock::SOCKET_ERROR {
-        let err_code = unsafe { WinSock::WSAGetLastError() };
-        return Err(io::Error::from_raw_os_error(err_code));
+        return Err(last_socket_error());
     }
 
     if accept_ex.is_none() {
@@ -153,6 +80,8 @@ fn load_get_accept_ex_sockaddrs(
     let mut get_accept_ex_sockaddrs: WinSock::LPFN_GETACCEPTEXSOCKADDRS = None;
     let mut guid = WSAID_GETACCEPTEXSOCKADDRS;
 
+    // SAFETY: the GUID and function-pointer output have their exact supplied
+    // sizes; null OVERLAPPED means none of these stack pointers are retained.
     let ioctl_result = unsafe {
         WinSock::WSAIoctl(
             socket,
@@ -168,8 +97,7 @@ fn load_get_accept_ex_sockaddrs(
     };
 
     if ioctl_result == WinSock::SOCKET_ERROR {
-        let err_code = unsafe { WinSock::WSAGetLastError() };
-        return Err(io::Error::from_raw_os_error(err_code));
+        return Err(last_socket_error());
     }
 
     if get_accept_ex_sockaddrs.is_none() {
@@ -184,54 +112,43 @@ fn load_get_accept_ex_sockaddrs(
 
 #[cfg(windows)]
 fn listener_socket_family(listener_socket: SOCKET) -> Result<i32, io::Error> {
-    let mut addr = SOCKADDR_IN6::default();
-    let mut addr_len = std::mem::size_of::<SOCKADDR_IN6>() as i32;
+    let mut addr = SOCKADDR_STORAGE::default();
+    let mut addr_len = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
+    // SAFETY: addr and addr_len are live writable output storage of the supplied
+    // size. getsockname does not retain their pointers.
     let result = unsafe {
         WinSock::getsockname(
             listener_socket,
-            (&mut addr as *mut SOCKADDR_IN6).cast::<SOCKADDR>(),
+            (&mut addr as *mut SOCKADDR_STORAGE).cast::<SOCKADDR>(),
             &mut addr_len,
         )
     };
 
     if result == WinSock::SOCKET_ERROR {
-        let err_code = unsafe { WinSock::WSAGetLastError() };
-        return Err(io::Error::from_raw_os_error(err_code));
+        return Err(last_socket_error());
     }
 
-    Ok(addr.sin6_family as i32)
+    let address = sockaddr_storage_to_socketaddr(&addr, addr_len as usize)?;
+    Ok(if address.is_ipv4() { AF_INET } else { AF_INET6 } as i32)
 }
 
 #[cfg(windows)]
-fn create_accept_socket(listener_socket: SOCKET) -> Result<SOCKET, io::Error> {
+fn create_accept_socket(listener_socket: SOCKET) -> Result<OwnedSocket, io::Error> {
     let family = listener_socket_family(listener_socket)?;
-    if family != AF_INET as i32 && family != AF_INET6 as i32 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "unsupported listening socket family for AcceptEx",
-        ));
-    }
-
-    let accept_socket = unsafe {
-        WinSock::WSASocketW(
-            family,
-            SOCK_STREAM,
-            IPPROTO_TCP,
-            ptr::null_mut(),
-            0,
-            WSA_FLAG_OVERLAPPED,
-        )
-    };
-    if accept_socket == INVALID_SOCKET {
-        let err_code = unsafe { WinSock::WSAGetLastError() };
-        return Err(io::Error::from_raw_os_error(err_code));
-    }
-
-    Ok(accept_socket)
+    // Socket::new requests both overlapped I/O and non-inheritance on Windows.
+    // Return an owner immediately so all later failure paths close the socket.
+    let socket = socket2::Socket::new(
+        socket2::Domain::from(family),
+        socket2::Type::STREAM,
+        Some(socket2::Protocol::TCP),
+    )?;
+    Ok(socket.into())
 }
 
 #[cfg(windows)]
 fn set_accept_context(listener_socket: SOCKET, accepted_socket: SOCKET) -> Result<(), io::Error> {
+    // SAFETY: the option value points to a live SOCKET of the exact supplied
+    // size; setsockopt reads it synchronously and retains no pointer.
     let result = unsafe {
         WinSock::setsockopt(
             accepted_socket,
@@ -242,8 +159,7 @@ fn set_accept_context(listener_socket: SOCKET, accepted_socket: SOCKET) -> Resul
         )
     };
     if result == WinSock::SOCKET_ERROR {
-        let err_code = unsafe { WinSock::WSAGetLastError() };
-        return Err(io::Error::from_raw_os_error(err_code));
+        return Err(last_socket_error());
     }
     Ok(())
 }
@@ -274,16 +190,42 @@ fn finish_unix_accept(owned: OwnedFd, set_flags: bool) -> io::Result<(RawOsHandl
     }
     // SAFETY: the storage was zero-initialized before the kernel filled it.
     let peer = unsafe { peer.assume_init() };
-    let address = sockaddr_storage_to_socketaddr(&peer)?;
+    let address = sockaddr_storage_to_socketaddr(&peer, peer_len as usize)?;
     Ok((owned.into_raw_fd(), address))
+}
+
+#[cfg(windows)]
+fn finish_windows_accept(owned: OwnedSocket) -> io::Result<(RawOsHandle, SocketAddr)> {
+    let mut peer = SOCKADDR_STORAGE::default();
+    let mut peer_len = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
+    // SAFETY: owned keeps the socket open; peer and peer_len are live writable
+    // output storage with the supplied capacity, not retained after the call.
+    let result = unsafe {
+        WinSock::getpeername(
+            owned.as_raw_socket() as SOCKET,
+            (&mut peer as *mut SOCKADDR_STORAGE).cast::<SOCKADDR>(),
+            &mut peer_len,
+        )
+    };
+    if result == WinSock::SOCKET_ERROR {
+        return Err(last_socket_error());
+    }
+    let address = sockaddr_storage_to_socketaddr(&peer, peer_len as usize)?;
+    Ok((RawOsHandle::Socket(owned.into_raw_socket()), address))
+}
+
+#[cfg(windows)]
+fn last_socket_error() -> io::Error {
+    // SAFETY: reads this thread's Winsock error state without pointer arguments.
+    io::Error::from_raw_os_error(unsafe { WinSock::WSAGetLastError() })
 }
 
 pub struct AcceptOp<'a> {
     handle: &'a InnerRawHandle,
     #[cfg(windows)]
-    accept_ex: Option<WinSock::LPFN_ACCEPTEX>,
+    accept_ex: WinSock::LPFN_ACCEPTEX,
     #[cfg(windows)]
-    get_accept_ex_sockaddrs: Option<WinSock::LPFN_GETACCEPTEXSOCKADDRS>,
+    get_accept_ex_sockaddrs: WinSock::LPFN_GETACCEPTEXSOCKADDRS,
     #[cfg(windows)]
     accept_socket: Option<OwnedSocket>,
     #[cfg(windows)]
@@ -330,6 +272,8 @@ impl Op for AcceptOp<'_> {
         #[cfg(unix)]
         {
             #[cfg(syscall_accept4)]
+            // SAFETY: null address outputs are permitted. The borrowed handle
+            // keeps the listener open; a successful call returns a new owned fd.
             let accepted_fd = unsafe {
                 libc::accept4(
                     self.handle.handle,
@@ -339,6 +283,8 @@ impl Op for AcceptOp<'_> {
                 )
             };
             #[cfg(not(syscall_accept4))]
+            // SAFETY: null address outputs are permitted; success transfers a
+            // new fd, which is immediately wrapped in an ownership guard below.
             let accepted_fd = unsafe {
                 libc::accept(
                     self.handle.handle,
@@ -373,11 +319,13 @@ impl Op for AcceptOp<'_> {
                 )));
             };
 
+            // SAFETY: the handle keeps the listener open and null address
+            // outputs are permitted. Success transfers a new socket.
             let accepted_socket = unsafe {
                 WinSock::accept(listener_socket as SOCKET, ptr::null_mut(), ptr::null_mut())
             };
             if accepted_socket == INVALID_SOCKET {
-                let error = io::Error::from_raw_os_error(unsafe { WinSock::WSAGetLastError() });
+                let error = last_socket_error();
                 if error.kind() == io::ErrorKind::WouldBlock {
                     if let Err(err) =
                         driver.submit_poll(self.handle, cx.waker().clone(), Interest::READABLE)
@@ -389,33 +337,9 @@ impl Op for AcceptOp<'_> {
                 return Poll::Ready(Err(error));
             }
 
-            let mut peer = SOCKADDR_STORAGE::default();
-            let mut peer_len = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
-            let getpeername_result = unsafe {
-                WinSock::getpeername(
-                    accepted_socket,
-                    (&mut peer as *mut SOCKADDR_STORAGE).cast::<SOCKADDR>(),
-                    &mut peer_len,
-                )
-            };
-            if getpeername_result == WinSock::SOCKET_ERROR {
-                let error = io::Error::from_raw_os_error(unsafe { WinSock::WSAGetLastError() });
-                unsafe { WinSock::closesocket(accepted_socket) };
-                return Poll::Ready(Err(error));
-            }
-
-            let address = match sockaddr_storage_to_socketaddr(&peer) {
-                Ok(address) => address,
-                Err(err) => {
-                    unsafe { WinSock::closesocket(accepted_socket) };
-                    return Poll::Ready(Err(err));
-                }
-            };
-
-            Poll::Ready(Ok((
-                RawOsHandle::Socket(accepted_socket as std::os::windows::io::RawSocket),
-                address,
-            )))
+            // SAFETY: accept returned a new socket, checked against INVALID_SOCKET.
+            let owned = unsafe { OwnedSocket::from_raw_socket(accepted_socket as _) };
+            Poll::Ready(finish_windows_accept(owned))
         }
     }
 
@@ -509,20 +433,18 @@ impl Op for AcceptOp<'_> {
             let mut remote_sockaddr: *mut SOCKADDR_STORAGE = std::ptr::null_mut();
             let mut remote_sockaddr_len: i32 = 0;
 
-            let get_accept_ex_sockaddrs = self.get_accept_ex_sockaddrs.ok_or_else(|| {
+            let get_accept_ex_sockaddrs_fn = self.get_accept_ex_sockaddrs.ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::Unsupported,
                     "GetAcceptExSockaddrs extension function is unavailable",
                 )
             })?;
-            let Some(get_accept_ex_sockaddrs_fn) = get_accept_ex_sockaddrs else {
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "GetAcceptExSockaddrs extension function is unavailable",
-                )));
-            };
 
-            let _ = unsafe {
+            // SAFETY: the completed AcceptEx buffer remains live and has the
+            // same address-region sizes used at submission. All four outputs
+            // point to writable locals; returned addresses are bounds-checked
+            // against this buffer before reading any bytes.
+            unsafe {
                 get_accept_ex_sockaddrs_fn(
                     peer.as_ptr() as *const c_void,
                     0,
@@ -535,21 +457,11 @@ impl Op for AcceptOp<'_> {
                 )
             };
 
-            if remote_sockaddr.is_null() {
-                return Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "can't obtain remote socket address",
-                )));
-            }
-
-            let address = match sockaddr_storage_to_socketaddr(
-                &(unsafe { std::ptr::read_unaligned(remote_sockaddr as *const SOCKADDR_STORAGE) }),
-            ) {
-                Ok(address) => address,
-                Err(err) => {
-                    return Poll::Ready(Err(err));
-                }
-            };
+            let address = crate::vibeio::op::socket_addr::socketaddr_from_buffer(
+                &peer,
+                remote_sockaddr as usize,
+                remote_sockaddr_len,
+            )?;
 
             return Poll::Ready(Ok((
                 RawOsHandle::Socket(accept_socket.into_raw_socket()),
@@ -570,12 +482,12 @@ impl Op for AcceptOp<'_> {
         let listener_socket = listener_socket as SOCKET;
 
         if self.accept_ex.is_none() {
-            self.accept_ex = Some(load_accept_ex(listener_socket)?);
+            self.accept_ex = load_accept_ex(listener_socket)?;
         }
         if self.get_accept_ex_sockaddrs.is_none() {
-            self.get_accept_ex_sockaddrs = Some(load_get_accept_ex_sockaddrs(listener_socket)?);
+            self.get_accept_ex_sockaddrs = load_get_accept_ex_sockaddrs(listener_socket)?;
         }
-        let accept_ex = self.accept_ex.ok_or_else(|| {
+        let accept_ex_fn = self.accept_ex.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::Unsupported,
                 "AcceptEx extension function is unavailable",
@@ -583,9 +495,7 @@ impl Op for AcceptOp<'_> {
         })?;
 
         if self.accept_socket.is_none() {
-            let socket = create_accept_socket(listener_socket)?;
-            // SAFETY: create_accept_socket returns a new, valid owned socket.
-            self.accept_socket = Some(unsafe { OwnedSocket::from_raw_socket(socket as _) });
+            self.accept_socket = Some(create_accept_socket(listener_socket)?);
         }
         let accept_socket = self
             .accept_socket
@@ -601,14 +511,11 @@ impl Op for AcceptOp<'_> {
             .as_mut()
             .expect("accept_output_buffer must be initialized");
 
-        let Some(accept_ex_fn) = accept_ex else {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "AcceptEx extension function is unavailable",
-            ));
-        };
-
         let bytes_received = self.bytes_received.get_or_insert_with(|| Box::new(0));
+        // SAFETY: both sockets stay owned through completion. Boxed output
+        // storage covers the two address regions and has stable addresses; the
+        // driver owns OVERLAPPED until acknowledgement. Drop transfers these
+        // allocations and the accepted socket to cancellation retention.
         let accept_result = unsafe {
             accept_ex_fn(
                 listener_socket,
@@ -625,12 +532,12 @@ impl Op for AcceptOp<'_> {
             return Ok(());
         }
 
-        let err_code = unsafe { WinSock::WSAGetLastError() };
-        if err_code == WSA_IO_PENDING {
+        let error = last_socket_error();
+        if error.raw_os_error() == Some(WSA_IO_PENDING) {
             Ok(())
         } else {
             drop(self.accept_socket.take());
-            Err(io::Error::from_raw_os_error(err_code))
+            Err(error)
         }
     }
 
@@ -672,12 +579,42 @@ impl Drop for AcceptOp<'_> {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod ownership_tests {
     use super::*;
     use std::io::Read;
+    #[cfg(unix)]
     use std::os::unix::net::UnixStream;
 
+    #[cfg(windows)]
+    #[test]
+    fn acceptex_socket_is_owned_and_non_inheritable() {
+        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
+        for (address, family) in [("127.0.0.1:0", AF_INET), ("[::1]:0", AF_INET6)] {
+            let listener = std::net::TcpListener::bind(address).unwrap();
+            let raw = listener.as_raw_socket() as SOCKET;
+            assert_eq!(listener_socket_family(raw).unwrap(), family as i32);
+            let accepted = create_accept_socket(raw).unwrap();
+            let mut flags = 0;
+            // SAFETY: accepted owns the live socket handle and flags is writable.
+            let result =
+                unsafe { GetHandleInformation(accepted.as_raw_socket() as *mut _, &mut flags) };
+            assert_ne!(result, 0, "{}", io::Error::last_os_error());
+            assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
+            assert_eq!(
+                socket2::SockRef::from(&accepted).r#type().unwrap(),
+                socket2::Type::STREAM
+            );
+        }
+        assert_eq!(
+            create_accept_socket(INVALID_SOCKET)
+                .unwrap_err()
+                .raw_os_error(),
+            Some(WinSock::WSAENOTSOCK)
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn unsupported_peer_address_closes_accepted_socket() {
         let (socket, mut peer) = UnixStream::pair().unwrap();
@@ -696,20 +633,44 @@ mod ownership_tests {
         let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         peer.set_nonblocking(true).unwrap();
         let (socket, _) = listener.accept().unwrap();
+        #[cfg(unix)]
         let (fd, address) = finish_unix_accept(socket.into(), true).unwrap();
+        #[cfg(windows)]
+        let (RawOsHandle::Socket(fd), address) = finish_windows_accept(socket.into()).unwrap()
+        else {
+            panic!("accepted socket must remain a socket");
+        };
         // SAFETY: finish_unix_accept transferred sole ownership of this fd.
+        #[cfg(unix)]
         let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+        // SAFETY: finish_windows_accept transferred sole ownership of this socket.
+        #[cfg(windows)]
+        let owned = unsafe { OwnedSocket::from_raw_socket(fd) };
         assert_eq!(address, peer.local_addr().unwrap());
-        // SAFETY: owned keeps this descriptor valid during the query.
-        assert_ne!(
-            unsafe { libc::fcntl(owned.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
-            0
-        );
+        #[cfg(unix)]
+        {
+            // SAFETY: owned keeps this descriptor valid during the query.
+            let flags = unsafe { libc::fcntl(owned.as_raw_fd(), libc::F_GETFD) };
+            assert_ne!(flags, -1);
+            assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        }
         assert_eq!(
             peer.read(&mut [0; 1]).unwrap_err().kind(),
             io::ErrorKind::WouldBlock
         );
         drop(owned);
+        peer.set_nonblocking(false).unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unconnected_socket_cannot_be_returned_as_an_accepted_connection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let error = finish_windows_accept(listener.into()).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(WinSock::WSAENOTCONN));
     }
 
     #[test]

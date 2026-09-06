@@ -53,6 +53,8 @@ fn socket_addr_to_raw(path: &Path) -> Result<(libc::sockaddr_un, libc::socklen_t
         ));
     }
 
+    // SAFETY: sockaddr_un contains only integer/byte fields, all valid when
+    // zeroed. This also initializes the trailing pathname terminator.
     let mut sockaddr = unsafe { MaybeUninit::<libc::sockaddr_un>::zeroed().assume_init() };
     sockaddr.sun_family = libc::AF_UNIX as libc::sa_family_t;
 
@@ -92,12 +94,9 @@ fn new_socket(
     path: &Path,
 ) -> Result<(StdUnixStream, libc::sockaddr_un, libc::socklen_t), io::Error> {
     let (raw_addr, raw_addr_len) = socket_addr_to_raw(path)?;
-    let socket_fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
-    if socket_fd == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    let stream = unsafe { StdUnixStream::from_raw_fd(socket_fd) };
-    Ok((stream, raw_addr, raw_addr_len))
+    let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)?;
+    let owned: std::os::fd::OwnedFd = socket.into();
+    Ok((owned.into(), raw_addr, raw_addr_len))
 }
 
 /// An async Unix domain socket stream that can use either completion-based or poll-based I/O.
@@ -570,6 +569,63 @@ mod tests {
     use super::*;
     use crate::vibeio::{driver::AnyDriver, executor::Runtime};
 
+    #[test]
+    fn unix_address_rejects_empty_nul_and_overlong_paths() {
+        use std::ffi::OsStr;
+        let (short, _) = socket_addr_to_raw(Path::new("x")).unwrap();
+        let capacity = short.sun_path.len();
+        for bytes in [Vec::new(), b"a\0b".to_vec(), vec![b'x'; capacity]] {
+            let path = Path::new(OsStr::from_bytes(&bytes));
+            assert_eq!(
+                socket_addr_to_raw(path).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+            assert_eq!(
+                new_socket(path).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+    }
+
+    #[test]
+    fn unix_address_preserves_maximum_and_non_utf8_pathnames() {
+        use std::ffi::OsStr;
+        let (short, _) = socket_addr_to_raw(Path::new("x")).unwrap();
+        let capacity = short.sun_path.len();
+        for bytes in [vec![b'x'; capacity - 1], vec![b'a', 0xff, b'b']] {
+            let path = Path::new(OsStr::from_bytes(&bytes));
+            let (address, length) = socket_addr_to_raw(path).unwrap();
+            assert_eq!(address.sun_family as i32, libc::AF_UNIX);
+            assert_eq!(
+                length as usize,
+                std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1
+            );
+            let encoded: Vec<_> = address.sun_path.iter().map(|&byte| byte as u8).collect();
+            assert_eq!(&encoded[..bytes.len()], bytes.as_slice());
+            assert!(encoded[bytes.len()..].iter().all(|&byte| byte == 0));
+            #[cfg(any(
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "freebsd",
+                target_os = "openbsd",
+                target_os = "dragonfly",
+                target_os = "netbsd",
+                target_os = "haiku",
+                target_os = "aix"
+            ))]
+            assert_eq!(address.sun_len as usize, length as usize);
+        }
+    }
+
+    #[test]
+    fn created_unix_socket_is_close_on_exec() {
+        // Construction validates the path but does not bind or create a file.
+        let (socket, _, _) = new_socket(Path::new("vibeio-unbound.sock")).unwrap();
+        // SAFETY: socket owns a live fd; F_GETFD only returns integer flags.
+        let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(flags, -1);
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+    }
     #[test]
     fn from_std_poll_stays_nonblocking_on_a_completion_capable_driver() {
         let mut driver = AnyDriver::new_mock();

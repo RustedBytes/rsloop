@@ -6,6 +6,53 @@ use mio::Interest;
 use crate::vibeio::driver::AnyDriver;
 use crate::vibeio::fd_inner::InnerRawHandle;
 
+pub(super) fn iovec_count<T: TryFrom<usize>>(count: usize) -> io::Result<T> {
+    T::try_from(count).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "too many I/O vectors for native count field",
+        )
+    })
+}
+
+#[cfg(unix)]
+pub(super) fn iovec_to_system(bufs: &[crate::vibeio::io::IoVec]) -> Box<[libc::iovec]> {
+    bufs.iter()
+        .map(|buf| libc::iovec {
+            iov_base: buf.ptr.cast(),
+            iov_len: buf.len,
+        })
+        .collect()
+}
+
+#[inline]
+pub(super) fn completion_len(capacity: usize) -> io::Result<u32> {
+    u32::try_from(capacity).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "buffer exceeds completion length limit",
+        )
+    })
+}
+
+#[cfg(unix)]
+pub(super) fn set_cloexec(fd: std::os::fd::RawFd) -> Result<(), io::Error> {
+    // SAFETY: F_GETFD has no pointer arguments and only queries descriptor flags.
+    let fdflags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if fdflags == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if fdflags & libc::FD_CLOEXEC == 0 {
+        // SAFETY: F_SETFD consumes an integer flag set, preserving existing flags.
+        let result = unsafe { libc::fcntl(fd, libc::F_SETFD, fdflags | libc::FD_CLOEXEC) };
+        if result == -1 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) enum CompletionBuffer<B> {
     Inline(B),
     Boxed(Box<B>),
@@ -14,6 +61,189 @@ pub(crate) enum CompletionBuffer<B> {
 #[cfg(test)]
 mod storage_tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn pending_windows_receives_outlive_submission_metadata() {
+        use crate::vibeio::fd_inner::RawOsHandle;
+        use crate::vibeio::op::{Op, ReadOp, ReadvOp, RecvOp};
+        use std::io::Write;
+        use std::os::windows::io::AsRawSocket;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        async fn receive<O: Op<Output = usize>>(
+            handle: &InnerRawHandle,
+            op: &mut O,
+            signal: &mpsc::Sender<()>,
+        ) {
+            let mut signalled = false;
+            let read = std::future::poll_fn(|cx| {
+                let result = handle.poll_op(cx, op);
+                // Release the sender only after submission has returned Pending,
+                // when the stack-local WSABUF and flags no longer exist.
+                if result.is_pending() && !signalled {
+                    signal.send(()).unwrap();
+                    signalled = true;
+                }
+                result
+            });
+            assert_eq!(
+                crate::vibeio::time::timeout(Duration::from_secs(5), read)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                1
+            );
+            assert!(signalled);
+        }
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        let (signal, ready) = mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            for _ in 0..3 {
+                ready.recv_timeout(Duration::from_secs(5)).unwrap();
+                peer.write_all(b"x").unwrap();
+            }
+        });
+        let runtime = crate::vibeio::executor::Runtime::new(AnyDriver::new_iocp().unwrap());
+        runtime.block_on(async move {
+            let handle = InnerRawHandle::new(
+                RawOsHandle::Socket(socket.as_raw_socket()),
+                Interest::READABLE,
+            )
+            .unwrap();
+            let mut read = ReadOp::new(&handle, Vec::<u8>::with_capacity(8));
+            receive(&handle, &mut read, &signal).await;
+            assert_eq!(read.take_bufs(), b"x");
+            let mut recv = RecvOp::new(&handle, Vec::<u8>::with_capacity(8));
+            receive(&handle, &mut recv, &signal).await;
+            assert_eq!(recv.take_bufs(), b"x");
+            let mut readv = ReadvOp::new(
+                &handle,
+                vec![vec![].into_boxed_slice(), vec![0u8].into_boxed_slice()],
+            );
+            receive(&handle, &mut readv, &signal).await;
+            assert_eq!(&*readv.take_bufs()[1], b"x");
+        });
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn native_iovec_counts_do_not_wrap() {
+        for count in [0, 1, 1024, i32::MAX as usize] {
+            assert_eq!(iovec_count::<i32>(count).unwrap() as usize, count);
+            assert_eq!(iovec_count::<u32>(count).unwrap() as usize, count);
+        }
+        assert_eq!(
+            iovec_count::<i32>(i32::MAX as usize + 1)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(iovec_count::<u32>(u32::MAX as usize).unwrap(), u32::MAX);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            iovec_count::<u32>(u32::MAX as usize + 1)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn completion_entries_transfer_expected_bytes() {
+        use crate::vibeio::op::{Op, ReadOp, ReadvOp, RecvOp, SendOp, WriteOp, WritevOp};
+        use std::io::{Read, Write};
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::UnixStream;
+        use std::rc::Rc;
+
+        fn complete(entry: io_uring::squeue::Entry) -> usize {
+            // Keep the ring local so it is closed before the caller's operation
+            // and payload can be dropped, including if submission fails.
+            let mut ring = io_uring::IoUring::new(2).unwrap();
+            // SAFETY: each caller below retains its operation and socket through
+            // this call; no buffer or metadata moves before CQE acknowledgement.
+            unsafe { ring.submission().push(&entry).unwrap() };
+            ring.submit_and_wait(1).unwrap();
+            let result = ring.completion().next().unwrap().result();
+            assert!(result >= 0, "completion failed: {result}");
+            result as usize
+        }
+
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut handle = InnerRawHandle::for_mock_completion(Rc::new(AnyDriver::new_mock()));
+        handle.handle = socket.as_raw_fd();
+
+        peer.write_all(b"read").unwrap();
+        let mut read = ReadOp::new(&handle, vec![0u8; 8]);
+        assert_eq!(complete(read.build_completion_entry(1).unwrap()), 4);
+        assert_eq!(&read.take_bufs()[..4], b"read");
+
+        peer.write_all(b"recv").unwrap();
+        let mut recv = RecvOp::new(&handle, vec![0u8; 8]);
+        assert_eq!(complete(recv.build_completion_entry(2).unwrap()), 4);
+        assert_eq!(&recv.take_bufs()[..4], b"recv");
+
+        let mut send = SendOp::new(&handle, b"send".to_vec());
+        assert_eq!(complete(send.build_completion_entry(3).unwrap()), 4);
+        assert_eq!(send.take_bufs(), b"send");
+        let mut output = [0; 4];
+        peer.read_exact(&mut output).unwrap();
+        assert_eq!(&output, b"send");
+
+        let mut write = WriteOp::new(&handle, b"write".to_vec());
+        assert_eq!(complete(write.build_completion_entry(4).unwrap()), 5);
+        assert_eq!(write.take_bufs(), b"write");
+        let mut output = [0; 5];
+        peer.read_exact(&mut output).unwrap();
+        assert_eq!(&output, b"write");
+
+        peer.write_all(b"abc").unwrap();
+        let mut read = ReadvOp::new(
+            &handle,
+            vec![
+                vec![9u8; 2].into_boxed_slice(),
+                vec![9u8; 2].into_boxed_slice(),
+            ],
+        );
+        assert_eq!(complete(read.build_completion_entry(5).unwrap()), 3);
+        let buffers = read.take_bufs();
+        assert_eq!(&*buffers[0], b"ab");
+        assert_eq!(&*buffers[1], &[b'c', 9]);
+
+        let buffers = vec![
+            vec![].into_boxed_slice(),
+            b"ab".to_vec().into_boxed_slice(),
+            b"cd".to_vec().into_boxed_slice(),
+        ];
+        let mut write = WritevOp::new(&handle, buffers);
+        assert_eq!(complete(write.build_completion_entry(6).unwrap()), 4);
+        assert_eq!(write.take_bufs().len(), 3);
+        let mut output = [0; 4];
+        peer.read_exact(&mut output).unwrap();
+        assert_eq!(&output, b"abcd");
+    }
+
+    #[test]
+    fn completion_lengths_do_not_wrap() {
+        for capacity in [0, 1, 4096, u32::MAX as usize] {
+            assert_eq!(completion_len(capacity).unwrap() as usize, capacity);
+        }
+        #[cfg(target_pointer_width = "64")]
+        for capacity in [u32::MAX as usize + 1, usize::MAX] {
+            assert_eq!(
+                completion_len(capacity).unwrap_err().kind(),
+                io::ErrorKind::InvalidInput
+            );
+        }
+    }
     use crate::vibeio::io::{IoBuf, IoBufMut};
 
     #[test]

@@ -14,7 +14,7 @@
 use std::cell::RefCell;
 use std::future::poll_fn;
 use std::io::{self, IoSlice};
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::mem::ManuallyDrop;
 use std::net::{Shutdown, SocketAddr, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
@@ -28,16 +28,15 @@ use mio::Interest;
 use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite, ReadBuf};
 
 #[cfg(windows)]
-use windows_sys::Win32::Networking::WinSock::{
-    self, AF_INET, AF_INET6, SOCK_STREAM, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6, SOCKADDR_STORAGE,
-    WSADATA,
-};
+use windows_sys::Win32::Networking::WinSock::SOCKADDR_STORAGE;
 
 use crate::vibeio::io::{
     AsInnerRawHandle, AsyncReadPoll, AsyncWritePoll, IoBuf, IoBufMut, IoBufTemporaryPoll,
     IoVectoredBuf, IoVectoredBufMut, IoVectoredBufTemporaryPoll,
 };
-use crate::vibeio::op::{ConnectOp, ReadOp, ReadinessOp, ReadvOp, RecvOp, WriteOp, WritevOp};
+use crate::vibeio::op::{
+    ConnectOp, ReadOp, ReadinessOp, ReadvOp, RecvOp, WriteOp, WritevOp, socket_addr_to_raw,
+};
 use crate::vibeio::{
     driver::RegistrationMode,
     fd_inner::InnerRawHandle,
@@ -45,161 +44,29 @@ use crate::vibeio::{
 };
 
 #[cfg(unix)]
-fn socket_addr_to_raw(
-    address: SocketAddr,
-) -> (libc::c_int, libc::sockaddr_storage, libc::socklen_t) {
-    match address {
-        SocketAddr::V4(address) => {
-            let sockaddr = libc::sockaddr_in {
-                sin_family: libc::AF_INET as libc::sa_family_t,
-                sin_port: address.port().to_be(),
-                sin_addr: libc::in_addr {
-                    s_addr: u32::from_ne_bytes(address.ip().octets()),
-                },
-                sin_zero: [0; 8],
-                #[cfg(any(
-                    target_os = "macos",
-                    target_os = "ios",
-                    target_os = "freebsd",
-                    target_os = "openbsd",
-                    target_os = "dragonfly",
-                    target_os = "netbsd",
-                    target_os = "haiku",
-                    target_os = "aix",
-                ))]
-                sin_len: 0,
-            };
-
-            let mut storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
-            unsafe {
-                storage
-                    .as_mut_ptr()
-                    .cast::<libc::sockaddr_in>()
-                    .write(sockaddr);
-                (
-                    libc::AF_INET,
-                    storage.assume_init(),
-                    std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-                )
-            }
-        }
-        SocketAddr::V6(address) => {
-            let sockaddr = libc::sockaddr_in6 {
-                sin6_family: libc::AF_INET6 as libc::sa_family_t,
-                sin6_port: address.port().to_be(),
-                sin6_flowinfo: address.flowinfo(),
-                sin6_addr: libc::in6_addr {
-                    s6_addr: address.ip().octets(),
-                },
-                sin6_scope_id: address.scope_id(),
-                #[cfg(any(
-                    target_os = "macos",
-                    target_os = "ios",
-                    target_os = "freebsd",
-                    target_os = "openbsd",
-                    target_os = "dragonfly",
-                    target_os = "netbsd",
-                    target_os = "haiku",
-                    target_os = "aix",
-                ))]
-                sin6_len: 0,
-            };
-
-            let mut storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
-            unsafe {
-                storage
-                    .as_mut_ptr()
-                    .cast::<libc::sockaddr_in6>()
-                    .write(sockaddr);
-                (
-                    libc::AF_INET6,
-                    storage.assume_init(),
-                    std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
-                )
-            }
-        }
-    }
-}
-
-#[cfg(windows)]
-fn socket_addr_to_raw(address: SocketAddr) -> (i32, SOCKADDR_STORAGE, i32) {
-    match address {
-        SocketAddr::V4(address) => {
-            let mut sockaddr = SOCKADDR_IN::default();
-            sockaddr.sin_family = AF_INET;
-            sockaddr.sin_port = address.port().to_be();
-            sockaddr.sin_addr.S_un.S_addr = u32::from_ne_bytes(address.ip().octets());
-
-            let mut storage = SOCKADDR_STORAGE::default();
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &sockaddr as *const SOCKADDR_IN as *const u8,
-                    &mut storage as *mut SOCKADDR_STORAGE as *mut u8,
-                    std::mem::size_of::<SOCKADDR_IN>(),
-                );
-            }
-            (
-                AF_INET as _,
-                storage,
-                std::mem::size_of::<SOCKADDR_IN>() as i32,
-            )
-        }
-        SocketAddr::V6(address) => {
-            let mut sockaddr = SOCKADDR_IN6::default();
-            sockaddr.sin6_family = AF_INET6;
-            sockaddr.sin6_port = address.port().to_be();
-            sockaddr.sin6_flowinfo = address.flowinfo();
-            sockaddr.sin6_addr.u.Byte = address.ip().octets();
-            sockaddr.Anonymous.sin6_scope_id = address.scope_id();
-
-            let mut storage = SOCKADDR_STORAGE::default();
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    &sockaddr as *const SOCKADDR_IN6 as *const u8,
-                    &mut storage as *mut SOCKADDR_STORAGE as *mut u8,
-                    std::mem::size_of::<SOCKADDR_IN6>(),
-                );
-            }
-            (
-                AF_INET6 as _,
-                storage,
-                std::mem::size_of::<SOCKADDR_IN6>() as i32,
-            )
-        }
-    }
-}
-
-#[cfg(unix)]
 fn new_socket(
     address: SocketAddr,
 ) -> Result<(std::net::TcpStream, libc::sockaddr_storage, libc::socklen_t), io::Error> {
-    let (domain, raw_addr, raw_addr_len) = socket_addr_to_raw(address);
-    let socket_fd = unsafe { libc::socket(domain, libc::SOCK_STREAM, 0) };
-    if socket_fd == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    let stream = unsafe { std::net::TcpStream::from_raw_fd(socket_fd.into_raw_fd()) };
-    Ok((stream, raw_addr, raw_addr_len))
+    let (raw_addr, raw_addr_len) = socket_addr_to_raw(address);
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(address),
+        socket2::Type::STREAM,
+        None,
+    )?;
+    Ok((socket.into(), raw_addr, raw_addr_len))
 }
 
 #[cfg(windows)]
 fn new_socket(
     address: SocketAddr,
 ) -> Result<(std::net::TcpStream, SOCKADDR_STORAGE, i32), io::Error> {
-    // 0x202 = MAKEWORD(2, 2)
-    let mut wsadata = WSADATA::default();
-    if unsafe { WinSock::WSAStartup(0x202, &mut wsadata as *mut WSADATA) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let (domain, raw_addr, raw_addr_len) = socket_addr_to_raw(address);
-    let socket = unsafe { WinSock::socket(domain, SOCK_STREAM, 0) };
-    if socket == WinSock::INVALID_SOCKET {
-        let err = io::Error::last_os_error();
-        let _ = unsafe { WinSock::WSACleanup() };
-        return Err(err);
-    }
-    let stream = unsafe { std::net::TcpStream::from_raw_socket(socket as _) };
-    Ok((stream, raw_addr, raw_addr_len))
+    let (raw_addr, raw_addr_len) = socket_addr_to_raw(address);
+    let socket = socket2::Socket::new(
+        socket2::Domain::for_address(address),
+        socket2::Type::STREAM,
+        None,
+    )?;
+    Ok((socket.into(), raw_addr, raw_addr_len))
 }
 
 /// An async TCP stream that can use either completion-based or poll-based I/O.
@@ -828,6 +695,33 @@ impl Drop for TcpStream {
         // Safety: The struct is dropped after the handle is dropped.
         unsafe {
             ManuallyDrop::drop(&mut self.handle);
+        }
+    }
+}
+
+#[cfg(test)]
+mod socket_creation_tests {
+    use super::*;
+
+    #[test]
+    fn created_socket_is_close_on_exec() {
+        let socket = new_socket("127.0.0.1:0".parse().unwrap()).unwrap().0;
+        #[cfg(unix)]
+        {
+            // SAFETY: socket owns the live descriptor; F_GETFD has no pointer arguments.
+            let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFD) };
+            assert_ne!(flags, -1);
+            assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        }
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
+            let mut flags = 0;
+            // SAFETY: socket owns the live kernel handle and flags is writable.
+            let result =
+                unsafe { GetHandleInformation(socket.as_raw_socket() as *mut _, &mut flags) };
+            assert_ne!(result, 0, "{}", io::Error::last_os_error());
+            assert_eq!(flags & HANDLE_FLAG_INHERIT, 0);
         }
     }
 }

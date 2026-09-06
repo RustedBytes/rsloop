@@ -22,6 +22,7 @@ mod recvfrom;
 mod rename;
 mod send;
 mod sendto;
+mod socket_addr;
 #[cfg(all(target_os = "linux", feature = "splice"))]
 mod splice;
 #[cfg(all(
@@ -68,6 +69,7 @@ pub use recvfrom::RecvfromOp;
 pub use rename::RenameOp;
 pub use send::SendOp;
 pub use sendto::SendtoOp;
+pub(crate) use socket_addr::socket_addr_to_raw;
 #[cfg(all(target_os = "linux", feature = "splice"))]
 pub use splice::SpliceOp;
 #[cfg(all(

@@ -14,8 +14,6 @@ use std::cell::RefCell;
 use std::future::poll_fn;
 use std::io;
 use std::mem::ManuallyDrop;
-#[cfg(unix)]
-use std::mem::MaybeUninit;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket as StdUdpSocket};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
@@ -33,82 +31,8 @@ use crate::vibeio::io::{
     AsInnerRawHandle, AsyncReadPoll, AsyncWritePoll, IoBuf, IoBufMut, IoBufTemporaryPoll,
 };
 #[cfg(unix)]
-use crate::vibeio::op::ConnectOp;
+use crate::vibeio::op::{ConnectOp, socket_addr_to_raw};
 use crate::vibeio::op::{ReadinessOp, RecvOp, RecvfromOp, SendOp, SendtoOp};
-
-#[cfg(unix)]
-#[inline]
-fn socket_addr_to_raw(address: SocketAddr) -> (libc::sockaddr_storage, libc::socklen_t) {
-    match address {
-        SocketAddr::V4(address) => {
-            let sockaddr = libc::sockaddr_in {
-                sin_family: libc::AF_INET as libc::sa_family_t,
-                sin_port: address.port().to_be(),
-                sin_addr: libc::in_addr {
-                    s_addr: u32::from_ne_bytes(address.ip().octets()),
-                },
-                sin_zero: [0; 8],
-                #[cfg(any(
-                    target_os = "macos",
-                    target_os = "ios",
-                    target_os = "freebsd",
-                    target_os = "openbsd",
-                    target_os = "dragonfly",
-                    target_os = "netbsd",
-                    target_os = "haiku",
-                    target_os = "aix",
-                ))]
-                sin_len: 0,
-            };
-
-            let mut storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
-            unsafe {
-                storage
-                    .as_mut_ptr()
-                    .cast::<libc::sockaddr_in>()
-                    .write(sockaddr);
-                (
-                    storage.assume_init(),
-                    std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
-                )
-            }
-        }
-        SocketAddr::V6(address) => {
-            let sockaddr = libc::sockaddr_in6 {
-                sin6_family: libc::AF_INET6 as libc::sa_family_t,
-                sin6_port: address.port().to_be(),
-                sin6_flowinfo: address.flowinfo(),
-                sin6_addr: libc::in6_addr {
-                    s6_addr: address.ip().octets(),
-                },
-                sin6_scope_id: address.scope_id(),
-                #[cfg(any(
-                    target_os = "macos",
-                    target_os = "ios",
-                    target_os = "freebsd",
-                    target_os = "openbsd",
-                    target_os = "dragonfly",
-                    target_os = "netbsd",
-                    target_os = "haiku",
-                    target_os = "aix",
-                ))]
-                sin6_len: 0,
-            };
-
-            let mut storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
-            unsafe {
-                storage
-                    .as_mut_ptr()
-                    .cast::<libc::sockaddr_in6>()
-                    .write(sockaddr);
-                (
-                    storage.assume_init(),
-                    std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
-                )
-            }
-        }
-    }
-}
 
 #[cfg(unix)]
 #[inline]

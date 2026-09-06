@@ -1208,3 +1208,270 @@ separate synchronization design.
   ignored), Linux/Windows-target/macOS-target strict harness Clippy, formatting,
   and whitespace checks pass. Native Windows/macOS FFI behavior and broader
   findings remain open; these documentation checks are not a proof of all I/O safety.
+
+## Shared accepted-socket address validation
+
+- Moved recvfrom's checked IPv4/IPv6 decoder and length regressions into the
+  internal op/socket_addr module. Accept now uses the same decoder and forwards
+  getpeername's returned length on Unix and Windows instead of ignoring it.
+- Windows AcceptEx no longer reads an entire SOCKADDR_STORAGE from a returned
+  pointer. It checks the pointer's offset and signed length against the retained
+  output buffer, copies only that checked slice into aligned initialized storage,
+  and validates the selected address structure's length. Reads use the original
+  buffer's provenance, not the provider-returned pointer. No extra syscall was
+  added. This is defensive validation, not a claim of observed provider corruption
+  or a measured performance improvement.
+- New regressions exercise null/outside/end/overflow-sized addresses, negative,
+  zero, truncated and oversized lengths, and unaligned IPv4/IPv6 input ending
+  exactly at the buffer boundary. They check nonzero port, IPv6 address, flowinfo,
+  and scope preservation. IPv6 field byte order remains consistent with Rust std.
+- Validation: 300 root all-feature tests, 183 harness tests and 6 doctests pass
+  (44 ignored). Root and Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. Native Windows/macOS execution and the
+  remaining package-wide cleanup findings are still open.
+
+## Accept ownership and unsafe-boundary audit
+
+- Windows polling accept now immediately wraps a successful socket in OwnedSocket
+  and passes it to a finishing helper. getpeername and address-decoding errors
+  release that owner automatically; removed the two separate manual closes.
+  Successful completion still transfers ownership exactly once. No previously
+  observed socket leak is claimed; the change makes error cleanup structural.
+- Removed nested Option wrappers around Winsock's already-optional extension
+  function pointers and their duplicate absence checks. Centralized last-error
+  retrieval and documented the remaining accept-module unsafe calls, including
+  synchronous output lifetimes and retained overlapped buffers. Enabled local
+  unsafe_op_in_unsafe_fn denial and undocumented-unsafe warnings.
+- Extended the successful ownership-transfer test to Windows and added a bounded
+  peer-EOF check after the transferred socket is dropped. The existing owning-
+  driver cancellation regression now also compiles on Windows; a Windows-only
+  test checks rejection of an unconnected socket. Windows tests are compile/lint
+  checked here, not natively executed.
+- Validation passes: 300 root tests, 183 harness tests, 6 doctests (44 ignored),
+  root strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks. Broader cleanup remains unfinished.
+
+## Atomic close-on-exec for Unix-domain completion accept
+
+- Found that AcceptUnixOp's Linux SQE omitted SOCK_CLOEXEC and only set FD_CLOEXEC
+  after observing the CQE. The returned descriptor was therefore inheritable
+  between kernel creation and userspace finishing. Added SOCK_CLOEXEC to the
+  submission and removed the now-redundant Linux finishing query/set. Preserved
+  blocking completion-mode descriptors; readiness accept4 still requests both
+  close-on-exec and nonblocking flags.
+- Added a live io_uring regression using a preconnected abstract Unix socket.
+  It inspects the accepted descriptor directly from the CQE, without executing
+  finishing code. The test failed on the original submission (FD_CLOEXEC was
+  zero) and passes with the flag added; it also verifies blocking status remains
+  unchanged. This proves the descriptor flag, not an observed child-process leak.
+- Shared the existing close-on-exec fallback helper between TCP and Unix-domain
+  accept. Platforms without accept4 still set this flag after accept and therefore
+  retain their non-atomic fallback limitation. Documented Unix accept unsafe
+  boundaries, enabled local safety lints, and added an owning-driver cancellation
+  test both outside a runtime and inside a different runtime.
+- Validation: 302 root tests, 185 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. No wall-clock speedup claim is made
+  from removing the finishing syscall. Native non-Linux and wider cleanup work
+  remain open.
+
+## UDP completion-send ancillary-header correction
+
+- Auditing the remaining descriptor-creation operations confirmed that file-open
+  options and TCP accept submissions already request close-on-exec. Follow-up
+  inspection found SendtoOp building a Linux msghdr with a null msg_control but
+  msg_controllen = 1, causing send failure rather than a valid no-ancillary send.
+- A live loopback io_uring regression returned CQE result -14 (EFAULT) before
+  the correction, instead of the eight-byte payload length. Setting ancillary
+  length to zero fixes the send; msg_flags is also reset to zero. The test now
+  verifies payload and source address for both nonempty and empty datagrams.
+- Removed redundant Linux header re-zeroing while explicitly resetting every
+  msghdr field. Initial address state uses the already-built address rather than
+  a temporary zeroed value. A metadata-reuse regression checks all reset fields
+  and stable boxed metadata/payload addresses.
+- Documented the sendto module's unsafe address conversions, synchronous payload
+  lifetimes and overlapped retention, and enabled local safety lints. A search of
+  the remaining production msghdr field assignments found no other nonzero
+  ancillary lengths paired with null control pointers.
+- Validation: 304 root tests, 187 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. This fixes a reproduced Linux send
+  error; native non-Linux execution and wider cleanup remain unverified/open.
+
+## Owned, non-inheritable TCP socket construction
+
+- TCP stream and listener constructors used raw socket calls without CLOEXEC
+  on Unix. Added direct constructor regressions; both failed with FD_CLOEXEC
+  absent before the change and pass afterward. This extends the inheritance
+  audit beyond completion submissions to the underlying networking constructors.
+- Replaced TCP socket creation with socket2::Socket::new, using the dependency
+  already present in rsloop. Listener setup now uses safe owned option/bind/listen
+  calls and transfers ownership into std only after success. Removed duplicated
+  listener address encoders and manual close/error branches on both platforms.
+- Preserved Unix SO_REUSEADDR, Windows default reuse policy, IPv6 dual-stack
+  configuration and platform SOMAXCONN. socket2 requests atomic CLOEXEC on Linux,
+  non-inheritable overlapped sockets on Windows, and fallback CLOEXEC plus
+  NOSIGPIPE on Apple. The Apple CLOEXEC fallback is not atomic. Removed per-socket
+  WSAStartup calls; socket2 delegates one-time Winsock initialization to std.
+- Added the harness dependency, locking socket2 to 0.6.4 like the root lockfile.
+  Tests cover inheritance flags, successful listener transfer, duplicate bind
+  rejection, Unix address reuse, and IPv6 wildcard dual-stack settings. Corrected
+  the initial IPv6 test to use a wildcard: a local socket experiment confirmed
+  Linux forces IPV6_V6ONLY after binding specifically to ::1, even when disabled
+  beforehand. Windows inheritance checks compile but have not run natively.
+- Validation: 308 root tests, 191 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. Wider cleanup and native non-Linux
+  runtime verification remain open; no throughput claim is inferred.
+
+## Unix-domain stream construction inheritance and pathname tests
+
+- The remaining direct libc::socket constructor was in Unix-domain streams and
+  also omitted CLOEXEC. Its new constructor regression failed with zero
+  FD_CLOEXEC before the change. Replaced raw creation/from_raw_fd with socket2
+  creation and safe Socket -> OwnedFd -> std UnixStream ownership transfers.
+  The regression now passes; Linux gets atomic CLOEXEC, while Apple retains the
+  dependency's post-creation flag fallback and NOSIGPIPE setup.
+- Added pathname regressions for empty, interior-NUL and overlong rejection,
+  the maximum accepted pathname, non-UTF-8 bytes, terminator initialization,
+  exact address length and platform sun_len. These do not create filesystem
+  entries. Documented why zero-initialized sockaddr_un storage is valid.
+- Validation: 311 root tests, 194 harness tests, 6 doctests (44 ignored), root
+  and Linux/macOS-target strict Clippy, formatting and whitespace checks pass.
+  This turn changes Unix-only code; native macOS execution remains unverified.
+  The wider cleanup, including remaining Windows-specific socket paths, is open.
+
+## Owned non-inheritable AcceptEx socket creation
+
+- The separate Windows AcceptEx constructor still used WSASocketW with only
+  WSA_FLAG_OVERLAPPED. Switched it to socket2::Socket::new with TCP protocol,
+  preserving overlapped I/O while requesting non-inheritance. It now returns
+  OwnedSocket directly, removing a raw ownership handoff at submission.
+- Listener-family lookup now uses full initialized SOCKADDR_STORAGE and the
+  shared length-checked decoder instead of reading a family from an unchecked
+  returned address length. Both IPv4 and IPv6 select their matching socket domain.
+- Added a Windows-only regression checking IPv4/IPv6 listener-family lookup,
+  non-inheritable handles, stream socket type, and invalid-listener rejection.
+  This regression is cross-compiled and linted, not natively executed: unlike
+  the Linux constructor regressions, no before/after runtime result is claimed.
+- Validation: Windows-target strict all-target/all-feature harness Clippy passes;
+  Linux/macOS-target harness Clippy, root strict Clippy, 194 harness tests and
+  6 doctests (44 ignored), formatting and whitespace checks also pass. Native
+  Windows AcceptEx execution and the wider package cleanup remain open.
+
+## Consolidated outbound IP socket-address encoding
+
+- Removed the repeated IPv4/IPv6 encoders in TCP stream construction, UDP
+  connect and SendtoOp. All three now use one internal adapter from std SocketAddr
+  through socket2::SockAddr into the platform's native storage. The adapter has
+  one documented unsafe storage view instead of repeated native writes/copies.
+  Public networking APIs and address-storage ownership remain unchanged.
+- Added round-trip tests against the independent checked decoder for unspecified,
+  nonzero, maximum-port, broadcast, IPv6 global and scoped link-local addresses.
+  Tests check exact native lengths, IPv6 flow/scope preservation, and BSD/Apple
+  storage length fields. socket2 fills platform length fields instead of the old
+  encoders' zero values; native non-Linux behavior remains unverified.
+- Validation passes: 312 root tests, 195 harness tests, 6 doctests (44 ignored),
+  root strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks. Existing live UDP completion tests pass.
+- Refreshed Qualirs: 296 findings remain under src/vibeio; the largest file counts
+  are IOCP (27), connect (24), read (23), recv (18), and recvfrom (17). These are
+  audit candidates, not confirmed bugs. The report remains local under target;
+  full package cleanup is not complete.
+
+## Connect address validation and borrowed unsafe boundaries
+
+- ConnectOp's internet constructor now uses the checked decoder to reject
+  truncated IPv4/IPv6 structures and unsupported families, not just lengths
+  outside storage capacity. The Unix-domain constructor rejects non-Unix
+  families. Errors remain InvalidInput; valid owned addresses retain their
+  original allocation and cancellation lifetime.
+- Synchronous connect helpers now borrow ConnectAddress instead of accepting
+  unrelated raw pointer/length arguments. Windows ConnectEx binding reads the
+  family from owned typed storage, removing its raw pointer dereference.
+- Simplified the nested optional ConnectEx pointer cache, documented synchronous
+  output storage and overlapped address retention, and enabled module-local
+  unsafe_op_in_unsafe_fn denial and undocumented-unsafe warnings. Existing
+  Windows bind-error classification was preserved, not newly certified.
+- Tests cover exact/truncated internet structures, unsupported families, and
+  mismatched Unix families. Live TCP connect and address movement/cancellation
+  regressions still pass. This is defensive input validation; no kernel
+  memory-safety failure was reproduced or inferred from the original input checks.
+- Validation: 313 root tests, 196 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. Native Windows/macOS runtime behavior
+  and broader cleanup remain open.
+
+## Read completion lengths and retained Windows metadata
+
+The Windows metadata-retention change below is superseded by the later
+"Winsock receive descriptor lifetime correction" audit; length checks remain.
+
+- ReadOp now checks capacity before encoding Linux's u32 completion length,
+  matching its Windows paths instead of silently truncating a usize. Shared
+  conversion tests cover zero, ordinary lengths, u32::MAX, and oversized 64-bit
+  values. No multi-gigabyte buffer allocation was needed for these boundary tests.
+- Windows receive flags now share boxed completion state with WSABUF, keeping
+  both addresses live through cancellation acknowledgement. This is conservative
+  lifetime hardening; no native Windows dangling-pointer failure was reproduced.
+  A Windows-only test verifies that cancellation retains the original flags
+  address and value alongside the payload allocation.
+- Documented read's remaining unsafe call/storage boundaries and enabled local
+  safety lints. A live Unix pipe test checks a short read into spare capacity,
+  EOF clearing the initialized prefix, and an error preserving existing bytes.
+- Validation: 315 root tests, 198 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. Native Windows/macOS execution and
+  remaining package-wide findings are still open.
+
+## Shared scalar completion length checks
+
+- Found the same unchecked usize-to-u32 casts in Linux RecvOp, SendOp and
+  WriteOp. All now use the checked completion_len helper shared with ReadOp;
+  oversized lengths return InvalidInput rather than wrapping to a smaller or
+  zero-length request. Existing Windows and positional I/O checks are preserved.
+- Moved the conversion-boundary tests to the shared utility. Added a live
+  io_uring socket-pair regression that builds and submits Read, Recv, Send and
+  Write SQEs and verifies byte counts and transferred payloads. Each temporary
+  ring closes before its caller's operation/buffer, including error unwinding.
+  Boundary arithmetic is tested without allocating multi-gigabyte buffers.
+- Validation: 316 root tests, 199 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. No remaining direct buffer length or
+  capacity casts to u32/inferred integer were found in op sources by the targeted
+  search; this is not a claim that all size handling or package cleanup is done.
+
+## Vectored descriptor count checks and safe array construction
+
+- Replaced unchecked descriptor-count casts in readv/writev for Unix readiness,
+  Linux completion and Winsock paths with a checked conversion to the receiving
+  API's integer type. Boundary tests cover signed/unsigned limits without giant
+  allocations. Platform IOV_MAX enforcement remains with the OS; this change
+  prevents integer wrapping rather than promising arbitrarily many vectors.
+- Replaced the duplicated MaybeUninit native-iovec builders with one safe
+  iterator-based builder. It copies pointer/length descriptors only, without
+  dereferencing payload pointers or changing existing ownership contracts.
+- Extended the live io_uring regression with vectored reads ending partway
+  through a second buffer (untouched suffix verified) and vectored writes
+  containing an empty segment. All buffers remain owned through completion.
+- Validation: 317 root tests, 200 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. Windows receive metadata lifetime
+  review, native non-Linux testing, and wider cleanup remain open.
+
+## Winsock receive descriptor lifetime correction
+
+- Reviewed Microsoft's WSARecv contract: providers capture WSABUF descriptors
+  during submission and delayed completion does not update lpFlags. Removed
+  unnecessary descriptor retention from ReadOp, RecvOp and ReadvOp, including
+  the recently added conservative ReadOp flags box. Payloads, file staging and
+  driver-owned OVERLAPPED storage still survive pending I/O and cancellation.
+  Source: https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsarecv
+- Added a Windows-only IOCP test for all three operations, releasing sender data
+  only after the receive returns Pending. It replaces the test that enforced
+  unnecessary flags retention. This new test is cross-compiled, not executed
+  here. Removed scalar descriptor allocations; no measured speedup is claimed.
+- Validation: 317 root tests, 200 harness tests, 6 doctests (44 ignored), root
+  strict Clippy, Linux/Windows-target/macOS-target strict harness Clippy,
+  formatting and whitespace checks pass. Native Windows execution and overlapped
+  peek behavior remain open, as does wider package cleanup.

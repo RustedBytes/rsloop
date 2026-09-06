@@ -15,7 +15,7 @@ use crate::vibeio::fd_inner::InnerRawHandle;
 use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::io::IoBufMut;
 use crate::vibeio::op::Op;
-use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
+use crate::vibeio::op::io_util::{CompletionBuffer, completion_len, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]
@@ -66,8 +66,6 @@ pub struct RecvOp<'a, B: IoBufMut> {
     handle: &'a InnerRawHandle,
     buf: Option<CompletionBuffer<B>>,
     completion_token: Option<usize>,
-    #[cfg(windows)]
-    socket_buf: Option<Box<WSABUF>>,
     peek: bool,
 }
 
@@ -78,8 +76,6 @@ impl<'a, B: IoBufMut> RecvOp<'a, B> {
             handle,
             buf: Some(CompletionBuffer::new(buf, handle.uses_completion())),
             completion_token: None,
-            #[cfg(windows)]
-            socket_buf: None,
             peek: false,
         }
     }
@@ -89,8 +85,6 @@ impl<'a, B: IoBufMut> RecvOp<'a, B> {
             handle,
             buf: Some(CompletionBuffer::new(buf, handle.uses_completion())),
             completion_token: None,
-            #[cfg(windows)]
-            socket_buf: None,
             peek: true,
         }
     }
@@ -217,20 +211,19 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
             )
         })?;
 
-        let wsabuf = self.socket_buf.get_or_insert_with(|| {
-            Box::new(WSABUF {
-                len: 0,
-                buf: std::ptr::null_mut(),
-            })
-        });
-        wsabuf.len = read_len;
-        wsabuf.buf = buf.as_buf_mut_ptr().cast();
+        let mut wsabuf = WSABUF {
+            len: read_len,
+            buf: buf.as_buf_mut_ptr().cast(),
+        };
 
         let mut flags: u32 = if self.peek { MSG_PEEK as u32 } else { 0 };
+        // SAFETY: WSARecv captures the descriptor during this call and does not
+        // update flags on delayed completion. Payload/OVERLAPPED stay retained.
+        // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsarecv
         let recv_result = unsafe {
             WinSock::WSARecv(
                 socket as SOCKET,
-                wsabuf.as_mut() as *mut WSABUF,
+                &mut wsabuf,
                 1,
                 std::ptr::null_mut(),
                 &mut flags,
@@ -263,7 +256,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
         let entry = opcode::Recv::new(
             types::Fd(self.handle.handle),
             buf.as_buf_mut_ptr(),
-            (buf.buf_capacity()) as _,
+            completion_len(buf.buf_capacity())?,
         )
         .flags(if self.peek { libc::MSG_PEEK } else { 0 })
         .build()
@@ -277,9 +270,6 @@ impl<B: IoBufMut> Drop for RecvOp<'_, B> {
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
-            #[cfg(windows)]
-            let completion_state = self.socket_buf.take();
-            #[cfg(not(windows))]
             let completion_state = ();
             // The owning driver, not the currently entered runtime, must retain
             // every kernel-visible allocation until completion is acknowledged.

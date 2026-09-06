@@ -16,7 +16,7 @@ use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::op::Op;
-use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
+use crate::vibeio::op::io_util::{CompletionBuffer, completion_len, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]
@@ -261,7 +261,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
         let entry = opcode::Write::new(
             types::Fd(self.handle.handle),
             buf.as_buf_ptr(),
-            buf.buf_len() as _,
+            completion_len(buf.buf_len())?,
         )
         .build()
         .user_data(user_data);
