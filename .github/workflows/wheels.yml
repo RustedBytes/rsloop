@@ -5,6 +5,12 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      pgo:
+        description: "Build wheels with profile-guided optimization (slower)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -63,7 +69,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          components: llvm-tools-preview
+
+      - name: Install LLVM tools for PGO
+        if: github.event_name == 'workflow_dispatch' && inputs.pgo
+        run: rustup component add llvm-tools-preview
 
       - name: Cache Cargo registry and target
         uses: Swatinem/rust-cache@v2
@@ -73,7 +82,13 @@ jobs:
         shell: bash
         env:
           RSLOOP_PYTHON_VERSIONS: ${{ matrix.python_versions }}
-        run: scripts/build-pgo-wheels.sh --out dist --target "${{ matrix.rust_target }}"
+          PGO_ENABLED: ${{ github.event_name == 'workflow_dispatch' && inputs.pgo }}
+        run: |
+          if [[ "$PGO_ENABLED" == "true" ]]; then
+            scripts/build-pgo-wheels.sh --out dist --target "${{ matrix.rust_target }}"
+          else
+            scripts/build-wheels.sh --out dist --target "${{ matrix.rust_target }}"
+          fi
 
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4

@@ -351,7 +351,7 @@ Build release wheels into `dist/wheels`:
 scripts/build-wheels.sh
 ```
 
-Build the published-wheel configuration with profile-guided optimization:
+Optionally build wheels with profile-guided optimization:
 
 ```bash
 rustup component add llvm-tools-preview
@@ -367,8 +367,12 @@ between Python versions or free-threaded builds. The target must be native
 because the instrumented extension runs during training.
 
 Set `RSLOOP_PGO_SCENARIOS` to override the comma-separated network scenarios.
-Tagged and manually dispatched wheel workflows use PGO on every supported
-platform except Windows ARM64. Rust profile-generation binaries currently
+The **Wheels** CI workflow disables PGO by default: tagged releases and ordinary
+manual runs use the normal release-wheel builder. To opt in, enable the `pgo`
+checkbox when manually running the workflow. LLVM tools are installed only for
+PGO runs; source-distribution and publishing steps are unchanged.
+When enabled, PGO is used on every supported platform except Windows ARM64.
+Rust profile-generation binaries currently
 crash on that target ([rust-lang/rust#156675](https://github.com/rust-lang/rust/issues/156675)),
 so it temporarily falls back to the normal fat-LTO release build.
 
