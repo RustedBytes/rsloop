@@ -361,12 +361,16 @@ impl TokioAsyncRead for PollUnixStream {
         }
 
         let this = self.get_mut();
-        // Equivalent to .assume_init_mut() in Rust 1.93.0+
-        let unfilled = unsafe { &mut *(buf.unfilled_mut() as *mut [MaybeUninit<u8>] as *mut [u8]) };
-        let buf_temp = unsafe { IoBufTemporaryPoll::new(unfilled.as_mut_ptr(), unfilled.len()) };
+        // SAFETY: only a raw pointer is passed to the synchronous read below;
+        // no initialized-byte reference is formed and no pointer is retained.
+        let unfilled = unsafe { buf.unfilled_mut() };
+        // SAFETY: ReadBuf exclusively owns this writable region for this poll.
+        let buf_temp =
+            unsafe { IoBufTemporaryPoll::new_uninit(unfilled.as_mut_ptr().cast(), unfilled.len()) };
         let mut op = ReadOp::new(&this.stream.handle, buf_temp);
         match this.stream.handle.poll_op_poll(cx, &mut op) {
             Poll::Ready(Ok(read)) => {
+                // SAFETY: the successful read initialized exactly this prefix.
                 unsafe {
                     buf.assume_init(read);
                 }

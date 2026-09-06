@@ -20,7 +20,7 @@ use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]
-fn socket_read(socket: SOCKET, buf: &mut [u8]) -> io::Result<usize> {
+fn socket_read(socket: SOCKET, buf: &mut [std::mem::MaybeUninit<u8>]) -> io::Result<usize> {
     use windows_sys::Win32::Networking::WinSock::{self as WinSock, SOCKET_ERROR, WSABUF};
 
     let len = u32::try_from(buf.len()).map_err(|_| {
@@ -116,8 +116,10 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
         #[cfg(windows)]
         let result = match self.handle.handle {
             RawOsHandle::Socket(socket) => {
+                // SAFETY: IoBufMut guarantees exclusive writable capacity, but
+                // not initialized bytes. The synchronous call retains no pointer.
                 let slice = unsafe {
-                    std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr(), buf.buf_capacity())
+                    std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr().cast(), buf.buf_capacity())
                 };
                 socket_read(socket as SOCKET, slice)
             }

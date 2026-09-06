@@ -79,8 +79,8 @@ struct WaitContext {
     wait_handle: windows_sys::Win32::Foundation::HANDLE,
 }
 
-// SAFETY: `wait_handle` isn't used after the callback returns, so it's safe to send across threads.
 #[cfg(windows)]
+// SAFETY: `wait_handle` isn't used after the callback returns, so it's safe to send across threads.
 unsafe impl Send for WaitContext {}
 
 #[cfg(windows)]

@@ -205,8 +205,13 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                         continue;
                     }
 
-                    let dst_slice = unsafe { std::slice::from_raw_parts_mut(dst.ptr, dst.len) };
-                    dst_slice[..chunk].copy_from_slice(&staging[src_offset..src_offset + chunk]);
+                    let src = &staging[src_offset..src_offset + chunk];
+                    // SAFETY: IoVectoredBufMut supplies writable capacity for
+                    // each destination. The separately allocated staging buffer
+                    // cannot overlap it. Do not form a u8 slice over spare capacity.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(src.as_ptr(), dst.ptr, chunk);
+                    }
                     src_offset += chunk;
                     remaining -= chunk;
                 }

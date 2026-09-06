@@ -87,7 +87,11 @@ fn sockaddr_storage_to_socketaddr(storage: &SOCKADDR_STORAGE) -> Result<SocketAd
 
 #[cfg(windows)]
 #[inline]
-fn socket_recvfrom(socket: SOCKET, buf: &mut [u8], peek: bool) -> io::Result<(usize, SocketAddr)> {
+fn socket_recvfrom(
+    socket: SOCKET,
+    buf: &mut [MaybeUninit<u8>],
+    peek: bool,
+) -> io::Result<(usize, SocketAddr)> {
     use windows_sys::Win32::Networking::WinSock::{
         self as WinSock, MSG_PEEK, SOCKADDR, SOCKADDR_STORAGE, SOCKET_ERROR, WSABUF,
     };
@@ -231,8 +235,10 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
         #[cfg(windows)]
         let result = match self.handle.handle {
             RawOsHandle::Socket(socket) => {
+                // SAFETY: IoBufMut guarantees exclusive writable capacity, but
+                // not initialized bytes. The synchronous call retains no pointer.
                 let slice = unsafe {
-                    std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr(), buf.buf_capacity())
+                    std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr().cast(), buf.buf_capacity())
                 };
                 socket_recvfrom(socket as SOCKET, slice, self.peek)
             }

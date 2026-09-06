@@ -19,7 +19,11 @@ use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
 
 #[cfg(windows)]
 #[inline]
-fn socket_recv(socket: SOCKET, buf: &mut [u8], peek: bool) -> io::Result<usize> {
+fn socket_recv(
+    socket: SOCKET,
+    buf: &mut [std::mem::MaybeUninit<u8>],
+    peek: bool,
+) -> io::Result<usize> {
     use windows_sys::Win32::Networking::WinSock::{
         self as WinSock, MSG_PEEK, SOCKET_ERROR, WSABUF,
     };
@@ -129,8 +133,10 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
         #[cfg(windows)]
         let result = match self.handle.handle {
             RawOsHandle::Socket(socket) => {
+                // SAFETY: IoBufMut guarantees exclusive writable capacity, but
+                // not initialized bytes. The synchronous call retains no pointer.
                 let slice = unsafe {
-                    std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr(), buf.buf_capacity())
+                    std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr().cast(), buf.buf_capacity())
                 };
                 socket_recv(socket as SOCKET, slice, self.peek)
             }

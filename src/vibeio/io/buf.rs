@@ -269,16 +269,45 @@ unsafe impl<I: IoBufMut> IoBufMut for IoBufWithCursor<I> {
 pub(crate) struct IoBufTemporaryPoll {
     ptr: *mut u8,
     len: usize,
+    capacity: usize,
 }
 
 impl IoBufTemporaryPoll {
     /// Create a new `IoBufTemporaryPoll` with the given pointer and length.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must remain valid for `len` initialized bytes throughout the poll.
+    /// Read operations additionally require exclusive writable access. The
+    /// wrapper must not escape the backing borrow, be sent to another thread,
+    /// or be submitted to an operation that retains the pointer after polling.
     #[inline]
     pub(crate) unsafe fn new(ptr: *mut u8, len: usize) -> Self {
-        Self { ptr, len }
+        Self {
+            ptr,
+            len,
+            capacity: len,
+        }
+    }
+
+    /// Wrap writable storage without claiming that any bytes are initialized.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be non-null, aligned, and exclusively writable for `capacity`
+    /// bytes. The same lifetime and poll-only restrictions as `new` apply.
+    #[inline]
+    pub(crate) unsafe fn new_uninit(ptr: *mut u8, capacity: usize) -> Self {
+        Self {
+            ptr,
+            len: 0,
+            capacity,
+        }
     }
 }
 
+// SAFETY: constructors distinguish initialized length from writable capacity;
+// their caller keeps the allocation stable for the entire synchronous poll.
 unsafe impl IoBuf for IoBufTemporaryPoll {
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
@@ -292,10 +321,12 @@ unsafe impl IoBuf for IoBufTemporaryPoll {
 
     #[inline]
     fn buf_capacity(&self) -> usize {
-        self.len
+        self.capacity
     }
 }
 
+// SAFETY: mutable use requires exclusive storage under the constructor contract.
+// Only the initialized prefix supplied by a successful read is exposed.
 unsafe impl IoBufMut for IoBufTemporaryPoll {
     #[inline]
     fn as_buf_mut_ptr(&mut self) -> *mut u8 {
@@ -303,9 +334,14 @@ unsafe impl IoBufMut for IoBufTemporaryPoll {
     }
 
     #[inline]
-    unsafe fn set_buf_init(&mut self, _len: usize) {}
+    unsafe fn set_buf_init(&mut self, len: usize) {
+        self.len = len;
+    }
 }
 
+// SAFETY: construction is unsafe and requires the wrapper to stay within the
+// backing borrow on the polling thread. Send is required by IoBuf, but callers
+// must not use it to transfer this non-owning wrapper or retain it asynchronously.
 unsafe impl Send for IoBufTemporaryPoll {}
 
 /// A single I/O vector entry.
@@ -466,4 +502,108 @@ pub(crate) fn iobuf_to_slice(buf: &impl IoBuf) -> &[u8] {
 #[inline]
 pub(crate) fn iobufmut_to_slice(buf: &mut impl IoBufMut) -> &mut [u8] {
     unsafe { std::slice::from_raw_parts_mut(buf.as_buf_mut_ptr(), buf.buf_len()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IoBuf, IoBufMut, IoBufTemporaryPoll};
+
+    #[test]
+    fn temporary_poll_buffer_tracks_initialized_prefix() {
+        let mut storage = [std::mem::MaybeUninit::<u8>::uninit(); 8];
+        // SAFETY: storage stays exclusively borrowed on this thread until buf
+        // is no longer used. No asynchronous operation receives the pointer.
+        let mut buf =
+            unsafe { IoBufTemporaryPoll::new_uninit(storage.as_mut_ptr().cast(), storage.len()) };
+        assert_eq!(buf.buf_len(), 0);
+        assert_eq!(buf.buf_capacity(), 8);
+        // SAFETY: write and expose only the first three bytes of this allocation.
+        unsafe {
+            std::ptr::copy_nonoverlapping(b"abc".as_ptr(), buf.as_buf_mut_ptr(), 3);
+            buf.set_buf_init(3);
+            assert_eq!(
+                std::slice::from_raw_parts(buf.as_buf_ptr(), buf.buf_len()),
+                b"abc"
+            );
+        }
+        assert_eq!(buf.buf_capacity(), 8);
+    }
+
+    async fn check_poll_read_buffer(
+        mut stream: impl tokio::io::AsyncRead + Unpin,
+        mut peer: impl std::io::Write,
+    ) {
+        use std::{
+            mem::MaybeUninit,
+            pin::Pin,
+            task::{Context, Poll},
+        };
+        use tokio::io::ReadBuf;
+
+        let mut storage = [MaybeUninit::uninit(); 8];
+        let mut buf = ReadBuf::uninit(&mut storage);
+        buf.put_slice(b"!");
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        assert!(
+            Pin::new(&mut stream)
+                .poll_read(&mut cx, &mut buf)
+                .is_pending()
+        );
+        assert_eq!(buf.filled(), b"!");
+        assert_eq!(buf.initialized().len(), 1);
+
+        peer.write_all(b"abc").unwrap();
+        // The exact number returned by each read is allowed to vary.
+        while buf.filled().len() < 4 {
+            let before = buf.filled().len();
+            std::future::poll_fn(|cx| Pin::new(&mut stream).poll_read(cx, &mut buf))
+                .await
+                .unwrap();
+            assert!(buf.filled().len() > before);
+        }
+        assert_eq!(buf.filled(), b"!abc");
+        assert_eq!(buf.initialized().len(), 4);
+        drop(peer);
+        std::future::poll_fn(|cx| Pin::new(&mut stream).poll_read(cx, &mut buf))
+            .await
+            .unwrap();
+        assert_eq!(buf.filled(), b"!abc");
+        assert_eq!(buf.initialized().len(), 4);
+
+        let mut empty = [];
+        let mut empty = ReadBuf::uninit(&mut empty);
+        assert!(matches!(
+            Pin::new(&mut stream).poll_read(&mut cx, &mut empty),
+            Poll::Ready(Ok(()))
+        ));
+    }
+
+    #[test]
+    fn tcp_poll_read_handles_uninitialized_storage_pending_and_eof() {
+        #[cfg(unix)]
+        let driver = crate::vibeio::driver::AnyDriver::new_mio().unwrap();
+        #[cfg(windows)]
+        let driver = crate::vibeio::driver::AnyDriver::new_iocp().unwrap();
+        let runtime = crate::vibeio::executor::Runtime::new(driver);
+        runtime.block_on(async {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (stream, _) = listener.accept().unwrap();
+            let stream = crate::vibeio::net::PollTcpStream::from_std(stream).unwrap();
+            check_poll_read_buffer(stream, peer).await;
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_poll_read_handles_uninitialized_storage_pending_and_eof() {
+        let runtime = crate::vibeio::executor::Runtime::new(
+            crate::vibeio::driver::AnyDriver::new_mio().unwrap(),
+        );
+        runtime.block_on(async {
+            let (stream, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            let stream = crate::vibeio::net::PollUnixStream::from_std(stream).unwrap();
+            check_poll_read_buffer(stream, peer).await;
+        });
+    }
 }
