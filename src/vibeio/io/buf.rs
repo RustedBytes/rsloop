@@ -364,9 +364,13 @@ unsafe impl IoBufMut for IoBufTemporaryPoll {
     }
 }
 
-// SAFETY: construction is unsafe and requires the wrapper to stay within the
-// backing borrow on the polling thread. Send is required by IoBuf, but callers
-// must not use it to transfer this non-owning wrapper or retain it asynchronously.
+/// # Safety
+///
+/// Construction is unsafe and requires the wrapper to stay within the backing
+/// borrow on the polling thread. Send is required by IoBuf, but callers must
+/// not transfer this non-owning wrapper or retain it asynchronously. All access
+/// to the pointer remains confined to the originating synchronous poll.
+// SAFETY: the unsafe constructors require the poll-only confinement above.
 unsafe impl Send for IoBufTemporaryPoll {}
 
 /// A single I/O vector entry.

@@ -94,8 +94,12 @@ impl WriterSender {
 
 impl Drop for WriterSender {
     fn drop(&mut self) {
+        // Serialize disconnection with recv's predicate check and Condvar wait
+        // to prevent a lost shutdown notification. No I/O or wait is performed
+        // while holding this guard; deferring cleanup would require a runtime.
         self.shared
             .state
+            // qualirs:ignore Q0082
             .lock()
             .expect("poisoned writer queue")
             .sender_alive = false;
@@ -132,8 +136,12 @@ impl WriterReceiver {
 
 impl Drop for WriterReceiver {
     fn drop(&mut self) {
+        // Serialize disconnection with enqueue so later sends are rejected.
+        // This guard only updates queue metadata; it does not wait for the
+        // worker to finish. Contention is possible, but cleanup must be synchronous.
         self.shared
             .state
+            // qualirs:ignore Q0082
             .lock()
             .expect("poisoned writer queue")
             .receiver_alive = false;

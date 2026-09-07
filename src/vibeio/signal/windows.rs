@@ -92,6 +92,10 @@ impl CtrlC {
 
 impl Drop for CtrlC {
     fn drop(&mut self) {
+        // Synchronously retire this slot under the dispatcher lock. Deferring
+        // removal could retain a cancelled task's waker indefinitely. User
+        // callbacks run after releasing the guard, including the retired drop.
+        // qualirs:ignore Q0082
         let retired = self.state.wakers.lock().unwrap().remove(self.waker_slot);
         drop(retired);
     }
