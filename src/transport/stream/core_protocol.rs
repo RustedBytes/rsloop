@@ -12,13 +12,116 @@ use std::sync::atomic::Ordering;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PySlice, PyTuple};
+use pyo3::types::{PyBytes, PyDict};
 
 use super::buffers::PendingReadBuffer;
 use super::protocol::StreamReaderFastPath;
 use super::tuning::{PENDING_READ_HIGH_WATER, PENDING_READ_LOW_WATER};
 use super::{PendingReadEvent, PyStreamTransport, StreamTransportCore};
-use crate::context::{run_in_context, run_in_context_noargs, run_in_context_onearg};
+use crate::context::{run_in_context_noargs, run_in_context_onearg};
+
+/// Copy raw bytes into a writable C-contiguous export, regardless of its
+/// element format. The export is released before calling buffer_updated, which
+/// is allowed to resize or replace the protocol's buffer.
+fn copy_to_protocol_buffer(buffer: &Bound<'_, PyAny>, source: &[u8]) -> PyResult<usize> {
+    pyo3::sync::critical_section::with_critical_section(buffer, || {
+        copy_to_protocol_buffer_locked(buffer, source)
+    })
+}
+
+fn copy_to_protocol_buffer_locked(buffer: &Bound<'_, PyAny>, source: &[u8]) -> PyResult<usize> {
+    let py = buffer.py();
+    // Exporters can make Py_buffer self-referential; keep its address stable.
+    let mut view = Box::<pyo3::ffi::Py_buffer>::new_uninit();
+    // SAFETY: buffer is live and attached; view has stable writable storage.
+    let result = unsafe {
+        pyo3::ffi::PyObject_GetBuffer(
+            buffer.as_ptr(),
+            view.as_mut_ptr(),
+            pyo3::ffi::PyBUF_WRITABLE | pyo3::ffi::PyBUF_C_CONTIGUOUS,
+        )
+    };
+    if result < 0 {
+        return Err(PyErr::fetch(py));
+    }
+    // SAFETY: successful GetBuffer initialized the allocation in place.
+    let mut view = unsafe { view.assume_init() };
+    let result = if view.len <= 0 {
+        Err(PyRuntimeError::new_err(
+            "get_buffer() returned an empty buffer",
+        ))
+    } else {
+        let count = source.len().min(view.len as usize);
+        // Use the buffer-protocol C API rather than forming Rust references to
+        // potentially shared Python memory. No Python callback can see an
+        // intermediate bytes object, and non-byte element formats need no cast.
+        // SAFETY: GetBuffer granted a writable contiguous export of at least
+        // count bytes. source lives throughout the call. The C API does not
+        // modify source (the mutable pointer supports Python 3.10's signature).
+        let copied = unsafe {
+            pyo3::ffi::PyBuffer_FromContiguous(
+                &mut *view,
+                source.as_ptr().cast_mut().cast(),
+                count as pyo3::ffi::Py_ssize_t,
+                b'C' as std::ffi::c_char,
+            )
+        };
+        if copied < 0 {
+            Err(PyErr::fetch(py))
+        } else {
+            Ok(count)
+        }
+    };
+    // SAFETY: exactly one release of the successfully acquired live export,
+    // still at the same address; all fallible paths above converge here.
+    unsafe { pyo3::ffi::PyBuffer_Release(&mut *view) };
+    result
+}
+
+#[cfg(test)]
+mod buffer_tests {
+    use super::copy_to_protocol_buffer;
+    use pyo3::prelude::*;
+
+    #[test]
+    fn copies_prefix_and_releases_export_before_resize() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            let buffer = py.eval(c"bytearray(b'________')", None, None).unwrap();
+            assert_eq!(copy_to_protocol_buffer(&buffer, b"abc").unwrap(), 3);
+            assert_eq!(buffer.extract::<Vec<u8>>().unwrap(), b"abc_____");
+            buffer
+                .call_method1("extend", (b"more".as_slice(),))
+                .unwrap();
+            assert_eq!(buffer.len().unwrap(), 12);
+        });
+    }
+
+    #[test]
+    fn supports_non_byte_formats_and_rejects_invalid_exports() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            let buffer = py
+                .eval(c"__import__('array').array('I', [0, 0])", None, None)
+                .unwrap();
+            assert_eq!(copy_to_protocol_buffer(&buffer, &[1, 2, 3]).unwrap(), 3);
+            let bytes = buffer.call_method0("tobytes").unwrap();
+            assert_eq!(&bytes.extract::<Vec<u8>>().unwrap()[..3], &[1, 2, 3]);
+            for expr in [
+                c"b'readonly'",
+                c"bytearray()",
+                c"memoryview(bytearray(8))[::2]",
+            ] {
+                let buffer = py.eval(expr, None, None).unwrap();
+                assert!(copy_to_protocol_buffer(&buffer, b"abc").is_err());
+            }
+            let buffer = py.eval(c"bytearray()", None, None).unwrap();
+            assert!(copy_to_protocol_buffer(&buffer, b"abc").is_err());
+            buffer.call_method1("extend", (b"ok".as_slice(),)).unwrap();
+            assert_eq!(copy_to_protocol_buffer(&buffer, b"long input").unwrap(), 2);
+        });
+    }
+}
 
 impl StreamTransportCore {
     pub(super) fn apply_pending_read_backpressure(&self) {
@@ -222,40 +325,20 @@ impl StreamTransportCore {
             let mut offset = 0;
             while offset < data.len() {
                 let remaining = data.len() - offset;
-                let args = PyTuple::new(py, [remaining])?.unbind();
-                let buffer_obj =
-                    run_in_context(py, &context, context_needs_run, get_buffer, &args)?;
-                // SAFETY: `buffer_obj` is a live Python object under the GIL. CPython returns a
-                // new memoryview reference or null with an exception set; PyO3 wraps both cases.
-                let memoryview = unsafe {
-                    Bound::from_owned_ptr_or_err(
-                        py,
-                        pyo3::ffi::PyMemoryView_FromObject(buffer_obj.bind(py).as_ptr()),
-                    )
-                }?;
-                // Cast to bytes so writable contiguous buffers with a non-byte element format
-                // receive raw socket data with the same semantics as socket.recv_into().
-                let byte_view = memoryview.call_method1("cast", ("B",))?;
-                let buffer_len = byte_view.len()?;
-                if buffer_len == 0 {
-                    return Err(PyRuntimeError::new_err(
-                        "get_buffer() returned an empty buffer",
-                    ));
-                }
-                let chunk_len = remaining.min(buffer_len);
-                let chunk_len_isize =
-                    isize::try_from(chunk_len).expect("Python buffer length fits in Py_ssize_t");
-                byte_view.set_item(
-                    PySlice::new(py, 0, chunk_len_isize, 1),
-                    PyBytes::new(py, &data[offset..offset + chunk_len]),
+                let buffer_obj = run_in_context_onearg(
+                    py,
+                    &context,
+                    context_needs_run,
+                    get_buffer,
+                    &remaining.into_pyobject(py)?.into_any(),
                 )?;
-                let updated_args = PyTuple::new(py, [chunk_len])?.unbind();
-                run_in_context(
+                let chunk_len = copy_to_protocol_buffer(buffer_obj.bind(py), &data[offset..])?;
+                run_in_context_onearg(
                     py,
                     &context,
                     context_needs_run,
                     buffer_updated,
-                    &updated_args,
+                    &chunk_len.into_pyobject(py)?.into_any(),
                 )?;
                 offset += chunk_len;
             }

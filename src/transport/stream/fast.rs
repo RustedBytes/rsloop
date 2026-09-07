@@ -2124,6 +2124,9 @@ impl PyFastStreamWriter {
     }
 
     fn writelines(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
+        if let Ok(transport) = self.transport.bind(py).cast_exact::<PyStreamTransport>() {
+            return transport.borrow().writelines(py, data);
+        }
         self.transport.call_method1(py, "writelines", (data,))?;
         Ok(())
     }

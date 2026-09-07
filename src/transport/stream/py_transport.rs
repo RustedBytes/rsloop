@@ -62,7 +62,7 @@ impl PyStreamTransport {
         self.write_data(py, data)
     }
 
-    fn writelines(&self, py: Python<'_>, seq: &Bound<'_, PyAny>) -> PyResult<()> {
+    pub(super) fn writelines(&self, py: Python<'_>, seq: &Bound<'_, PyAny>) -> PyResult<()> {
         if self.core.has_text_encoding {
             for item in seq.try_iter()? {
                 self.write_data(py, &item?)?;
@@ -79,14 +79,20 @@ impl PyStreamTransport {
         // Match asyncio's single-write writelines behavior. Besides reducing
         // syscalls for framed protocols, validating and joining here lets the
         // direct path account for backpressure once for the complete batch.
-        let bytes_type = py.import("builtins")?.getattr("bytes")?;
+        // Immutable byte segments need neither a Python conversion nor a
+        // builtins lookup (the common framed-protocol case).
+        let mut bytes_type = None;
         let mut joined = self.core.new_pooled_write_buffer(0);
         for item in seq.try_iter()? {
             let item = item?;
             if let Ok(bytes) = item.cast::<PyBytes>() {
                 joined.extend_from_slice(bytes.as_bytes());
             } else {
-                let converted = bytes_type.call1((item,))?;
+                let converter = match &bytes_type {
+                    Some(converter) => converter,
+                    None => bytes_type.insert(py.import("builtins")?.getattr("bytes")?),
+                };
+                let converted = converter.call1((item,))?;
                 joined.extend_from_slice(converted.cast::<PyBytes>()?.as_bytes());
             }
         }

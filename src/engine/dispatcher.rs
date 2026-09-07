@@ -1,18 +1,17 @@
-//! Coordination-thread dispatcher for commands, timers, and compatibility watchers.
+//! Coordination-thread dispatcher for commands and compatibility watchers.
 //!
 //! It prepares `ReadyItem`s but leaves Python callback execution to the loop
 //! thread. Direct stream I/O can instead run on the loop thread's own reactor.
 
 #[cfg(not(unix))]
 use std::collections::HashSet;
-use std::collections::{BinaryHeap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::task::{Context, Poll};
 use std::thread;
-use std::time::Instant;
 
 use super::commands::{
     LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
@@ -25,21 +24,11 @@ use pyo3::prelude::*;
 #[cfg(unix)]
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
 
-mod timer_entry;
-use timer_entry::TimerEntry;
-
-fn timer_wait_needs_replacement<T: PartialEq>(current: Option<&T>, deadline: &T) -> bool {
-    current.is_none_or(|current| current != deadline)
-}
-
 /// Long-lived future driven by the coordination thread's `vibeio` runtime.
 struct RuntimeDispatcher {
     core: Arc<LoopCore>,
     command_rx: Receiver<LoopCommand>,
-    timer_wait: Option<(Instant, crate::vibeio::time::Sleep)>,
     ready_batch: VecDeque<ReadyItem>,
-    timers: BinaryHeap<TimerEntry>,
-    next_timer_id: u64,
     active_run: Option<ActiveRun>,
     #[cfg(unix)]
     signal_tasks: HashMap<i32, SignalWatcher>,
@@ -126,10 +115,7 @@ pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>
     let dispatcher = RuntimeDispatcher {
         core: Arc::clone(&core),
         command_rx,
-        timer_wait: None,
         ready_batch: VecDeque::new(),
-        timers: BinaryHeap::new(),
-        next_timer_id: 0,
         active_run: None,
         #[cfg(unix)]
         signal_tasks: HashMap::new(),
@@ -159,8 +145,6 @@ impl Future for RuntimeDispatcher {
                 return Poll::Ready(());
             }
 
-            self.collect_expired_timers();
-
             if self.active_run.is_some() && self.has_ready() {
                 self.dispatch_ready_batch();
             }
@@ -168,34 +152,11 @@ impl Future for RuntimeDispatcher {
             if self.drain_commands() {
                 return Poll::Ready(());
             }
-            self.collect_expired_timers();
             if self.active_run.is_some() && self.has_ready() {
                 self.dispatch_ready_batch();
                 continue;
             }
 
-            if self.active_run.is_none() {
-                self.timer_wait = None;
-                return Poll::Pending;
-            }
-
-            let Some(deadline) = self.timers.peek().map(|entry| entry.when) else {
-                self.timer_wait = None;
-                return Poll::Pending;
-            };
-            let replace_timer = timer_wait_needs_replacement(
-                self.timer_wait.as_ref().map(|(current, _)| current),
-                &deadline,
-            );
-            if replace_timer {
-                self.timer_wait =
-                    Some((deadline, crate::vibeio::time::Sleep::sleep_until(deadline)));
-            }
-            let (_, sleep) = self.timer_wait.as_mut().expect("timer wait missing");
-            if Pin::new(sleep).poll(cx).is_ready() {
-                self.timer_wait = None;
-                continue;
-            }
             return Poll::Pending;
         }
     }
@@ -218,23 +179,6 @@ impl RuntimeDispatcher {
                 Err(TryRecvError::Empty) => return false,
                 Err(TryRecvError::Disconnected) => return true,
             }
-        }
-    }
-
-    fn collect_expired_timers(&mut self) {
-        crate::profile_scope!("runtime.collect_expired_timers");
-        if self.active_run.is_none() {
-            return;
-        }
-
-        let now = Instant::now();
-        while self.timers.peek().is_some_and(|entry| entry.when <= now) {
-            let entry = self.timers.pop().expect("timer heap peeked but empty");
-            if entry.callback.cancelled() {
-                continue;
-            }
-            self.ready_batch
-                .push_back(ReadyItem::Callback(entry.callback));
         }
     }
 
@@ -279,16 +223,6 @@ impl RuntimeDispatcher {
                 crate::profile_scope!("runtime.cmd.server_accepted");
                 self.ready_batch
                     .push_back(ReadyItem::ServerAccepted { server, stream });
-            }
-            LoopCommand::ScheduleTimer { callback, when } => {
-                crate::profile_scope!("runtime.cmd.schedule_timer");
-                let seq = self.next_timer_id;
-                self.next_timer_id += 1;
-                self.timers.push(TimerEntry {
-                    when,
-                    seq,
-                    callback,
-                });
             }
             LoopCommand::Run(LoopRunCommand::EnterRun { pending_ready }) => {
                 crate::profile_scope!("runtime.cmd.enter_run");
@@ -549,7 +483,7 @@ impl RuntimeDispatcher {
             .expect("poisoned pending ready queue");
         pending.extend(self.ready_batch.drain(..));
         drop(pending);
-        // Wake the parked loop thread so runtime-dispatched work (timers, fd
+        // Wake the parked loop thread so runtime-dispatched work (fd
         // watchers) is observed; `signal_ready` coalesces redundant wakes.
         self.core.signal_ready();
     }
@@ -588,25 +522,6 @@ impl RuntimeDispatcher {
         }
         for (_, task) in self.accept_tasks.drain() {
             abort_watch_task(task);
-        }
-    }
-}
-
-#[cfg(kani)]
-mod verification {
-    use super::timer_wait_needs_replacement;
-
-    #[kani::proof]
-    fn merge_timer_wait_is_reused_only_for_the_same_deadline() {
-        let current: Option<u64> = kani::any();
-        let deadline: u64 = kani::any();
-        let replace = timer_wait_needs_replacement(current.as_ref(), &deadline);
-
-        assert_eq!(replace, current != Some(deadline));
-        if current == Some(deadline) {
-            assert!(!replace);
-        } else {
-            assert!(replace);
         }
     }
 }

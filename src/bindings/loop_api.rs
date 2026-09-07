@@ -15,6 +15,7 @@ mod asyncgens;
 mod asyncio_cache;
 mod connections;
 mod executor;
+mod fast_callbacks;
 mod ffi_helpers;
 mod lifecycle;
 mod methods;
@@ -27,6 +28,7 @@ mod servers;
 mod signals;
 mod sock_ops;
 mod socket_connect;
+mod socket_operation;
 mod sockets;
 mod spawn_env;
 mod tasks;
@@ -37,6 +39,7 @@ pub use asyncgens::{asyncgen_finalizer_hook, asyncgen_firstiter_hook};
 pub use lifecycle::future_done_stop;
 pub use signals::signal_bridge;
 
+pub(crate) use fast_callbacks::install_fast_callbacks;
 pub(crate) use tasks::{try_fast_create_future, try_fast_create_task};
 
 use crate::engine::{CallbackKind, LoopCore, LoopCoreError};

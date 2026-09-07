@@ -7,4 +7,5 @@ pub use loop_api::{
     signal_bridge,
 };
 
+pub(crate) use loop_api::install_fast_callbacks;
 pub(crate) use loop_api::{try_fast_create_future, try_fast_create_task};

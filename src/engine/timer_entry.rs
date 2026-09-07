@@ -20,7 +20,7 @@ fn compare_timer_parts<T: Ord>(
 pub(super) struct TimerEntry {
     pub(super) when: Instant,
     pub(super) seq: u64,
-    pub(super) callback: Arc<super::super::callbacks::ReadyCallback>,
+    pub(super) callback: Arc<super::callbacks::ReadyCallback>,
 }
 
 impl PartialEq for TimerEntry {

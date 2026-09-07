@@ -44,6 +44,14 @@ fn is_write_batch_candidate(len: usize) -> bool {
     len > SMALL_WRITE_COALESCE_MIN_BYTES && len <= SMALL_WRITE_COALESCE_MAX_BYTES
 }
 
+fn stage_owned_buffer(pending: &mut Option<OwnedWriteBuffer>, data: OwnedWriteBuffer) {
+    if let Some(buffer) = pending {
+        buffer.extend_from_slice(data.remaining());
+    } else {
+        *pending = Some(data);
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WriteBufferSignal {
     None,
@@ -229,6 +237,32 @@ impl StreamTransportCore {
         let buffer = pending.get_or_insert_with(|| self.new_pooled_write_buffer(data.len()));
         buffer.extend_from_slice(data);
         drop(pending);
+        self.finish_staged_write(should_pause);
+        Ok(())
+    }
+
+    /// Retain an already-owned write allocation instead of copying it into a
+    /// second pool slot. Only joining an existing batch requires a copy.
+    fn stage_direct_write_buffer(self: &Arc<Self>, data: OwnedWriteBuffer) -> io::Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        if transport_stats_enabled() {
+            TRANSPORT_STAGED_WRITES.fetch_add(1, Ordering::Relaxed);
+        }
+        let should_pause = self.record_write_buffer_enqueued(data.len())?;
+        stage_owned_buffer(
+            &mut self
+                .pending_direct_write
+                .lock()
+                .expect("poisoned pending direct write"),
+            data,
+        );
+        self.finish_staged_write(should_pause);
+        Ok(())
+    }
+
+    fn finish_staged_write(self: &Arc<Self>, should_pause: bool) {
         if should_pause {
             self.notify_pause_writing();
         }
@@ -244,7 +278,6 @@ impl StreamTransportCore {
             self.direct_write_scheduled.store(false, Ordering::Release);
             self.fail_write(None);
         }
-        Ok(())
     }
 
     pub(crate) fn flush_pending_direct_write(self: &Arc<Self>) {
@@ -326,9 +359,10 @@ impl StreamTransportCore {
             match self.try_direct_tasked_write(data) {
                 Ok(written) if written == data.len() => return Ok(()),
                 Ok(written) => {
-                    let mut pending =
-                        OwnedWriteBuffer::from_pooled_slice(data, &self.write_buffer_pool);
-                    pending.advance(written);
+                    let pending = OwnedWriteBuffer::from_pooled_slice(
+                        &data[written..],
+                        &self.write_buffer_pool,
+                    );
                     self.set_write_backpressure_active(true);
                     return self.queue_write(pending);
                 }
@@ -370,7 +404,7 @@ impl StreamTransportCore {
         {
             self.request_poll_reader();
             if !self.poll_reader_ready.load(Ordering::Acquire) {
-                return self.stage_direct_write(data.remaining());
+                return self.stage_direct_write_buffer(data);
             }
         }
 
@@ -378,7 +412,7 @@ impl StreamTransportCore {
             if self.direct_write_scheduled.load(Ordering::Acquire)
                 || (self.coalesce_small_writes && is_write_batch_candidate(data.remaining().len()))
             {
-                return self.stage_direct_write(data.remaining());
+                return self.stage_direct_write_buffer(data);
             }
             match self.try_direct_tasked_write(data.remaining()) {
                 Ok(written) if written == data.remaining().len() => return Ok(()),
@@ -694,12 +728,27 @@ mod tests {
 
     use pyo3::prelude::*;
 
-    use super::{OwnedWriteBuffer, is_write_batch_candidate};
+    use super::{OwnedWriteBuffer, is_write_batch_candidate, stage_owned_buffer};
     use crate::transport::stream::test_support::{build_test_core, shutdown_test_core};
     use crate::transport::stream::tuning::{
         SMALL_WRITE_COALESCE_MAX_BYTES, SMALL_WRITE_COALESCE_MIN_BYTES, STREAM_READ_BUFFER_SIZE,
         max_write_buffer_size,
     };
+
+    #[test]
+    fn owned_staging_moves_first_allocation_and_appends_only_unsent_bytes() {
+        let mut first = OwnedWriteBuffer::from_slice(b"sent-first");
+        first.advance(5);
+        let address = first.remaining().as_ptr();
+        let mut pending = None;
+        stage_owned_buffer(&mut pending, first);
+        assert_eq!(pending.as_ref().unwrap().remaining().as_ptr(), address);
+        assert_eq!(pending.as_ref().unwrap().remaining(), b"first");
+        let mut second = OwnedWriteBuffer::from_slice(b"sent-second");
+        second.advance(5);
+        stage_owned_buffer(&mut pending, second);
+        assert_eq!(pending.as_ref().unwrap().remaining(), b"firstsecond");
+    }
 
     #[test]
     fn write_batch_range_tracks_the_normal_read_block() {

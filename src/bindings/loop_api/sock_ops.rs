@@ -5,11 +5,9 @@
 //! source of truth so subclassed or wrapped sockets keep working.
 
 use pyo3::prelude::*;
-use pyo3::types::PySlice;
 
 use super::PyLoop;
 use super::socket_connect::connect_socket_to_address;
-use crate::fd_ops;
 
 pub(super) fn sock_recv<'py>(
     slf: Py<PyLoop>,
@@ -17,22 +15,12 @@ pub(super) fn sock_recv<'py>(
     sock: Py<PyAny>,
     nbytes: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let locals = PyLoop::task_locals(py, &slf)?;
-    let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
-        loop {
-            match Python::attach(|py| sock.call_method1(py, "recv", (nbytes,))) {
-                Ok(value) => return Ok(value),
-                Err(err) => {
-                    let retry = Python::attach(|py| fd_ops::is_retryable_socket_error(py, &err))?;
-                    if !retry {
-                        return Err(err);
-                    }
-                }
-            }
-            fd_ops::wait_readable(fd).await?;
-        }
-    })
+    super::socket_operation::start(
+        slf,
+        py,
+        sock,
+        super::socket_operation::SocketAction::Recv(nbytes),
+    )
 }
 
 pub(super) fn sock_recv_into<'py>(
@@ -41,22 +29,12 @@ pub(super) fn sock_recv_into<'py>(
     sock: Py<PyAny>,
     buf: Py<PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let locals = PyLoop::task_locals(py, &slf)?;
-    let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
-        loop {
-            match Python::attach(|py| sock.call_method1(py, "recv_into", (buf.clone_ref(py),))) {
-                Ok(value) => return Ok(value),
-                Err(err) => {
-                    let retry = Python::attach(|py| fd_ops::is_retryable_socket_error(py, &err))?;
-                    if !retry {
-                        return Err(err);
-                    }
-                }
-            }
-            fd_ops::wait_readable(fd).await?;
-        }
-    })
+    super::socket_operation::start(
+        slf,
+        py,
+        sock,
+        super::socket_operation::SocketAction::RecvInto(buf),
+    )
 }
 
 pub(super) fn sock_sendall<'py>(
@@ -65,38 +43,25 @@ pub(super) fn sock_sendall<'py>(
     sock: Py<PyAny>,
     data: Py<PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let locals = PyLoop::task_locals(py, &slf)?;
-    let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
-        let total = Python::attach(|py| data.bind(py).len())?;
-        let mut sent = 0usize;
-
-        while sent < total {
-            let wrote = match Python::attach(|py| -> PyResult<usize> {
-                let sent = isize::try_from(sent).expect("Python object length fits in Py_ssize_t");
-                let total =
-                    isize::try_from(total).expect("Python object length fits in Py_ssize_t");
-                let chunk = data.bind(py).get_item(PySlice::new(py, sent, total, 1))?;
-                sock.call_method1(py, "send", (chunk,))?.extract(py)
-            }) {
-                Ok(wrote) => wrote,
-                Err(err) => {
-                    let retry = Python::attach(|py| fd_ops::is_retryable_socket_error(py, &err))?;
-                    if !retry {
-                        return Err(err);
-                    }
-                    fd_ops::wait_writable(fd).await?;
-                    continue;
-                }
-            };
-            sent += wrote;
-            if sent < total {
-                fd_ops::wait_writable(fd).await?;
-            }
+    let len = {
+        let export = pyo3::buffer::PyUntypedBuffer::get(data.bind(py))?;
+        if !export.is_c_contiguous() {
+            return Err(pyo3::exceptions::PyBufferError::new_err(
+                "sendall requires a contiguous buffer",
+            ));
         }
-
-        Ok(Python::attach(|py| py.None()))
-    })
+        export.len_bytes()
+    };
+    super::socket_operation::start(
+        slf,
+        py,
+        sock,
+        super::socket_operation::SocketAction::SendAll {
+            data,
+            offset: 0,
+            len,
+        },
+    )
 }
 
 pub(super) fn sock_accept<'py>(
@@ -104,27 +69,7 @@ pub(super) fn sock_accept<'py>(
     py: Python<'py>,
     sock: Py<PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let locals = PyLoop::task_locals(py, &slf)?;
-    let fd = fd_ops::fileobj_to_fd(py, sock.bind(py))?;
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
-        loop {
-            match Python::attach(|py| -> PyResult<Py<PyAny>> {
-                let accepted = sock.call_method0(py, "accept")?;
-                let client = accepted.bind(py).get_item(0)?;
-                client.call_method1("setblocking", (false,))?;
-                Ok(accepted)
-            }) {
-                Ok(value) => return Ok(value),
-                Err(err) => {
-                    let retry = Python::attach(|py| fd_ops::is_retryable_socket_error(py, &err))?;
-                    if !retry {
-                        return Err(err);
-                    }
-                }
-            }
-            fd_ops::wait_readable(fd).await?;
-        }
-    })
+    super::socket_operation::start(slf, py, sock, super::socket_operation::SocketAction::Accept)
 }
 
 pub(super) fn sock_connect<'py>(

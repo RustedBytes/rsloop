@@ -27,7 +27,7 @@ fn call_callback_onearg(
     Ok(callback.bind(py).call1((arg.bind(py),))?.unbind())
 }
 
-enum CallbackArgs {
+pub(crate) enum CallbackArgs {
     None,
     One(Py<PyAny>),
     Many(Py<PyTuple>),
@@ -80,9 +80,20 @@ impl ReadyCallback {
                     .expect("single callback arg")
                     .unbind(),
             ),
-            _ => CallbackArgs::Many(args_tuple.clone_ref(py)),
+            _ => CallbackArgs::Many(args_tuple),
         };
 
+        Self::from_args(id, kind, callback, args, context, context_needs_run)
+    }
+
+    pub(crate) fn from_args(
+        id: CallbackId,
+        kind: CallbackKind,
+        callback: Py<PyAny>,
+        args: CallbackArgs,
+        context: Py<PyAny>,
+        context_needs_run: bool,
+    ) -> Self {
         Self {
             id,
             kind,
@@ -181,7 +192,13 @@ impl ReadyCallback {
 /// The handle owns its callback inline and the ready queue holds `Py<PyHandle>`
 /// clones, requiring one allocation per `call_soon`. The class is frozen so
 /// the event loop can read the callback without dynamic borrow checking.
-#[pyclass(name = "Handle", module = "rsloop._loop", weakref, frozen)]
+#[pyclass(
+    name = "Handle",
+    module = "rsloop._loop",
+    weakref,
+    frozen,
+    freelist = 8192
+)]
 pub struct PyHandle {
     callback: ReadyCallback,
 }

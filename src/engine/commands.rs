@@ -2,7 +2,6 @@
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use pyo3::prelude::*;
 
@@ -58,13 +57,6 @@ pub enum LoopCommand {
     ScheduleReady(Arc<ReadyCallback>),
     /// Enqueues a callback owned by its Python `Handle`.
     ScheduleReadyHandle(Py<PyHandle>),
-    /// Registers a callback for execution at a monotonic deadline.
-    ScheduleTimer {
-        /// Callback to execute.
-        callback: Arc<ReadyCallback>,
-        /// Monotonic deadline on the runtime clock.
-        when: Instant,
-    },
     /// Changes the loop's active run session.
     Run(LoopRunCommand),
     /// Starts, stops, or delivers an operating-system signal watcher.

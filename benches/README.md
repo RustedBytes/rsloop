@@ -1,5 +1,9 @@
 # Event Loop Benchmark
 
+See the [five-path optimization experiment](optimization-results.md) for
+before/after socket, buffered-I/O, timer, write, and callback measurements,
+including application-level regressions and reproducible alternating A/B runs.
+
 For embedded timer repoll costs, run `cargo bench --bench timer --locked`.
 It measures unchanged/changing wakers with one or 1,024 pending timers, without
 OS waiting. See [vibeio performance results](vibeio-performance.md) for measured

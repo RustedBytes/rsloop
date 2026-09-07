@@ -7,9 +7,7 @@ use pyo3::prelude::*;
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use self::windows::{
-    duplicate_handle, duplicate_handle_from_fd, duplicate_tcp_stream, poll_fd,
-};
+pub use self::windows::{duplicate_handle, duplicate_handle_from_fd, poll_fd};
 
 pub type RawFd = i64;
 
@@ -110,37 +108,6 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
         )),
         PollReadiness::Ready { read, write } => Ok((read, write)),
     }
-}
-
-pub async fn wait_readable(fd: RawFd) -> PyResult<()> {
-    #[cfg(windows)]
-    {
-        if let Ok(stream) = duplicate_tcp_stream(fd)
-            && stream.peer_addr().is_ok()
-        {
-            let (tx, rx) = futures::channel::oneshot::channel();
-            let task = crate::windows_vibeio::spawn(move || async move {
-                let result = async {
-                    let stream = crate::vibeio::net::PollTcpStream::from_std(stream)?;
-                    let mut buf = [0_u8; 1];
-                    stream.peek(&mut buf).await.map(|_| ())
-                }
-                .await;
-                let _ = tx.send(result);
-            });
-
-            if let Ok(task) = task {
-                let result = rx
-                    .await
-                    .map_err(|_| PyRuntimeError::new_err("vibeio wait dropped"))?
-                    .map_err(|err| PyRuntimeError::new_err(err.to_string()));
-                crate::windows_vibeio::cancel(task);
-                return result;
-            }
-        }
-    }
-
-    wait_for_interest(fd, true, false).await
 }
 
 pub async fn wait_writable(fd: RawFd) -> PyResult<()> {

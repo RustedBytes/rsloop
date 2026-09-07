@@ -77,3 +77,12 @@ pub use crate::vibeio::builder::*;
 #[allow(unused_imports)]
 pub use crate::vibeio::driver::RegistrationMode;
 pub use crate::vibeio::executor::*;
+
+// Embedding-only readiness plumbing; standalone runtime checks do not use it.
+#[allow(unused_imports)]
+pub(crate) use fd_inner::InnerRawHandle;
+#[cfg(windows)]
+#[allow(unused_imports)]
+pub(crate) use fd_inner::RawOsHandle;
+#[allow(unused_imports)]
+pub(crate) use op::ReadinessOp;

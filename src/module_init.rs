@@ -27,6 +27,7 @@ pub(crate) fn add_module_contents(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 fn add_module_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLoop>()?;
+    crate::bindings::install_fast_callbacks(m.py())?;
     m.add_class::<PyHandle>()?;
     m.add_class::<PyTimerHandle>()?;
     m.add_class::<PyProcessTransport>()?;

@@ -4,6 +4,7 @@ mod callbacks;
 mod commands;
 mod dispatcher;
 mod loop_core;
+mod timer_entry;
 
 pub use callbacks::{PyHandle, PyTimerHandle, ReadyCallback};
 pub use commands::{
@@ -12,6 +13,7 @@ pub use commands::{
 };
 pub use loop_core::LoopCore;
 
+pub(crate) use callbacks::CallbackArgs;
 pub(crate) use callbacks::CallbackKind;
 #[cfg(unix)]
 pub(crate) use loop_core::SignalHandlerTemplate;
