@@ -121,22 +121,53 @@ class TestLocalSocket:
 
     def test_cancelled_partial_send_releases_mutable_buffer(self):
         a, b = self.pair()
-        a.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+
+        class PartialSender:
+            # Windows socketpair uses TCP: even a small SO_SNDBUF does not
+            # guarantee a 1 MiB send blocks. Force one real partial send and
+            # then a readiness wait, independent of kernel buffer capacity.
+            sent = 0
+            attempts = 0
+            blocked = True
+
+            def gettimeout(self):
+                return a.gettimeout()
+
+            def fileno(self):
+                return a.fileno()
+
+            def send(self, data):
+                self.attempts += 1
+                if self.blocked and self.sent:
+                    raise BlockingIOError
+                count = a.send(memoryview(data)[:17] if self.blocked else data)
+                self.sent += count
+                return count
+
+        sender = PartialSender()
 
         async def exercise():
             payload = bytearray(b"x" * 1024 * 1024)
-            pending = self.loop.sock_sendall(a, payload)
+            pending = self.loop.sock_sendall(sender, payload)
             assert not pending.done()
+            assert 0 < sender.sent < len(payload)
+            assert sender.attempts == 2
             pending.cancel()
             payload.clear()
+            sender.blocked = False
             await asyncio.sleep(0)
-            while True:
-                try:
-                    b.recv(65536)
-                except BlockingIOError:
-                    break
+            # Await delivery of exactly the accepted prefix; a TCP peer may
+            # not observe it in a single nonblocking recv immediately.
+            received = bytearray()
+            while len(received) < sender.sent:
+                received.extend(
+                    await self.loop.sock_recv(b, sender.sent - len(received))
+                )
+            assert received == b"x" * sender.sent
             await asyncio.sleep(0)
             await asyncio.sleep(0)
+            assert sender.sent <= 17
+            assert sender.attempts == 2
             with pytest.raises(BlockingIOError):
                 b.recv(1)
             await self.loop.sock_sendall(a, b"after")

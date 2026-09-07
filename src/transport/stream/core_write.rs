@@ -325,6 +325,25 @@ impl StreamTransportCore {
         }
     }
 
+    /// Hand staged bytes to the writer before a graceful shutdown. On Windows
+    /// a normal flush can defer while the completion reader is being rebound;
+    /// close/write_eof must not bypass those bytes via the lazy-writer shortcut.
+    #[cfg(any(windows, test))]
+    pub(super) fn queue_pending_direct_write(self: &Arc<Self>) {
+        self.direct_write_scheduled.store(false, Ordering::Release);
+        let pending = self
+            .pending_direct_write
+            .lock()
+            .expect("poisoned pending direct write")
+            .take();
+        if let Some(data) = pending {
+            // The dedicated writer can wait for socket progress without
+            // blocking Python. These bytes have already been accounted for.
+            self.set_write_backpressure_active(true);
+            self.queue_recorded_write(data);
+        }
+    }
+
     pub(super) fn discard_pending_direct_write(self: &Arc<Self>) {
         self.direct_write_scheduled.store(false, Ordering::Release);
         let discarded = {
@@ -752,6 +771,47 @@ mod tests {
         second.advance(5);
         stage_owned_buffer(&mut pending, second);
         assert_eq!(pending.as_ref().unwrap().remaining(), b"firstsecond");
+    }
+
+    #[test]
+    fn deferred_staged_bytes_precede_shutdown_without_double_accounting() {
+        use super::super::WriterCommand;
+        use std::sync::atomic::Ordering;
+
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            for finish in [WriterCommand::Close, WriterCommand::WriteEof] {
+                let (core, writer_rx, loop_core, _protocol) = build_test_core(py);
+                core.stage_direct_write(b"first").unwrap();
+                core.stage_direct_write(b"second").unwrap();
+                assert_eq!(core.get_write_buffer_size(), 11);
+
+                core.queue_pending_direct_write();
+                core.queue_pending_direct_write(); // A repeated close cannot duplicate bytes.
+                assert!(!core.direct_write_scheduled.load(Ordering::Acquire));
+                assert!(core.pending_direct_write.lock().unwrap().is_none());
+                assert_eq!(core.get_write_buffer_size(), 11);
+                let eof = matches!(finish, WriterCommand::WriteEof);
+                assert!(core.writer_tx.send(finish).is_ok());
+                let WriterCommand::Data(data) =
+                    writer_rx.try_recv().ok().expect("queued writer command")
+                else {
+                    panic!("shutdown overtook staged data");
+                };
+                assert_eq!(data.remaining(), b"firstsecond");
+                assert!(matches!(
+                    (
+                        writer_rx.try_recv().ok().expect("queued writer command"),
+                        eof
+                    ),
+                    (WriterCommand::WriteEof, true) | (WriterCommand::Close, false)
+                ));
+                assert!(writer_rx.try_recv().is_err());
+                core.record_write_buffer_drained(data.len());
+                assert_eq!(core.get_write_buffer_size(), 0);
+                shutdown_test_core(core, writer_rx, loop_core);
+            }
+        });
     }
 
     #[test]

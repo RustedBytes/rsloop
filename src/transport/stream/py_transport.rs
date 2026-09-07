@@ -104,6 +104,8 @@ impl PyStreamTransport {
 
     fn close(&self) -> PyResult<()> {
         self.core.flush_pending_direct_write();
+        #[cfg(windows)]
+        self.core.queue_pending_direct_write();
         self.core.set_closing();
         if let Some(fd) = self.core.runtime_socket_fd() {
             let _ = stop_socket_reader_nowait(&self.core, fd);
@@ -168,6 +170,8 @@ impl PyStreamTransport {
             ));
         }
         self.core.flush_pending_direct_write();
+        #[cfg(windows)]
+        self.core.queue_pending_direct_write();
         self.core.mark_write_eof();
         if self.core.direct_writer.is_some() && self.core.writer_is_still_lazy() {
             if let Some(writer) = &self.core.direct_writer {
