@@ -22,6 +22,373 @@ runtime is safe or that the Qualirs review is finished.
 
 ## Current inventory
 
+### Partial kqueue deletion clears only retired filter state
+
+- Successful per-filter deletion now clears that filter's cached readiness and
+  removes its waiter, even when deletion of the other filter fails. Failed
+  filters preserve registration, readiness and waiter for retry.
+- Removed wakers are retained in locals until state borrows end, including the
+  error return path. This prevents stale readiness/waker state from surviving
+  re-registration of a successfully deleted filter.
+- Expanded the three failure-combination tests to check readiness and waiter
+  state as well as installed flags. macOS strict cross-Clippy passes; these
+  native-target tests still require execution on macOS.
+
+### Kqueue readiness respects installed-filter state
+
+- Extracted per-registration readiness recording and made it check the relevant
+  registered_read/registered_write flag before latching readiness or taking a
+  waiter. Token/generation checks still precede this step in event dispatch.
+- Added a state-machine test for all four read/write registration combinations,
+  with both absent and present wakers. Events for unregistered filters must not
+  change readiness or consume the stored waiter; registered filters retain the
+  existing latch-or-wake behavior.
+- macOS all-feature strict cross-Clippy passes. This is defensive state handling,
+  not a natively reproduced stale-event race. Native test execution remains open.
+
+### Retryable kqueue deregistration
+
+- Changed deregistration to retain its token if either kernel deletion fails.
+  It still attempts both filters and returns the first error, but records each
+  successful deletion so retries target only filters that remain installed.
+  Previously it removed the registration before attempting either syscall.
+- Full success removes the registration and drops wakers outside the state
+  borrow. Deletion calls also execute without borrowing state.
+- Extended failure injection for read-only, write-only and dual failures:
+  bookkeeping must retain exactly the failed filters, retry must delete only
+  those filters, and subsequent raw deletion must report both absent.
+- macOS strict all-feature cross-Clippy passes; native test execution remains
+  pending. Permanent Drop-time deletion failures may retain bookkeeping until
+  driver destruction, and failed initial-registration rollback remains separate.
+
+### Kqueue interruption handling
+
+- Recorded both remaining kqueue long-unsafe-block reports: each is one kevent
+  call with bounded input/output storage and an existing local safety comment.
+- EV_DELETE cleanup now retries Interrupted iteratively. A retry that finds no
+  filter uses the existing missing-filter success policy; other terminal errors
+  are preserved. This covers rollback and deregistration through delete_filter.
+- Added a 100,000-interruption fault-injection test ending in success, ENOENT or
+  EIO. macOS all-feature strict cross-Clippy passes; native execution is pending.
+- This does not resolve non-interruption cleanup failure or all rebind semantics.
+
+### Full feature verification after lazy-reaper and eventfd fixes
+
+- Root all-feature Rust tests: 384 passed, zero failures/ignored. Root
+  all-target/all-feature strict Clippy also passes.
+- All 24 isolated-feature strict Clippy builds pass across Linux GNU, Windows
+  GNU and macOS ARM64. Each target checks no features, fs, process, signal,
+  pipe, stdio, splice and blocking-default separately.
+- Native Linux isolated tests pass in every configuration:
+
+  | Features | Unit tests passed | Doctests passed |
+  | --- | ---: | ---: |
+  | None | 178 | 16 |
+  | fs | 215 | 16 |
+  | process | 192 | 16 |
+  | signal | 191 | 16 |
+  | pipe | 183 | 16 |
+  | stdio | 182 | 16 |
+  | splice | 192 | 16 |
+  | blocking-default | 180 | 16 |
+
+- Logs: target/vibeio-cleanup-root-current.log,
+  target/vibeio-cleanup-lint-matrix-current.log and
+  target/vibeio-cleanup-native-matrix-current.log. All runs completed normally.
+  Windows/macOS evidence is compilation only; Python release-build evidence
+  below predates the latest lazy-reaper/eventfd changes. Native platform and
+  exceptional lifecycle verification remain open.
+
+### Direct io_uring destructor coverage
+
+- Extended live_shutdown_cancels_queued_and_submitted_reads across both direct
+  driver destruction and explicit quiescence followed by destruction, each with
+  a locally queued or already submitted read. Previously it tested only the
+  explicit-quiescence path before Drop.
+- All four read-shutdown cases execute on Linux. The explicit path verifies
+  ECANCELED while retaining the buffer until driver destruction; both paths
+  verify normal teardown releases retained storage. The existing live CQ
+  overflow/descriptor-result shutdown test also passes in the same test run.
+- This adds evidence for normal native shutdown. It does not exercise the
+  exceptional quiescence-error retention path or prove arbitrary kernel races;
+  those remain open. No production behavior changed.
+
+### io_uring wake review and retry hardening
+
+- Refreshed the scan to 196 reports before this change and recorded the six
+  UringDriver locations, distinguishing ownership contracts from safe reborrows.
+- Linux eventfd interrupt writes now use the existing iterative wake helper,
+  renamed send_wake_notification and shared with Apple datagram wake sources.
+  Interrupted writes retry; WouldBlock means a wake is already pending.
+- The helper's 100,000-interruption fault-injection test and Linux all-feature
+  suite pass. Linux strict Clippy and macOS strict cross-Clippy pass. No native
+  eventfd interruption/lost-wakeup reproduction or throughput claim is made.
+- Remaining driver teardown concerns are not closed by these local findings.
+
+### Socket-address report review
+
+- Confirmed the seven process-wrapper reborrow findings still match their
+  earlier specific dispositions; did not duplicate that review inventory.
+- Recorded the four socket-address missing-comment reports against the existing
+  storage-type, alignment, bounds and provenance contracts.
+- Expanded native-length test coverage from selected boundaries to every
+  undersized and valid storage length, plus unsupported-family rejection.
+  Existing pointer/unaligned/round-trip tests remain intact. No production
+  conversion behavior changed.
+
+### Duplicate lazy reaper initialization fixed
+
+- Reproduced concurrent cache misses with a join of two current_zombie_reaper
+  requests: before the fix they returned different channels, failing the new
+  same-channel regression test.
+- start_zombie_reaper performs only channel allocation and task enqueueing, so
+  it is now synchronous. The runtime creates/caches the sender under a short
+  RefCell borrow, without an initializer task or suspension between cache miss
+  and publication. Concurrent requests and subsequent lookup share one channel.
+- Process-only and all-feature Linux tests pass after the fix, including child
+  cleanup after a canceled wait. The latter test was renamed because startup
+  itself no longer suspends. Linux/Windows strict Clippy passes.
+- This closes the duplicate-initializer defect, not every reaper shutdown or
+  native Windows wait-callback race. No measured performance claim is made.
+
+### Executor finding review
+
+- Recorded all seven executor snapshot reports: documented spawn precondition,
+  two test callback contracts and four safe pin/RefMut reborrows.
+- Added direct safety comments to the stateless test RawWaker callbacks, without
+  weakening the reentrant-clone fixture. Removed an unnecessary sender clone
+  from current_zombie_reaper's already-cloned cached-channel path.
+- Re-ran executor tests and strict all-feature Clippy. These scoped checks do
+  not complete the broader lazy-reaper initialization/shutdown audit.
+
+### Positioned-read findings and narrowed allowances
+
+- Recorded all ten ReadAtOp snapshot findings against completion-length updates,
+  OVERLAPPED offset initialization, the ReadFile call and safe buffer reborrows.
+  Existing offset-boundary and actual Linux sparse-file fixtures provide scoped
+  evidence; native Windows execution remains pending.
+- Narrowed the non-completion-platform dead-code allowances on ReadAtOp and
+  WriteAtOp from their entire structs to just offset. Other fields remain linted.
+- macOS isolated-fs strict cross-Clippy and Linux isolated-fs tests pass.
+  No runtime behavior or performance change is claimed.
+
+### Scalar write/send findings
+
+- Recorded all 13 WriteOp/SendOp/SendtoOp reports in the 198-finding snapshot.
+  The flagged large blocks each contain one FFI call, and the missing-comment
+  sites have preceding local contracts. No safety rules were suppressed.
+- Removed three identity matches around poll_result_or_wait, preserving pending,
+  error and partial-write results directly. Completion ownership is unchanged.
+- Linux all-feature strict Clippy/tests and Windows all-feature cross-Clippy
+  pass. Native Windows completion/cancellation remains unverified; this review
+  is not a whole-runtime soundness or performance claim.
+
+### Vectored-write review
+
+- Recorded all seven WritevOp snapshot reports against their existing local
+  contracts: synchronous send, overlapped send, staging gather and file write.
+- Added a Linux mock cancellation test proving transfer preserves both the
+  boxed native descriptor-array address and owned payload addresses, including
+  an empty segment. This models retirement rather than claiming a native race.
+- Simplified poll_poll's identity match to return poll_result_or_wait directly;
+  readiness, errors and partial-write counts are unchanged.
+- Native Windows send/staging/cancellation verification remains open.
+
+### Vectored-read review
+
+- Recorded all 12 ReadvOp snapshot findings, distinguishing ordinary Option
+  reborrows, documented single FFI calls and staging-buffer scatter copies.
+- Extended the existing short-datagram/empty-segment test to actual Linux
+  io_uring as well as polling. It verifies segment lengths, untouched suffixes
+  and stable backing addresses; completion waits are bounded. Both paths ran
+  successfully in the featureless harness.
+- Production behavior is unchanged. Native Windows staging/scatter and pending
+  cancellation verification remain outstanding despite successful cross-checks.
+
+### Scalar read/receive finding review
+
+- Recorded all 24 ReadOp/RecvOp snapshot findings: sixteen safe mutable reborrow
+  reports and eight comment/long-FFI-block reports. Necessary FFI operations stay
+  intact; the dispositions do not waive native cancellation/teardown review.
+- Added a real Linux io_uring stream test for both operations with reused,
+  preinitialized storage. It permits partial reads, checks each visible length,
+  collects the exact payload, and verifies EOF clears the buffer. The test runs
+  without optional features and executed successfully on this host.
+- No production behavior change or performance claim. Windows overlapped peek
+  and broader shutdown interleavings remain explicitly unverified.
+
+### Recvfrom finding review and native truncation coverage
+
+- Recorded all 17 RecvfromOp snapshot reports individually/by exact duplicate
+  location: six missing-comment/long-FFI-block reports and eleven safe-as_mut
+  reborrow reports. Kept necessary FFI calls intact and distinguished existing
+  comments from the still-required native lifetime verification.
+- Added a Linux io_uring test for oversized UDP datagrams with zero/eight-byte
+  buffers on IPv4 and IPv6. It checks source addresses, initialized lengths,
+  peek non-consumption and eventual packet consumption. Executed successfully
+  on this host, not skipped; featureless strict Clippy also passes.
+- No production behavior changed. Windows overlapped peek/cancellation and
+  broader driver teardown remain outside this native Linux evidence.
+
+### Integrated extension verification refresh
+
+- Rebuilt and installed rsloop 0.1.48 with maturin develop --release --locked
+  for CPython 3.14. Optimized compilation completed in 36.93 seconds; this is
+  build time, not an event-loop performance measurement.
+- The actual rebuilt extension passes the Python compatibility suite:
+  109 tests in 3.767 seconds, two skips, no failures.
+- A rsloop-only workload-matrix smoke run completed all 13 scenarios, each with
+  one measured run after warmup. Idle used five cycles and one warmup cycle;
+  affinity was CPUs 2,3. Artifact: target/vibeio-cleanup-matrix-smoke.json.
+- This is functional integration coverage only. The short single-process-block
+  sample cannot establish stability, before/after speedup or superiority over
+  uvloop. README benchmark numbers are unchanged. Native Windows/macOS execution
+  and the remaining finding/lifecycle reviews are still outstanding.
+
+### Filesystem driver-selection simplification
+
+- Replaced nine check-then-expect sequences with direct matching on a filtered
+  current driver: hard_link, both Linux symlink entry points, rename, remove_dir,
+  remove_file, create_dir, metadata and symlink_metadata. The driver is now
+  available by construction inside the completion branch; redundant
+  "invalid driver state" panic assertions are gone.
+- Selection order is unchanged: completion support first, configured blocking
+  offload second, synchronous fallback last. Path conversion, ownership and
+  operation error propagation are unchanged. The Q0078 blocking dispositions
+  remain applicable; this is not a claim to eliminate synchronous fallback.
+- Isolated fs tests and strict Clippy pass, as does the all-feature harness.
+  This is control-flow cleanup, not a demonstrated panic or measured speedup.
+
+### Buffer finding dispositions and cursor coverage
+
+- Recorded per-location dispositions for all five io/buf.rs findings in the
+  198-finding snapshot: three missing-comment reports, the Send-comment report,
+  and the spare-capacity pointer offset. Required initialization is retained;
+  constructor-call lifetime auditing is not waived by the comment dispositions.
+- Added direct cursor tests for invalid advancement without mutation, partial
+  suffix initialization, preserved prefix, exhausted cursors and empty storage.
+- Removed unnecessary optional-feature gates from two existing blocking-read
+  helper tests; the helper already compiles under cfg(test). Featureless testing
+  now covers its prefix initialization, error lengths and empty-capacity path.
+- No production behavior change or performance improvement is claimed here.
+
+### Reaper fallback ownership-transfer review
+
+- Restricted fallback mutex guards to taking the child; the subsequent wait is
+  outside the lock in both worker and failed-spawn paths. Previously the if-let
+  guard remained live throughout waiting. This was not a demonstrated deadlock:
+  successful worker startup and parent-side fallback are mutually exclusive.
+- Extracted the worker-start seam without adding a boxed callback allocation.
+  A real-child failure-injection test verifies rejected startup retains the
+  child and synchronous fallback reaps it. The assertion observes with WNOWAIT.
+- Linux isolated-process regression and full harness pass (262 tests and
+  16 doctests); isolated-process strict Clippy and Windows all-feature strict
+  cross-Clippy pass. Native Windows reaper execution remains pending.
+- Qualirs now reports 198 findings. Its two direct-Drop lock reports disappear
+  because the calls moved into a helper, not because fallback waiting vanished.
+  OS thread-creation failure can still make Drop wait synchronously; this remains
+  an explicit limitation rather than a claimed nonblocking cleanup guarantee.
+
+### Windows console-handler initialization ordering
+
+- Fixed a publication gap: the console handler was installed inside the state
+  OnceCell initializer, before CTRL_C_STATE became visible to callbacks. A
+  callback in that interval could acknowledge Ctrl-C without dispatching it.
+- State publication now precedes handler installation. A separate OnceCell
+  serializes successful installation; failure leaves reusable state and allows
+  the next constructor to retry. No listener is returned before installation
+  succeeds. Events before listener creation are still not promised to it.
+- The actual initialization helper is tested on Linux through the Windows
+  bookkeeping module: failure leaves installation unset, retry sees published
+  state, an installation-time modeled callback updates it, and subsequent calls
+  reuse state without reinstalling. This passes natively; actual console delivery
+  still needs Windows execution. Windows strict cross-Clippy passes.
+- The signal-drop mutex findings remain real contention points. Waker removal
+  drops callbacks outside the lock, but registry/dispatch bookkeeping can still
+  contend; this change does not claim wait-free destruction or solve fork safety.
+
+### Verification refresh after IOCP cleanup
+
+- All 24 isolated-feature strict Clippy builds pass: Linux GNU, Windows GNU
+  and macOS ARM64, each with no features and separately fs, process, signal,
+  pipe, stdio, splice and blocking-default. This includes the new package-wide
+  unsafe-comment gate. Log: target/vibeio-cleanup-lint-matrix-current.log.
+- Root all-target/all-feature strict Clippy passes. Root Rust tests pass:
+  377 tests, zero failures/ignored. Log: target/vibeio-cleanup-root-current.log.
+- Featureless Linux harness tests pass: 172 tests and 16 doctests, zero ignored.
+  Strict all-feature harness rustdoc passes. The previous all-feature Linux
+  harness result remains 260 tests and 16 doctests.
+- Refreshed Qualirs inventory: 200 vibeio diagnostics, comprising 75 Q0087,
+  63 Q0090, 44 Q0095 and 18 other findings. Analyzer exit status 1 denotes the
+  reported findings; no rules were disabled. Remaining diagnostics still need
+  their recorded dispositions or further review, not blanket suppression.
+- Windows/macOS results above are cross-compilation only. This refresh does not
+  execute those platforms, rebuild the Python extension, or measure performance.
+
+### IOCP disassociation errors and cross-platform safety-comment gate
+
+- NtSetInformationFile's detachment result is now checked and converted to an
+  I/O error. Completion registrations remain in the slab if detachment fails;
+  rebind_mode returns that error without attempting the replacement. Previously
+  the native error was ignored and the registration was removed regardless.
+- Added a Windows-only test injecting a null target into an otherwise live
+  registration, checking failed rebind preserves the token/mode, then restoring
+  the target and retrying detachment. Association with a second port checks the
+  successful detach path, while the socket remains independently owned.
+- Documented the last IOCP unsafe-call contract using Microsoft's synchronous
+  Nt/ZwSetInformationFile documentation. Enabled undocumented_unsafe_blocks for
+  the whole package, including Windows. Strict all-feature cross-Clippy passes
+  for Windows and macOS; Linux strict Clippy and 260 tests/16 doctests pass.
+- Windows tests are cross-checked, not natively executed. Drop still cannot
+  report detachment errors; an exceptional failure can retain registration
+  bookkeeping until driver destruction. Pending-operation teardown and native
+  cancellation races remain open. Passing this comment gate is not a complete
+  soundness proof.
+- References:
+  https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ioisoperationsynchronous
+  https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetinformationfile
+
+### IOCP submission-error destruction and cancellation retention
+
+- Fixed submit_completion's immediate-error path: the removed Completion now
+  drops after the mutable DriverState borrow ends. Previously its stored waker
+  could run a reentrant destructor under that borrow and panic.
+- Added a Windows-only failed-submission regression test with a safe custom
+  waker destructor checking that driver state can be borrowed again. It uses
+  an unsupported Op, so no kernel request is submitted. Cross-Clippy passes;
+  native before/after execution is not available on this Linux host.
+- Strengthened repeated-cancellation state coverage to retain a real boxed
+  OVERLAPPED context, check its pointer remains stable across cancellations,
+  and check the completed branch returns no cancellation pointer.
+- Documented CancelIoEx's call-site lifetime: the pointer-producing branch
+  retains its context and returns no retired payload to drop before the call.
+  Cancellation return status never releases pending allocations. The remaining
+  Windows unsafe-comment probe site is NtSetInformationFile disassociation;
+  native cancellation races and teardown remain broader open verification work.
+- Linux validation: 260 tests and 16 doctests pass. Reference:
+  https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-cancelioex
+
+### Completion-port batching and association review
+
+- Documented the synchronous batch call's live port, writable local outputs,
+  array capacity/count contract and disabled alertable callbacks. Failure paths
+  do not inspect packet outputs; successful packets retain per-entry processing.
+- Documented regular handle association's borrowed source and existing owned
+  port. The returned port is an alias, not a second independently owned handle.
+- Added a Windows-only test posting 257 interrupt packets, draining them in
+  bounded batches and checking the queue is empty afterward. It permits partial
+  batches rather than assuming each native call fills the array.
+- Moved the modeled retirement packet's existing safety comment directly next
+  to its unsafe call. Ordinary Windows strict cross-Clippy passes; the explicit
+  whole-Windows unsafe-comment probe now has two remaining sites:
+  NtSetInformationFile disassociation and CancelIoEx cancellation.
+- Linux validation remains 260 tests and 16 doctests. The new Windows test is
+  cross-checked only, not natively executed. No runtime speedup or complete IOCP
+  soundness claim follows from these changes.
+- API contracts reviewed:
+  https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-getqueuedcompletionstatusex
+  https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-createiocompletionport
+
 ### AFD setup ownership review
 
 - Documented NtCreateFile's counted UTF-16 name/object-attribute lifetimes and

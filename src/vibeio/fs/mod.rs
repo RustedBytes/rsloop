@@ -226,8 +226,9 @@ pub async fn hard_link(
     let src = src.as_ref();
     let dst = dst.as_ref();
 
-    let driver = crate::vibeio::executor::current_driver();
-    if driver.as_ref().is_some_and(|d| d.supports_completion()) {
+    if let Some(driver) =
+        crate::vibeio::executor::current_driver().filter(|driver| driver.supports_completion())
+    {
         let src_cstr = CString::new(src.as_os_str().as_encoded_bytes()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -241,7 +242,6 @@ pub async fn hard_link(
             )
         })?;
 
-        let driver = driver.expect("invalid driver state");
         let mut op = HardLinkOp::new(driver.clone(), src_cstr, dst_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
@@ -347,8 +347,9 @@ pub async fn symlink_dir(
     let src = src.as_ref();
     let dst = dst.as_ref();
 
-    let driver = crate::vibeio::executor::current_driver();
-    if driver.as_ref().is_some_and(|d| d.supports_completion()) {
+    if let Some(driver) =
+        crate::vibeio::executor::current_driver().filter(|driver| driver.supports_completion())
+    {
         // On Linux with io_uring, use SymlinkOp
         let src_cstr = CString::new(src.as_os_str().as_encoded_bytes()).map_err(|e| {
             std::io::Error::new(
@@ -362,7 +363,6 @@ pub async fn symlink_dir(
                 format!("Invalid path: {}", e),
             )
         })?;
-        let driver = driver.expect("invalid driver state");
         let mut op = SymlinkOp::new(driver.clone(), src_cstr, dst_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
@@ -468,8 +468,9 @@ pub async fn symlink_file(
     let src = src.as_ref();
     let dst = dst.as_ref();
 
-    let driver = crate::vibeio::executor::current_driver();
-    if driver.as_ref().is_some_and(|d| d.supports_completion()) {
+    if let Some(driver) =
+        crate::vibeio::executor::current_driver().filter(|driver| driver.supports_completion())
+    {
         // On Linux with io_uring, use SymlinkOp
         let src_cstr = CString::new(src.as_os_str().as_encoded_bytes()).map_err(|e| {
             std::io::Error::new(
@@ -483,7 +484,6 @@ pub async fn symlink_file(
                 format!("Invalid path: {}", e),
             )
         })?;
-        let driver = driver.expect("invalid driver state");
         let mut op = SymlinkOp::new(driver.clone(), src_cstr, dst_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
@@ -575,8 +575,9 @@ pub async fn rename(
     let from = from.as_ref();
     let to = to.as_ref();
 
-    let driver = crate::vibeio::executor::current_driver();
-    if driver.as_ref().is_some_and(|d| d.supports_completion()) {
+    if let Some(driver) =
+        crate::vibeio::executor::current_driver().filter(|driver| driver.supports_completion())
+    {
         let from_cstr = CString::new(from.as_os_str().as_encoded_bytes()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -589,7 +590,6 @@ pub async fn rename(
                 format!("Invalid path: {}", e),
             )
         })?;
-        let driver = driver.expect("invalid driver state");
         let mut op = RenameOp::new(driver.clone(), from_cstr, to_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
@@ -656,15 +656,15 @@ pub async fn rename(
 pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let path = path.as_ref();
 
-    let driver = crate::vibeio::executor::current_driver();
-    if driver.as_ref().is_some_and(|d| d.supports_completion()) {
+    if let Some(driver) =
+        crate::vibeio::executor::current_driver().filter(|driver| driver.supports_completion())
+    {
         let path_cstr = CString::new(path.as_os_str().as_encoded_bytes()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("Invalid path: {}", e),
             )
         })?;
-        let driver = driver.expect("invalid driver state");
         let mut op = UnlinkOp::new(driver.clone(), path_cstr, true);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
@@ -724,15 +724,15 @@ pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let path = path.as_ref();
 
-    let driver = crate::vibeio::executor::current_driver();
-    if driver.as_ref().is_some_and(|d| d.supports_completion()) {
+    if let Some(driver) =
+        crate::vibeio::executor::current_driver().filter(|driver| driver.supports_completion())
+    {
         let path_cstr = CString::new(path.as_os_str().as_encoded_bytes()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("Invalid path: {}", e),
             )
         })?;
-        let driver = driver.expect("invalid driver state");
         let mut op = UnlinkOp::new(driver.clone(), path_cstr, false);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
     } else if crate::vibeio::executor::offload_fs() {
@@ -792,15 +792,15 @@ pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<(
 pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let path = path.as_ref();
 
-    let driver = crate::vibeio::executor::current_driver();
-    if driver.as_ref().is_some_and(|d| d.supports_completion()) {
+    if let Some(driver) =
+        crate::vibeio::executor::current_driver().filter(|driver| driver.supports_completion())
+    {
         let path_cstr = CString::new(path.as_os_str().as_encoded_bytes()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("Invalid path: {}", e),
             )
         })?;
-        let driver = driver.expect("invalid driver state");
         // mode 0o777 is standard for mkdir, umask will be applied
         let mut op = MkDirOp::new(driver.clone(), path_cstr, 0o777);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
@@ -927,15 +927,15 @@ pub async fn create_dir_all(path: impl AsRef<std::path::Path>) -> std::io::Resul
 pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Metadata> {
     let path = path.as_ref();
 
-    let driver = crate::vibeio::executor::current_driver();
-    if driver.as_ref().is_some_and(|d| d.supports_completion()) {
+    if let Some(driver) =
+        crate::vibeio::executor::current_driver().filter(|driver| driver.supports_completion())
+    {
         let path_cstr = CString::new(path.as_os_str().as_encoded_bytes()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("Invalid path: {}", e),
             )
         })?;
-        let driver = driver.expect("invalid driver state");
         let mut op = crate::vibeio::op::StatxOp::new(
             driver.clone(),
             libc::AT_FDCWD,
@@ -1005,15 +1005,15 @@ pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Meta
 pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Metadata> {
     let path = path.as_ref();
 
-    let driver = crate::vibeio::executor::current_driver();
-    if driver.as_ref().is_some_and(|d| d.supports_completion()) {
+    if let Some(driver) =
+        crate::vibeio::executor::current_driver().filter(|driver| driver.supports_completion())
+    {
         let path_cstr = CString::new(path.as_os_str().as_encoded_bytes()).map_err(|e| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!("Invalid path: {}", e),
             )
         })?;
-        let driver = driver.expect("invalid driver state");
         let mut op = crate::vibeio::op::StatxOp::new(
             driver.clone(),
             libc::AT_FDCWD,

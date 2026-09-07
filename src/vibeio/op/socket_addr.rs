@@ -326,7 +326,7 @@ mod tests {
             let mut storage: Storage = unsafe { std::mem::zeroed() };
             storage.ss_family = family as _;
             let capacity = std::mem::size_of::<Storage>();
-            for length in [0, required - 1, capacity + 1, usize::MAX] {
+            for length in (0..required).chain([capacity + 1, usize::MAX]) {
                 assert_eq!(
                     sockaddr_storage_to_socketaddr(&storage, length)
                         .unwrap_err()
@@ -338,6 +338,19 @@ mod tests {
             assert_eq!(address.is_ipv4(), index == 0);
             assert!(address.ip().is_unspecified());
             assert_eq!(address.port(), 0);
+            for length in required..=capacity {
+                assert_eq!(
+                    sockaddr_storage_to_socketaddr(&storage, length).unwrap(),
+                    address
+                );
+            }
+            storage.ss_family = 0;
+            assert_eq!(
+                sockaddr_storage_to_socketaddr(&storage, capacity)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::InvalidData
+            );
         }
     }
 }

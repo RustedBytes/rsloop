@@ -182,7 +182,8 @@ impl InnerRawHandle {
         self.mode
     }
 
-    /// Replace the registration. If acquiring the new registration fails, the
+    /// Replace the registration. If deregistration fails, return its error
+    /// without attempting a replacement. If acquiring the new registration fails, the
     /// handle is unregistered: callers must drop it or retry before doing I/O.
     #[inline]
     pub(crate) fn rebind_mode(
@@ -263,6 +264,50 @@ mod tests {
     use std::os::fd::AsRawFd;
     #[cfg(unix)]
     use std::os::unix::net::UnixStream;
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_iocp_detachment_preserves_registration_for_retry() {
+        use std::os::windows::io::AsRawSocket;
+        let driver = Rc::new(AnyDriver::new_iocp().unwrap());
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .unwrap();
+        let raw = RawOsHandle::Socket(socket.as_raw_socket());
+        let mut handle = InnerRawHandle::new_with_driver_and_mode(
+            &driver,
+            raw,
+            Interest::READABLE,
+            RegistrationMode::Completion,
+        )
+        .unwrap();
+        let original_token = handle.token;
+        // Inject an invalid target without closing the original owned socket.
+        handle.handle = RawOsHandle::Handle(std::ptr::null_mut());
+        let result = handle.rebind_mode(RegistrationMode::Poll);
+        handle.handle = raw;
+        assert!(result.is_err());
+        assert_eq!(handle.token, original_token);
+        assert!(handle.uses_completion());
+        // Retrying detachment must find the original registration, then a new
+        // port must be able to associate the still-live socket.
+        driver.deregister_handle(&handle).unwrap();
+        handle.token = UNREGISTERED;
+        drop(handle);
+        let other_driver = Rc::new(AnyDriver::new_iocp().unwrap());
+        let other = InnerRawHandle::new_with_driver_and_mode(
+            &other_driver,
+            raw,
+            Interest::READABLE,
+            RegistrationMode::Completion,
+        )
+        .unwrap();
+        drop(other);
+        assert_eq!(socket.r#type().unwrap(), socket2::Type::STREAM);
+    }
 
     #[cfg(unix)]
     #[test]

@@ -354,20 +354,11 @@ pub(crate) async fn current_zombie_reaper() -> Option<async_channel::Sender<Zomb
         let runtime = runtime.borrow();
         runtime.as_ref().map(|runtime_inner| runtime_inner.clone())
     })?;
-    let option = runtime
-        .zombie_reaper
-        .try_borrow()
-        .ok()
-        .and_then(|e| e.as_ref().cloned());
-    if let Some(option) = option {
-        Some(option.clone())
-    } else {
-        let reaper = runtime.spawn(start_zombie_reaper()).await;
-        if let Ok(mut option) = runtime.zombie_reaper.try_borrow_mut() {
-            *option = Some(reaper.clone());
-        }
-        Some(reaper)
-    }
+    // Startup only allocates a channel and queues a task; it never polls user
+    // code or awaits. Publish under this short borrow so concurrent requests
+    // cannot start separate reapers while the first initializer is suspended.
+    let mut reaper = runtime.zombie_reaper.borrow_mut();
+    Some(reaper.get_or_insert_with(start_zombie_reaper).clone())
 }
 
 /// Spawn a task on the current runtime.
@@ -854,6 +845,27 @@ impl Drop for Runtime {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "process")]
+    #[test]
+    fn concurrent_reaper_requests_share_one_channel() {
+        let runtime = super::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
+        runtime.block_on(async {
+            let (first, second) = futures_util::future::join(
+                super::current_zombie_reaper(),
+                super::current_zombie_reaper(),
+            )
+            .await;
+            let first = first.unwrap();
+            let second = second.unwrap();
+            assert!(
+                first.same_channel(&second),
+                "duplicate reapers were created"
+            );
+            let cached = super::current_zombie_reaper().await.unwrap();
+            assert!(first.same_channel(&cached));
+        });
+    }
+
     use super::*;
     use std::cell::Cell;
     use std::task::{RawWaker, RawWakerVTable};
@@ -1048,10 +1060,13 @@ mod tests {
 
     #[test]
     fn join_rechecks_completion_after_reentrant_waker_clone() {
+        // SAFETY: no data pointer is read or owned. The callback accesses only
+        // this thread's test hook and returns another stateless raw waker.
         unsafe fn clone(_: *const ()) -> RawWaker {
             reenter_join();
             RawWaker::new(std::ptr::null(), &VTABLE)
         }
+        // SAFETY: a stateless waker has no allocation to release or dereference.
         unsafe fn ignore(_: *const ()) {}
         const VTABLE: RawWakerVTable = RawWakerVTable::new(clone, ignore, ignore, ignore);
         let state = Rc::new(RefCell::new(JoinState {

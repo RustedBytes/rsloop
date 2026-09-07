@@ -32,10 +32,12 @@ pub(crate) fn validate_windows_write_offset(offset: u64) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 pub struct WriteAtOp<'a, B: IoBuf> {
     handle: &'a InnerRawHandle,
     buf: Option<CompletionBuffer<B>>,
+    // Non-completion platforms use the higher-level filesystem fallback.
+    // Keep other operation fields subject to dead-code checking.
+    #[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
     offset: u64,
     completion_token: Option<usize>,
 }

@@ -42,24 +42,35 @@ impl Drop for ReapChild {
         if matches!(child.try_wait(), Ok(Some(_))) {
             return;
         }
-        // Keep ownership outside the spawn closure so a thread-creation failure
-        // cannot discard an unreaped child. Blocking is a last resort only when
-        // the OS cannot create the fallback worker.
-        let pending = std::sync::Arc::new(std::sync::Mutex::new(Some(child)));
-        let worker = pending.clone();
-        if std::thread::Builder::new()
-            .name("vibeio-reap".into())
-            .spawn(move || {
-                if let Some(mut child) = worker.lock().unwrap().take() {
-                    let _ = child.wait();
-                }
-            })
-            .is_err()
-        {
-            if let Some(mut child) = pending.lock().unwrap().take() {
-                let _ = child.wait();
-            }
-        }
+        reap_with_worker(child, |worker| {
+            std::thread::Builder::new()
+                .name("vibeio-reap".into())
+                .spawn(move || wait_pending_child(&worker))
+                .map(drop)
+        });
+    }
+}
+
+type PendingChild = std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>;
+
+fn wait_pending_child(pending: &PendingChild) {
+    // This mutex only transfers ownership; never retain its guard while waiting.
+    let child = pending.lock().unwrap().take();
+    if let Some(mut child) = child {
+        let _ = child.wait();
+    }
+}
+
+fn reap_with_worker(
+    child: std::process::Child,
+    start: impl FnOnce(PendingChild) -> io::Result<()>,
+) {
+    // Keep ownership outside the spawn closure so a thread-creation failure
+    // cannot discard an unreaped child. Blocking is a last resort only when
+    // the OS cannot create the fallback worker.
+    let pending = std::sync::Arc::new(std::sync::Mutex::new(Some(child)));
+    if start(pending.clone()).is_err() {
+        wait_pending_child(&pending);
     }
 }
 
@@ -190,6 +201,22 @@ mod ownership_tests {
     }
 
     #[test]
+    fn failed_worker_start_preserves_child_for_synchronous_reaping() {
+        let (child, stdin) = held_child();
+        let pid = child.id();
+        reap_with_worker(child, |worker| {
+            assert_eq!(worker.lock().unwrap().as_ref().unwrap().id(), pid);
+            // Model spawn rejecting and destroying its closure. Release the
+            // child's input so the documented synchronous fallback can finish.
+            drop(worker);
+            drop(stdin);
+            Err(io::Error::from(io::ErrorKind::WouldBlock))
+        });
+        // WNOWAIT in this assertion cannot perform the reaping being tested.
+        assert_reaped(pid);
+    }
+
+    #[test]
     fn queued_and_rejected_messages_reap_on_drop() {
         for rejected in [false, true] {
             let (child, stdin) = held_child();
@@ -210,7 +237,7 @@ mod ownership_tests {
     }
 
     #[test]
-    fn cancelled_wait_during_reaper_initialization_reaps_child() {
+    fn cancelled_wait_after_lazy_reaper_start_reaps_child() {
         let runtime = crate::vibeio::executor::Runtime::new(
             crate::vibeio::driver::AnyDriver::new_mio().unwrap(),
         );
@@ -281,7 +308,7 @@ mod ownership_tests {
 }
 
 #[inline]
-pub(crate) async fn start_zombie_reaper() -> async_channel::Sender<ZombieReaperMessage> {
+pub(crate) fn start_zombie_reaper() -> async_channel::Sender<ZombieReaperMessage> {
     let (tx, rx) = async_channel::unbounded();
     crate::vibeio::spawn(zombie_reaper_fn(rx));
     tx

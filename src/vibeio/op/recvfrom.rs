@@ -435,6 +435,70 @@ impl<B: IoBufMut> Drop for RecvfromOp<'_, B> {
 mod cancellation_tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recvmsg_completion_truncates_to_capacity_and_preserves_peek() {
+        use std::os::fd::AsRawFd;
+        use std::rc::Rc;
+        use std::time::{Duration, Instant};
+        let driver = match AnyDriver::new_uring_custom(io_uring::IoUring::builder()) {
+            Ok(driver) => Rc::new(driver),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                ) =>
+            {
+                eprintln!("io_uring unavailable: {error}");
+                return;
+            }
+            Err(error) => panic!("io_uring initialization failed: {error}"),
+        };
+        for bind in ["127.0.0.1:0", "[::1]:0"] {
+            let reader = std::net::UdpSocket::bind(bind).unwrap();
+            let writer = std::net::UdpSocket::bind(bind).unwrap();
+            reader.set_nonblocking(true).unwrap();
+            let handle = InnerRawHandle::new_with_driver_and_mode(
+                &driver,
+                reader.as_raw_fd(),
+                Interest::READABLE,
+                crate::vibeio::driver::RegistrationMode::Completion,
+            )
+            .unwrap();
+            let source = writer.local_addr().unwrap();
+            let payload = [0x5a; 64];
+            for capacity in [0, 8] {
+                writer
+                    .send_to(&payload, reader.local_addr().unwrap())
+                    .unwrap();
+                for peek in [true, false] {
+                    let buffer = Vec::<u8>::with_capacity(capacity);
+                    let expected = buffer.capacity().min(payload.len());
+                    let mut op = if peek {
+                        RecvfromOp::new_peek(&handle, buffer)
+                    } else {
+                        RecvfromOp::new(&handle, buffer)
+                    };
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    let mut cx = Context::from_waker(std::task::Waker::noop());
+                    let result = loop {
+                        if let Poll::Ready(result) = op.poll_completion(&mut cx, &driver) {
+                            break result.unwrap();
+                        }
+                        assert!(Instant::now() < deadline, "recvmsg completion timed out");
+                        driver.wait(Some(Duration::from_millis(10)));
+                    };
+                    assert_eq!(result, (expected, source));
+                    assert_eq!(op.take_bufs(), payload[..expected]);
+                }
+                assert_eq!(
+                    reader.recv_from(&mut [0; 64]).unwrap_err().kind(),
+                    io::ErrorKind::WouldBlock
+                );
+            }
+        }
+    }
+
     #[cfg(any(unix, windows))]
     #[test]
     fn polling_datagrams_preserve_peek_address_and_empty_packet() {

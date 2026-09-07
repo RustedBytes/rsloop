@@ -398,15 +398,7 @@ impl PollTcpStream {
     where
         Io: FnOnce() -> io::Result<IoR>,
     {
-        if *self.read_ready.borrow() {
-            let result = io();
-            if result.is_err() {
-                *self.read_ready.borrow_mut() = false;
-            }
-            result
-        } else {
-            Err(io::Error::new(io::ErrorKind::WouldBlock, "read not ready"))
-        }
+        crate::vibeio::net::try_io_ready(&self.read_ready, "read not ready", io)
     }
 
     /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
@@ -415,15 +407,7 @@ impl PollTcpStream {
     where
         Io: FnOnce() -> io::Result<IoR>,
     {
-        if *self.write_ready.borrow() {
-            let result = io();
-            if result.is_err() {
-                *self.write_ready.borrow_mut() = false;
-            }
-            result
-        } else {
-            Err(io::Error::new(io::ErrorKind::WouldBlock, "write not ready"))
-        }
+        crate::vibeio::net::try_io_ready(&self.write_ready, "write not ready", io)
     }
 }
 

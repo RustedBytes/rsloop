@@ -38,6 +38,63 @@
 //! See "Unix socket exchange and path cleanup" in
 //! `tools/vibeio-check/EXAMPLES.md` for an executable, Unix-gated example.
 
+#[inline]
+fn try_io_ready<T>(
+    ready: &std::cell::RefCell<bool>,
+    not_ready: &'static str,
+    operation: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    if !*ready.borrow() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            not_ready,
+        ));
+    }
+    let result = operation();
+    if result
+        .as_ref()
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+    {
+        *ready.borrow_mut() = false;
+    }
+    result
+}
+
+#[cfg(test)]
+mod readiness_tests {
+    #[test]
+    fn only_would_block_clears_readiness_and_callbacks_run_unborrowed() {
+        use std::{
+            cell::RefCell,
+            io::{self, ErrorKind},
+        };
+        let ready = RefCell::new(true);
+        for kind in [
+            ErrorKind::Interrupted,
+            ErrorKind::ConnectionReset,
+            ErrorKind::InvalidInput,
+        ] {
+            let result: io::Result<()> = super::try_io_ready(&ready, "not ready", || {
+                assert!(ready.try_borrow_mut().is_ok());
+                Err(kind.into())
+            });
+            assert_eq!(result.unwrap_err().kind(), kind);
+            assert!(*ready.borrow());
+        }
+        assert_eq!(
+            super::try_io_ready(&ready, "not ready", || Ok(42)).unwrap(),
+            42
+        );
+        let result: io::Result<()> =
+            super::try_io_ready(&ready, "not ready", || Err(ErrorKind::WouldBlock.into()));
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::WouldBlock);
+        assert!(!*ready.borrow());
+        let result: io::Result<()> =
+            super::try_io_ready(&ready, "not ready", || panic!("not ready callback"));
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::WouldBlock);
+    }
+}
+
 mod tcp;
 mod udp;
 #[cfg(unix)]

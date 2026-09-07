@@ -294,6 +294,73 @@ impl<B: IoBufMut> Drop for RecvOp<'_, B> {
 mod cancellation_tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stream_completions_replace_initialized_length_and_clear_it_at_eof() {
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        use std::rc::Rc;
+        use std::time::{Duration, Instant};
+        let driver = match AnyDriver::new_uring_custom(io_uring::IoUring::builder()) {
+            Ok(driver) => Rc::new(driver),
+            Err(error)
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                ) =>
+            {
+                eprintln!("io_uring unavailable: {error}");
+                return;
+            }
+            Err(error) => panic!("io_uring initialization failed: {error}"),
+        };
+        fn complete(op: &mut impl Op<Output = usize>, driver: &AnyDriver) -> usize {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            loop {
+                if let Poll::Ready(result) = op.poll_completion(&mut cx, driver) {
+                    return result.unwrap();
+                }
+                assert!(Instant::now() < deadline, "stream completion timed out");
+                driver.wait(Some(Duration::from_millis(10)));
+            }
+        }
+        for use_read in [false, true] {
+            let (reader, mut writer) = std::os::unix::net::UnixStream::pair().unwrap();
+            writer.write_all(b"abc").unwrap();
+            writer.shutdown(std::net::Shutdown::Write).unwrap();
+            let handle = InnerRawHandle::new_with_driver_and_mode(
+                &driver,
+                reader.as_raw_fd(),
+                Interest::READABLE,
+                crate::vibeio::driver::RegistrationMode::Completion,
+            )
+            .unwrap();
+            let mut buffer = b"old initialized contents".to_vec();
+            let mut received = Vec::new();
+            loop {
+                let count;
+                if use_read {
+                    let mut op = crate::vibeio::op::ReadOp::new(&handle, buffer);
+                    count = complete(&mut op, &driver);
+                    buffer = op.take_bufs();
+                } else {
+                    let mut op = RecvOp::new(&handle, buffer);
+                    count = complete(&mut op, &driver);
+                    buffer = op.take_bufs();
+                }
+                assert_eq!(buffer.len(), count);
+                if count == 0 {
+                    break;
+                }
+                received.extend_from_slice(&buffer);
+                assert!(received.len() <= 3);
+            }
+            assert_eq!(received, b"abc");
+            assert!(buffer.is_empty());
+        }
+    }
+
     #[test]
     fn pending_buffer_is_retained_by_owning_driver() {
         crate::vibeio::op::io_util::cancellation_tests::check_cancellation(

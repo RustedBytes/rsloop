@@ -19,10 +19,12 @@ use crate::vibeio::io::IoBufMut;
 use crate::vibeio::op::Op;
 use crate::vibeio::op::io_util::CompletionBuffer;
 
-#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 pub struct ReadAtOp<'a, B: IoBufMut> {
     handle: &'a InnerRawHandle,
     buf: Option<CompletionBuffer<B>>,
+    // Non-completion platforms use the higher-level filesystem fallback.
+    // Keep other operation fields subject to dead-code checking.
+    #[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
     offset: u64,
     completion_token: Option<usize>,
 }

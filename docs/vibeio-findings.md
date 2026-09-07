@@ -1,6 +1,21 @@
 # Remaining Qualirs finding dispositions
 
-Current rescan after owned open/accept results and the connect review: **215**
+Rescan before the eventfd retry change: **196** diagnostics (73 Q0087, 63 Q0090,
+44 Q0095 and 16 other findings). The reduction follows direct safety comments
+on the executor's two stateless test callbacks; no analyzer rules were disabled.
+
+Earlier rescan after reaper fallback extraction: **198** diagnostics (75 Q0087,
+63 Q0090, 44 Q0095 and 16 other findings). The two fewer Q0082 reports result
+from moving the lock into a helper, not eliminating Drop's fallback blocking.
+That limitation remains explicitly open below; no rules were disabled.
+
+Earlier rescan after the IOCP detachment review and cross-platform safety-comment
+gate: **200** diagnostics (75 Q0087, 63 Q0090, 44 Q0095 and 18 in other rules).
+No analyzer rules were disabled. This includes recorded false positives and
+still-open reviews; it is not a count of confirmed defects. The detailed older
+snapshots below retain their historical line numbers and counts.
+
+Earlier rescan after owned open/accept results and the connect review: **215**
 diagnostics (90 Q0087, 63 Q0090, 44 Q0095 and 18 in other rules). No rules were
 disabled. This includes findings with recorded dispositions, not 215 proven bugs
 or an assertion that the full remaining inventory has been reviewed.
@@ -12,7 +27,7 @@ the per-location dispositions below do not remove them from analyzer output.
 Rescan before the RecvOp follow-up: **231** diagnostics (106 Q0087, 63 Q0090,
 44 Q0095 and 18 in other rules). Older counts below remain historical snapshots.
 
-Latest rescan after safe file/pipe/socket ownership conversions: **242** findings
+Earlier rescan after safe file/pipe/socket ownership conversions: **242** findings
 (117 Q0087, 63 Q0090, 44 Q0095, and 18 findings in the other rules).
 The table below retains its earlier snapshot locations; these are historical
 identifiers, not current line numbers. The new count is not evidence that the
@@ -49,6 +64,304 @@ anchors. No rules were disabled for this review.
 | Q0082 | signal/windows.rs:94, CtrlC::drop | Open synchronization constraint: removes its slab entry under a std mutex. Retired waker drops occur after unlocking; cross-thread contention remains possible. Portable state tests are not native console lifecycle verification. |
 
 ## Still requiring per-location review
+
+### Partial kqueue deregistration also retires cached readiness and waiters
+
+The retryable-deletion change initially updated installed flags alone. Successful
+deletions now also clear cached readiness and take their wakers; failed filters
+keep all three pieces of state. Waker destruction occurs outside state borrows
+on success and error. Failure-combination fixtures verify this distinction.
+macOS cross-Clippy passes; native execution is still outstanding.
+
+### Kqueue event filtering after partial deregistration
+
+wait_events now delegates to Registration::record_readiness after validating
+token/generation. The helper ignores events for filters marked unregistered,
+which matters when a failed deregistration preserves a token after deleting only
+one filter. A state-machine test covers both flags independently and verifies
+ignored events neither latch readiness nor consume wakers. Cross-Clippy passes;
+native stale-event delivery is not reproduced or asserted by this fixture.
+
+### Kqueue deregistration no longer discards retry state on failure
+
+deregister_with now snapshots the installed filters, attempts both deletions,
+records successful ones and removes the token only on full success. A failed
+rebind therefore keeps bookkeeping for remaining filters instead of leaving a
+token that points to a removed slab entry. Tests cover all three combinations
+of deletion failure and verify selective successful retry, including kernel
+filter absence afterward. They compile under macOS strict Clippy but have not
+run natively. This supersedes the earlier intentional-retirement-on-error policy;
+permanent Drop-time errors and failed initial-registration rollback remain open.
+
+### Kqueue's two Q0095 reports and interrupted filter deletion
+
+The 196-finding snapshot flags apply_changes (147) and wait_events (220). Each
+unsafe block contains one kevent call with a preceding local contract: bounded
+live changelist input with no output, or a fixed-capacity event output with a
+live optional timespec and no changelist. Splitting either argument list would
+not improve safety. Output iteration is restricted to the returned count.
+
+Reviewing rollback identified that EV_DELETE interruption returned immediately.
+delete_filter now retries Interrupted iteratively; existing absent/invalid-target
+normalization handles the case where an interrupted deletion already succeeded.
+A fault-injection test covers 100,000 interruptions followed by success, ENOENT
+or EIO, preserving the terminal error. macOS cross-Clippy compiles this test;
+it has not run natively. Non-interruption kernel deletion failures can still
+leave filters until descriptor/queue close and remain an explicit open concern.
+
+### io_uring teardown evidence: direct Drop as well as explicit quiescence
+
+The live read-shutdown fixture now checks direct UringDriver destruction in
+addition to manual quiesce followed by destruction, for both queued and submitted
+reads. Retained buffers are released on normal teardown; explicit quiescence
+checks the canceled CQE before release. Both live shutdown tests (read retention
+and overflowed descriptor results) execute successfully on Linux. This closes a
+test-coverage gap, not the separate exceptional-quiescence-error/leak proof or
+all shutdown interleavings.
+
+### UringDriver: six reports in the 196-finding snapshot
+
+| Reports/location | Local disposition |
+| --- | --- |
+| Q0087, 71 | eventfd write uses an upgraded owning Arc and initialized eight-byte value. Its safety comment is retained at the call; the path now shares iterative Interrupted retry with Apple wake notifications. |
+| Q0087, 122 | Completion::drop closes only an unclaimed nonnegative fd result. A consumer takes the result before removal; the existing comment documents single ownership. |
+| Q0087, 390 | SQ push copies an entry whose referenced allocations remain with the operation/driver. The existing contract covers cancellation retention; this local explanation is not a proof of all teardown paths. |
+| Q0087, 520 | Accept CQE's fresh descriptor is immediately owned by OwnedFd and either queued or dropped. Existing ownership comments apply. |
+| Q0090, 528/1090 | Option::as_mut reborrows multishot-accept state through an exclusive registration borrow. No raw-pointer reference conversion occurs. |
+
+The wake retry helper already tests 100,000 injected interruptions followed by
+success, WouldBlock or a terminal error. Sharing it adds retry to Linux eventfd
+without recursive stack growth. A full nonblocking wake source remains treated
+as already notified. No native lost-wakeup reproduction or speedup is claimed.
+
+### Socket address conversion: four Q0087 reports in the 198-finding snapshot
+
+| Location | Local disposition |
+| --- | --- |
+| 19, socket_addr_to_raw | The existing comment describes socket2 storage's platform-native type and copying the initialized address while its owner is live. |
+| 54, Unix IPv4 decode | Family and minimum/maximum returned length are checked before borrowing sockaddr_in from sufficiently aligned/sized sockaddr_storage. The preceding comment exists. |
+| 68, Unix IPv6 decode | The same checked family/length and storage alignment contract applies to sockaddr_in6. The preceding comment exists. |
+| 163, socketaddr_from_buffer copy | Checked integer subtraction/addition select a slice within the owned output buffer. Copying bounded initialized bytes into fresh aligned zeroed storage permits unaligned provider output without dereferencing the provider's integer address. The comment explains bounds and non-overlap. |
+
+Expanded native length tests now reject every undersized length, accept every
+length from the native structure size through storage capacity, and reject an
+unsupported family. Existing fixtures cover out-of-buffer pointers, signed
+length failures, unaligned IPv4/IPv6 and full address-field round trips. Passing
+these pure conversion tests does not validate external providers' whole I/O
+lifecycles.
+
+### Concurrent lazy reaper initialization: reproduced and fixed
+
+current_zombie_reaper previously released its cache borrow, spawned an async
+initializer and awaited it. Two initial requests could each start a reaper and
+return distinct senders, with only the last cached. A two-request join regression
+failed before the change with "duplicate reapers were created". Startup now
+creates the channel and queues the reaper synchronously under the cache borrow;
+it executes no user future and cannot suspend before publication. The test and
+existing canceled-wait cleanup pass on Linux. This supersedes the earlier open
+duplicate-initializer concern while leaving broader teardown verification open.
+
+### Executor: all seven reports in the 198-finding snapshot
+
+| Reports/location | Local disposition |
+| --- | --- |
+| Q0069, 392, spawn | Missing runtime is a documented caller-precondition panic; an existing test verifies the message. Replacing it with a silently dropped task or changing the public return type would change the API contract. |
+| Q0087, 1051/1055, test RawWaker callbacks | Added direct safety comments to the stateless clone/ignore functions. They neither read the null data pointer nor own an allocation; clone invokes only the current thread's test hook. Waker construction already had its own contract. |
+| Q0090, 718/797 | Pin::as_mut reborrows the pinned root/task future. Neither operation performs a raw-pointer cast or moves the pinned pointee. Task storage is taken out of its RefCell before polling user code. |
+| Q0090, 846 | Safe mutable dereference of a RefMut to take the task slab during shutdown. The borrow ends before detached task futures are dropped, permitting reentrant cleanup. |
+| Q0090, 1378 | Pin::as_mut on the test's pinned oneshot receiver. This is an ordinary safe pin reborrow. |
+
+The existing self-cancellation test covers the SpawnFuture wrapper's post-poll
+cancellation check, which applies to both executor polling loops. The reentrant
+clone test covers join completion during waker cloning. A redundant second
+channel-sender clone in current_zombie_reaper was removed; the first clone already
+detaches the returned sender from its RefCell borrow. Concurrent lazy reaper
+initialization and full shutdown interleavings remain separate audit concerns.
+
+### ReadAtOp: all ten reports in the 198-finding snapshot
+
+| Reports/location | Local disposition |
+| --- | --- |
+| Q0087, 97 | set_buf_init follows acknowledged completion and error/EOF conversion. The existing safety comment covers stable capacity, initialized prefix and zero-length Windows EOF. |
+| Q0087, 123 | The two offset-word assignments use the driver-provided OVERLAPPED before submission. The preceding comment describes exclusive live storage and subsequent driver ownership. |
+| Q0087 + Q0095, 133 | One ReadFile call with checked capacity, stable CompletionBuffer storage and retained OVERLAPPED. Its multi-line local comment exists; keep the single FFI call together. |
+| Paired Q0090, 92, 104, 163 | Six ordinary Option/CompletionBuffer::as_mut reborrows in completion decoding, Windows submission and Linux entry construction. These are safe reborrows, not raw-pointer as_mut operations. |
+
+Linux entry creation checks the signed positional range before building the
+SQE. Existing positional-offset boundary tests and the native positioned-I/O
+fixture cover invalid offsets, large sparse offsets, unchanged shared cursor,
+EOF and read errors with retained buffers. Windows EOF and offset handling have
+cross-checked fixtures but still need native execution. ReadAtOp/WriteAtOp's
+non-completion-platform dead-code exemption now applies only to offset rather
+than hiding unused fields across the entire struct.
+
+### WriteOp, SendOp and SendtoOp: 13 snapshot reports
+
+| Reports/location in the 198-finding snapshot | Local disposition |
+| --- | --- |
+| WriteOp Q0095, 45 | One synchronous WSASend invocation with initialized payload, checked byte length, local descriptor/output and null OVERLAPPED. Keep its argument list intact. |
+| WriteOp Q0087 + Q0095, 200 | One overlapped WSASend. The existing comment documents descriptor capture and CompletionBuffer/driver retention of payload and OVERLAPPED. |
+| WriteOp Q0087 + Q0095, 236 | One WriteFile invocation with checked length and stable initialized payload; the driver owns the completion context. The preceding safety comment is present. |
+| SendOp Q0087 + Q0095, 45 | One synchronous WSASend with the same live payload/local output contract; an existing comment precedes it. |
+| SendOp Q0087 + Q0095, 203 | One overlapped WSASend with captured WSABUF metadata and retained payload/context. Existing comment references the capture contract. |
+| SendtoOp Q0095, 47 | One synchronous WSASendTo; destination address, descriptor and outputs remain live through the call. |
+| SendtoOp Q0095, 138 | One synchronous Unix sendto with initialized payload and correctly sized encoded destination address. |
+| SendtoOp Q0087 + Q0095, 244 | One overlapped WSASendTo using boxed destination metadata and stable payload. Both are transferred to the owning driver on pending cancellation; the existing comment covers this. |
+
+Completion decoding clears the operation token before returning an acknowledged
+result; negative results remain errors and positive partial counts are preserved.
+Linux Sendto installs address/iovec/header pointers only after boxing its state.
+The three poll paths now directly return poll_result_or_wait instead of matching
+and reconstructing every variant unchanged. Existing native sendmsg and workload
+tests cover ordinary I/O; mock cancellation tests cover owning-driver retention.
+Native Windows cancellation and complete shutdown proofs remain separate work.
+
+### WritevOp: all seven reports in the 198-finding snapshot
+
+| Reports/location | Local disposition |
+| --- | --- |
+| Q0087 + Q0095, 50 | One synchronous WSASend call with checked descriptor lengths/count and a local byte-count output. The preceding comment documents initialized stable payloads and synchronous lifetimes. |
+| Q0087 + Q0095, 230 | One overlapped WSASend call. The existing API-referenced comment distinguishes descriptor capture from retained payload and driver-owned OVERLAPPED lifetimes. |
+| Q0087, 280 | The staging gather forms a readable slice only for nonempty initialized IoVectoredBuf regions, then copies into an independent allocation. Its preceding SAFETY comment is present. |
+| Q0087 + Q0095, 287 | One WriteFile call into retained initialized staging bytes. Checked total length and stable ownership cover the call; staging is released only on immediate failure or acknowledged completion, otherwise transferred on cancellation. |
+
+Linux descriptor-array lifetime is separately checked by a new mock cancellation
+test: building the real SQE installs a boxed array, and dropping the pending op
+transfers that same array and the same payload pointers to the owning driver.
+It includes an empty segment without dereferencing it. No kernel request is made
+in this test. Existing io_uring pipe coverage exercises actual vectored writes;
+Windows staging retention has a cross-compiled test, not native execution.
+
+### ReadvOp: all 12 reports in the 198-finding snapshot
+
+| Reports/location | Local disposition |
+| --- | --- |
+| Q0087 + Q0095, 50 | Synchronous WSARecv with checked descriptor count/lengths and local outputs. The existing comment covers disjoint writable regions and no retained pointers. One FFI call accounts for the long block. |
+| Q0087, 122 | Synchronous readv receives a live descriptor array converted from owned writable buffers, with checked native count. Its preceding safety comment is present. |
+| Q0087, 213 | Windows file completion scatters a separately owned staging allocation into writable destinations. Source slicing is bounds checked; raw copy avoids making initialized slices over destination spare capacity. The existing comment explains non-overlap. |
+| Q0087 + Q0095, 255 | One overlapped WSARecv submission. Winsock captures descriptors; buffer ownership and the driver OVERLAPPED outlive the request. The existing local contract cites the API documentation. |
+| Q0087 + Q0095, 301 | One overlapped ReadFile submission into initialized staging storage. Checked total length precedes allocation; staging is retained on success/pending and transferred on cancellation. |
+| Q0090, 115, 195, 228, 336 | Four ordinary Option::as_mut calls in polling, completion scatter, Windows submission and Linux entry building. These are safe reborrows, not unsafe pointer conversions. |
+
+The Linux boxed descriptor array is stored before the SQE can be submitted and
+transferred together with owned buffers on cancellation. The existing datagram
+test now executes both synchronous polling and real io_uring completion: empty
+segments, a short packet spanning segments, an empty packet, unchanged suffixes,
+fixed segment lengths and stable backing addresses. It executed on Linux without
+skipping io_uring. Windows compilation does not establish native scatter or
+cancellation behavior; broader shutdown review remains open.
+
+### ReadOp and RecvOp: 24 reports in the 198-finding snapshot
+
+| Reports/location | Local disposition |
+| --- | --- |
+| RecvOp Q0087 + Q0095 at 48 | socket_recv uses one synchronous WSARecv call. Its local safety comment covers descriptor/output lifetimes and exclusive writable capacity. Keep the complete FFI argument list together. |
+| RecvOp Q0087 + Q0095 at 227 | submit_windows uses one overlapped WSARecv call. The existing comment references descriptor capture and delayed flags behavior; payload/OVERLAPPED are retained until acknowledgement. Native overlapped MSG_PEEK remains separate open verification. |
+| RecvOp paired Q0090 at 116, 192, 202, 260 | Eight reports on safe Option/CompletionBuffer::as_mut reborrows, respectively polling, completion decoding, Windows submission and Linux entry building. They are not unsafe raw-pointer mutable-reference conversions. |
+| ReadOp Q0087 + Q0095 at 212 | One overlapped WSARecv call with the same documented captured-descriptor/retained-payload contract. The safety comment is present, not missing. |
+| ReadOp Q0095 at 47 | One synchronous WSARecv call with local writable outputs and no retained pointers. Splitting its arguments into multiple unsafe blocks would not improve the contract. |
+| ReadOp Q0095 at 241 | One ReadFile call with retained payload capacity and driver-owned OVERLAPPED storage. EOF conversion is handled by read_error_result; it exposes zero initialized bytes. |
+| ReadOp paired Q0090 at 106, 188, 198, 273 | Eight safe Option/CompletionBuffer reborrow reports in the same four phases. No extra alias is created by these method calls. |
+
+Both operations clear their completion token before exposing successful output;
+negative results return before length updates (except ReadOp's explicit EOF
+mapping). Drop transfers the stable buffer when the token remains outstanding.
+A native Linux io_uring test now exercises both Read and Recv on a stream with
+preinitialized reused storage: partial data replaces the old visible length and
+EOF clears it. Existing ReadOp polling tests cover short reads, EOF and errors;
+both operations have mock owning-driver cancellation/reclamation tests. Native
+Windows cancellation, peek compatibility and full shutdown proofs remain open.
+
+### RecvfromOp: all 17 reports in the 198-finding snapshot
+
+| Reports/location | Local disposition |
+| --- | --- |
+| Q0087 + Q0095, line 59, socket_recvfrom | One synchronous WSARecvFrom call with live stack outputs and exclusive IoBufMut capacity. The existing SAFETY comment precedes it. The long block is one FFI argument list, not multiple unrelated unsafe operations. |
+| Q0087 + Q0095, line 167, poll_poll | One synchronous recvfrom call; no MSG_TRUNC input flag. The initialized sockaddr output and writable buffer bounds are documented locally. Keep the single call together. |
+| Q0087 + Q0095, line 334, submit_windows | One overlapped WSARecvFrom submission using boxed address/flags/length storage and a stable CompletionBuffer. Drop transfers both allocations to the owning driver. The local contract exists; native Windows cancellation/peek behavior remains separately unverified. |
+| Two Q0090 each, lines 158, 258, 287 | Option::as_mut and CompletionBuffer::as_mut reborrow buffer storage in poll_poll and the Linux/Windows completion branches. These are safe methods, not raw-pointer as_mut casts. Completion branches update initialized length only after acknowledged success. |
+| Two Q0090 each, lines 298, 370 | The same safe buffer reborrows in submit_windows/build_completion_entry. The separate completion-state box supplies stable descriptor/address fields; pointers into it are installed after boxing. |
+| Q0090, line 498, reused_recvmsg_state test | Safe Option::as_mut on the test's completion box. No submission is made; the test changes output metadata then verifies rebuilding resets it without moving storage. |
+
+New native Linux io_uring coverage exercises IPv4/IPv6 source decoding and
+oversized datagrams with zero/eight-byte buffers. Both peek and consuming reads
+report bounded initialized prefixes, and only the consuming call empties the
+queue. Existing mock cancellation tests cover transfer to the owning driver and
+rejected early reclamation. These are scoped evidence, not a claim to prove
+every driver shutdown interleaving or third-party IoBuf implementation.
+
+### io/buf.rs remaining five reports (198-finding snapshot)
+
+| Rule/location | Disposition and evidence |
+| --- | --- |
+| Q0087 and Q0094, line 370, IoBufTemporaryPoll Send | The immediately preceding SAFETY comment exists and requires polling-thread confinement and a live backing borrow. These missing-comment reports are false positives; correctness still depends on each unsafe constructor caller honoring the contract. |
+| Q0087, line 540, read_into_buf | The preceding SAFETY comment explains exclusive capacity and initialized-prefix bounds. Initializing spare bytes is necessary before exposing a safe mutable byte slice, which a Read implementation may inspect. |
+| Q0089, line 541, read_into_buf pointer offset | initialized <= capacity follows from IoBuf's unsafe contract. The write length is capacity - initialized, so it stays in the allocation; the full-capacity case performs a zero-length write at the end. Existing prefix/spare/error tests now also execute without optional features. |
+| Q0087, line 724, temporary_poll_buffer_tracks_initialized_prefix | The comment directly before the split let/unsafe expression describes the local storage lifetime and excludes asynchronous submission. The test initializes three bytes before exposing them. Retain the test and comment rather than suppressing the rule. |
+
+Additional cursor coverage verifies suffix capacity/initialization, preservation
+of the preceding prefix, rejected advancement (including usize::MAX) without
+state mutation, full consumption, and empty-buffer behavior. No production
+pointer arithmetic was replaced merely to silence these reports.
+
+### ReapChild fallback mutex scope and worker-start failure
+
+The two historical ReapChild::drop lock sites transferred ownership through
+Arc<Mutex<Option<Child>>>. Their if-let temporary guards remained live during
+child.wait(). Both branches now use wait_pending_child, whose guard ends before
+waiting. Worker-start injection tests with a real child verify that rejecting
+the worker leaves ownership for synchronous reaping; WNOWAIT checks do not reap
+the child themselves. This passes on Linux with process alone and in the full
+harness. The destructor can still block waiting when worker creation fails;
+removal of its direct-lock diagnostics does not resolve that limitation.
+
+### Signal drop-lock review and Windows initialization gap
+
+Signal::drop and CtrlC::drop remove their waker slots under a mutex and destroy
+the removed waker after unlocking. The Q0082 lock findings are not false
+positives: concurrent dispatch scans and Unix handler restoration can contend.
+No wait-free claim or blanket suppression is appropriate. Reviewing this path
+also found Windows handler installation preceded publication of CTRL_C_STATE.
+The state is now published first, with a separate retryable installation cell.
+A Linux-executed test of the actual Windows initialization helper verifies
+publication, failed-install retry and successful-install reuse. Native console
+delivery and Unix fork/global-handler interactions remain open.
+
+### IOCP detachment status and synchronous input lifetime
+
+disassociate_iocp_handle now propagates NtSetInformationFile failures. Completion
+registration removal happens only after successful detachment, allowing failed
+rebind to preserve the existing registration rather than falsely proceeding.
+A Windows-only invalid-target/retry/second-port-association test cross-checks;
+native execution remains pending. Microsoft's IoIsOperationSynchronous and
+NtSetInformationFile documentation establish the synchronous information-call
+contract used by the local safety comment. The package-wide unsafe-comment
+gate now covers Windows too. Drop-time detachment failure reporting/bookkeeping,
+pending request teardown and native race coverage remain separate open issues.
+
+### IOCP failed-submission reentrancy and cancellation pointer lifetime
+
+The immediate submit_windows error branch formerly destroyed its Completion
+(including an arbitrary waker) under a mutable state borrow. It now removes the
+entry into a local and destroys it after releasing the borrow. A Windows-only
+test checks a custom waker destructor can borrow the state; it cross-checks but
+has not been run natively. Cancellation's unsafe-call comment now describes the
+retained boxed pointer and the absence of a reentrant retired destructor in that
+branch. The repeated-cancellation test verifies pointer stability and completed
+retirement behavior. These changes do not establish all native cancellation or
+shutdown races; disassociation's NT information-call lifetime remains open.
+
+### Completion-port batch and regular-association contracts
+
+process_batch now documents its synchronous output-buffer bounds and ownership
+contract. register_handle_with_mode documents that successful association
+returns an alias of the existing port, without transferring source ownership.
+The modeled packet test's comment now attaches directly to its unsafe block.
+A new native-Windows test covers empty queues and draining 257 interrupt packets
+across bounded, possibly partial batches. Windows strict cross-Clippy passes,
+but native execution remains pending. The explicit Windows-wide unsafe-comment
+probe is down to two production sites: disassociation and cancellation; these
+remain open rather than receiving unverified lifetime assertions.
 
 ### AFD creation and association comments
 

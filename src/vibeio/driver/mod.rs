@@ -255,13 +255,13 @@ pub(crate) fn completion_error(result: i32) -> io::Error {
     }
 }
 
-#[cfg(any(target_vendor = "apple", test))]
+#[cfg(any(target_vendor = "apple", target_os = "linux", test))]
 #[inline]
-fn send_wake_datagram(mut send: impl FnMut() -> io::Result<usize>) -> io::Result<()> {
+fn send_wake_notification(mut send: impl FnMut() -> io::Result<usize>) -> io::Result<()> {
     loop {
         match send() {
             Ok(_) => return Ok(()),
-            // A full nonblocking socket already has a queued wake notification.
+            // A full nonblocking socket/eventfd already has a queued wake.
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
             // Retry without recursive stack growth under repeated signals.
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
@@ -783,7 +783,7 @@ impl AnyDriver {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn wake_datagram_retries_interruptions_without_losing_terminal_result() {
+    fn wake_notification_retries_interruptions_without_losing_terminal_result() {
         use std::io::{self, ErrorKind};
         for terminal in [
             None,
@@ -791,7 +791,7 @@ mod tests {
             Some(ErrorKind::BrokenPipe),
         ] {
             let mut attempts = 0usize;
-            let result = super::send_wake_datagram(|| {
+            let result = super::send_wake_notification(|| {
                 attempts += 1;
                 if attempts <= 100_000 {
                     return Err(ErrorKind::Interrupted.into());

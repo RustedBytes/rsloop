@@ -65,16 +65,23 @@ impl Interruptor for UringInterruptor {
     fn interrupt(&self) {
         if let Some(eventfd) = self.eventfd.upgrade() {
             let value: u64 = 1;
-            // SAFETY: the upgraded Arc owns the descriptor throughout write,
-            // including when the driver is concurrently shutting down. value is
-            // initialized for the required eight-byte eventfd write.
-            let _ = unsafe {
-                libc::write(
-                    eventfd.as_raw_fd(),
-                    &value as *const u64 as *const std::ffi::c_void,
-                    std::mem::size_of::<u64>(),
-                )
-            };
+            let _ = super::send_wake_notification(|| {
+                // SAFETY: the Arc and initialized value stay live for every
+                // synchronous retry, even during driver shutdown. The supplied
+                // byte count is the exact eventfd write size.
+                let written = unsafe {
+                    libc::write(
+                        eventfd.as_raw_fd(),
+                        &value as *const u64 as *const std::ffi::c_void,
+                        std::mem::size_of::<u64>(),
+                    )
+                };
+                if written < 0 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(written as usize)
+                }
+            });
         }
     }
 }
@@ -671,51 +678,55 @@ mod memory_fallback_tests {
             }
         }
         for submit_first in [false, true] {
-            let mut driver = match UringDriver::new(8, IoUring::builder()) {
-                Ok(driver) => driver,
-                Err(err)
-                    if matches!(
-                        err.raw_os_error(),
-                        Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
-                    ) =>
-                {
-                    eprintln!("live io_uring shutdown test unavailable: {err}");
-                    return;
+            for explicit_quiesce in [false, true] {
+                let mut driver = match UringDriver::new(8, IoUring::builder()) {
+                    Ok(driver) => driver,
+                    Err(err)
+                        if matches!(
+                            err.raw_os_error(),
+                            Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                        ) =>
+                    {
+                        eprintln!("live io_uring shutdown test unavailable: {err}");
+                        return;
+                    }
+                    Err(err) => panic!("io_uring initialization failed: {err}"),
+                };
+                let (reader, _writer) = std::os::unix::net::UnixStream::pair().unwrap();
+                let dropped = Rc::new(Cell::new(false));
+                let mut buffer = Buffer {
+                    bytes: Box::new([0; 8]),
+                    dropped: dropped.clone(),
+                };
+                let ptr = buffer.bytes.as_mut_ptr();
+                let token = driver.state.get_mut().completions.insert(Completion {
+                    waiter: None,
+                    completed: None,
+                    ignored_data: Some(Box::new(buffer)),
+                    returns_fd: false,
+                });
+                let entry = opcode::Read::new(types::Fd(reader.as_raw_fd()), ptr, 8)
+                    .build()
+                    .user_data(UringDriver::encode_completion_key(token));
+                driver.push_entry(entry).unwrap();
+                if submit_first {
+                    driver.ring.get_mut().submit().unwrap();
                 }
-                Err(err) => panic!("io_uring initialization failed: {err}"),
-            };
-            let (reader, _writer) = std::os::unix::net::UnixStream::pair().unwrap();
-            let dropped = Rc::new(Cell::new(false));
-            let mut buffer = Buffer {
-                bytes: Box::new([0; 8]),
-                dropped: dropped.clone(),
-            };
-            let ptr = buffer.bytes.as_mut_ptr();
-            let token = driver.state.get_mut().completions.insert(Completion {
-                waiter: None,
-                completed: None,
-                ignored_data: Some(Box::new(buffer)),
-                returns_fd: false,
-            });
-            let entry = opcode::Read::new(types::Fd(reader.as_raw_fd()), ptr, 8)
-                .build()
-                .user_data(UringDriver::encode_completion_key(token));
-            driver.push_entry(entry).unwrap();
-            if submit_first {
-                driver.ring.get_mut().submit().unwrap();
+                assert!(!dropped.get());
+                if explicit_quiesce {
+                    driver.quiesce().unwrap();
+                    assert_eq!(
+                        driver.state.get_mut().completions[token].completed,
+                        Some(-libc::ECANCELED)
+                    );
+                    assert!(
+                        !dropped.get(),
+                        "storage must survive cancellation acknowledgement"
+                    );
+                }
+                drop(driver);
+                assert!(dropped.get(), "confirmed shutdown should release storage");
             }
-            assert!(!dropped.get());
-            driver.quiesce().unwrap();
-            assert_eq!(
-                driver.state.get_mut().completions[token].completed,
-                Some(-libc::ECANCELED)
-            );
-            assert!(
-                !dropped.get(),
-                "storage must survive cancellation acknowledgement"
-            );
-            drop(driver);
-            assert!(dropped.get(), "confirmed shutdown should release storage");
         }
     }
 

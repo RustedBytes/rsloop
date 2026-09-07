@@ -559,6 +559,48 @@ mod tests {
     use super::{IoBuf, IoBufMut, IoBufTemporaryPoll, IoVectoredBuf, IoVectoredBufMut};
 
     #[test]
+    fn cursor_preserves_prefix_and_checks_advance_before_mutation() {
+        let mut storage = Vec::with_capacity(16);
+        storage.extend_from_slice(b"prefix-tail");
+        let capacity = storage.capacity();
+        let mut cursor = super::IoBufWithCursor::new(storage);
+        cursor.advance(7);
+        assert_eq!(super::iobuf_to_slice(&cursor), b"tail");
+        assert_eq!(cursor.buf_capacity(), capacity - 7);
+        for invalid in [5, usize::MAX] {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    cursor.advance(invalid);
+                }))
+                .is_err()
+            );
+            assert_eq!(super::iobuf_to_slice(&cursor), b"tail");
+        }
+        super::read_into_buf(&mut cursor, |suffix| {
+            assert_eq!(&suffix[..4], b"tail");
+            assert!(suffix[4..].iter().all(|byte| *byte == 0));
+            suffix[..2].copy_from_slice(b"OK");
+            Ok(2)
+        })
+        .unwrap();
+        assert_eq!(super::iobuf_to_slice(&cursor), b"OK");
+        cursor.advance(2);
+        assert!(super::iobuf_to_slice(&cursor).is_empty());
+        cursor.advance(0);
+        assert_eq!(cursor.buf_capacity(), capacity - 9);
+        assert_eq!(cursor.into_inner(), b"prefix-OK");
+
+        let mut empty = super::IoBufWithCursor::new(Vec::<u8>::new());
+        empty.advance(0);
+        assert!(super::iobuf_to_slice(&empty).is_empty());
+        assert_eq!(empty.buf_capacity(), 0);
+        assert_eq!(
+            super::read_into_buf(&mut empty, |_| panic!("empty read")).unwrap(),
+            0
+        );
+    }
+
+    #[test]
     fn vectored_emptiness_preserves_writable_spare_capacity() {
         struct Spare(Vec<u8>);
         // SAFETY: the Vec owns stable memory. The readable descriptor exposes
@@ -615,7 +657,6 @@ mod tests {
         }
     }
 
-    #[cfg(any(feature = "fs", feature = "process", feature = "stdio"))]
     #[test]
     fn blocking_read_initializes_spare_capacity_and_tracks_result_length() {
         let mut buf = Vec::with_capacity(8);
@@ -635,7 +676,6 @@ mod tests {
         assert!(buf.is_empty());
     }
 
-    #[cfg(any(feature = "fs", feature = "process", feature = "stdio"))]
     #[test]
     fn blocking_read_errors_do_not_expose_unreported_bytes() {
         let mut buf = Vec::with_capacity(8);

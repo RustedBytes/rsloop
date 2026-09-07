@@ -143,11 +143,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
             )),
         };
 
-        match poll_result_or_wait(result, self.handle, cx, driver, Interest::WRITABLE) {
-            Poll::Ready(Ok(written)) => Poll::Ready(Ok(written)),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            Poll::Pending => Poll::Pending,
-        }
+        poll_result_or_wait(result, self.handle, cx, driver, Interest::WRITABLE)
     }
 
     #[cfg(any(unix, windows))]
@@ -365,6 +361,42 @@ impl<B: IoVectoredBuf> Drop for WritevOp<'_, B> {
 #[cfg(test)]
 mod cancellation_tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cancelled_write_retains_descriptor_array_and_payload_addresses() {
+        let owner = std::rc::Rc::new(AnyDriver::new_mock());
+        let handle = InnerRawHandle::for_mock_completion(owner.clone());
+        let buffers = vec![
+            Box::<[u8]>::from([]),
+            Box::<[u8]>::from(b"payload".as_slice()),
+        ];
+        let payload = buffers[1].as_ptr();
+        let mut op = WritevOp::new(&handle, buffers);
+        op.build_completion_entry(41).unwrap();
+        let descriptors = op.completion_system_iovecs.as_ref().unwrap().as_ptr();
+        op.completion_token = Some(41);
+        drop(op);
+        let AnyDriver::Mock(driver) = owner.as_ref() else {
+            unreachable!()
+        };
+        let held = driver.ignored.take();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].0, 41);
+        let (iovecs, buffers) = held[0]
+            .1
+            .downcast_ref::<(Option<Box<[libc::iovec]>>, Option<Vec<Box<[u8]>>>)>()
+            .unwrap();
+        let iovecs = iovecs.as_ref().unwrap();
+        assert_eq!(iovecs.as_ptr(), descriptors);
+        assert_eq!(iovecs.len(), 2);
+        assert_eq!(iovecs[0].iov_len, 0);
+        assert_eq!(iovecs[1].iov_base.cast_const().cast::<u8>(), payload);
+        assert_eq!(iovecs[1].iov_len, 7);
+        assert_eq!(buffers.as_ref().unwrap()[1].as_ptr(), payload);
+        assert_eq!(&*buffers.as_ref().unwrap()[1], b"payload");
+        drop(held); // Model acknowledgement; no actual kernel request was made.
+    }
 
     #[cfg(windows)]
     #[test]

@@ -130,11 +130,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
             )),
         };
 
-        match poll_result_or_wait(result, self.handle, cx, driver, Interest::WRITABLE) {
-            Poll::Ready(Ok(written)) => Poll::Ready(Ok(written)),
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            Poll::Pending => Poll::Pending,
-        }
+        poll_result_or_wait(result, self.handle, cx, driver, Interest::WRITABLE)
     }
 
     #[cfg(any(unix, windows))]

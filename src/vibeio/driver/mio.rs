@@ -88,7 +88,7 @@ impl DriverWaker {
 
     #[inline]
     fn wake(&self) -> io::Result<()> {
-        super::send_wake_datagram(|| self.sender.send(&[1]))
+        super::send_wake_notification(|| self.sender.send(&[1]))
     }
 
     fn acknowledge(&self) {

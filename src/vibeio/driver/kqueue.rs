@@ -47,7 +47,7 @@ impl DriverWaker {
 
     #[inline]
     fn wake(&self) -> io::Result<()> {
-        super::send_wake_datagram(|| self.sender.send(&[1]))
+        super::send_wake_notification(|| self.sender.send(&[1]))
     }
 
     fn acknowledge(&self) {
@@ -76,6 +76,25 @@ struct Registration {
 struct DriverState {
     registrations: Slab<Registration>,
     next_generation: u32,
+}
+
+impl Registration {
+    fn record_readiness(&mut self, filter: i16) -> Option<Waker> {
+        let (waiter, ready) = if filter == libc::EVFILT_READ && self.registered_read {
+            (&mut self.read_waiter, &mut self.read_ready)
+        } else if filter == libc::EVFILT_WRITE && self.registered_write {
+            (&mut self.write_waiter, &mut self.write_ready)
+        } else {
+            return None;
+        };
+        match waiter.take() {
+            Some(waker) => Some(waker),
+            None => {
+                *ready = true;
+                None
+            }
+        }
+    }
 }
 
 pub struct KqueueDriver {
@@ -162,16 +181,25 @@ impl KqueueDriver {
     }
 
     fn delete_filter(&self, fd: RawFd, filter: i16) -> io::Result<()> {
-        match self.apply_change(Self::change(fd, filter, libc::EV_DELETE, 0)) {
-            Err(err)
-                if matches!(
-                    err.raw_os_error(),
-                    Some(libc::ENOENT) | Some(libc::EBADF) | Some(libc::EINVAL)
-                ) =>
-            {
-                Ok(())
+        Self::delete_filter_with(|| self.apply_change(Self::change(fd, filter, libc::EV_DELETE, 0)))
+    }
+
+    fn delete_filter_with(mut delete: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+        loop {
+            match delete() {
+                // Deletion is idempotent: an interrupted call may already have
+                // removed the filter, in which case the retry reports it absent.
+                Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+                Err(err)
+                    if matches!(
+                        err.raw_os_error(),
+                        Some(libc::ENOENT) | Some(libc::EBADF) | Some(libc::EINVAL)
+                    ) =>
+                {
+                    return Ok(());
+                }
+                result => return result,
             }
-            result => result,
         }
     }
 
@@ -254,20 +282,8 @@ impl KqueueDriver {
             if registration.generation != generation {
                 continue;
             }
-            let (waiter, ready) = if event.filter == libc::EVFILT_READ {
-                (&mut registration.read_waiter, &mut registration.read_ready)
-            } else if event.filter == libc::EVFILT_WRITE {
-                (
-                    &mut registration.write_waiter,
-                    &mut registration.write_ready,
-                )
-            } else {
-                continue;
-            };
-            if let Some(waker) = waiter.take() {
+            if let Some(waker) = registration.record_readiness(event.filter) {
                 wakers.push(waker);
-            } else {
-                *ready = true;
             }
         }
         drop(state);
@@ -295,32 +311,57 @@ impl KqueueDriver {
         handle: &InnerRawHandle,
         mut delete: impl FnMut(RawFd, i16) -> io::Result<()>,
     ) -> io::Result<()> {
-        let registration = self
-            .state
-            .borrow_mut()
-            .registrations
-            .try_remove(handle.token.0)
-            .ok_or_else(|| {
+        let (fd, registered_read, registered_write) = {
+            let state = self.state.borrow();
+            let registration = state.registrations.get(handle.token.0).ok_or_else(|| {
                 io::Error::new(
                     ErrorKind::NotFound,
                     format!("I/O token {} is not registered", handle.token.0),
                 )
             })?;
-        // The token is retired regardless of kernel errors. Attempt both
-        // deletions, preserving the first error rather than abandoning the
-        // second filter. Retired wakers drop outside the state borrow.
+            (
+                registration.fd,
+                registration.registered_read,
+                registration.registered_write,
+            )
+        };
+        // Attempt both filters and record each successful deletion. Retain the
+        // token on failure so a retry knows which kernel filters still exist.
         let mut error = None;
-        for (filter, installed) in [
-            (libc::EVFILT_READ, registration.registered_read),
-            (libc::EVFILT_WRITE, registration.registered_write),
-        ] {
+        let mut retired_wakers = [None, None];
+        for (index, (filter, installed)) in [
+            (libc::EVFILT_READ, registered_read),
+            (libc::EVFILT_WRITE, registered_write),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             if installed {
-                if let Err(err) = delete(registration.fd, filter) {
+                if let Err(err) = delete(fd, filter) {
                     error.get_or_insert(err);
+                } else {
+                    let mut state = self.state.borrow_mut();
+                    let registration = &mut state.registrations[handle.token.0];
+                    if filter == libc::EVFILT_READ {
+                        registration.registered_read = false;
+                        registration.read_ready = false;
+                        retired_wakers[index] = registration.read_waiter.take();
+                    } else {
+                        registration.registered_write = false;
+                        registration.write_ready = false;
+                        retired_wakers[index] = registration.write_waiter.take();
+                    }
                 }
             }
         }
-        error.map_or(Ok(()), Err)
+        if let Some(error) = error {
+            return Err(error);
+        }
+        let retired = self.state.borrow_mut().registrations.remove(handle.token.0);
+        // User waker destructors may re-enter the driver.
+        drop(retired);
+        drop(retired_wakers);
+        Ok(())
     }
 
     fn reregister_with(
@@ -529,6 +570,61 @@ impl Driver for KqueueDriver {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn readiness_for_unregistered_filters_does_not_change_state() {
+        for read_registered in [false, true] {
+            for write_registered in [false, true] {
+                let mut registration = super::Registration {
+                    fd: -1,
+                    read_waiter: None,
+                    write_waiter: None,
+                    read_ready: false,
+                    write_ready: false,
+                    registered_read: read_registered,
+                    registered_write: write_registered,
+                    generation: 1,
+                };
+                assert!(registration.record_readiness(libc::EVFILT_READ).is_none());
+                assert!(registration.record_readiness(libc::EVFILT_WRITE).is_none());
+                assert_eq!(registration.read_ready, read_registered);
+                assert_eq!(registration.write_ready, write_registered);
+                registration.read_waiter = Some(std::task::Waker::noop().clone());
+                registration.write_waiter = Some(std::task::Waker::noop().clone());
+                assert_eq!(
+                    registration.record_readiness(libc::EVFILT_READ).is_some(),
+                    read_registered
+                );
+                assert_eq!(
+                    registration.record_readiness(libc::EVFILT_WRITE).is_some(),
+                    write_registered
+                );
+                assert_eq!(registration.read_waiter.is_some(), !read_registered);
+                assert_eq!(registration.write_waiter.is_some(), !write_registered);
+            }
+        }
+    }
+
+    #[test]
+    fn filter_deletion_retries_interruptions_and_preserves_terminal_errors() {
+        for terminal in [None, Some(libc::ENOENT), Some(libc::EIO)] {
+            let mut attempts = 0;
+            let result = super::KqueueDriver::delete_filter_with(|| {
+                attempts += 1;
+                if attempts <= 100_000 {
+                    return Err(std::io::Error::from_raw_os_error(libc::EINTR));
+                }
+                assert_eq!(attempts, 100_001);
+                terminal.map_or(Ok(()), |code| Err(std::io::Error::from_raw_os_error(code)))
+            });
+            assert_eq!(attempts, 100_001);
+            if terminal == Some(libc::EIO) {
+                assert_eq!(result.unwrap_err().raw_os_error(), terminal);
+            } else {
+                result.unwrap();
+            }
+        }
+    }
+
     use std::io::Write;
     use std::os::fd::AsRawFd;
     use std::rc::Rc;
@@ -639,6 +735,14 @@ mod tests {
                 unreachable!()
             };
             let mut attempts = Vec::new();
+            {
+                let mut state = kqueue.state.borrow_mut();
+                let registration = &mut state.registrations[handle.token.0];
+                registration.read_ready = true;
+                registration.write_ready = true;
+                registration.read_waiter = Some(Waker::noop().clone());
+                registration.write_waiter = Some(Waker::noop().clone());
+            }
             let error = kqueue
                 .deregister_with(&handle, |fd, filter| {
                     assert!(kqueue.state.try_borrow_mut().is_ok());
@@ -659,22 +763,41 @@ mod tests {
                 error.raw_os_error(),
                 Some(if fail_read { libc::EIO } else { libc::ENOMEM })
             );
-            assert!(!kqueue.state.borrow().registrations.contains(handle.token.0));
-            for (filter, failed) in [
+            {
+                let state = kqueue.state.borrow();
+                let registration = &state.registrations[handle.token.0];
+                assert_eq!(registration.registered_read, fail_read);
+                assert_eq!(registration.registered_write, fail_write);
+                assert_eq!(registration.read_ready, fail_read);
+                assert_eq!(registration.write_ready, fail_write);
+                assert_eq!(registration.read_waiter.is_some(), fail_read);
+                assert_eq!(registration.write_waiter.is_some(), fail_write);
+            }
+            let mut retried = Vec::new();
+            kqueue
+                .deregister_with(&handle, |fd, filter| {
+                    assert!(kqueue.state.try_borrow_mut().is_ok());
+                    retried.push(filter);
+                    kqueue.delete_filter(fd, filter)
+                })
+                .unwrap();
+            let expected: Vec<_> = [
                 (libc::EVFILT_READ, fail_read),
                 (libc::EVFILT_WRITE, fail_write),
-            ] {
+            ]
+            .into_iter()
+            .filter_map(|(filter, failed)| failed.then_some(filter))
+            .collect();
+            assert_eq!(retried, expected);
+            assert!(!kqueue.state.borrow().registrations.contains(handle.token.0));
+            for filter in [libc::EVFILT_READ, libc::EVFILT_WRITE] {
                 let result = kqueue.apply_change(KqueueDriver::change(
                     reader.as_raw_fd(),
                     filter,
                     libc::EV_DELETE,
                     0,
                 ));
-                if failed {
-                    result.unwrap(); // Release the deliberately retained filter.
-                } else {
-                    assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::ENOENT));
-                }
+                assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::ENOENT));
             }
         }
     }

@@ -382,7 +382,7 @@ mod cancellation_tests {
 
     #[cfg(any(unix, windows))]
     #[test]
-    fn polling_short_read_skips_empty_segments_and_preserves_suffix() {
+    fn short_read_skips_empty_segments_and_preserves_suffix() {
         use std::net::UdpSocket;
         #[cfg(unix)]
         use std::os::fd::AsRawFd;
@@ -390,50 +390,92 @@ mod cancellation_tests {
         use std::os::windows::io::AsRawSocket;
         use std::rc::Rc;
 
-        // Datagram boundaries make the short read deterministic: a stream may
-        // legally return fewer bytes than its currently queued payload.
-        let reader = UdpSocket::bind("127.0.0.1:0").unwrap();
-        let writer = UdpSocket::bind("127.0.0.1:0").unwrap();
-        reader.connect(writer.local_addr().unwrap()).unwrap();
-        writer.connect(reader.local_addr().unwrap()).unwrap();
-        reader
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-            .unwrap();
-        let driver = Rc::new(AnyDriver::new_mock());
-        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
-        #[cfg(unix)]
-        {
-            handle.handle = reader.as_raw_fd();
-        }
-        #[cfg(windows)]
-        {
-            handle.handle = RawOsHandle::Socket(reader.as_raw_socket());
-        }
-        let mut cx = Context::from_waker(std::task::Waker::noop());
-        let mut buffers: Vec<Box<[u8]>> = [0, 2, 0, 4, 0]
-            .into_iter()
-            .map(|len| vec![b'_'; len].into_boxed_slice())
-            .collect();
-        let addresses: Vec<_> = buffers.iter().map(|buf| buf.as_ptr()).collect();
+        let drivers = vec![Rc::new(AnyDriver::new_mock())];
+        #[cfg(target_os = "linux")]
+        let drivers = {
+            let mut drivers = drivers;
+            match AnyDriver::new_uring_custom(io_uring::IoUring::builder()) {
+                Ok(driver) => drivers.push(Rc::new(driver)),
+                Err(error)
+                    if matches!(
+                        error.raw_os_error(),
+                        Some(libc::EPERM | libc::ENOSYS | libc::EOPNOTSUPP)
+                    ) =>
+                {
+                    eprintln!("io_uring unavailable: {error}");
+                }
+                Err(error) => panic!("io_uring initialization failed: {error}"),
+            }
+            drivers
+        };
+        for driver in drivers {
+            // Datagram boundaries make the short read deterministic: a stream may
+            // legally return fewer bytes than its currently queued payload.
+            let reader = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let writer = UdpSocket::bind("127.0.0.1:0").unwrap();
+            reader.connect(writer.local_addr().unwrap()).unwrap();
+            writer.connect(reader.local_addr().unwrap()).unwrap();
+            reader
+                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            #[cfg(unix)]
+            let raw = reader.as_raw_fd();
+            #[cfg(windows)]
+            let raw = RawOsHandle::Socket(reader.as_raw_socket());
+            let polling = matches!(driver.as_ref(), AnyDriver::Mock(_));
+            let handle = if polling {
+                let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
+                handle.handle = raw;
+                handle
+            } else {
+                InnerRawHandle::new_with_driver_and_mode(
+                    &driver,
+                    raw,
+                    Interest::READABLE,
+                    crate::vibeio::driver::RegistrationMode::Completion,
+                )
+                .unwrap()
+            };
+            let mut cx = Context::from_waker(std::task::Waker::noop());
+            let mut buffers: Vec<Box<[u8]>> = [0, 2, 0, 4, 0]
+                .into_iter()
+                .map(|len| vec![b'_'; len].into_boxed_slice())
+                .collect();
+            let addresses: Vec<_> = buffers.iter().map(|buf| buf.as_ptr()).collect();
 
-        for payload in [b"abc".as_slice(), b""] {
-            assert_eq!(writer.send(payload).unwrap(), payload.len());
-            let mut op = ReadvOp::new(&handle, buffers);
-            assert!(
-                matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(count))
-                    if count == payload.len())
-            );
-            buffers = op.take_bufs();
-            assert_eq!(&*buffers[1], b"ab");
-            assert_eq!(&*buffers[3], b"c___");
-            assert_eq!(
-                buffers.iter().map(|buf| buf.len()).collect::<Vec<_>>(),
-                [0, 2, 0, 4, 0]
-            );
-            assert_eq!(
-                buffers.iter().map(|buf| buf.as_ptr()).collect::<Vec<_>>(),
-                addresses
-            );
+            for payload in [b"abc".as_slice(), b""] {
+                assert_eq!(writer.send(payload).unwrap(), payload.len());
+                let mut op = ReadvOp::new(&handle, buffers);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let result = loop {
+                    let result = if polling {
+                        op.poll_poll(&mut cx, &driver)
+                    } else {
+                        op.poll_completion(&mut cx, &driver)
+                    };
+                    if result.is_ready() {
+                        break result;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "readv completion timed out"
+                    );
+                    driver.wait(Some(std::time::Duration::from_millis(10)));
+                };
+                assert!(matches!(result, Poll::Ready(Ok(count))
+                    if count == payload.len()));
+                buffers = op.take_bufs();
+                assert_eq!(&*buffers[1], b"ab");
+                assert_eq!(&*buffers[3], b"c___");
+                assert_eq!(
+                    buffers.iter().map(|buf| buf.len()).collect::<Vec<_>>(),
+                    [0, 2, 0, 4, 0]
+                );
+                assert_eq!(
+                    buffers.iter().map(|buf| buf.as_ptr()).collect::<Vec<_>>(),
+                    addresses
+                );
+            }
         }
     }
 

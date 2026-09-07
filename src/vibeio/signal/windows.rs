@@ -18,7 +18,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
-#[cfg(windows)]
 use once_cell::sync::OnceCell;
 #[cfg(windows)]
 use windows_sys::Win32::System::Console::{CTRL_C_EVENT, SetConsoleCtrlHandler};
@@ -30,6 +29,8 @@ struct CtrlCState {
 
 #[cfg(windows)]
 static CTRL_C_STATE: OnceCell<Arc<CtrlCState>> = OnceCell::new();
+#[cfg(windows)]
+static CTRL_C_HANDLER_INSTALLED: OnceCell<()> = OnceCell::new();
 
 /// Cross-platform Ctrl-C future (Windows implementation).
 ///
@@ -129,12 +130,7 @@ fn dispatch_ctrl_c(state: &CtrlCState) {
 
 #[cfg(windows)]
 fn ctrl_c_state() -> io::Result<&'static Arc<CtrlCState>> {
-    CTRL_C_STATE.get_or_try_init(|| {
-        let state = Arc::new(CtrlCState {
-            counter: AtomicUsize::new(0),
-            wakers: Mutex::new(slab::Slab::new()),
-        });
-
+    initialize_ctrl_c_state(&CTRL_C_STATE, &CTRL_C_HANDLER_INSTALLED, || {
         // SAFETY: the process-lifetime callback has the required system ABI;
         // shared state is synchronized and retained in CTRL_C_STATE.
         let ok = unsafe { SetConsoleCtrlHandler(Some(ctrl_c_handler), 1) };
@@ -142,8 +138,26 @@ fn ctrl_c_state() -> io::Result<&'static Arc<CtrlCState>> {
             return Err(io::Error::last_os_error());
         }
 
-        Ok(state)
+        Ok(())
     })
+}
+
+fn initialize_ctrl_c_state<'a>(
+    state_cell: &'a OnceCell<Arc<CtrlCState>>,
+    installed: &OnceCell<()>,
+    install: impl FnOnce() -> io::Result<()>,
+) -> io::Result<&'a Arc<CtrlCState>> {
+    // Publish before installation can expose the callback on another thread.
+    // A failed installation leaves reusable state but does not mark success;
+    // a later constructor retries installation, serialized by the second cell.
+    let state = state_cell.get_or_init(|| {
+        Arc::new(CtrlCState {
+            counter: AtomicUsize::new(0),
+            wakers: Mutex::new(slab::Slab::new()),
+        })
+    });
+    installed.get_or_try_init(install)?;
+    Ok(state)
 }
 
 #[cfg(windows)]
@@ -160,6 +174,34 @@ unsafe extern "system" fn ctrl_c_handler(ctrl_type: u32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initialization_publishes_state_before_callback_and_retries_failure() {
+        let state_cell = OnceCell::new();
+        let installed = OnceCell::new();
+        let failed = initialize_ctrl_c_state(&state_cell, &installed, || {
+            assert!(state_cell.get().is_some());
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        });
+        assert!(matches!(failed, Err(error) if error.kind() == io::ErrorKind::PermissionDenied));
+        assert!(installed.get().is_none());
+        let published = state_cell.get().unwrap().clone();
+        let state = initialize_ctrl_c_state(&state_cell, &installed, || {
+            // Model the newly registered callback arriving before installation
+            // returns, on the actual published state rather than a test copy.
+            dispatch_ctrl_c(state_cell.get().expect("callback state not published"));
+            Ok(())
+        })
+        .unwrap();
+        assert!(Arc::ptr_eq(state, &published));
+        assert_eq!(state.counter.load(Ordering::Acquire), 1);
+        assert!(installed.get().is_some());
+        let reused = initialize_ctrl_c_state(&state_cell, &installed, || {
+            panic!("successful installation must not be repeated")
+        })
+        .unwrap();
+        assert!(Arc::ptr_eq(state, reused));
+    }
 
     fn listener(state: &Arc<CtrlCState>) -> CtrlC {
         CtrlC {
