@@ -830,6 +830,7 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(unix, feature = "blocking-default"))]
     use crate::vibeio::driver::AnyDriver;
     use crate::vibeio::executor::Runtime;
     use crate::vibeio::io::{AsyncRead, AsyncWrite, IoBufWithCursor};
@@ -923,7 +924,18 @@ mod tests {
     }
 
     fn make_runtime() -> Runtime {
-        Runtime::new(AnyDriver::new_best().expect("driver should initialize"))
+        // Windows child pipes need blocking workers even when this test is
+        // built with only `process`, without the `blocking-default` feature.
+        struct TestPool;
+        impl crate::vibeio::blocking::BlockingThreadPool for TestPool {
+            fn spawn(&self, task: Box<dyn FnOnce() + Send>) {
+                std::thread::spawn(task);
+            }
+        }
+        crate::vibeio::RuntimeBuilder::new()
+            .blocking_pool(Box::new(TestPool))
+            .build()
+            .expect("driver should initialize")
     }
 
     #[test]
