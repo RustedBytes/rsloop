@@ -16,7 +16,6 @@ import threading
 import time
 import warnings
 import weakref
-from unittest import mock
 
 import pytest
 import rsloop
@@ -251,7 +250,9 @@ class TestCompatibility:
     @pytest.mark.skipif(
         not (EXCEPTION_GROUP is not None), reason="requires ExceptionGroup"
     )
-    def test_create_connection_all_errors_returns_exception_group(self) -> None:
+    def test_create_connection_all_errors_returns_exception_group(
+        self, monkeypatch
+    ) -> None:
         async def main() -> int:
             loop = asyncio.get_running_loop()
 
@@ -264,23 +265,22 @@ class TestCompatibility:
             async def fake_sock_connect(self, sock, address):
                 raise OSError(errno.ECONNREFUSED, f"connect failed: {address!r}")
 
-            with mock.patch("socket.getaddrinfo", new=fake_getaddrinfo):
-                with mock.patch.object(
-                    rsloop.Loop, "sock_connect", new=fake_sock_connect
-                ):
-                    with pytest.raises(EXCEPTION_GROUP) as ctx:
-                        await loop.create_connection(
-                            asyncio.Protocol,
-                            "compat.test",
-                            443,
-                            all_errors=True,
-                        )
+            with monkeypatch.context() as patch:
+                patch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+                patch.setattr(rsloop.Loop, "sock_connect", fake_sock_connect)
+                with pytest.raises(EXCEPTION_GROUP) as ctx:
+                    await loop.create_connection(
+                        asyncio.Protocol,
+                        "compat.test",
+                        443,
+                        all_errors=True,
+                    )
             assert all(isinstance(exc, OSError) for exc in ctx.value.exceptions)
             return len(ctx.value.exceptions)
 
         assert rsloop.run(main()) == 2
 
-    def test_create_connection_interleave_reorders_attempts(self) -> None:
+    def test_create_connection_interleave_reorders_attempts(self, monkeypatch) -> None:
         async def main() -> list[int]:
             loop = asyncio.get_running_loop()
             calls = []
@@ -300,22 +300,23 @@ class TestCompatibility:
             # create_connection() drives the connect through _sock_connect_fast
             # (the loop-thread/vibeio fast path), mirroring how uvloop's
             # create_connection bypasses the public sock_connect().
-            with mock.patch("socket.getaddrinfo", new=fake_getaddrinfo):
-                with mock.patch.object(
-                    rsloop.Loop, "_sock_connect_fast", new=fake_sock_connect
-                ):
-                    with pytest.raises(OSError):
-                        await loop.create_connection(
-                            asyncio.Protocol,
-                            "compat.test",
-                            80,
-                            interleave=1,
-                        )
+            with monkeypatch.context() as patch:
+                patch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+                patch.setattr(rsloop.Loop, "_sock_connect_fast", fake_sock_connect)
+                with pytest.raises(OSError):
+                    await loop.create_connection(
+                        asyncio.Protocol,
+                        "compat.test",
+                        80,
+                        interleave=1,
+                    )
             return calls
 
         assert rsloop.run(main()) == [42001, 42003, 42002, 42004]
 
-    def test_create_connection_happy_eyeballs_staggers_attempts(self) -> None:
+    def test_create_connection_happy_eyeballs_staggers_attempts(
+        self, monkeypatch
+    ) -> None:
         async def main() -> tuple[float, int]:
             loop = asyncio.get_running_loop()
             done = loop.create_future()
@@ -363,20 +364,19 @@ class TestCompatibility:
                     return await orig_sock_connect(self, sock, address)
 
                 started = time.monotonic()
-                with mock.patch("socket.getaddrinfo", new=fake_getaddrinfo):
-                    with mock.patch.object(
-                        rsloop.Loop, "sock_connect", new=fake_sock_connect
-                    ):
-                        transport, _ = await loop.create_connection(
-                            ClientProtocol,
-                            "compat.test",
-                            80,
-                            happy_eyeballs_delay=0.01,
-                        )
-                        await asyncio.wait_for(done, 1.0)
-                        transport.close()
-                        await asyncio.sleep(0)
-                        socket_fileno = transport.get_extra_info("socket").fileno()
+                with monkeypatch.context() as patch:
+                    patch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+                    patch.setattr(rsloop.Loop, "sock_connect", fake_sock_connect)
+                    transport, _ = await loop.create_connection(
+                        ClientProtocol,
+                        "compat.test",
+                        80,
+                        happy_eyeballs_delay=0.01,
+                    )
+                    await asyncio.wait_for(done, 1.0)
+                    transport.close()
+                    await asyncio.sleep(0)
+                    socket_fileno = transport.get_extra_info("socket").fileno()
                 return time.monotonic() - started, socket_fileno
             finally:
                 server.close()
@@ -791,6 +791,7 @@ class TestCompatibility:
 
     def test_shutdown_default_executor_timeout_warns_and_falls_back_to_nowait(
         self,
+        monkeypatch,
     ) -> None:
         async def main() -> tuple[list[bool], list[str]]:
             loop = asyncio.get_running_loop()
@@ -809,7 +810,8 @@ class TestCompatibility:
                 messages.append(str(message))
                 return None
 
-            with mock.patch.object(warnings, "warn", side_effect=capture_warning):
+            with monkeypatch.context() as patch:
+                patch.setattr(warnings, "warn", capture_warning)
                 await loop.shutdown_default_executor(timeout=0.01)
             return calls, messages
 
@@ -907,7 +909,9 @@ class TestCompatibility:
 
         rsloop.run(main())
 
-    def test_shutdown_asyncgens_warns_on_new_iteration_after_shutdown(self) -> None:
+    def test_shutdown_asyncgens_warns_on_new_iteration_after_shutdown(
+        self, monkeypatch
+    ) -> None:
         async def main() -> tuple[list[str], list[object]]:
             loop = asyncio.get_running_loop()
             messages = []
@@ -924,7 +928,8 @@ class TestCompatibility:
                 sources.append(source)
                 return None
 
-            with mock.patch.object(warnings, "warn", side_effect=capture_warning):
+            with monkeypatch.context() as patch:
+                patch.setattr(warnings, "warn", capture_warning)
                 await loop.shutdown_asyncgens()
                 agen = gen()
                 assert await agen.__anext__() == "value"

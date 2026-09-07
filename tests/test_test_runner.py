@@ -1,7 +1,6 @@
 """Keep the CI wrapper consistent with pytest's selection and exit codes."""
 
 import sys
-from unittest import mock
 
 import pytest
 
@@ -31,8 +30,8 @@ def test_invalid_traceback_interval(monkeypatch, value, message):
 
 
 @pytest.fixture
-def wrapper_calls(monkeypatch):
-    calls = mock.Mock()
+def wrapper_calls(monkeypatch, mocker):
+    calls = mocker.Mock()
     monkeypatch.setattr(runner.os, "chdir", calls.chdir)
     monkeypatch.setattr(sys, "path", sys.path.copy())
     monkeypatch.setattr(
@@ -56,15 +55,15 @@ def wrapper_calls(monkeypatch):
         pytest.ExitCode.NO_TESTS_COLLECTED,
     ],
 )
-def test_wrapper_forwards_arguments_and_exit_code(wrapper_calls, exit_code):
+def test_wrapper_forwards_arguments_and_exit_code(wrapper_calls, exit_code, mocker):
     wrapper_calls.pytest.return_value = exit_code
     assert runner.main() == int(exit_code)
     wrapper_calls.assert_has_calls(
         [
-            mock.call.chdir(runner.ROOT_DIR),
-            mock.call.enable(),
-            mock.call.start(17, repeat=True),
-            mock.call.pytest(
+            mocker.call.chdir(runner.ROOT_DIR),
+            mocker.call.enable(),
+            mocker.call.start(17, repeat=True),
+            mocker.call.pytest(
                 [
                     "-v",
                     "-s",
@@ -75,7 +74,7 @@ def test_wrapper_forwards_arguments_and_exit_code(wrapper_calls, exit_code):
                     "stats",
                 ]
             ),
-            mock.call.cancel(),
+            mocker.call.cancel(),
         ]
     )
     assert sys.path[0] == str(runner.ROOT_DIR)

@@ -100,6 +100,11 @@ For the same diagnostics locally, run `uv run python scripts/run_python_tests.py
 Optional framework/database smoke scripts remain under `just test-frameworks`
 and `just test-databases`; pytest does not collect them by default.
 
+Use pytest's `monkeypatch` fixture for attribute and environment overrides, and
+pytest-mock's `mocker` fixture for mocks, spies, and call assertions. Use
+`monkeypatch.context()` when a shared function must be restored before the test
+finishes (for example, import machinery or warning handling).
+
 ## Build the docs
 
 With MkDocs installed:

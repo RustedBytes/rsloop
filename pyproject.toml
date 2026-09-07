@@ -58,6 +58,7 @@ dev = [
 # Core pytest dependencies, including on free-threaded Python.
 test = [
     "pytest>=8.4",
+    "pytest-mock>=3.14",
     "typing-extensions>=4.0",
     "websockets>=13.0",
 ]
