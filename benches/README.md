@@ -8,14 +8,15 @@ before/after results and limitations; these are not Python event-loop comparison
 This benchmark compares:
 
 - stdlib `asyncio`
-- `uvloop`
+- `uvloop` (`winloop` on Windows)
+- `zuvloop` on Python 3.14+
 - the Rust prototype in `rsloop`
 
 Run it from the repository root so Python resolves the editable Rust package cleanly:
 
 ```bash
 uv run --with maturin maturin develop --release
-uv run --with uvloop python benches/compare_event_loops.py
+uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/compare_event_loops.py
 ```
 
 Benchmark runner: [`benches/compare_event_loops.py`](./compare_event_loops.py)
@@ -28,7 +29,7 @@ Useful quick run:
 
 ```bash
 uv run --with maturin maturin develop --release
-uv run --with uvloop python benches/compare_event_loops.py \
+uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/compare_event_loops.py \
   --warmups 0 \
   --repeat 3 \
   --callbacks 50000 \
@@ -42,7 +43,7 @@ measured runs, add a label directory:
 
 ```bash
 uv run --with maturin maturin develop --release --features profiler
-uv run --with uvloop python benches/compare_event_loops.py \
+uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/compare_event_loops.py \
   --loops rsloop \
   --workloads callbacks,tasks,tcp_streams \
   --profile-rsloop-dir benches/profiles
@@ -68,10 +69,10 @@ Current workloads:
 - `tcp_streams`: local `asyncio.start_server()` / `asyncio.open_connection()` echo round trips
 
 By default, `tcp_streams` uses `rsloop`'s native fast streams. If you want all
-three loops to go through the stdlib `asyncio` streams layer instead, pass:
+selected loops to go through the stdlib `asyncio` streams layer instead, pass:
 
 ```bash
-uv run --with uvloop python benches/compare_event_loops.py --no-rsloop-fast-streams
+uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/compare_event_loops.py --no-rsloop-fast-streams
 ```
 
 ## Representative workload matrix
@@ -107,18 +108,22 @@ Build rsloop in release mode and run the standard matrix with:
 
 ```bash
 uv run --with maturin maturin develop --release
-uv run --with uvloop python benches/workload_matrix.py  # Unix
-uv run --with winloop python benches/workload_matrix.py # Windows
+uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/workload_matrix.py  # Unix
+uv run --with winloop --with 'zuvloop; python_version >= "3.14"' python benches/workload_matrix.py # Windows
 ```
 
 The default comparison is `asyncio,uvloop,rsloop` on Unix. Because uvloop is
 not available on Windows, the default there is `asyncio,winloop,rsloop`.
-Unavailable optional loops are reported and skipped.
+On Python 3.14+, zuvloop is added before rsloop in both defaults. Older Python
+versions retain the three-loop defaults. Select a subset with `--loops`, for
+example `--loops uvloop,zuvloop,rsloop` on Unix with Python 3.14+.
+Unavailable optional loops are reported and skipped; workload failures are not
+silently replaced by another loop. zuvloop is a benchmark-only dependency.
 
 For a quick smoke run:
 
 ```bash
-uv run --with uvloop python benches/workload_matrix.py \
+uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/workload_matrix.py \
   --warmups 0 \
   --repeat 1 \
   --concurrency 4 \
@@ -152,7 +157,7 @@ pass before each rsloop scenario:
 
 ```bash
 uv run --with maturin maturin develop --release --features profiler
-uv run --with uvloop python benches/workload_matrix.py \
+uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/workload_matrix.py \
   --loops rsloop \
   --profile-rsloop-dir benches/profiles \
   --allow-profiler-build

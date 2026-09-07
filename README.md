@@ -464,10 +464,32 @@ The repository also includes:
 
 ```bash
 uv run --with maturin maturin develop --release
-uv run --with uvloop python benches/compare_event_loops.py
+uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/compare_event_loops.py
 ```
 
-An example output from that script on macOS (arm64) with CPython 3.14:
+### Four-loop comparison on Linux
+
+Measured on September 7, 2026 on an Intel Core i9-9900K, Linux
+7.0.0-31-generic (x86_64), and CPython 3.14, with rsloop 0.1.48 built in
+release mode. Each entry is the median of five measured runs after one warmup,
+with each run in a fresh subprocess. Times are milliseconds; lower is better.
+
+| Workload | asyncio | uvloop | zuvloop | rsloop |
+|---|---:|---:|---:|---:|
+| 200,000 callbacks | 109.24 | 51.03 | **36.97** | 45.80 |
+| 50,000 tasks | 148.07 | 88.56 | **77.48** | 87.05 |
+| 5,000 TCP roundtrips | 149.27 | 122.88 | 105.12 | **90.62** |
+
+The TCP workload uses 1,024-byte payloads and rsloop's native fast streams;
+the other loops use stdlib asyncio streams. Use `--no-rsloop-fast-streams`
+to compare all loops through the stdlib streams layer. Zuvloop led callbacks
+and tasks in this run, while rsloop led TCP roundtrips. These are local
+microbenchmarks, not isolated-lab measurements or general application performance
+claims; do not compare them directly with the historical macOS results below.
+
+### Historical macOS comparison
+
+An earlier example output from the script on macOS (arm64) with CPython 3.14:
 
 ```
 callbacks (200,000 ops)

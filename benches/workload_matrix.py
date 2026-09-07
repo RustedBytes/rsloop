@@ -127,7 +127,8 @@ def parse_args() -> argparse.Namespace:
         default=default_loops_csv(),
         help=(
             "Comma-separated loops. Defaults to asyncio, uvloop, and rsloop on "
-            "Unix; asyncio, winloop, and rsloop on Windows."
+            "Unix; asyncio, winloop, and rsloop on Windows. "
+            "Python 3.14+ also includes zuvloop."
         ),
     )
     parser.add_argument("--scenarios", default=DEFAULT_SCENARIOS)

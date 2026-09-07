@@ -17,7 +17,7 @@ from dataclasses import dataclass, replace
 from typing import Callable
 
 
-LOOP_CHOICES = ("asyncio", "uvloop", "winloop", "rsloop")
+LOOP_CHOICES = ("asyncio", "uvloop", "winloop", "zuvloop", "rsloop")
 WORKLOAD_CHOICES = ("callbacks", "tasks", "tcp_streams")
 RSLOOP_PROFILE_ENV = "RSLOOP_TRACY"
 
@@ -28,6 +28,8 @@ def default_loops_csv() -> str:
         loops.insert(1, "winloop")
     else:
         loops.insert(1, "uvloop")
+    if sys.version_info >= (3, 14):
+        loops.insert(-1, "zuvloop")
     return ",".join(loops)
 
 
@@ -48,12 +50,12 @@ class ChildResult:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare stdlib asyncio, uvloop, winloop, and the Rust prototype event loop.",
+        description="Compare asyncio, uvloop, winloop, zuvloop, and rsloop.",
     )
     parser.add_argument(
         "--loops",
         default=default_loops_csv(),
-        help="Comma-separated loops to benchmark. Choices: asyncio,uvloop,winloop,rsloop",
+        help="Comma-separated loops to benchmark. Choices: asyncio,uvloop,winloop,zuvloop,rsloop",
     )
     parser.add_argument(
         "--workloads",
@@ -168,6 +170,10 @@ def loop_factory_for(loop_name: str) -> Callable[[], asyncio.AbstractEventLoop]:
         return asyncio.new_event_loop
     if loop_name == "uvloop":
         return importlib.import_module("uvloop").new_event_loop
+    if loop_name == "zuvloop":
+        if sys.version_info < (3, 14):
+            raise RuntimeError("zuvloop requires Python 3.14 or newer")
+        return importlib.import_module("zuvloop").new_event_loop
     if loop_name == "winloop":
         if sys.platform != "win32":
             raise RuntimeError("winloop is only supported on Windows")

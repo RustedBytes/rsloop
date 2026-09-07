@@ -74,4 +74,4 @@ test-anyio:
     uv run --with anyio python tests/packages/anyio_test.py
 
 bench-real-world:
-    uv run --with {{benchmark-backend}} python benches/workload_matrix.py
+    uv run --with {{benchmark-backend}} --with 'zuvloop; python_version >= "3.14"' python benches/workload_matrix.py
