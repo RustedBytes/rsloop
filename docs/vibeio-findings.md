@@ -65,6 +65,40 @@ anchors. No rules were disabled for this review.
 
 ## Still requiring per-location review
 
+### Polling adapter temporary-buffer review (dcd9953)
+
+The fresh scan still contains 196 vibeio findings. These nine Q0087 reports
+incorrectly report absent safety comments: each constructor has a preceding
+local SAFETY explanation. Locations below refer to dcd9953.
+
+| Location | Borrow and dispatch evidence |
+| --- | --- |
+| net/tcp/stream.rs:388, PollTcpStream::peek | Exclusive initialized buffer; wrapper and RecvOp are constructed inside each poll_fn call, not retained across Pending. |
+| net/tcp/stream.rs:603, poll_write | Initialized shared source; local WriteOp only reads the bytes. |
+| net/tcp/stream.rs:621, poll_write_vectored | Borrowed initialized IoSlices; local WritevOp owns copied descriptor metadata, not the borrowed payload. |
+| net/udp.rs:1050, poll_send_to | Initialized shared source; local SendtoOp owns its address metadata and only reads the source. |
+| net/udp.rs:1088, poll_peek_from | Exclusive writable slice; local RecvfromOp and its pointer-bearing metadata end with this poll. |
+| net/unix/stream.rs:376, poll_write | Same local, read-only WriteOp contract as TCP. |
+| net/unix/stream.rs:394, poll_write_vectored | Same local descriptor-copy and borrowed-payload contract as TCP. |
+| io/pipe.rs:430, poll_write | Borrowed initialized source used by a local read-only WriteOp. |
+| io/pipe.rs:448, poll_write_vectored | Borrowed initialized IoSlices used by a local WritevOp. |
+
+All nine dispatch through InnerRawHandle::poll_op_poll, which rejects completion
+mode before calling poll_poll. No local operation escapes on Pending. Existing
+regressions cover cancelled TCP peek, pipe scalar/vectored backpressure and all
+six borrowed UDP polling methods. This closes the missing-comment dispositions;
+it does not substitute for native Windows/macOS execution or prove every FFI
+implementation used by these operations.
+
+### Readiness invalidation review
+
+The six TCP/UDP/Unix try_io methods now share try_io_ready. Only WouldBlock
+clears cached readiness; Interrupted and other errors are returned without
+clearing it. The regression checks those errors, success, WouldBlock, callback
+suppression when not ready, and absence of a RefCell borrow during the callback.
+This is a logic correction, not a measured throughput gain or a reproduced
+lost-event hang.
+
 ### Partial kqueue deregistration also retires cached readiness and waiters
 
 The retryable-deletion change initially updated installed flags alone. Successful

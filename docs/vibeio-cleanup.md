@@ -22,6 +22,33 @@ runtime is safe or that the Qualirs review is finished.
 
 ## Current inventory
 
+### Fresh rsloop integration verification at dcd9953
+
+- Rebuilt and installed the optimized CPython 3.14 rsloop 0.1.48 extension with
+  `maturin develop --release --locked` (40.43 seconds reported for the build).
+- Root all-feature Rust suite: 385 tests passed, no failures or ignored tests;
+  see target/vibeio-cleanup-root-current.log.
+- Python compatibility suite: 109 tests ran in 3.315 seconds, OK with two skips;
+  see target/vibeio-cleanup-python-current.log.
+- The workload matrix smoke completed all 13 rsloop scenarios, one measured run
+  each after one warmup, pinned to CPUs 2,3 with five idle measurement cycles
+  and one idle warmup cycle. Output: target/vibeio-cleanup-matrix-smoke.json.
+  This is functional integration evidence, not a stable performance comparison;
+  no uvloop comparison or README performance update is claimed.
+
+### Polling adapter and readiness follow-up
+
+- Reviewed and recorded all nine current polling-adapter Q0087 reports in
+  vibeio-findings.md. Local safety comments are present, temporary operations
+  remain poll-local, and dispatch rejects completion mode. The fresh scan at
+  dcd9953 still reports 196 findings; no rules were disabled.
+- Recorded the shared readiness helper introduced in dcd9953: only WouldBlock
+  clears readiness, and callbacks execute outside RefCell borrows. Its regression
+  covers success, Interrupted, other errors, WouldBlock and not-ready suppression.
+- At commit verification, native Linux all-feature tests passed: 268 unit tests
+  and 16 doctests. Formatting and all-target/all-feature strict Clippy passed.
+  These results do not establish native Windows/macOS behavior or speedup.
+
 ### Partial kqueue deletion clears only retired filter state
 
 - Successful per-filter deletion now clears that filter's cached readiness and
