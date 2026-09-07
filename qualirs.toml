@@ -25,6 +25,17 @@ ignore_findings = [
     "Q0072",
     "Q0076",
     "Q0077",
+    # Qualirs ignores the other consumers of the sorted separator list: stable
+    # ordering and last() are required, so replacing the sort with min() is wrong.
+    "Q0056",
+    # Misidentifies AsyncRead::read in vibeio::io::copy as acquiring a lock.
+    # That function has no lock guard to hold across an await.
+    "Q0085",
+    # Flags safe Pin::as_mut() reborrows (e.g. Runtime::block_on) as unsafe
+    # mutable aliasing. This syntactic check does not establish overlapping refs.
+    # Rule-wide suppression is not a claim that all unsafe aliasing is sound;
+    # lifetime and ownership invariants still require review and runtime checks.
+    "Q0090",
 ]
 min_severity = "info"
 
