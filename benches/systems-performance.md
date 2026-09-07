@@ -1,5 +1,9 @@
 # Systems performance investigation — 2026-09-07
 
+Follow-up: the [reactor investigation](reactor-performance.md) fixes the
+short-transfer issue recorded below and measures a further raw-socket
+optimization. This report preserves the earlier measurements and findings.
+
 Rsloop's remaining disadvantage is concentrated in callback scheduling and
 generic plaintext protocol traffic. It is not uniformly slower than uvloop or
 zuvloop. This investigation implements two changes: avoid redundant read-pool

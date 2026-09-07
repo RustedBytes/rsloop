@@ -857,16 +857,21 @@ impl LoopCore {
                 // cleared the ordinary wake flag. Never park before importing it.
                 continue;
             }
-            if !ready_batch.is_empty() || !local_ready.is_empty() {
-                // A task repeatedly yielding with sleep(0) must not prevent
-                // loop-thread socket readers from observing kernel readiness.
-                // This poll cannot park. Keep Python attached: repeatedly
-                // detaching/reacquiring here can starve workers trying to
-                // acquire the GIL during a busy Python callback chain.
+            // A missed cross-thread spin suggests progress needs the owning
+            // reactor. During its cooldown, service local readiness before
+            // detaching and constructing a park future. Keep successful
+            // worker-thread ping-pong on its cheaper spin path. As before,
+            // hot Python callback chains must also service local I/O.
+            if !ready_batch.is_empty() || !local_ready.is_empty() || spin_cooldown > 0 {
                 LOOP_RUNTIMES.with(|runtimes| {
                     runtimes.borrow()[&loop_runtime_key].poll_once();
                 });
-                continue;
+                if !ready_batch.is_empty()
+                    || !local_ready.is_empty()
+                    || self.wake.ready_pending.load(Ordering::Acquire)
+                {
+                    continue;
+                }
             }
 
             // Wait for the next wakeup with the GIL released. First spin briefly

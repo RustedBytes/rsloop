@@ -1,5 +1,9 @@
 # Event Loop Benchmark
 
+The [reactor performance follow-up](reactor-performance.md) fixes the
+short-transfer failure and measures adaptive polling before parking, including
+the rejected unconditional-polling variant and native-stream regression checks.
+
 The [systems performance investigation](systems-performance.md) explains the
 remaining callback/protocol gap, measures numeric resolution and read-pool
 notifications, and records a pre-existing intermittent transfer failure.

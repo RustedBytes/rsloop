@@ -56,6 +56,47 @@ class TestLocalSocket:
 
         self.run_async(exercise())
 
+    def test_busy_socket_loop_services_timers_and_threadsafe_callbacks(self):
+        a, b = self.pair()
+        start = threading.Event()
+        remote = self.loop.create_future()
+        timer = self.loop.create_future()
+
+        def schedule_from_thread():
+            if start.wait(5):
+                self.loop.call_soon_threadsafe(remote.set_result, "remote")
+
+        worker = threading.Thread(target=schedule_from_thread)
+        worker.start()
+
+        async def exercise():
+            async def echo():
+                while data := await self.loop.sock_recv(b, 1):
+                    await self.loop.sock_sendall(b, data)
+
+            peer = asyncio.create_task(echo())
+            self.loop.call_later(0.005, timer.set_result, "timer")
+            count = 0
+            try:
+                while count < 10 or not (remote.done() and timer.done()):
+                    await self.loop.sock_sendall(a, b"x")
+                    assert await self.loop.sock_recv(a, 1) == b"x"
+                    count += 1
+                    if count == 10:
+                        start.set()
+                assert remote.result() == "remote"
+                assert timer.result() == "timer"
+            finally:
+                peer.cancel()
+                await asyncio.gather(peer, return_exceptions=True)
+
+        try:
+            self.run_async(exercise())
+        finally:
+            start.set()
+            worker.join(timeout=5)
+        assert not worker.is_alive()
+
     def test_partial_send_and_receive_into_preserve_all_bytes(self):
         a, b = self.pair()
         a.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)

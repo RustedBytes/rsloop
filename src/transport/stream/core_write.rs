@@ -203,12 +203,13 @@ impl StreamTransportCore {
     pub(super) fn queue_write(self: &Arc<Self>, data: OwnedWriteBuffer) -> io::Result<()> {
         let should_pause = self.record_write_buffer_enqueued(data.remaining().len())?;
         self.ensure_writer_worker();
-        if should_pause {
-            self.notify_pause_writing();
-        }
         if self.writer_tx.send(WriterCommand::Data(data)).is_err() {
             self.clear_write_buffer(false);
             self.fail_write(None);
+        } else if should_pause {
+            // pause_writing can re-enter close/write_eof. Publish these bytes
+            // first so that any control command follows them in the queue.
+            self.notify_pause_writing();
         }
         Ok(())
     }
@@ -305,10 +306,13 @@ impl StreamTransportCore {
                 self.record_write_buffer_drained(written);
             }
             Ok(written) => {
-                self.record_write_buffer_drained(written);
                 data.advance(written);
                 self.set_write_backpressure_active(true);
                 self.queue_recorded_write(data);
+                // Draining can synchronously call resume_writing, which may
+                // write again or close the transport. Transfer ownership of
+                // the unsent suffix first, before Python can re-enter us.
+                self.record_write_buffer_drained(written);
             }
             Err(err)
                 if err.kind() == io::ErrorKind::Interrupted
