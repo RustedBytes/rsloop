@@ -709,7 +709,14 @@ mod tests {
                     .unwrap(),
                 _ => {
                     writer.write_all(b"x").unwrap();
-                    kqueue.wait_events(Some(Duration::from_secs(1))).unwrap();
+                    crate::vibeio::test_support::drive_until(
+                        || calls.get() > 0,
+                        || {
+                            kqueue
+                                .wait_events(Some(Duration::from_millis(100)))
+                                .unwrap()
+                        },
+                    );
                 }
             }
             assert!(calls.get() > 0);
@@ -952,7 +959,15 @@ mod tests {
         .expect("reader should register");
 
         writer.write_all(b"!").expect("socket write should succeed");
-        driver.wait(Some(Duration::from_millis(100)));
+        crate::vibeio::test_support::drive_until(
+            || {
+                let AnyDriver::Kqueue(kqueue) = driver.as_ref() else {
+                    unreachable!()
+                };
+                kqueue.state.borrow().registrations[handle.token.0].read_ready
+            },
+            || driver.wait(Some(Duration::from_millis(100))),
+        );
 
         let wakes = Arc::new(WakeCount(AtomicUsize::new(0)));
         driver

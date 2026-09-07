@@ -210,7 +210,7 @@ mod storage_tests {
             let mut scalar = ReadOp::new(&handle, vec![7u8; 4]);
             assert_eq!(
                 crate::vibeio::time::timeout(
-                    std::time::Duration::from_secs(5),
+                    crate::vibeio::test_support::WATCHDOG,
                     std::future::poll_fn(|cx| handle.poll_op(cx, &mut scalar))
                 )
                 .await
@@ -223,7 +223,7 @@ mod storage_tests {
                 let mut positional = ReadAtOp::new(&handle, vec![7u8; 4], offset);
                 assert_eq!(
                     crate::vibeio::time::timeout(
-                        std::time::Duration::from_secs(5),
+                        crate::vibeio::test_support::WATCHDOG,
                         std::future::poll_fn(|cx| handle.poll_op(cx, &mut positional))
                     )
                     .await
@@ -240,7 +240,7 @@ mod storage_tests {
             let mut vectored = ReadvOp::new(&handle, buffers.clone());
             assert_eq!(
                 crate::vibeio::time::timeout(
-                    std::time::Duration::from_secs(5),
+                    crate::vibeio::test_support::WATCHDOG,
                     std::future::poll_fn(|cx| handle.poll_op(cx, &mut vectored))
                 )
                 .await
@@ -258,7 +258,7 @@ mod storage_tests {
             let mut write = crate::vibeio::op::WritevOp::new(&handle, buffers.clone());
             assert_eq!(
                 crate::vibeio::time::timeout(
-                    std::time::Duration::from_secs(5),
+                    crate::vibeio::test_support::WATCHDOG,
                     std::future::poll_fn(|cx| handle.poll_op(cx, &mut write))
                 )
                 .await
@@ -270,7 +270,7 @@ mod storage_tests {
             let mut read = ReadAtOp::new(&handle, Vec::<u8>::with_capacity(4), 0);
             assert_eq!(
                 crate::vibeio::time::timeout(
-                    std::time::Duration::from_secs(5),
+                    crate::vibeio::test_support::WATCHDOG,
                     std::future::poll_fn(|cx| handle.poll_op(cx, &mut read))
                 )
                 .await
@@ -299,7 +299,6 @@ mod storage_tests {
         use std::io::Write;
         use std::os::windows::io::AsRawSocket;
         use std::sync::mpsc;
-        use std::time::Duration;
 
         async fn receive<O: Op<Output = usize>>(
             handle: &InnerRawHandle,
@@ -318,7 +317,7 @@ mod storage_tests {
                 result
             });
             assert_eq!(
-                crate::vibeio::time::timeout(Duration::from_secs(5), read)
+                crate::vibeio::time::timeout(crate::vibeio::test_support::WATCHDOG, read)
                     .await
                     .unwrap()
                     .unwrap(),
@@ -333,7 +332,9 @@ mod storage_tests {
         let (signal, ready) = mpsc::channel();
         let writer = std::thread::spawn(move || {
             for _ in 0..3 {
-                ready.recv_timeout(Duration::from_secs(5)).unwrap();
+                ready
+                    .recv_timeout(crate::vibeio::test_support::WATCHDOG)
+                    .unwrap();
                 peer.write_all(b"x").unwrap();
             }
         });
@@ -405,7 +406,7 @@ mod storage_tests {
         }
 
         let (socket, mut peer) = UnixStream::pair().unwrap();
-        peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
         let mut handle = InnerRawHandle::for_mock_completion(Rc::new(AnyDriver::new_mock()));
         handle.handle = socket.as_raw_fd();

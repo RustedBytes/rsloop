@@ -1232,7 +1232,7 @@ mod tests {
 
                 socket.connect(peer_addr).await.unwrap();
                 assert_eq!(socket.send(b"ping".to_vec()).await.0.unwrap(), 4);
-                peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
                     .unwrap();
                 let mut buf = [0; 4];
                 assert_eq!(peer.recv(&mut buf).unwrap(), 4);
@@ -1469,7 +1469,7 @@ mod tests {
             assert_eq!(buffer, [b'_'; 16]);
             buffer.fill(b'x');
 
-            crate::vibeio::time::timeout(std::time::Duration::from_secs(5), async {
+            crate::vibeio::time::timeout(crate::vibeio::test_support::WATCHDOG, async {
                 // macOS rejects an explicit destination on connected UDP
                 // sockets, so exercise send_to before connecting the sender.
                 for payload in [&b"ping"[..], &b""[..]] {

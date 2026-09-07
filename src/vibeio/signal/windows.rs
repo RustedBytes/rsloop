@@ -320,33 +320,20 @@ mod tests {
     }
     #[cfg(windows)]
     use crate::vibeio::driver::AnyDriver;
-    #[cfg(windows)]
-    use std::time::Duration;
-
-    #[cfg(windows)]
-    async fn await_ctrl_c_with_timeout(
-        fut: impl Future<Output = io::Result<()>>,
-    ) -> io::Result<()> {
-        crate::vibeio::time::timeout(Duration::from_secs(1), fut)
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "ctrl-c timeout"))?
-    }
-
     #[test]
     #[cfg(windows)]
     fn ctrl_c_unblocks_on_handler() {
         let rt = crate::vibeio::executor::Runtime::new(AnyDriver::new_mock());
         let result = rt.block_on(async {
             let ctrlc = ctrl_c()?;
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(10));
+            crate::vibeio::test_support::notify_after_pending(ctrlc, move || {
                 // SAFETY: invoke our handler directly with a supported integer
                 // event code; it accesses only synchronized process-lifetime state.
                 unsafe {
                     let _ = ctrl_c_handler(CTRL_C_EVENT);
                 }
-            });
-            await_ctrl_c_with_timeout(ctrlc).await
+            })
+            .await
         });
         assert!(result.is_ok());
     }

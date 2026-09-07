@@ -216,7 +216,7 @@ mod socket_creation_tests {
         let (mut accepted, remote) = listener.accept().unwrap();
         assert_eq!(remote, peer.local_addr().unwrap());
         accepted
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
         peer.write_all(b"hello").unwrap();
         let mut payload = [0; 5];

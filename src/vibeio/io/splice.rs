@@ -178,7 +178,6 @@ mod tests {
 
     #[test]
     fn staging_writer_closes_on_drop_and_failed_registration() {
-        use std::io::Read;
         for fail_registration in [false, true] {
             let mut driver = AnyDriver::new_mock();
             let AnyDriver::Mock(mock) = &mut driver else {
@@ -206,7 +205,7 @@ mod tests {
                 }
                 // EOF proves the owned writer was released on both paths;
                 // nonblocking mode makes a leaked writer fail instead of hang.
-                assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+                crate::vibeio::test_support::assert_eof(&mut reader);
                 let driver = crate::vibeio::executor::current_driver().unwrap();
                 let AnyDriver::Mock(mock) = driver.as_ref() else {
                     unreachable!()
@@ -252,7 +251,7 @@ mod tests {
             peer
         });
         let mut received = [0; 12];
-        peer.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
         peer.read_exact(&mut received).unwrap();
         assert_eq!(&received, b"hello splice");

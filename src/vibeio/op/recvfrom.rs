@@ -479,7 +479,7 @@ mod cancellation_tests {
                     } else {
                         RecvfromOp::new(&handle, buffer)
                     };
-                    let deadline = Instant::now() + Duration::from_secs(5);
+                    let deadline = Instant::now() + crate::vibeio::test_support::WATCHDOG;
                     let mut cx = Context::from_waker(std::task::Waker::noop());
                     let result = loop {
                         if let Poll::Ready(result) = op.poll_completion(&mut cx, &driver) {
@@ -512,7 +512,7 @@ mod cancellation_tests {
         let reader = UdpSocket::bind("127.0.0.1:0").unwrap();
         let writer = UdpSocket::bind("127.0.0.1:0").unwrap();
         reader
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
         let destination = reader.local_addr().unwrap();
         let source = writer.local_addr().unwrap();

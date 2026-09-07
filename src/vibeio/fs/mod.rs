@@ -1091,11 +1091,14 @@ mod tests {
     }
 
     fn unique_path(name: &str) -> PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let pid = std::process::id();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("vibeio_{name}_{now}.tmp"))
+        std::env::temp_dir().join(format!("vibeio_{name}_{pid}_{id}_{now}.tmp"))
     }
 
     #[test]

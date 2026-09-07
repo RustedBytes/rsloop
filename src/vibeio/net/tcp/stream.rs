@@ -699,7 +699,7 @@ mod socket_creation_tests {
             assert_eq!(buffer, [b'_'; 8]);
             buffer.fill(b'x');
             peer.write_all(b"peek").unwrap();
-            crate::vibeio::time::timeout(std::time::Duration::from_secs(5), async {
+            crate::vibeio::time::timeout(crate::vibeio::test_support::WATCHDOG, async {
                 let count = stream.peek(&mut buffer).await.unwrap();
                 assert!(count > 0 && count <= 4);
                 assert_eq!(&buffer[..count], &b"peek"[..count]);

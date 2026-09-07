@@ -756,7 +756,6 @@ mod ownership_tests {
     #[test]
     fn tcp_connect_uses_owned_address_on_live_driver() {
         use crate::vibeio::net::{PollTcpStream, TcpStream};
-        use std::time::Duration;
 
         #[cfg(unix)]
         let driver = AnyDriver::new_mio().unwrap();
@@ -788,7 +787,7 @@ mod ownership_tests {
                 let address = listener.local_addr().unwrap();
                 runtime.block_on(async move {
                     let stream = crate::vibeio::time::timeout(
-                        Duration::from_secs(5),
+                        crate::vibeio::test_support::WATCHDOG,
                         TcpStream::connect(address),
                     )
                     .await
@@ -799,7 +798,7 @@ mod ownership_tests {
                     assert_eq!(peer, stream.local_addr().unwrap());
 
                     let stream = crate::vibeio::time::timeout(
-                        Duration::from_secs(5),
+                        crate::vibeio::test_support::WATCHDOG,
                         PollTcpStream::connect(address),
                     )
                     .await

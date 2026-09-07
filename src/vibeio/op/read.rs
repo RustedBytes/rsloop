@@ -318,7 +318,7 @@ mod cancellation_tests {
         let mut writer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (reader, _) = listener.accept().unwrap();
         reader
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
         writer.write_all(b"x").unwrap();
         writer.shutdown(Shutdown::Write).unwrap();

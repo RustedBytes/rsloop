@@ -166,7 +166,7 @@ mod ownership_tests {
         drop(stdin);
         assert_eq!(
             receiver
-                .recv_timeout(Duration::from_secs(5))
+                .recv_timeout(crate::vibeio::test_support::WATCHDOG)
                 .unwrap()
                 .unwrap()
                 .code(),
@@ -175,7 +175,7 @@ mod ownership_tests {
     }
 
     fn assert_reaped(pid: u32) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + crate::vibeio::test_support::WATCHDOG;
         loop {
             let mut status = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
             // SAFETY: status is writable. WNOWAIT observes without reaping, so
@@ -273,7 +273,7 @@ mod ownership_tests {
         drop(stdin);
         assert_reaped(pid);
         // Reaping precedes delivery by a small interval, so poll under a deadline.
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + crate::vibeio::test_support::WATCHDOG;
         loop {
             if let Poll::Ready(status) = wait.as_mut().poll(&mut Context::from_waker(Waker::noop()))
             {
@@ -295,12 +295,20 @@ mod ownership_tests {
         let pid = child.id();
         runtime.block_on(async move {
             let (tx, rx) = async_channel::unbounded();
-            crate::vibeio::spawn(zombie_reaper_fn_linux_pidfd(rx));
             tx.try_send((ReapChild(Some(child)), None)).unwrap();
-            // Give the reaper task a turn while the child remains pipe-held.
-            crate::vibeio::time::sleep(Duration::from_millis(10)).await;
+            // Poll the receiver explicitly: Pending means it consumed the
+            // queued child and spawned its wait task, then awaited more input.
+            let mut reaper = std::pin::pin!(zombie_reaper_fn_linux_pidfd(rx));
+            assert!(
+                reaper
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
             drop(tx);
         });
+        // Service the spawned wait task while the child is still pipe-held.
+        runtime.poll_once();
         drop(runtime);
         drop(stdin);
         assert_reaped(pid);
@@ -461,7 +469,7 @@ mod windows_wait_tests {
             let (sender, receiver) = oneshot::channel();
             register_process_wait((ReapChild(Some(child)), Some(sender)));
             let result = receiver
-                .recv_timeout(std::time::Duration::from_secs(5))
+                .recv_timeout(crate::vibeio::test_support::WATCHDOG)
                 .unwrap();
             assert_eq!(result.unwrap().code(), Some(7));
         }

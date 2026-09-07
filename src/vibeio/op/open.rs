@@ -145,7 +145,7 @@ mod cancellation_tests {
             libc::O_WRONLY | libc::O_CLOEXEC,
             0,
         );
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + crate::vibeio::test_support::WATCHDOG;
         let mut cx = Context::from_waker(std::task::Waker::noop());
         let opened = loop {
             if let Poll::Ready(result) = op.poll_completion(&mut cx, &driver) {
@@ -163,7 +163,7 @@ mod cancellation_tests {
             "the returned descriptor must keep the pipe writer alive"
         );
         drop(opened);
-        assert_eq!(reader.read(&mut byte).unwrap(), 0, "last writer was leaked");
+        crate::vibeio::test_support::assert_eof(&mut reader);
     }
 
     #[test]

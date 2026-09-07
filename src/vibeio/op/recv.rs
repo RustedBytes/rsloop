@@ -315,7 +315,7 @@ mod cancellation_tests {
             Err(error) => panic!("io_uring initialization failed: {error}"),
         };
         fn complete(op: &mut impl Op<Output = usize>, driver: &AnyDriver) -> usize {
-            let deadline = Instant::now() + Duration::from_secs(5);
+            let deadline = Instant::now() + crate::vibeio::test_support::WATCHDOG;
             let mut cx = Context::from_waker(std::task::Waker::noop());
             loop {
                 if let Poll::Ready(result) = op.poll_completion(&mut cx, driver) {

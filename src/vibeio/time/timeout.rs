@@ -147,7 +147,7 @@ mod tests {
                 let dropped = Rc::new(Cell::new(false));
                 let mut timeout = Box::pin(Timeout::new_at(
                     future(&Rc::new(Cell::new(false)), &dropped),
-                    Instant::now() + Duration::from_secs(60),
+                    crate::vibeio::time::deadline_after(Instant::now(), Duration::MAX),
                 ));
                 let mut cx = Context::from_waker(Waker::noop());
                 assert!(timeout.as_mut().poll(&mut cx).is_pending());
@@ -227,10 +227,7 @@ mod tests {
         runtime.block_on(async {
             let ready = Rc::new(Cell::new(false));
             let dropped = Rc::new(Cell::new(false));
-            let mut timeout = Box::pin(Timeout::new(
-                future(&ready, &dropped),
-                Duration::from_secs(60),
-            ));
+            let mut timeout = Box::pin(Timeout::new(future(&ready, &dropped), Duration::MAX));
             let mut cx = Context::from_waker(Waker::noop());
             assert!(timeout.as_mut().poll(&mut cx).is_pending());
             let timer = crate::vibeio::executor::current_timer().unwrap();
@@ -254,7 +251,7 @@ mod tests {
             let dropped = Rc::new(Cell::new(false));
             let mut timeout = Box::pin(Timeout::new(
                 future(&Rc::new(Cell::new(false)), &dropped),
-                Duration::from_secs(60),
+                Duration::MAX,
             ));
             let mut cx = Context::from_waker(Waker::noop());
             assert!(timeout.as_mut().poll(&mut cx).is_pending());

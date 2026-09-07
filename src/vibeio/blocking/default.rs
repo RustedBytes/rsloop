@@ -61,7 +61,7 @@ mod tests {
         pool.spawn(Box::new(move || send.send(42).unwrap()));
         assert_eq!(
             receive
-                .recv_timeout(std::time::Duration::from_secs(2))
+                .recv_timeout(crate::vibeio::test_support::WATCHDOG)
                 .unwrap(),
             42
         );

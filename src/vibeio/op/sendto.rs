@@ -385,7 +385,7 @@ mod cancellation_tests {
         use std::rc::Rc;
         let receiver = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         receiver
-            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
         let sender = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         let mut handle = InnerRawHandle::for_mock_completion(Rc::new(AnyDriver::new_mock()));

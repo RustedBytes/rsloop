@@ -66,6 +66,8 @@ pub mod process;
 #[cfg(feature = "signal")]
 pub mod signal;
 mod task;
+#[cfg(test)]
+mod test_support;
 pub mod time;
 mod timer;
 pub mod util;

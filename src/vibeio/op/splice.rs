@@ -273,7 +273,7 @@ mod tests {
         drop(handle);
         drop(input);
         drop(destination);
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + crate::vibeio::test_support::WATCHDOG;
         let mut received = Vec::new();
         loop {
             driver.wait(Some(Duration::from_millis(10)));
@@ -396,7 +396,10 @@ mod tests {
             "an empty source must not wake on destination writability"
         );
         producer.write_all(b"x").unwrap();
-        driver.wait(Some(Duration::from_millis(100)));
+        crate::vibeio::test_support::drive_until(
+            || wakes.0.load(Ordering::SeqCst) > 0,
+            || driver.wait(Some(Duration::from_millis(100))),
+        );
         assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
         assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(1))));
         let mut byte = [0];
@@ -438,7 +441,10 @@ mod tests {
         driver.wait(Some(Duration::ZERO));
         assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
         output.read_exact(&mut vec![0; filled]).unwrap();
-        driver.wait(Some(Duration::from_millis(100)));
+        crate::vibeio::test_support::drive_until(
+            || wakes.0.load(Ordering::SeqCst) > 0,
+            || driver.wait(Some(Duration::from_millis(100))),
+        );
         assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
         assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(1))));
         let mut byte = [0];
@@ -472,7 +478,10 @@ mod tests {
         let mut op = SpliceOp::new(input.as_raw_fd(), &handle, 1);
         assert!(op.poll_poll(&mut cx, &driver).is_pending());
         drop(producer);
-        driver.wait(Some(Duration::from_millis(100)));
+        crate::vibeio::test_support::drive_until(
+            || replacement.0.load(Ordering::SeqCst) > 0,
+            || driver.wait(Some(Duration::from_millis(100))),
+        );
         assert_eq!(cancelled.0.load(Ordering::SeqCst), 0);
         assert_eq!(replacement.0.load(Ordering::SeqCst), 1);
         assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(0))));

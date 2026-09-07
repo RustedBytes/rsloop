@@ -631,7 +631,7 @@ mod ownership_tests {
             finish_unix_accept(owned, true).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
-        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+        crate::vibeio::test_support::assert_eof(&mut peer);
     }
 
     #[test]
@@ -639,7 +639,7 @@ mod ownership_tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        peer.set_read_timeout(Some(std::time::Duration::from_secs(1)))
+        peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
         let driver = std::rc::Rc::new(AnyDriver::new_mock());
         let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
@@ -659,7 +659,7 @@ mod ownership_tests {
         };
         assert_eq!(result.1, peer.local_addr().unwrap());
         drop(result);
-        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+        crate::vibeio::test_support::assert_eof(&mut peer);
     }
 
     #[test]
@@ -686,9 +686,9 @@ mod ownership_tests {
         );
         drop(owned);
         peer.set_nonblocking(false).unwrap();
-        peer.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
-        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+        crate::vibeio::test_support::assert_eof(&mut peer);
     }
 
     #[cfg(windows)]

@@ -15,8 +15,8 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    use crate::vibeio::io::{AsyncRead, AsyncWrite};
     use crate::vibeio::net::PollUnixStream;
+    use crate::vibeio::test_support::{read_exact, write_all};
     use crate::vibeio::{driver::AnyDriver, executor::spawn};
 
     use super::{UnixListener, UnixStream};
@@ -53,7 +53,7 @@ mod tests {
         let runtime = crate::vibeio::executor::Runtime::new(
             AnyDriver::new_mio().expect("mio driver should initialize"),
         );
-        runtime.block_on(async {
+        runtime.block_on(crate::vibeio::test_support::with_watchdog(async {
             let socket_path = unique_socket_path("exchange");
             cleanup_socket(&socket_path);
 
@@ -70,11 +70,8 @@ mod tests {
 
             let server = spawn(async move {
                 let (mut stream, _) = listener.accept().await?;
-                let buffer = [0u8; 4];
-                let (read, buffer) = stream.read(buffer).await;
-                let read = read?;
-                assert_eq!(&buffer[..read], b"ping");
-                stream.write(b"pong".to_vec()).await.0?;
+                assert_eq!(read_exact(&mut stream, 4).await?, b"ping");
+                write_all(&mut stream, b"pong").await?;
                 stream.shutdown(Shutdown::Both)?;
                 Ok::<(), std_io::Error>(())
             });
@@ -82,15 +79,15 @@ mod tests {
             let mut client = UnixStream::connect(&socket_path)
                 .await
                 .expect("client should connect");
-            client
-                .write(b"ping".to_vec())
+            write_all(&mut client, b"ping")
                 .await
-                .0
                 .expect("client should write");
-            let response = [0u8; 4];
-            let (read, response) = client.read(response).await;
-            let read = read.expect("client should read");
-            assert_eq!(&response[..read], b"pong");
+            assert_eq!(
+                read_exact(&mut client, 4)
+                    .await
+                    .expect("client should read"),
+                b"pong"
+            );
             #[cfg(not(target_os = "macos"))]
             assert_eq!(
                 client
@@ -105,7 +102,7 @@ mod tests {
 
             server.await.expect("server task should complete");
             cleanup_socket(&socket_path);
-        });
+        }));
     }
 
     #[test]
@@ -114,7 +111,7 @@ mod tests {
             #[cfg(unix)]
             AnyDriver::new_mio().expect("mio driver should initialize"),
         );
-        runtime.block_on(async {
+        runtime.block_on(crate::vibeio::test_support::with_watchdog(async {
             let socket_path = unique_socket_path("vectored");
             cleanup_socket(&socket_path);
             let Some(listener) = try_bind_listener(&socket_path) else {
@@ -123,11 +120,8 @@ mod tests {
 
             let server = spawn(async move {
                 let (mut stream, _) = listener.accept().await?;
-                let received = [0u8; 4];
-                let (read, received) = stream.read(received).await;
-                let read = read?;
-                assert_eq!(&received[..read], b"mio!");
-                stream.write(b"ok".to_vec()).await.0?;
+                assert_eq!(read_exact(&mut stream, 4).await?, b"mio!");
+                write_all(&mut stream, b"ok").await?;
                 Ok::<(), std_io::Error>(())
             });
 
@@ -144,6 +138,6 @@ mod tests {
             assert_eq!(&response, b"ok");
 
             server.await.expect("server task should complete");
-        });
+        }));
     }
 }

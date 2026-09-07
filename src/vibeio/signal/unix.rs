@@ -511,7 +511,6 @@ fn create_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
 mod tests {
     use super::*;
     use crate::vibeio::driver::AnyDriver;
-    use std::time::Duration;
 
     #[test]
     fn waker_clone_runs_unlocked_and_rechecks_notifications() {
@@ -778,45 +777,41 @@ mod tests {
         assert!(state.wakers.lock().unwrap().is_empty());
     }
 
-    async fn await_signal_with_timeout(
-        fut: impl Future<Output = io::Result<()>>,
+    async fn receive_signal(
+        future: impl Future<Output = io::Result<()>>,
+        signum: libc::c_int,
     ) -> io::Result<()> {
-        crate::vibeio::time::timeout(Duration::from_secs(1), fut)
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "signal timeout"))?
-    }
-
-    fn spawn_signal_after_delay(signum: libc::c_int) {
         let pid = std::process::id() as libc::pid_t;
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(10));
-            // SAFETY: kill consumes integer identifiers; the test installed a
-            // listener for this signal in our still-running process.
-            unsafe {
-                libc::kill(pid, signum);
-            }
-        });
+        crate::vibeio::test_support::notify_after_pending(future, move || {
+            // SAFETY: the listener is installed in this isolated, live test process.
+            assert_eq!(unsafe { libc::kill(pid, signum) }, 0);
+        })
+        .await
     }
 
     #[test]
     fn signal_recv_unblocks() {
+        if crate::vibeio::test_support::isolated_signal_test() {
+            return;
+        }
         let rt = crate::vibeio::executor::Runtime::new(AnyDriver::new_mock());
         let result = rt.block_on(async {
             let mut sig = signal(SignalKind::user_defined1())?;
-            spawn_signal_after_delay(SignalKind::user_defined1().as_raw());
-            await_signal_with_timeout(sig.recv()).await
+            receive_signal(sig.recv(), SignalKind::user_defined1().as_raw()).await
         });
         assert!(result.is_ok());
     }
 
     #[test]
     fn ctrl_c_unblocks_on_sigint() {
+        if crate::vibeio::test_support::isolated_signal_test() {
+            return;
+        }
         let rt = crate::vibeio::executor::Runtime::new(AnyDriver::new_mock());
         let result = rt.block_on(async {
             let ctrlc = ctrl_c()?;
 
-            spawn_signal_after_delay(SignalKind::interrupt().as_raw());
-            await_signal_with_timeout(ctrlc).await
+            receive_signal(ctrlc, SignalKind::interrupt().as_raw()).await
         });
         assert!(result.is_ok());
     }

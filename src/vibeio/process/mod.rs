@@ -934,6 +934,7 @@ mod tests {
         }
         crate::vibeio::RuntimeBuilder::new()
             .blocking_pool(Box::new(TestPool))
+            .enable_timer(true)
             .build()
             .expect("driver should initialize")
     }
@@ -1082,7 +1083,7 @@ mod tests {
 
     #[test]
     fn command_spawn_stdio_roundtrip() {
-        make_runtime().block_on(async {
+        make_runtime().block_on(crate::vibeio::test_support::with_watchdog(async {
             let mut cmd = if cfg!(windows) {
                 let mut cmd = Command::new("cmd");
                 cmd.args([
@@ -1119,6 +1120,6 @@ mod tests {
 
             let status = child.wait().await.expect("wait succeeds");
             assert!(status.success());
-        });
+        }));
     }
 }

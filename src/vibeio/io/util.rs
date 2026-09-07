@@ -537,7 +537,7 @@ mod duplex_tests {
                 server.shutdown().await.unwrap();
             };
             let (result, (), ()) =
-                crate::vibeio::time::timeout(std::time::Duration::from_secs(2), async {
+                crate::vibeio::time::timeout(crate::vibeio::test_support::WATCHDOG, async {
                     futures_util::join!(relay, client, server)
                 })
                 .await

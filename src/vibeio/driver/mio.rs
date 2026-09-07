@@ -420,7 +420,10 @@ mod tests {
                 1 => drop(handle),
                 _ => {
                     peer.write_all(b"x").unwrap();
-                    mio.wait_timeout(Some(Duration::from_secs(1)));
+                    crate::vibeio::test_support::drive_until(
+                        || calls.get() > 0,
+                        || mio.wait_timeout(Some(Duration::from_millis(100))),
+                    );
                 }
             }
             assert!(calls.get() > 0);
@@ -514,7 +517,10 @@ mod tests {
 
         side2.write_all(b"!").expect("failed to write to pipe"); // Exact data written doesn't matter...
 
-        driver.wait(Some(Duration::from_millis(100)));
+        crate::vibeio::test_support::drive_until(
+            || wake.wake_count() > 0,
+            || driver.wait(Some(Duration::from_millis(100))),
+        );
         assert_eq!(wake.wake_count(), 1);
     }
 
@@ -532,18 +538,22 @@ mod tests {
             }
         });
 
-        let started = std::time::Instant::now();
         for _ in 0..5_000 {
+            driver.events.borrow_mut().clear();
             request_tx.send(()).expect("interrupt worker stopped");
-            driver.wait(Some(Duration::from_millis(100)));
+            crate::vibeio::test_support::drive_until(
+                || {
+                    driver
+                        .events
+                        .borrow()
+                        .iter()
+                        .any(|event| event.token() == super::WAKE_TOKEN)
+                },
+                || driver.wait(Some(Duration::from_millis(100))),
+            );
         }
 
         drop(request_tx);
         worker.join().expect("interrupt worker panicked");
-        assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "cross-thread interrupt stress run took {:?}",
-            started.elapsed()
-        );
     }
 }

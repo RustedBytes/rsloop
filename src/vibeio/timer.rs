@@ -153,6 +153,8 @@ impl DeadlineHeap {
 pub struct Timer {
     deadlines: RefCell<DeadlineHeap>,
     expired: RefCell<Vec<Waker>>,
+    #[cfg(test)]
+    test_now: std::cell::Cell<Option<Instant>>,
 }
 
 impl Timer {
@@ -161,12 +163,23 @@ impl Timer {
         Self {
             deadlines: RefCell::new(DeadlineHeap::new()),
             expired: RefCell::new(Vec::with_capacity(16)),
+            #[cfg(test)]
+            test_now: std::cell::Cell::new(None),
         }
     }
 
     #[inline]
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = self.test_now.get() {
+            return now;
+        }
+        Instant::now()
+    }
+
+    #[inline]
     pub fn submit(&self, deadline: Instant, waker: Waker) -> Option<TimerHandle> {
-        if deadline <= Instant::now() {
+        if deadline <= self.now() {
             waker.wake();
             return None;
         }
@@ -220,7 +233,7 @@ impl Timer {
     /// elapsed time, so frequent scheduler spins cannot freeze timer progress.
     #[inline]
     pub fn spin_and_get_deadline(&self) -> (Option<Duration>, bool) {
-        let now = Instant::now();
+        let now = self.now();
         let mut expired = std::mem::take(&mut *self.expired.borrow_mut());
         {
             let mut deadlines = self.deadlines.borrow_mut();
@@ -238,7 +251,7 @@ impl Timer {
         }
         // Callbacks may have inserted/cancelled deadlines or taken time to run.
         let deadline = self.deadlines.borrow().deadline();
-        let now = Instant::now();
+        let now = self.now();
         (
             deadline.map(|deadline| deadline.saturating_duration_since(now)),
             woken_up,
@@ -257,6 +270,12 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn frozen_timer() -> Timer {
+        let timer = Timer::new();
+        timer.test_now.set(Some(Instant::now()));
+        timer
+    }
 
     thread_local! {
         static REENTER: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
@@ -297,8 +316,8 @@ mod tests {
 
     #[test]
     fn updating_waiter_preserves_heap_and_rejects_stale_handles() {
-        let timer = Timer::new();
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let timer = frozen_timer();
+        let deadline = timer.now() + Duration::from_secs(60);
         let first = Arc::new(AtomicUsize::new(0));
         let second = Arc::new(AtomicUsize::new(0));
         let handle = timer.submit(deadline, test_waker(&first)).unwrap();
@@ -324,7 +343,7 @@ mod tests {
 
     #[test]
     fn updating_waiter_drops_replaced_waker_outside_heap_borrow() {
-        let timer = std::rc::Rc::new(Timer::new());
+        let timer = std::rc::Rc::new(frozen_timer());
         let inner = timer.clone();
         let calls = std::rc::Rc::new(std::cell::Cell::new(0));
         let called = calls.clone();
@@ -337,7 +356,7 @@ mod tests {
         let _scope = ReentryScope;
         let handle = timer
             .submit(
-                Instant::now() + Duration::from_secs(60),
+                timer.now() + Duration::from_secs(60),
                 Waker::from(Arc::new(ReenterOnDrop)),
             )
             .unwrap();
@@ -347,7 +366,7 @@ mod tests {
 
     #[test]
     fn cancellation_drops_wakers_outside_heap_borrow() {
-        let timer = std::rc::Rc::new(Timer::new());
+        let timer = std::rc::Rc::new(frozen_timer());
         let calls = std::rc::Rc::new(std::cell::Cell::new(0));
         let inner = timer.clone();
         let called = calls.clone();
@@ -360,7 +379,7 @@ mod tests {
         let _scope = ReentryScope;
         let handle = timer
             .submit(
-                Instant::now() + Duration::from_secs(60),
+                timer.now() + Duration::from_secs(60),
                 Waker::from(Arc::new(ReenterOnDrop)),
             )
             .unwrap();
@@ -370,9 +389,9 @@ mod tests {
 
     #[test]
     fn expiry_allows_nested_spin_and_returns_callback_inserted_deadline() {
-        let timer = std::rc::Rc::new(Timer::new());
+        let timer = std::rc::Rc::new(frozen_timer());
         let inner = timer.clone();
-        let next = Instant::now() + Duration::from_secs(60);
+        let next = timer.now() + Duration::from_secs(60);
         REENTER.with(|slot| {
             *slot.borrow_mut() = Some(Box::new(move || {
                 assert_eq!(inner.spin_and_get_deadline(), (None, false));
@@ -384,7 +403,7 @@ mod tests {
         timer
             .deadlines
             .borrow_mut()
-            .insert(Instant::now(), Waker::from(Arc::new(ReenterOnWake)));
+            .insert(timer.now(), Waker::from(Arc::new(ReenterOnWake)));
         let (deadline, woke) = timer.spin_and_get_deadline();
         assert!(woke);
         assert!(deadline.is_some());
@@ -407,23 +426,17 @@ mod tests {
 
     #[test]
     fn nearest_deadline_and_cancel_are_exact() {
-        let timer = Timer::new();
+        let timer = frozen_timer();
         let counter = Arc::new(AtomicUsize::new(0));
         let later = timer
-            .submit(
-                Instant::now() + Duration::from_secs(2),
-                test_waker(&counter),
-            )
+            .submit(timer.now() + Duration::from_secs(2), test_waker(&counter))
             .unwrap();
         let sooner = timer
-            .submit(
-                Instant::now() + Duration::from_secs(1),
-                test_waker(&counter),
-            )
+            .submit(timer.now() + Duration::from_secs(1), test_waker(&counter))
             .unwrap();
         let (deadline, woke) = timer.spin_and_get_deadline();
         assert!(!woke);
-        assert!(deadline.is_some_and(|duration| duration < Duration::from_secs(2)));
+        assert!(deadline.is_some_and(|duration| duration == Duration::from_secs(1)));
         timer.cancel(sooner);
         timer.cancel(later);
         assert_eq!(timer.spin_and_get_deadline(), (None, false));
@@ -431,20 +444,14 @@ mod tests {
 
     #[test]
     fn stale_handle_cannot_cancel_reused_slot() {
-        let timer = Timer::new();
+        let timer = frozen_timer();
         let counter = Arc::new(AtomicUsize::new(0));
         let stale = timer
-            .submit(
-                Instant::now() + Duration::from_secs(1),
-                test_waker(&counter),
-            )
+            .submit(timer.now() + Duration::from_secs(1), test_waker(&counter))
             .unwrap();
         timer.cancel(stale);
         let current = timer
-            .submit(
-                Instant::now() + Duration::from_secs(2),
-                test_waker(&counter),
-            )
+            .submit(timer.now() + Duration::from_secs(2), test_waker(&counter))
             .unwrap();
         timer.cancel(stale);
         assert!(timer.spin_and_get_deadline().0.is_some());
@@ -453,13 +460,13 @@ mod tests {
 
     #[test]
     fn expired_timers_wake_as_a_batch() {
-        let timer = Timer::new();
+        let timer = frozen_timer();
         let counter = Arc::new(AtomicUsize::new(0));
-        let deadline = Instant::now() + Duration::from_millis(2);
+        let deadline = timer.now() + Duration::from_millis(2);
         for _ in 0..8 {
             timer.submit(deadline, test_waker(&counter)).unwrap();
         }
-        std::thread::sleep(Duration::from_millis(5));
+        timer.test_now.set(Some(deadline));
         assert_eq!(timer.spin_and_get_deadline(), (None, true));
         assert_eq!(counter.load(Ordering::Relaxed), 8);
     }

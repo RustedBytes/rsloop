@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn spurious_polls_preserve_registration_and_replace_waiter() {
         let timer = Rc::new(Timer::new());
-        let mut sleep = Sleep::new(Duration::from_secs(60));
+        let mut sleep = Sleep::new(Duration::MAX);
         sleep.timer = Some(timer);
         let first = Arc::new(WakeCounter(AtomicUsize::new(0)));
         let second = Arc::new(WakeCounter(AtomicUsize::new(0)));
@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn completed_sleep_releases_registration_before_timer_is_drained() {
         let timer = Rc::new(Timer::new());
-        let mut sleep = Sleep::new(Duration::from_secs(60));
+        let mut sleep = Sleep::new(Duration::MAX);
         sleep.timer = Some(timer.clone());
         let owner = Arc::new(WakeCounter(AtomicUsize::new(0)));
         let waker = Waker::from(owner.clone());

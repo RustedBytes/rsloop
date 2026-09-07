@@ -212,7 +212,7 @@ mod cancellation_tests {
         use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
         fn complete<O: Op>(op: &mut O, driver: &AnyDriver) -> io::Result<O::Output> {
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + crate::vibeio::test_support::WATCHDOG;
             let mut cx = Context::from_waker(std::task::Waker::noop());
             loop {
                 if let Poll::Ready(result) = op.poll_completion(&mut cx, driver) {

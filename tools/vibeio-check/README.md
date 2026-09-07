@@ -48,6 +48,26 @@ fault injection for every remaining exceptional lifecycle path.
 
 Both workflows are manually dispatched; editing them does not run CI.
 
+## Deterministic test conventions
+
+Timer unit tests freeze and explicitly advance a per-instance test clock; normal
+runtime tests still use the real clock. Readiness tests wait for the expected
+event rather than assuming a single poll delivers it. Cross-thread interrupt
+tests verify each wake event without a throughput assertion. Stream roundtrips
+handle partial transfers and interrupted operations. Real Unix signal delivery
+runs in a separate test process so it cannot interrupt unrelated harness threads.
+Signal workers are released only after the receiving future first polls pending.
+Descriptor cleanup tests observe EOF under a watchdog rather than requiring it
+on the first read: kernel work or concurrent fork/exec can briefly retain an
+otherwise closed pipe/socket reference.
+
+Native I/O watchdogs use the shared 30-second `test_support::WATCHDOG`, not a
+performance target. They detect missing progress; increasing them is not a fix
+for a race. Tests should use channels, explicit polling, or other observable
+state to establish ordering, never a sleep intended to let another task start.
+Kernel integration tests still depend on OS availability and scheduling: repeat
+runs on each native platform remain necessary and do not prove absence of races.
+
 Keep Clippy policy, dependency versions and feature wiring aligned with the root
 manifest when updating them. The initial lockfile was resolved from the root lockfile. This
 harness intentionally does not enable the root build script's platform syscall

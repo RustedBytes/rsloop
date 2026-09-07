@@ -13,7 +13,6 @@ mod tests {
     use super::*;
     use std::future::poll_fn;
     use std::process::{Command, Stdio};
-    use std::time::Duration;
 
     struct ChildGuard(std::process::Child);
     impl Drop for ChildGuard {
@@ -60,7 +59,7 @@ mod tests {
                 );
                 drop(child.0.stdin.take());
                 let raw = crate::vibeio::time::timeout(
-                    Duration::from_secs(5),
+                    crate::vibeio::test_support::WATCHDOG,
                     poll_fn(|cx| {
                         if completion {
                             op.poll_completion(cx, &driver)

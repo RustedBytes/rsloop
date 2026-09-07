@@ -11,7 +11,7 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    use crate::vibeio::io::{AsyncRead, AsyncWrite};
+    use crate::vibeio::test_support::{read_exact, write_all};
     use crate::vibeio::{driver::AnyDriver, executor::spawn};
 
     use super::{PollTcpStream, TcpListener, TcpStream};
@@ -33,7 +33,7 @@ mod tests {
             #[cfg(windows)]
             AnyDriver::new_iocp().expect("iocp driver should initialize"),
         );
-        runtime.block_on(async {
+        runtime.block_on(crate::vibeio::test_support::with_watchdog(async {
             let address = "127.0.0.1:0"
                 .parse::<SocketAddr>()
                 .expect("address should parse");
@@ -46,11 +46,8 @@ mod tests {
 
             let server = spawn(async move {
                 let (mut stream, _) = listener.accept().await?;
-                let buffer = [0u8; 4];
-                let (read, buffer) = stream.read(buffer).await;
-                let read = read?;
-                assert_eq!(&buffer[..read], b"ping");
-                stream.write(b"pong".to_vec()).await.0?;
+                assert_eq!(read_exact(&mut stream, 4).await?, b"ping");
+                write_all(&mut stream, b"pong").await?;
                 stream.shutdown(Shutdown::Both)?;
                 Ok::<(), std_io::Error>(())
             });
@@ -58,15 +55,15 @@ mod tests {
             let mut client = TcpStream::connect(server_address)
                 .await
                 .expect("client should connect");
-            client
-                .write(b"ping".to_vec())
+            write_all(&mut client, b"ping")
                 .await
-                .0
                 .expect("client should write");
-            let response = [0u8; 4];
-            let (read, response) = client.read(response).await;
-            let read = read.expect("client should read");
-            assert_eq!(&response[..read], b"pong");
+            assert_eq!(
+                read_exact(&mut client, 4)
+                    .await
+                    .expect("client should read"),
+                b"pong"
+            );
             assert_eq!(
                 client
                     .peer_addr()
@@ -78,7 +75,7 @@ mod tests {
                 .expect("shutdown should succeed");
 
             server.await.expect("server task should complete");
-        });
+        }));
     }
 
     #[test]
@@ -89,7 +86,7 @@ mod tests {
             #[cfg(windows)]
             AnyDriver::new_iocp().expect("iocp driver should initialize"),
         );
-        runtime.block_on(async {
+        runtime.block_on(crate::vibeio::test_support::with_watchdog(async {
             let address = "127.0.0.1:0"
                 .parse::<SocketAddr>()
                 .expect("address should parse");
@@ -102,11 +99,8 @@ mod tests {
 
             let server = spawn(async move {
                 let (mut stream, _) = listener.accept().await?;
-                let received = [0u8; 4];
-                let (read, received) = stream.read(received).await;
-                let read = read?;
-                assert_eq!(&received[..read], b"mio!");
-                stream.write(b"ok".to_vec()).await.0?;
+                assert_eq!(read_exact(&mut stream, 4).await?, b"mio!");
+                write_all(&mut stream, b"ok").await?;
                 Ok::<(), std_io::Error>(())
             });
 
@@ -123,6 +117,6 @@ mod tests {
             assert_eq!(&response, b"ok");
 
             server.await.expect("server task should complete");
-        });
+        }));
     }
 }

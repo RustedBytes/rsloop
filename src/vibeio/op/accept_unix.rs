@@ -178,7 +178,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn discarding_poll_accept_result_closes_the_connection() {
-        use std::io::Read;
         let name = format!("vibeio-accept-owned-{}", std::process::id());
         let address = SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
         let listener = UnixListener::bind_addr(&address).unwrap();
@@ -195,7 +194,7 @@ mod tests {
             panic!("queued connection must be accepted");
         };
         drop(result);
-        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+        crate::vibeio::test_support::assert_eof(&mut peer);
     }
 
     #[cfg(target_os = "linux")]
@@ -203,11 +202,10 @@ mod tests {
     fn discarding_completion_accept_results_closes_tcp_and_unix_connections() {
         use crate::vibeio::driver::RegistrationMode;
         use crate::vibeio::op::AcceptOp;
-        use std::io::Read;
         use std::time::{Duration, Instant};
 
         fn complete<O: Op>(op: &mut O, driver: &AnyDriver) -> O::Output {
-            let deadline = Instant::now() + Duration::from_secs(2);
+            let deadline = Instant::now() + crate::vibeio::test_support::WATCHDOG;
             let mut cx = Context::from_waker(std::task::Waker::noop());
             loop {
                 if let Poll::Ready(result) = op.poll_completion(&mut cx, driver) {
@@ -240,12 +238,13 @@ mod tests {
         )
         .unwrap();
         let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
+            .unwrap();
         let mut op = AcceptOp::new(&handle);
         let accepted = complete(&mut op, &driver);
         assert_eq!(accepted.1, peer.local_addr().unwrap());
         drop(accepted);
-        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+        crate::vibeio::test_support::assert_eof(&mut peer);
         drop(op);
         drop(handle);
 
@@ -263,7 +262,7 @@ mod tests {
         peer.set_nonblocking(true).unwrap();
         let mut op = AcceptUnixOp::new(&handle);
         drop(complete(&mut op, &driver));
-        assert_eq!(peer.read(&mut [0; 1]).unwrap(), 0);
+        crate::vibeio::test_support::assert_eof(&mut peer);
     }
 
     #[test]

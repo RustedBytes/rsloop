@@ -416,7 +416,7 @@ mod cancellation_tests {
             reader.connect(writer.local_addr().unwrap()).unwrap();
             writer.connect(reader.local_addr().unwrap()).unwrap();
             reader
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
                 .unwrap();
             #[cfg(unix)]
             let raw = reader.as_raw_fd();
@@ -446,7 +446,7 @@ mod cancellation_tests {
             for payload in [b"abc".as_slice(), b""] {
                 assert_eq!(writer.send(payload).unwrap(), payload.len());
                 let mut op = ReadvOp::new(&handle, buffers);
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let deadline = std::time::Instant::now() + crate::vibeio::test_support::WATCHDOG;
                 let result = loop {
                     let result = if polling {
                         op.poll_poll(&mut cx, &driver)
