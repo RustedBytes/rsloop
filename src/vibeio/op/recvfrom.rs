@@ -507,40 +507,43 @@ mod cancellation_tests {
         use std::os::fd::AsRawFd;
         #[cfg(windows)]
         use std::os::windows::io::AsRawSocket;
-        use std::rc::Rc;
 
         let reader = UdpSocket::bind("127.0.0.1:0").unwrap();
         let writer = UdpSocket::bind("127.0.0.1:0").unwrap();
-        reader
-            .set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
-            .unwrap();
+        reader.set_nonblocking(true).unwrap();
         let destination = reader.local_addr().unwrap();
         let source = writer.local_addr().unwrap();
-        let driver = Rc::new(AnyDriver::new_mock());
-        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
-        #[cfg(unix)]
-        {
-            handle.handle = reader.as_raw_fd();
-        }
-        #[cfg(windows)]
-        {
-            handle.handle = RawOsHandle::Socket(reader.as_raw_socket());
-        }
+        let driver = crate::vibeio::test_support::polling_driver();
+        let handle = InnerRawHandle::new_with_driver_and_mode(
+            &driver,
+            #[cfg(unix)]
+            reader.as_raw_fd(),
+            #[cfg(windows)]
+            RawOsHandle::Socket(reader.as_raw_socket()),
+            Interest::READABLE,
+            crate::vibeio::driver::RegistrationMode::Poll,
+        )
+        .unwrap();
         let mut cx = Context::from_waker(std::task::Waker::noop());
         let mut buffer = Vec::<u8>::with_capacity(32);
 
         for payload in [b"abc".as_slice(), b"", b"after empty"] {
-            assert_eq!(writer.send_to(payload, destination).unwrap(), payload.len());
             for peek in [true, false] {
                 let mut op = if peek {
                     RecvfromOp::new_peek(&handle, buffer)
                 } else {
                     RecvfromOp::new(&handle, buffer)
                 };
-                assert!(
-                    matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok((count, addr)))
-                        if count == payload.len() && addr == source)
-                );
+                if peek {
+                    assert!(op.poll_poll(&mut cx, &driver).is_pending());
+                    assert_eq!(writer.send_to(payload, destination).unwrap(), payload.len());
+                }
+                let (count, addr) = crate::vibeio::test_support::poll_io(
+                    || op.poll_poll(&mut cx, &driver),
+                    || driver.wait(Some(std::time::Duration::from_millis(10))),
+                )
+                .expect("datagram receive/peek should complete");
+                assert_eq!((count, addr), (payload.len(), source));
                 buffer = op.take_bufs();
                 assert_eq!(buffer, payload);
             }

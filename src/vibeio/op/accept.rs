@@ -638,25 +638,32 @@ mod ownership_tests {
     fn discarding_poll_accept_result_closes_the_connection() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
+        #[cfg(unix)]
+        let driver = std::rc::Rc::new(AnyDriver::new_mio().unwrap());
+        #[cfg(windows)]
+        let driver = std::rc::Rc::new(AnyDriver::new_iocp().unwrap());
+        let handle = InnerRawHandle::new_with_driver_and_mode(
+            &driver,
+            #[cfg(unix)]
+            listener.as_raw_fd(),
+            #[cfg(windows)]
+            RawOsHandle::Socket(listener.as_raw_socket()),
+            Interest::READABLE,
+            crate::vibeio::driver::RegistrationMode::Poll,
+        )
+        .unwrap();
+        let mut op = AcceptOp::new(&handle);
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        // Exercise readiness registration before a connection is available.
+        assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Pending));
         let mut peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
-        let driver = std::rc::Rc::new(AnyDriver::new_mock());
-        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
-        #[cfg(unix)]
-        {
-            handle.handle = listener.as_raw_fd();
-        }
-        #[cfg(windows)]
-        {
-            handle.handle = RawOsHandle::Socket(listener.as_raw_socket());
-        }
-        let mut op = AcceptOp::new(&handle);
-        let Poll::Ready(Ok(result)) =
-            op.poll_poll(&mut Context::from_waker(std::task::Waker::noop()), &driver)
-        else {
-            panic!("queued connection must be accepted");
-        };
+        let result = crate::vibeio::test_support::poll_io(
+            || op.poll_poll(&mut cx, &driver),
+            || driver.wait(Some(std::time::Duration::from_millis(100))),
+        )
+        .expect("TCP accept should complete after client connects");
         assert_eq!(result.1, peer.local_addr().unwrap());
         drop(result);
         crate::vibeio::test_support::assert_eof(&mut peer);

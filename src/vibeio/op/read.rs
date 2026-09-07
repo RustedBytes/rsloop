@@ -312,27 +312,44 @@ mod cancellation_tests {
         use std::io::Write;
         use std::net::{Shutdown, TcpListener, TcpStream};
         use std::os::windows::io::AsRawSocket;
-        use std::rc::Rc;
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut writer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
         let (reader, _) = listener.accept().unwrap();
-        reader
-            .set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
-            .unwrap();
-        writer.write_all(b"x").unwrap();
-        writer.shutdown(Shutdown::Write).unwrap();
+        reader.set_nonblocking(true).unwrap();
 
-        let driver = Rc::new(AnyDriver::new_mock());
-        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
-        handle.handle = RawOsHandle::Socket(reader.as_raw_socket());
+        let driver = crate::vibeio::test_support::polling_driver();
+        let handle = InnerRawHandle::new_with_driver_and_mode(
+            &driver,
+            RawOsHandle::Socket(reader.as_raw_socket()),
+            Interest::READABLE,
+            crate::vibeio::driver::RegistrationMode::Poll,
+        )
+        .unwrap();
         let mut cx = Context::from_waker(std::task::Waker::noop());
         let mut op = ReadOp::new(&handle, Vec::<u8>::with_capacity(32));
-        assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(1))));
+        assert!(op.poll_poll(&mut cx, &driver).is_pending());
+        writer.write_all(b"x").unwrap();
+        writer.shutdown(Shutdown::Write).unwrap();
+        assert_eq!(
+            crate::vibeio::test_support::poll_io(
+                || op.poll_poll(&mut cx, &driver),
+                || driver.wait(Some(std::time::Duration::from_millis(10))),
+            )
+            .expect("read should complete"),
+            1
+        );
         let buffer = op.take_bufs();
         assert_eq!(buffer, b"x");
         let mut op = ReadOp::new(&handle, buffer);
-        assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(0))));
+        assert_eq!(
+            crate::vibeio::test_support::poll_io(
+                || op.poll_poll(&mut cx, &driver),
+                || driver.wait(Some(std::time::Duration::from_millis(10))),
+            )
+            .expect("read should reach EOF"),
+            0
+        );
         assert!(op.take_bufs().is_empty());
     }
 
@@ -341,22 +358,43 @@ mod cancellation_tests {
     fn short_read_eof_and_error_preserve_initialized_prefix_contract() {
         use std::io::Write;
         use std::os::fd::AsRawFd;
-        use std::rc::Rc;
-        let driver = Rc::new(AnyDriver::new_mock());
+        let driver = crate::vibeio::test_support::polling_driver();
         let (reader, mut writer) = std::io::pipe().unwrap();
-        writer.write_all(b"abc").unwrap();
-        drop(writer);
-        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
-        handle.handle = reader.as_raw_fd();
+        crate::vibeio::fd_inner::set_nonblocking(reader.as_raw_fd(), true).unwrap();
+        let handle = InnerRawHandle::new_with_driver_and_mode(
+            &driver,
+            reader.as_raw_fd(),
+            Interest::READABLE,
+            crate::vibeio::driver::RegistrationMode::Poll,
+        )
+        .unwrap();
         let mut cx = Context::from_waker(std::task::Waker::noop());
         let mut op = ReadOp::new(&handle, Vec::<u8>::with_capacity(32));
-        assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(3))));
+        assert!(op.poll_poll(&mut cx, &driver).is_pending());
+        writer.write_all(b"abc").unwrap();
+        drop(writer);
+        assert_eq!(
+            crate::vibeio::test_support::poll_io(
+                || op.poll_poll(&mut cx, &driver),
+                || driver.wait(Some(std::time::Duration::from_millis(10))),
+            )
+            .expect("read should complete"),
+            3
+        );
         let buffer = op.take_bufs();
         assert_eq!(buffer, b"abc");
         let mut op = ReadOp::new(&handle, buffer);
-        assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Ready(Ok(0))));
+        assert_eq!(
+            crate::vibeio::test_support::poll_io(
+                || op.poll_poll(&mut cx, &driver),
+                || driver.wait(Some(std::time::Duration::from_millis(10))),
+            )
+            .expect("read should reach EOF"),
+            0
+        );
         assert!(op.take_bufs().is_empty());
 
+        let driver = std::rc::Rc::new(AnyDriver::new_mock());
         let invalid = InnerRawHandle::for_mock_completion(driver.clone());
         let mut op = ReadOp::new(&invalid, b"unchanged".to_vec());
         assert!(

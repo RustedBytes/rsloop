@@ -182,17 +182,24 @@ mod tests {
         let address = SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
         let listener = UnixListener::bind_addr(&address).unwrap();
         listener.set_nonblocking(true).unwrap();
+        let driver = Rc::new(AnyDriver::new_mio().unwrap());
+        let handle = InnerRawHandle::new_with_driver_and_mode(
+            &driver,
+            listener.as_raw_fd(),
+            Interest::READABLE,
+            crate::vibeio::driver::RegistrationMode::Poll,
+        )
+        .unwrap();
+        let mut op = AcceptUnixOp::new(&handle);
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        assert!(matches!(op.poll_poll(&mut cx, &driver), Poll::Pending));
         let mut peer = UnixStream::connect_addr(&address).unwrap();
         peer.set_nonblocking(true).unwrap();
-        let driver = Rc::new(AnyDriver::new_mock());
-        let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
-        handle.handle = listener.as_raw_fd();
-        let mut op = AcceptUnixOp::new(&handle);
-        let Poll::Ready(Ok(result)) =
-            op.poll_poll(&mut Context::from_waker(std::task::Waker::noop()), &driver)
-        else {
-            panic!("queued connection must be accepted");
-        };
+        let result = crate::vibeio::test_support::poll_io(
+            || op.poll_poll(&mut cx, &driver),
+            || driver.wait(Some(std::time::Duration::from_millis(100))),
+        )
+        .expect("Unix accept should complete after client connects");
         drop(result);
         crate::vibeio::test_support::assert_eof(&mut peer);
     }

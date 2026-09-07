@@ -7,6 +7,60 @@ use std::time::Instant;
 
 pub(crate) const WATCHDOG: Duration = Duration::from_secs(30);
 
+pub(crate) fn polling_driver() -> std::rc::Rc<super::driver::AnyDriver> {
+    #[cfg(unix)]
+    let driver = super::driver::AnyDriver::new_mio();
+    #[cfg(windows)]
+    let driver = super::driver::AnyDriver::new_iocp();
+    std::rc::Rc::new(driver.expect("native polling driver should initialize"))
+}
+
+/// Drive a native operation through Pending and interrupted syscalls. Keep
+/// terminal errors intact instead of misreporting them as readiness failures.
+pub(crate) fn poll_io<T>(
+    mut poll: impl FnMut() -> std::task::Poll<io::Result<T>>,
+    mut drive: impl FnMut(),
+) -> io::Result<T> {
+    let deadline = std::time::Instant::now() + WATCHDOG;
+    loop {
+        match poll() {
+            std::task::Poll::Pending => {}
+            std::task::Poll::Ready(Err(error)) if error.kind() == io::ErrorKind::Interrupted => {}
+            std::task::Poll::Ready(result) => return result,
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "native operation exceeded watchdog",
+            ));
+        }
+        drive();
+    }
+}
+
+#[test]
+fn poll_io_retries_pending_and_interrupted_but_preserves_terminal_errors() {
+    use std::task::Poll;
+    let mut outcomes = [
+        Poll::Pending,
+        Poll::Ready(Err(io::ErrorKind::Interrupted.into())),
+        Poll::Ready(Ok(42)),
+    ]
+    .into_iter();
+    let mut waits = 0;
+    assert_eq!(
+        poll_io(|| outcomes.next().unwrap(), || waits += 1).unwrap(),
+        42
+    );
+    assert_eq!(waits, 2);
+    let error = poll_io::<()>(
+        || Poll::Ready(Err(io::Error::from_raw_os_error(1234))),
+        || panic!("terminal errors must not be retried"),
+    )
+    .unwrap_err();
+    assert_eq!(error.raw_os_error(), Some(1234));
+}
+
 /// The reader must be nonblocking or have a read timeout. Kernel work and
 /// concurrent fork/exec can briefly retain a pipe/socket after its owner drops.
 pub(crate) fn assert_eof(reader: &mut impl io::Read) {

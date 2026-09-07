@@ -387,9 +387,8 @@ mod storage_tests {
     #[test]
     fn completion_entries_transfer_expected_bytes() {
         use crate::vibeio::op::{Op, ReadOp, ReadvOp, RecvOp, SendOp, WriteOp, WritevOp};
-        use std::io::{Read, Write};
         use std::os::fd::AsRawFd;
-        use std::os::unix::net::UnixStream;
+        use std::os::unix::net::UnixDatagram;
         use std::rc::Rc;
 
         fn complete(entry: io_uring::squeue::Entry) -> usize {
@@ -399,24 +398,47 @@ mod storage_tests {
             // SAFETY: each caller below retains its operation and socket through
             // this call; no buffer or metadata moves before CQE acknowledgement.
             unsafe { ring.submission().push(&entry).unwrap() };
-            ring.submit_and_wait(1).unwrap();
-            let result = ring.completion().next().unwrap().result();
+            let deadline = std::time::Instant::now() + crate::vibeio::test_support::WATCHDOG;
+            loop {
+                match ring.submit() {
+                    Ok(_) => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "submission exceeded watchdog"
+                        );
+                    }
+                    Err(error) => panic!("completion submission failed: {error}"),
+                }
+            }
+            let result = loop {
+                if let Some(entry) = ring.completion().next() {
+                    break entry.result();
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "CQE exceeded watchdog"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            };
             assert!(result >= 0, "completion failed: {result}");
             result as usize
         }
 
-        let (socket, mut peer) = UnixStream::pair().unwrap();
+        // Datagram boundaries make exact CQE lengths part of the fixture contract.
+        // Stream partial-transfer behavior is covered by the stream read/recv tests.
+        let (socket, peer) = UnixDatagram::pair().unwrap();
         peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
         let mut handle = InnerRawHandle::for_mock_completion(Rc::new(AnyDriver::new_mock()));
         handle.handle = socket.as_raw_fd();
 
-        peer.write_all(b"read").unwrap();
+        assert_eq!(peer.send(b"read").unwrap(), b"read".len());
         let mut read = ReadOp::new(&handle, vec![0u8; 8]);
         assert_eq!(complete(read.build_completion_entry(1).unwrap()), 4);
         assert_eq!(&read.take_bufs()[..4], b"read");
 
-        peer.write_all(b"recv").unwrap();
+        assert_eq!(peer.send(b"recv").unwrap(), b"recv".len());
         let mut recv = RecvOp::new(&handle, vec![0u8; 8]);
         assert_eq!(complete(recv.build_completion_entry(2).unwrap()), 4);
         assert_eq!(&recv.take_bufs()[..4], b"recv");
@@ -425,17 +447,17 @@ mod storage_tests {
         assert_eq!(complete(send.build_completion_entry(3).unwrap()), 4);
         assert_eq!(send.take_bufs(), b"send");
         let mut output = [0; 4];
-        peer.read_exact(&mut output).unwrap();
+        assert_eq!(peer.recv(&mut output).unwrap(), output.len());
         assert_eq!(&output, b"send");
 
         let mut write = WriteOp::new(&handle, b"write".to_vec());
         assert_eq!(complete(write.build_completion_entry(4).unwrap()), 5);
         assert_eq!(write.take_bufs(), b"write");
         let mut output = [0; 5];
-        peer.read_exact(&mut output).unwrap();
+        assert_eq!(peer.recv(&mut output).unwrap(), output.len());
         assert_eq!(&output, b"write");
 
-        peer.write_all(b"abc").unwrap();
+        assert_eq!(peer.send(b"abc").unwrap(), b"abc".len());
         let mut read = ReadvOp::new(
             &handle,
             vec![
@@ -457,7 +479,7 @@ mod storage_tests {
         assert_eq!(complete(write.build_completion_entry(6).unwrap()), 4);
         assert_eq!(write.take_bufs().len(), 3);
         let mut output = [0; 4];
-        peer.read_exact(&mut output).unwrap();
+        assert_eq!(peer.recv(&mut output).unwrap(), output.len());
         assert_eq!(&output, b"abcd");
     }
 

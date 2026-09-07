@@ -388,9 +388,10 @@ mod cancellation_tests {
         use std::os::fd::AsRawFd;
         #[cfg(windows)]
         use std::os::windows::io::AsRawSocket;
+        #[cfg(target_os = "linux")]
         use std::rc::Rc;
 
-        let drivers = vec![Rc::new(AnyDriver::new_mock())];
+        let drivers = vec![crate::vibeio::test_support::polling_driver()];
         #[cfg(target_os = "linux")]
         let drivers = {
             let mut drivers = drivers;
@@ -415,27 +416,26 @@ mod cancellation_tests {
             let writer = UdpSocket::bind("127.0.0.1:0").unwrap();
             reader.connect(writer.local_addr().unwrap()).unwrap();
             writer.connect(reader.local_addr().unwrap()).unwrap();
-            reader
-                .set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
-                .unwrap();
+            reader.set_nonblocking(true).unwrap();
             #[cfg(unix)]
             let raw = reader.as_raw_fd();
             #[cfg(windows)]
             let raw = RawOsHandle::Socket(reader.as_raw_socket());
-            let polling = matches!(driver.as_ref(), AnyDriver::Mock(_));
-            let handle = if polling {
-                let mut handle = InnerRawHandle::for_mock_completion(driver.clone());
-                handle.handle = raw;
-                handle
-            } else {
-                InnerRawHandle::new_with_driver_and_mode(
-                    &driver,
-                    raw,
-                    Interest::READABLE,
-                    crate::vibeio::driver::RegistrationMode::Completion,
-                )
-                .unwrap()
-            };
+            #[cfg(target_os = "linux")]
+            let polling = !matches!(driver.as_ref(), AnyDriver::IoUring(_));
+            #[cfg(not(target_os = "linux"))]
+            let polling = true;
+            let handle = InnerRawHandle::new_with_driver_and_mode(
+                &driver,
+                raw,
+                Interest::READABLE,
+                if polling {
+                    crate::vibeio::driver::RegistrationMode::Poll
+                } else {
+                    crate::vibeio::driver::RegistrationMode::Completion
+                },
+            )
+            .unwrap();
             let mut cx = Context::from_waker(std::task::Waker::noop());
             let mut buffers: Vec<Box<[u8]>> = [0, 2, 0, 4, 0]
                 .into_iter()
@@ -444,26 +444,23 @@ mod cancellation_tests {
             let addresses: Vec<_> = buffers.iter().map(|buf| buf.as_ptr()).collect();
 
             for payload in [b"abc".as_slice(), b""] {
-                assert_eq!(writer.send(payload).unwrap(), payload.len());
                 let mut op = ReadvOp::new(&handle, buffers);
-                let deadline = std::time::Instant::now() + crate::vibeio::test_support::WATCHDOG;
-                let result = loop {
-                    let result = if polling {
-                        op.poll_poll(&mut cx, &driver)
-                    } else {
-                        op.poll_completion(&mut cx, &driver)
-                    };
-                    if result.is_ready() {
-                        break result;
-                    }
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "readv completion timed out"
-                    );
-                    driver.wait(Some(std::time::Duration::from_millis(10)));
-                };
-                assert!(matches!(result, Poll::Ready(Ok(count))
-                    if count == payload.len()));
+                if polling {
+                    assert!(op.poll_poll(&mut cx, &driver).is_pending());
+                }
+                assert_eq!(writer.send(payload).unwrap(), payload.len());
+                let count = crate::vibeio::test_support::poll_io(
+                    || {
+                        if polling {
+                            op.poll_poll(&mut cx, &driver)
+                        } else {
+                            op.poll_completion(&mut cx, &driver)
+                        }
+                    },
+                    || driver.wait(Some(std::time::Duration::from_millis(10))),
+                )
+                .expect("vectored datagram read should complete");
+                assert_eq!(count, payload.len());
                 buffers = op.take_bufs();
                 assert_eq!(&*buffers[1], b"ab");
                 assert_eq!(&*buffers[3], b"c___");
