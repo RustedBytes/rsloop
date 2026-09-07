@@ -1,0 +1,1275 @@
+{
+  "benchmark_commit": "6cc3444e97aad1294813ea9b6de03bc190f95abb",
+  "date": "2026-09-07",
+  "python": "3.14.7 (main, Sep  1 2026, 14:18:09) [Clang 22.1.3 ]",
+  "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.39",
+  "versions": {
+    "rsloop": "0.1.49",
+    "uvloop": "0.22.1",
+    "zuvloop": "0.0.14",
+    "websockets": "17.0.1",
+    "aiohttp": "3.14.3",
+    "starlette": "1.6.0",
+    "uvicorn": "0.52.3"
+  },
+  "build_info": {
+    "version": "0.1.49",
+    "profile": "release",
+    "target_os": "linux",
+    "target_arch": "x86_64",
+    "free_threaded": false,
+    "reactor": "io_uring",
+    "runtime_profile": "rsloop",
+    "minimum_os": "Linux 6.1",
+    "tls_backend": "rustls",
+    "profiler": false
+  },
+  "cpu_affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "source_sha256": "3c9713b70af923cf31209e261fa27c7f379472cea320283ffbcbde6c647dfe3a",
+  "source_hash_method": "Sorted src/**/*.rs, Cargo.toml, Cargo.lock, build.rs; each relative path, NUL, bytes, NUL",
+  "binary_sha256": "a18be233031ee58d5c3d1809d2cd69db91dab5f5bff1990defe3196ab3cbea8c",
+  "notes": [
+    "Release build without profiler or PGO. No concurrent builds/tests/profiling during timed measurements. Host services active; frequency not fixed.",
+    "Micro: seven fresh-process measurements after two warmups per loop/workload; asyncio,uvloop,zuvloop,rsloop.",
+    "Network: seven measured runs after two warmups in one process per loop/scenario; rsloop,uvloop,zuvloop; 16 connections, 500 operations/connection for request/response workloads; bulk transfers 2 MiB/connection in 64 KiB chunks.",
+    "Idle: nine rotating paired process blocks; 100 cycles plus five warmups, 200 established connections, 0.2 seconds idle/cycle.",
+    "Compact run-level data retains latency quantiles and idle milestone medians; individual request/cycle samples omitted. Not direct input to check_regression.py."
+  ],
+  "results": [
+    {
+      "scenario": "idle_connections",
+      "loop": "rsloop",
+      "measurement_mode": "paired-cold",
+      "benchmark_version": 2,
+      "settings": {
+        "connections": 200,
+        "cycles": 100,
+        "warmup_cycles": 5,
+        "idle_seconds": 0.2,
+        "timeout_seconds": 30.0,
+        "cpu_affinity": null
+      },
+      "block_orders": [
+        [
+          "rsloop",
+          "uvloop",
+          "zuvloop"
+        ],
+        [
+          "uvloop",
+          "zuvloop",
+          "rsloop"
+        ],
+        [
+          "zuvloop",
+          "rsloop",
+          "uvloop"
+        ],
+        [
+          "rsloop",
+          "uvloop",
+          "zuvloop"
+        ],
+        [
+          "uvloop",
+          "zuvloop",
+          "rsloop"
+        ],
+        [
+          "zuvloop",
+          "rsloop",
+          "uvloop"
+        ],
+        [
+          "rsloop",
+          "uvloop",
+          "zuvloop"
+        ],
+        [
+          "uvloop",
+          "zuvloop",
+          "rsloop"
+        ],
+        [
+          "zuvloop",
+          "rsloop",
+          "uvloop"
+        ]
+      ],
+      "comparison_reference": "uvloop",
+      "idle_comparison": {
+        "metric": "median_cycle_p95_ms",
+        "change_percent": -23.464639927274078,
+        "ci95_percent": [
+          -48.59164912851631,
+          5.916160658539335
+        ],
+        "classification": "inconclusive",
+        "threshold_percent": 5.0,
+        "reference_runs": 9,
+        "candidate_runs": 9,
+        "paired": true,
+        "bootstrap_samples": 10000,
+        "seed": 0,
+        "reason": "run-level bootstrap"
+      },
+      "runs": [
+        {
+          "loop": "rsloop",
+          "scenario": "idle_connections",
+          "seconds": 1.5805994061520323,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 44105728,
+          "connection_setup_seconds": 0.09927315701497719,
+          "traffic_seconds": 1.4524602501187474,
+          "teardown_seconds": 0.028865999018307775,
+          "idle_residency_seconds": 20.0121606666944,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.1045040410244837,
+          "latency_summary_ms": {
+            "p50": 17.684849037323147,
+            "p95": 18.97940697381273,
+            "p99": 19.555494014639407
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 17.30288498220034,
+            "p50_ms": 17.67619649763219,
+            "p95_ms": 17.96181351528503,
+            "all_ms": 18.09141901321709
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.377950983121991,
+            "p10": 3.5343639901839197,
+            "p50": 17.938516044523567,
+            "p90": 19.000075990334153,
+            "max": 20.241284975782037
+          }
+        },
+        {
+          "loop": "rsloop",
+          "scenario": "idle_connections",
+          "seconds": 1.4880732669262215,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 44285952,
+          "connection_setup_seconds": 0.09498569299466908,
+          "traffic_seconds": 1.3852141979150474,
+          "teardown_seconds": 0.007873376016505063,
+          "idle_residency_seconds": 20.0121021294035,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0857672130223364,
+          "latency_summary_ms": {
+            "p50": 17.51146896276623,
+            "p95": 18.812325957696885,
+            "p99": 21.176199021283537
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 17.2207975119818,
+            "p50_ms": 17.579445004230365,
+            "p95_ms": 17.856645019492134,
+            "all_ms": 17.990656022448093
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.374385996721685,
+            "p10": 3.488941991236061,
+            "p50": 17.847014998551458,
+            "p90": 18.686684023123235,
+            "max": 26.127202960196882
+          }
+        },
+        {
+          "loop": "rsloop",
+          "scenario": "idle_connections",
+          "seconds": 1.5637528322986327,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 44044288,
+          "connection_setup_seconds": 0.04382749000797048,
+          "traffic_seconds": 1.4912413452984765,
+          "teardown_seconds": 0.028683996992185712,
+          "idle_residency_seconds": 20.01230292971013,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0219871119479649,
+          "latency_summary_ms": {
+            "p50": 17.895574972499162,
+            "p95": 18.90961598837748,
+            "p99": 19.843734975438565
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 17.55579048767686,
+            "p50_ms": 17.900125007145107,
+            "p95_ms": 18.18191452184692,
+            "all_ms": 18.306499492609873
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.4735280205495656,
+            "p10": 3.612696018535644,
+            "p50": 18.175530014559627,
+            "p90": 18.898574984632432,
+            "max": 21.730120002757758
+          }
+        },
+        {
+          "loop": "rsloop",
+          "scenario": "idle_connections",
+          "seconds": 1.307796572044026,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 44150784,
+          "connection_setup_seconds": 0.04201094002928585,
+          "traffic_seconds": 1.2375285250600427,
+          "teardown_seconds": 0.02825710695469752,
+          "idle_residency_seconds": 20.010641144705005,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.071286900958512,
+          "latency_summary_ms": {
+            "p50": 14.214299968443811,
+            "p95": 19.00193898472935,
+            "p99": 20.01260605175048
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 15.319767990149558,
+            "p50_ms": 15.62495349207893,
+            "p95_ms": 15.857181482715532,
+            "all_ms": 15.993634471669793
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.4408210194669664,
+            "p10": 3.574175003450364,
+            "p50": 14.0620669699274,
+            "p90": 18.94405798520893,
+            "max": 20.429087977390736
+          }
+        },
+        {
+          "loop": "rsloop",
+          "scenario": "idle_connections",
+          "seconds": 1.1941509887692519,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 48394240,
+          "connection_setup_seconds": 0.04979924997314811,
+          "traffic_seconds": 1.123862422828097,
+          "teardown_seconds": 0.02048931596800685,
+          "idle_residency_seconds": 20.00989876704989,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.085443854040932,
+          "latency_summary_ms": {
+            "p50": 7.514556986279786,
+            "p95": 19.07693495741114,
+            "p99": 27.62010198784992
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 7.4881289910990745,
+            "p50_ms": 7.551061979029328,
+            "p95_ms": 7.599983480758965,
+            "all_ms": 7.622183969942853
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.4052239498123527,
+            "p10": 3.5180419799871743,
+            "p50": 7.491608965210617,
+            "p90": 18.803332990501076,
+            "max": 28.184214956127107
+          }
+        },
+        {
+          "loop": "rsloop",
+          "scenario": "idle_connections",
+          "seconds": 1.3714099902426824,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 50130944,
+          "connection_setup_seconds": 0.057419110962655395,
+          "traffic_seconds": 1.3027657382772304,
+          "teardown_seconds": 0.01122514100279659,
+          "idle_residency_seconds": 20.012287759047467,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0189858119701967,
+          "latency_summary_ms": {
+            "p50": 17.427573970053345,
+            "p95": 18.710676988121122,
+            "p99": 19.402151985559613
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 17.13573551387526,
+            "p50_ms": 17.502506991149858,
+            "p95_ms": 17.819721484556794,
+            "all_ms": 17.94455701019615
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.4032510011456907,
+            "p10": 3.6670439876616,
+            "p50": 17.800811969209462,
+            "p90": 18.74485402368009,
+            "max": 22.24280097289011
+          }
+        },
+        {
+          "loop": "rsloop",
+          "scenario": "idle_connections",
+          "seconds": 1.5941647051367909,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 51355648,
+          "connection_setup_seconds": 0.09387127903755754,
+          "traffic_seconds": 1.4708515830570832,
+          "teardown_seconds": 0.02944184304215014,
+          "idle_residency_seconds": 20.01262420497369,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.071104513015598,
+          "latency_summary_ms": {
+            "p50": 17.65255199279636,
+            "p95": 19.00338602717966,
+            "p99": 20.026628975756466
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 17.293380515184253,
+            "p50_ms": 17.64062201255001,
+            "p95_ms": 17.914716998348013,
+            "all_ms": 18.044614495011047
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.4313470241613686,
+            "p10": 3.6515449755825102,
+            "p50": 17.882685991935432,
+            "p90": 18.892704974859953,
+            "max": 23.217927024234086
+          }
+        },
+        {
+          "loop": "rsloop",
+          "scenario": "idle_connections",
+          "seconds": 1.5477078537805937,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 55726080,
+          "connection_setup_seconds": 0.05028375395340845,
+          "traffic_seconds": 1.4689126178273,
+          "teardown_seconds": 0.02851148199988529,
+          "idle_residency_seconds": 20.012737276265398,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0391436239588074,
+          "latency_summary_ms": {
+            "p50": 18.01606104709208,
+            "p95": 19.276388979051262,
+            "p99": 19.70546704251319
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 17.618871002923697,
+            "p50_ms": 17.978001007577404,
+            "p95_ms": 18.26527703087777,
+            "all_ms": 18.397077481495216
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.4577680053189397,
+            "p10": 3.5776569857262075,
+            "p50": 18.247875035740435,
+            "p90": 19.265461014583707,
+            "max": 20.028896047733724
+          }
+        },
+        {
+          "loop": "rsloop",
+          "scenario": "idle_connections",
+          "seconds": 1.007033756992314,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 57556992,
+          "connection_setup_seconds": 0.08103218802716583,
+          "traffic_seconds": 0.896612431970425,
+          "teardown_seconds": 0.02938913699472323,
+          "idle_residency_seconds": 20.00940407824237,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0676869371091016,
+          "latency_summary_ms": {
+            "p50": 4.235738015267998,
+            "p95": 18.716412014327943,
+            "p99": 19.370121008250862
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 4.158550465945154,
+            "p50_ms": 4.234287975123152,
+            "p95_ms": 4.291364981327206,
+            "all_ms": 4.321867483668029
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.4111080458387733,
+            "p10": 3.5008859704248607,
+            "p50": 4.27451595896855,
+            "p90": 18.566666985861957,
+            "max": 24.209119961597025
+          }
+        }
+      ],
+      "environment_example": {
+        "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.39",
+        "python": "3.14.7 (main, Sep  1 2026, 14:18:09) [Clang 22.1.3 ]",
+        "cpu_count": 16,
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "load_average_start": [
+          1.4970703125,
+          1.2099609375,
+          1.15673828125
+        ],
+        "pid": 416936,
+        "load_average_end": [
+          1.28271484375,
+          1.18994140625,
+          1.15234375
+        ]
+      }
+    },
+    {
+      "scenario": "idle_connections",
+      "loop": "uvloop",
+      "measurement_mode": "paired-cold",
+      "benchmark_version": 2,
+      "settings": {
+        "connections": 200,
+        "cycles": 100,
+        "warmup_cycles": 5,
+        "idle_seconds": 0.2,
+        "timeout_seconds": 30.0,
+        "cpu_affinity": null
+      },
+      "block_orders": [
+        [
+          "rsloop",
+          "uvloop",
+          "zuvloop"
+        ],
+        [
+          "uvloop",
+          "zuvloop",
+          "rsloop"
+        ],
+        [
+          "zuvloop",
+          "rsloop",
+          "uvloop"
+        ],
+        [
+          "rsloop",
+          "uvloop",
+          "zuvloop"
+        ],
+        [
+          "uvloop",
+          "zuvloop",
+          "rsloop"
+        ],
+        [
+          "zuvloop",
+          "rsloop",
+          "uvloop"
+        ],
+        [
+          "rsloop",
+          "uvloop",
+          "zuvloop"
+        ],
+        [
+          "uvloop",
+          "zuvloop",
+          "rsloop"
+        ],
+        [
+          "zuvloop",
+          "rsloop",
+          "uvloop"
+        ]
+      ],
+      "comparison_reference": "uvloop",
+      "idle_comparison": null,
+      "runs": [
+        {
+          "loop": "uvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.2520123868598603,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 36454400,
+          "connection_setup_seconds": 0.02380964602343738,
+          "traffic_seconds": 1.2165691828122362,
+          "teardown_seconds": 0.011633558024186641,
+          "idle_residency_seconds": 20.02928027312737,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0215579869691283,
+          "latency_summary_ms": {
+            "p50": 9.95252002030611,
+            "p95": 19.428490020800382,
+            "p99": 20.29921201756224
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 9.727711498271674,
+            "p50_ms": 10.005181975429878,
+            "p95_ms": 10.2311544760596,
+            "all_ms": 10.25957299862057
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.8318730075843632,
+            "p10": 4.016906023025513,
+            "p50": 10.069023992400616,
+            "p90": 19.448051985818893,
+            "max": 21.541624970268458
+          }
+        },
+        {
+          "loop": "uvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.3777044101734646,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 38264832,
+          "connection_setup_seconds": 0.025946339010261,
+          "traffic_seconds": 1.3470613761455752,
+          "teardown_seconds": 0.004696695017628372,
+          "idle_residency_seconds": 20.029668041912373,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0996985288802534,
+          "latency_summary_ms": {
+            "p50": 18.297772970981896,
+            "p95": 19.955242983996868,
+            "p99": 20.93792101368308
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 17.9670125071425,
+            "p50_ms": 18.45312351360917,
+            "p95_ms": 18.890975537942722,
+            "all_ms": 18.93739352817647
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.780202998314053,
+            "p10": 3.8857610197737813,
+            "p50": 18.87468504719436,
+            "p90": 20.028972008731216,
+            "max": 22.52339501865208
+          }
+        },
+        {
+          "loop": "uvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.5387580647366121,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 42565632,
+          "connection_setup_seconds": 0.025759082986041903,
+          "traffic_seconds": 1.5080051077529788,
+          "teardown_seconds": 0.004993873997591436,
+          "idle_residency_seconds": 20.03246001212392,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0892811579396948,
+          "latency_summary_ms": {
+            "p50": 19.27811501082033,
+            "p95": 20.593444001860917,
+            "p99": 21.251630038022995
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 18.867306993342936,
+            "p50_ms": 19.413518020883203,
+            "p95_ms": 19.880373496562243,
+            "all_ms": 19.928042485844344
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.8575849612243474,
+            "p10": 3.9753050077706575,
+            "p50": 19.86876700539142,
+            "p90": 20.699635962955654,
+            "max": 22.057786991354078
+          }
+        },
+        {
+          "loop": "uvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.5543397022993304,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 44367872,
+          "connection_setup_seconds": 0.021522415045183152,
+          "traffic_seconds": 1.5142799072200432,
+          "teardown_seconds": 0.01853738003410399,
+          "idle_residency_seconds": 20.033911308739334,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.072385216015391,
+          "latency_summary_ms": {
+            "p50": 18.538061005529016,
+            "p95": 19.91804997669533,
+            "p99": 21.162414050195366
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 18.010601022979245,
+            "p50_ms": 18.521073478041217,
+            "p95_ms": 18.95509150926955,
+            "all_ms": 19.001787499291822
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.7415450206026435,
+            "p10": 3.887403989210725,
+            "p50": 18.952550017274916,
+            "p90": 19.999325973913074,
+            "max": 22.7918479940854
+          }
+        },
+        {
+          "loop": "uvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.3892475108150393,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 46641152,
+          "connection_setup_seconds": 0.03486291103763506,
+          "traffic_seconds": 1.331539825827349,
+          "teardown_seconds": 0.02284477395005524,
+          "idle_residency_seconds": 20.028830081399065,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0966956201009452,
+          "latency_summary_ms": {
+            "p50": 18.275788985192776,
+            "p95": 19.76237603230402,
+            "p99": 20.1927280286327
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 18.00626199110411,
+            "p50_ms": 18.517472984967753,
+            "p95_ms": 18.911456514615566,
+            "all_ms": 18.95808900007978
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.778012003749609,
+            "p10": 3.8830750272609293,
+            "p50": 18.89650704106316,
+            "p90": 19.794777035713196,
+            "max": 20.529343048110604
+          }
+        },
+        {
+          "loop": "uvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.512858725793194,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 51003392,
+          "connection_setup_seconds": 0.02215458295540884,
+          "traffic_seconds": 1.4706519138417207,
+          "teardown_seconds": 0.020052228996064514,
+          "idle_residency_seconds": 20.031375402992126,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0583075199392624,
+          "latency_summary_ms": {
+            "p50": 18.986709008459002,
+            "p95": 20.496251992881298,
+            "p99": 21.47055702516809
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 18.52473701001145,
+            "p50_ms": 19.01771200937219,
+            "p95_ms": 19.489393016556278,
+            "all_ms": 19.536375533789396
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.8596030208282173,
+            "p10": 3.9534950046800077,
+            "p50": 19.469035032670945,
+            "p90": 20.676126005128026,
+            "max": 23.21117604151368
+          }
+        },
+        {
+          "loop": "uvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.6766121662803926,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 52752384,
+          "connection_setup_seconds": 0.030097656999714673,
+          "traffic_seconds": 1.63814978528535,
+          "teardown_seconds": 0.00836472399532795,
+          "idle_residency_seconds": 20.031173428928014,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0820946970488876,
+          "latency_summary_ms": {
+            "p50": 19.260956963989884,
+            "p95": 20.439572050236166,
+            "p99": 20.945872005540878
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 18.822347978129983,
+            "p50_ms": 19.32432348257862,
+            "p95_ms": 19.766843499382958,
+            "all_ms": 19.812881015241146
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.7841160083189607,
+            "p10": 3.943165997043252,
+            "p50": 19.765403994824737,
+            "p90": 20.548372995108366,
+            "max": 21.657518984284252
+          }
+        },
+        {
+          "loop": "uvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.687407587945927,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 53985280,
+          "connection_setup_seconds": 0.020857690018601716,
+          "traffic_seconds": 1.6464311439194717,
+          "teardown_seconds": 0.020118754007853568,
+          "idle_residency_seconds": 20.03277981519932,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.1060101250186563,
+          "latency_summary_ms": {
+            "p50": 18.734657031018287,
+            "p95": 20.043352036736906,
+            "p99": 20.863397978246212
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 18.19293003063649,
+            "p50_ms": 18.72725601424463,
+            "p95_ms": 19.174151035258546,
+            "all_ms": 19.221428519813344
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.774822980631143,
+            "p10": 4.238274006638676,
+            "p50": 19.173069042153656,
+            "p90": 20.110387005843222,
+            "max": 23.48633698420599
+          }
+        },
+        {
+          "loop": "uvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.6678785203257576,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 58380288,
+          "connection_setup_seconds": 0.028293308976572007,
+          "traffic_seconds": 1.6187268823268823,
+          "teardown_seconds": 0.020858329022303224,
+          "idle_residency_seconds": 20.031928870128468,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.1081573970150203,
+          "latency_summary_ms": {
+            "p50": 18.76411697594449,
+            "p95": 20.257461990695447,
+            "p99": 21.12129796296358
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 18.203807034296915,
+            "p50_ms": 18.72228749562055,
+            "p95_ms": 19.182071497198194,
+            "all_ms": 19.22949851723388
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.7357559776864946,
+            "p10": 3.9868640014901757,
+            "p50": 19.17424501152709,
+            "p90": 20.351754035800695,
+            "max": 24.227681977208704
+          }
+        }
+      ],
+      "environment_example": {
+        "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.39",
+        "python": "3.14.7 (main, Sep  1 2026, 14:18:09) [Clang 22.1.3 ]",
+        "cpu_count": 16,
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "load_average_start": [
+          1.28271484375,
+          1.18994140625,
+          1.15234375
+        ],
+        "pid": 417642,
+        "load_average_end": [
+          1.275390625,
+          1.193359375,
+          1.154296875
+        ]
+      }
+    },
+    {
+      "scenario": "idle_connections",
+      "loop": "zuvloop",
+      "measurement_mode": "paired-cold",
+      "benchmark_version": 2,
+      "settings": {
+        "connections": 200,
+        "cycles": 100,
+        "warmup_cycles": 5,
+        "idle_seconds": 0.2,
+        "timeout_seconds": 30.0,
+        "cpu_affinity": null
+      },
+      "block_orders": [
+        [
+          "rsloop",
+          "uvloop",
+          "zuvloop"
+        ],
+        [
+          "uvloop",
+          "zuvloop",
+          "rsloop"
+        ],
+        [
+          "zuvloop",
+          "rsloop",
+          "uvloop"
+        ],
+        [
+          "rsloop",
+          "uvloop",
+          "zuvloop"
+        ],
+        [
+          "uvloop",
+          "zuvloop",
+          "rsloop"
+        ],
+        [
+          "zuvloop",
+          "rsloop",
+          "uvloop"
+        ],
+        [
+          "rsloop",
+          "uvloop",
+          "zuvloop"
+        ],
+        [
+          "uvloop",
+          "zuvloop",
+          "rsloop"
+        ],
+        [
+          "zuvloop",
+          "rsloop",
+          "uvloop"
+        ]
+      ],
+      "comparison_reference": "uvloop",
+      "idle_comparison": {
+        "metric": "median_cycle_p95_ms",
+        "change_percent": -15.247667570961799,
+        "ci95_percent": [
+          -31.033523736015333,
+          4.528014790675703
+        ],
+        "classification": "inconclusive",
+        "threshold_percent": 5.0,
+        "reference_runs": 9,
+        "candidate_runs": 9,
+        "paired": true,
+        "bootstrap_samples": 10000,
+        "seed": 0,
+        "reason": "run-level bootstrap"
+      },
+      "runs": [
+        {
+          "loop": "zuvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.4571419609128498,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 37502976,
+          "connection_setup_seconds": 0.016890686994884163,
+          "traffic_seconds": 1.4167414669063874,
+          "teardown_seconds": 0.023509807011578232,
+          "idle_residency_seconds": 20.127907547110226,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.1090082489536144,
+          "latency_summary_ms": {
+            "p50": 17.02376501634717,
+            "p95": 18.147295981179923,
+            "p99": 19.11653997376561
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 16.64329500636086,
+            "p50_ms": 17.079977958928794,
+            "p95_ms": 17.45797452167608,
+            "all_ms": 17.499793000752106
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.5491700400598347,
+            "p10": 3.655679989606142,
+            "p50": 17.457339039538056,
+            "p90": 18.20302801206708,
+            "max": 23.156999028287828
+          }
+        },
+        {
+          "loop": "zuvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.1200692109414376,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 39141376,
+          "connection_setup_seconds": 0.016961919027380645,
+          "traffic_seconds": 1.0808749138959683,
+          "teardown_seconds": 0.02223237801808864,
+          "idle_residency_seconds": 20.123831804201473,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0254183110664599,
+          "latency_summary_ms": {
+            "p50": 9.096032998058945,
+            "p95": 18.16103101009503,
+            "p99": 20.501438004430383
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 8.88759849476628,
+            "p50_ms": 9.127069497480989,
+            "p95_ms": 9.316684969235212,
+            "all_ms": 9.340200485894457
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.5490919835865498,
+            "p10": 3.6998619907535613,
+            "p50": 9.312237962149084,
+            "p90": 17.961625999305397,
+            "max": 21.296675957273692
+          }
+        },
+        {
+          "loop": "zuvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.216200941009447,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 40882176,
+          "connection_setup_seconds": 0.016925961012020707,
+          "traffic_seconds": 1.1836476460448466,
+          "teardown_seconds": 0.015627333952579647,
+          "idle_residency_seconds": 20.125854112789966,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0458222719607875,
+          "latency_summary_ms": {
+            "p50": 10.378904000390321,
+            "p95": 17.788190976716578,
+            "p99": 18.371255020610988
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 10.124952998012304,
+            "p50_ms": 10.378204984590411,
+            "p95_ms": 10.59363450622186,
+            "all_ms": 10.623871989082545
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.4788749762810767,
+            "p10": 3.6333519965410233,
+            "p50": 10.591447993647307,
+            "p90": 17.882310959976166,
+            "max": 19.062548992224038
+          }
+        },
+        {
+          "loop": "zuvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.348078016366344,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 45285376,
+          "connection_setup_seconds": 0.016835771035403013,
+          "traffic_seconds": 1.309166920313146,
+          "teardown_seconds": 0.022075325017794967,
+          "idle_residency_seconds": 20.130943636700977,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0806730380281806,
+          "latency_summary_ms": {
+            "p50": 16.676746017765254,
+            "p95": 17.74562703212723,
+            "p99": 18.163408967666328
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 16.360445006284863,
+            "p50_ms": 16.769000998465344,
+            "p95_ms": 17.13383849710226,
+            "all_ms": 17.176858993479982
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.4536589519120753,
+            "p10": 3.6934849922545254,
+            "p50": 17.125236976426095,
+            "p90": 17.76612101821229,
+            "max": 18.40970100602135
+          }
+        },
+        {
+          "loop": "zuvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.3217994334409013,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 47517696,
+          "connection_setup_seconds": 0.016983135021291673,
+          "traffic_seconds": 1.2819815134280361,
+          "teardown_seconds": 0.022834784991573542,
+          "idle_residency_seconds": 20.128740087908227,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0792890979791991,
+          "latency_summary_ms": {
+            "p50": 16.759712947532535,
+            "p95": 18.13196000875905,
+            "p99": 21.06895501492545
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 16.441017505712807,
+            "p50_ms": 16.86946302652359,
+            "p95_ms": 17.2479594766628,
+            "all_ms": 17.287591996137053
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.5064329858869314,
+            "p10": 3.5669159842655063,
+            "p50": 17.239303968381137,
+            "p90": 17.96011399710551,
+            "max": 22.383560019079596
+          }
+        },
+        {
+          "loop": "zuvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.4178758274647407,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 49135616,
+          "connection_setup_seconds": 0.017812061996664852,
+          "traffic_seconds": 1.376097679429222,
+          "teardown_seconds": 0.023966086038853973,
+          "idle_residency_seconds": 20.131144901621155,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0936966618755832,
+          "latency_summary_ms": {
+            "p50": 17.096758005209267,
+            "p95": 18.17738200770691,
+            "p99": 18.55237002018839
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 16.72341101220809,
+            "p50_ms": 17.140513489721343,
+            "p95_ms": 17.514644481707364,
+            "all_ms": 17.561594489961863
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.476046957075596,
+            "p10": 3.693204023875296,
+            "p50": 17.50726898899302,
+            "p90": 18.273584952112287,
+            "max": 19.247099990025163
+          }
+        },
+        {
+          "loop": "zuvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.2066480352077633,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 53231616,
+          "connection_setup_seconds": 0.017418989969883114,
+          "traffic_seconds": 1.166254646203015,
+          "teardown_seconds": 0.0229743990348652,
+          "idle_residency_seconds": 20.131673720665276,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.025512131047435,
+          "latency_summary_ms": {
+            "p50": 16.04440901428461,
+            "p95": 17.953885020688176,
+            "p99": 21.25483303098008
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 15.743485535494983,
+            "p50_ms": 16.101465531392023,
+            "p95_ms": 16.425356501713395,
+            "all_ms": 16.461722523672506
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.5064960247837007,
+            "p10": 3.5818780306726694,
+            "p50": 16.079898981843144,
+            "p90": 17.9514039773494,
+            "max": 26.162589027080685
+          }
+        },
+        {
+          "loop": "zuvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.2238833323353902,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 55382016,
+          "connection_setup_seconds": 0.018874366011004895,
+          "traffic_seconds": 1.1996627593180165,
+          "teardown_seconds": 0.005346207006368786,
+          "idle_residency_seconds": 20.1238181325607,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.0862776150461286,
+          "latency_summary_ms": {
+            "p50": 16.68113301275298,
+            "p95": 18.39316898258403,
+            "p99": 21.01680199848488
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 16.529510990949348,
+            "p50_ms": 16.949854005360976,
+            "p95_ms": 17.314702010480687,
+            "all_ms": 17.35477548209019
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.501311002764851,
+            "p10": 3.6117470008321106,
+            "p50": 17.30389503063634,
+            "p90": 18.311487045139074,
+            "max": 23.455274989828467
+          }
+        },
+        {
+          "loop": "zuvloop",
+          "scenario": "idle_connections",
+          "seconds": 1.4406212219037116,
+          "operations": 20000,
+          "bytes_transferred": 40000,
+          "peak_rss_bytes": 56905728,
+          "connection_setup_seconds": 0.01689410104881972,
+          "traffic_seconds": 1.4006290298420936,
+          "teardown_seconds": 0.02309809101279825,
+          "idle_residency_seconds": 20.1271193533903,
+          "benchmark_version": 2,
+          "warmup_seconds": 1.1062834089971147,
+          "latency_summary_ms": {
+            "p50": 17.00633898144588,
+            "p95": 18.19338701898232,
+            "p99": 18.666739983018488
+          },
+          "idle_cycle_count": 100,
+          "idle_median_ms": {
+            "first_ms": 16.58532049623318,
+            "p50_ms": 17.00265647377819,
+            "p95_ms": 17.359725490678102,
+            "all_ms": 17.399756965460256
+          },
+          "cycle_p95_distribution_ms": {
+            "min": 3.512374998535961,
+            "p10": 3.9285700186155736,
+            "p50": 17.358065000735223,
+            "p90": 18.29574501607567,
+            "max": 19.560751970857382
+          }
+        }
+      ],
+      "environment_example": {
+        "platform": "Linux-7.0.0-31-generic-x86_64-with-glibc2.39",
+        "python": "3.14.7 (main, Sep  1 2026, 14:18:09) [Clang 22.1.3 ]",
+        "cpu_count": 16,
+        "cpu_affinity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "load_average_start": [
+          1.275390625,
+          1.193359375,
+          1.154296875
+        ],
+        "pid": 418363,
+        "load_average_end": [
+          0.83935546875,
+          1.0966796875,
+          1.12255859375
+        ]
+      }
+    }
+  ]
+}

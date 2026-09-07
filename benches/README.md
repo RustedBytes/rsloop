@@ -1,5 +1,9 @@
 # Event Loop Benchmark
 
+The [full comparison at commit 6cc3444](full-benchmark-6cc3444.md) contains the
+current README measurements: four-loop microbenchmarks, all 12 sustained network
+workloads, and nine-block idle activation results, with recorded build hashes.
+
 The [reactor performance follow-up](reactor-performance.md) fixes the
 short-transfer failure and measures adaptive polling before parking, including
 the rejected unconditional-polling variant and native-stream regression checks.
