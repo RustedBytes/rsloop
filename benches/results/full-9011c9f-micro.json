@@ -1,0 +1,559 @@
+{
+  "benchmark_commit": "9011c9f",
+  "date": "2026-09-07",
+  "format": "compact run-level measurements; individual request and cycle samples omitted; environment example retained per scenario/loop",
+  "results": [
+    {
+      "workload": "callbacks",
+      "loop": "asyncio",
+      "runs": [
+        {
+          "seconds": 0.11178272700635716,
+          "operations": 200000,
+          "ops_per_sec": 1789185.1930631988,
+          "baseline_rss_bytes": 24444928,
+          "peak_rss_bytes": 62046208,
+          "peak_rss_delta_bytes": 37601280
+        },
+        {
+          "seconds": 0.11024238300160505,
+          "operations": 200000,
+          "ops_per_sec": 1814184.2960441825,
+          "baseline_rss_bytes": 24465408,
+          "peak_rss_bytes": 62062592,
+          "peak_rss_delta_bytes": 37597184
+        },
+        {
+          "seconds": 0.11234256997704506,
+          "operations": 200000,
+          "ops_per_sec": 1780269.0470839858,
+          "baseline_rss_bytes": 24465408,
+          "peak_rss_bytes": 62062592,
+          "peak_rss_delta_bytes": 37597184
+        },
+        {
+          "seconds": 0.10882733599282801,
+          "operations": 200000,
+          "ops_per_sec": 1837773.553633441,
+          "baseline_rss_bytes": 24461312,
+          "peak_rss_bytes": 62062592,
+          "peak_rss_delta_bytes": 37601280
+        },
+        {
+          "seconds": 0.11361649900209159,
+          "operations": 200000,
+          "ops_per_sec": 1760307.7172472826,
+          "baseline_rss_bytes": 24457216,
+          "peak_rss_bytes": 62054400,
+          "peak_rss_delta_bytes": 37597184
+        }
+      ]
+    },
+    {
+      "workload": "callbacks",
+      "loop": "uvloop",
+      "runs": [
+        {
+          "seconds": 0.05283806499210186,
+          "operations": 200000,
+          "ops_per_sec": 3785149.9677343527,
+          "baseline_rss_bytes": 26193920,
+          "peak_rss_bytes": 71430144,
+          "peak_rss_delta_bytes": 45236224
+        },
+        {
+          "seconds": 0.051203659997554496,
+          "operations": 200000,
+          "ops_per_sec": 3905970.7843062794,
+          "baseline_rss_bytes": 26140672,
+          "peak_rss_bytes": 71413760,
+          "peak_rss_delta_bytes": 45273088
+        },
+        {
+          "seconds": 0.051239967986475676,
+          "operations": 200000,
+          "ops_per_sec": 3903203.0631398554,
+          "baseline_rss_bytes": 26177536,
+          "peak_rss_bytes": 71467008,
+          "peak_rss_delta_bytes": 45289472
+        },
+        {
+          "seconds": 0.05161086900625378,
+          "operations": 200000,
+          "ops_per_sec": 3875152.7314094566,
+          "baseline_rss_bytes": 26157056,
+          "peak_rss_bytes": 71385088,
+          "peak_rss_delta_bytes": 45228032
+        },
+        {
+          "seconds": 0.05115047900471836,
+          "operations": 200000,
+          "ops_per_sec": 3910031.809898614,
+          "baseline_rss_bytes": 26206208,
+          "peak_rss_bytes": 71421952,
+          "peak_rss_delta_bytes": 45215744
+        }
+      ]
+    },
+    {
+      "workload": "callbacks",
+      "loop": "zuvloop",
+      "runs": [
+        {
+          "seconds": 0.03865430498262867,
+          "operations": 200000,
+          "ops_per_sec": 5174067.936026283,
+          "baseline_rss_bytes": 27086848,
+          "peak_rss_bytes": 48484352,
+          "peak_rss_delta_bytes": 21397504
+        },
+        {
+          "seconds": 0.038469783001346514,
+          "operations": 200000,
+          "ops_per_sec": 5198885.577103454,
+          "baseline_rss_bytes": 27058176,
+          "peak_rss_bytes": 48455680,
+          "peak_rss_delta_bytes": 21397504
+        },
+        {
+          "seconds": 0.036589814990293235,
+          "operations": 200000,
+          "ops_per_sec": 5466001.947620046,
+          "baseline_rss_bytes": 26947584,
+          "peak_rss_bytes": 48455680,
+          "peak_rss_delta_bytes": 21508096
+        },
+        {
+          "seconds": 0.03595258100540377,
+          "operations": 200000,
+          "ops_per_sec": 5562882.953241644,
+          "baseline_rss_bytes": 26918912,
+          "peak_rss_bytes": 48427008,
+          "peak_rss_delta_bytes": 21508096
+        },
+        {
+          "seconds": 0.035851336986524984,
+          "operations": 200000,
+          "ops_per_sec": 5578592.510376157,
+          "baseline_rss_bytes": 27041792,
+          "peak_rss_bytes": 48463872,
+          "peak_rss_delta_bytes": 21422080
+        }
+      ]
+    },
+    {
+      "workload": "callbacks",
+      "loop": "rsloop",
+      "runs": [
+        {
+          "seconds": 0.048052914993604645,
+          "operations": 200000,
+          "ops_per_sec": 4162078.4093247615,
+          "baseline_rss_bytes": 26836992,
+          "peak_rss_bytes": 67059712,
+          "peak_rss_delta_bytes": 40222720
+        },
+        {
+          "seconds": 0.04834909600322135,
+          "operations": 200000,
+          "ops_per_sec": 4136581.9949699705,
+          "baseline_rss_bytes": 26828800,
+          "peak_rss_bytes": 67178496,
+          "peak_rss_delta_bytes": 40349696
+        },
+        {
+          "seconds": 0.04773136699805036,
+          "operations": 200000,
+          "ops_per_sec": 4190116.742480248,
+          "baseline_rss_bytes": 26791936,
+          "peak_rss_bytes": 67141632,
+          "peak_rss_delta_bytes": 40349696
+        },
+        {
+          "seconds": 0.04747314500855282,
+          "operations": 200000,
+          "ops_per_sec": 4212908.160265509,
+          "baseline_rss_bytes": 26845184,
+          "peak_rss_bytes": 67190784,
+          "peak_rss_delta_bytes": 40345600
+        },
+        {
+          "seconds": 0.04875446599908173,
+          "operations": 200000,
+          "ops_per_sec": 4102188.3001193553,
+          "baseline_rss_bytes": 26820608,
+          "peak_rss_bytes": 67137536,
+          "peak_rss_delta_bytes": 40316928
+        }
+      ]
+    },
+    {
+      "workload": "tasks",
+      "loop": "asyncio",
+      "runs": [
+        {
+          "seconds": 0.14610348001588136,
+          "operations": 50000,
+          "ops_per_sec": 342223.19683668745,
+          "baseline_rss_bytes": 24481792,
+          "peak_rss_bytes": 32374784,
+          "peak_rss_delta_bytes": 7892992
+        },
+        {
+          "seconds": 0.14944649298558943,
+          "operations": 50000,
+          "ops_per_sec": 334567.9045464206,
+          "baseline_rss_bytes": 24457216,
+          "peak_rss_bytes": 32358400,
+          "peak_rss_delta_bytes": 7901184
+        },
+        {
+          "seconds": 0.14760296000167727,
+          "operations": 50000,
+          "ops_per_sec": 338746.5942378922,
+          "baseline_rss_bytes": 24444928,
+          "peak_rss_bytes": 33124352,
+          "peak_rss_delta_bytes": 8679424
+        },
+        {
+          "seconds": 0.1463030689919833,
+          "operations": 50000,
+          "ops_per_sec": 341756.33050281234,
+          "baseline_rss_bytes": 24432640,
+          "peak_rss_bytes": 32354304,
+          "peak_rss_delta_bytes": 7921664
+        },
+        {
+          "seconds": 0.14868969001690857,
+          "operations": 50000,
+          "ops_per_sec": 336270.7931821913,
+          "baseline_rss_bytes": 24461312,
+          "peak_rss_bytes": 32358400,
+          "peak_rss_delta_bytes": 7897088
+        }
+      ]
+    },
+    {
+      "workload": "tasks",
+      "loop": "uvloop",
+      "runs": [
+        {
+          "seconds": 0.09999648400116712,
+          "operations": 50000,
+          "ops_per_sec": 500017.5806122985,
+          "baseline_rss_bytes": 26161152,
+          "peak_rss_bytes": 35676160,
+          "peak_rss_delta_bytes": 9515008
+        },
+        {
+          "seconds": 0.09063557599438354,
+          "operations": 50000,
+          "ops_per_sec": 551659.7588909059,
+          "baseline_rss_bytes": 26140672,
+          "peak_rss_bytes": 35684352,
+          "peak_rss_delta_bytes": 9543680
+        },
+        {
+          "seconds": 0.0917375189892482,
+          "operations": 50000,
+          "ops_per_sec": 545033.2704753013,
+          "baseline_rss_bytes": 26214400,
+          "peak_rss_bytes": 35811328,
+          "peak_rss_delta_bytes": 9596928
+        },
+        {
+          "seconds": 0.09584316099062562,
+          "operations": 50000,
+          "ops_per_sec": 521685.6318510872,
+          "baseline_rss_bytes": 26189824,
+          "peak_rss_bytes": 35762176,
+          "peak_rss_delta_bytes": 9572352
+        },
+        {
+          "seconds": 0.09529209698666818,
+          "operations": 50000,
+          "ops_per_sec": 524702.4840579932,
+          "baseline_rss_bytes": 26144768,
+          "peak_rss_bytes": 35618816,
+          "peak_rss_delta_bytes": 9474048
+        }
+      ]
+    },
+    {
+      "workload": "tasks",
+      "loop": "zuvloop",
+      "runs": [
+        {
+          "seconds": 0.07740815699798986,
+          "operations": 50000,
+          "ops_per_sec": 645926.7593891739,
+          "baseline_rss_bytes": 27049984,
+          "peak_rss_bytes": 35069952,
+          "peak_rss_delta_bytes": 8019968
+        },
+        {
+          "seconds": 0.07723973898100667,
+          "operations": 50000,
+          "ops_per_sec": 647335.1756444316,
+          "baseline_rss_bytes": 27000832,
+          "peak_rss_bytes": 35127296,
+          "peak_rss_delta_bytes": 8126464
+        },
+        {
+          "seconds": 0.0837861519830767,
+          "operations": 50000,
+          "ops_per_sec": 596757.3258418539,
+          "baseline_rss_bytes": 26914816,
+          "peak_rss_bytes": 35078144,
+          "peak_rss_delta_bytes": 8163328
+        },
+        {
+          "seconds": 0.07809188499231823,
+          "operations": 50000,
+          "ops_per_sec": 640271.3931789253,
+          "baseline_rss_bytes": 26939392,
+          "peak_rss_bytes": 35139584,
+          "peak_rss_delta_bytes": 8200192
+        },
+        {
+          "seconds": 0.07908271401538514,
+          "operations": 50000,
+          "ops_per_sec": 632249.41913694,
+          "baseline_rss_bytes": 26935296,
+          "peak_rss_bytes": 35135488,
+          "peak_rss_delta_bytes": 8200192
+        }
+      ]
+    },
+    {
+      "workload": "tasks",
+      "loop": "rsloop",
+      "runs": [
+        {
+          "seconds": 0.08542712402413599,
+          "operations": 50000,
+          "ops_per_sec": 585294.1974948535,
+          "baseline_rss_bytes": 26841088,
+          "peak_rss_bytes": 35852288,
+          "peak_rss_delta_bytes": 9011200
+        },
+        {
+          "seconds": 0.08470853097969666,
+          "operations": 50000,
+          "ops_per_sec": 590259.321248107,
+          "baseline_rss_bytes": 26832896,
+          "peak_rss_bytes": 35844096,
+          "peak_rss_delta_bytes": 9011200
+        },
+        {
+          "seconds": 0.08732401599991135,
+          "operations": 50000,
+          "ops_per_sec": 572580.1708438462,
+          "baseline_rss_bytes": 26853376,
+          "peak_rss_bytes": 35897344,
+          "peak_rss_delta_bytes": 9043968
+        },
+        {
+          "seconds": 0.08517875400139019,
+          "operations": 50000,
+          "ops_per_sec": 587000.8382510968,
+          "baseline_rss_bytes": 26853376,
+          "peak_rss_bytes": 35815424,
+          "peak_rss_delta_bytes": 8962048
+        },
+        {
+          "seconds": 0.08770328300306574,
+          "operations": 50000,
+          "ops_per_sec": 570104.0860494608,
+          "baseline_rss_bytes": 26812416,
+          "peak_rss_bytes": 35823616,
+          "peak_rss_delta_bytes": 9011200
+        }
+      ]
+    },
+    {
+      "workload": "tcp_streams",
+      "loop": "asyncio",
+      "runs": [
+        {
+          "seconds": 0.15770194499054924,
+          "operations": 5000,
+          "ops_per_sec": 31705.379412407627,
+          "baseline_rss_bytes": 24444928,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 6352896
+        },
+        {
+          "seconds": 0.15018662001239136,
+          "operations": 5000,
+          "ops_per_sec": 33291.9137509551,
+          "baseline_rss_bytes": 24461312,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 6336512
+        },
+        {
+          "seconds": 0.14700776600511745,
+          "operations": 5000,
+          "ops_per_sec": 34011.80859945825,
+          "baseline_rss_bytes": 24449024,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 6348800
+        },
+        {
+          "seconds": 0.14911037601996213,
+          "operations": 5000,
+          "ops_per_sec": 33532.20703655543,
+          "baseline_rss_bytes": 24477696,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 6320128
+        },
+        {
+          "seconds": 0.14904336500330828,
+          "operations": 5000,
+          "ops_per_sec": 33547.28336876329,
+          "baseline_rss_bytes": 24465408,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 6332416
+        }
+      ]
+    },
+    {
+      "workload": "tcp_streams",
+      "loop": "uvloop",
+      "runs": [
+        {
+          "seconds": 0.12867331801680848,
+          "operations": 5000,
+          "ops_per_sec": 38858.09487983247,
+          "baseline_rss_bytes": 26198016,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 4599808
+        },
+        {
+          "seconds": 0.12267554699792527,
+          "operations": 5000,
+          "ops_per_sec": 40757.91893623724,
+          "baseline_rss_bytes": 26222592,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 4575232
+        },
+        {
+          "seconds": 0.13013713198597543,
+          "operations": 5000,
+          "ops_per_sec": 38421.009620365985,
+          "baseline_rss_bytes": 26218496,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 4579328
+        },
+        {
+          "seconds": 0.12318478501401842,
+          "operations": 5000,
+          "ops_per_sec": 40589.42830830123,
+          "baseline_rss_bytes": 26218496,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 4579328
+        },
+        {
+          "seconds": 0.12441784702241421,
+          "operations": 5000,
+          "ops_per_sec": 40187.160601639705,
+          "baseline_rss_bytes": 26202112,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 4595712
+        }
+      ]
+    },
+    {
+      "workload": "tcp_streams",
+      "loop": "zuvloop",
+      "runs": [
+        {
+          "seconds": 0.1055997500079684,
+          "operations": 5000,
+          "ops_per_sec": 47348.59693912824,
+          "baseline_rss_bytes": 27004928,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 3792896
+        },
+        {
+          "seconds": 0.103599474998191,
+          "operations": 5000,
+          "ops_per_sec": 48262.792838354704,
+          "baseline_rss_bytes": 27009024,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 3788800
+        },
+        {
+          "seconds": 0.1073768500064034,
+          "operations": 5000,
+          "ops_per_sec": 46564.97186965185,
+          "baseline_rss_bytes": 26988544,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 3809280
+        },
+        {
+          "seconds": 0.10851291101425886,
+          "operations": 5000,
+          "ops_per_sec": 46077.46629654961,
+          "baseline_rss_bytes": 27070464,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 3727360
+        },
+        {
+          "seconds": 0.10321270101121627,
+          "operations": 5000,
+          "ops_per_sec": 48443.6503551694,
+          "baseline_rss_bytes": 26918912,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 3878912
+        }
+      ]
+    },
+    {
+      "workload": "tcp_streams",
+      "loop": "rsloop",
+      "runs": [
+        {
+          "seconds": 0.09163629898102954,
+          "operations": 5000,
+          "ops_per_sec": 54563.53056156377,
+          "baseline_rss_bytes": 26841088,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 3956736
+        },
+        {
+          "seconds": 0.09150616300757974,
+          "operations": 5000,
+          "ops_per_sec": 54641.12837499081,
+          "baseline_rss_bytes": 26836992,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 3960832
+        },
+        {
+          "seconds": 0.09161256201332435,
+          "operations": 5000,
+          "ops_per_sec": 54577.66806339056,
+          "baseline_rss_bytes": 26828800,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 3969024
+        },
+        {
+          "seconds": 0.09049597798730247,
+          "operations": 5000,
+          "ops_per_sec": 55251.074259914094,
+          "baseline_rss_bytes": 26783744,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 4014080
+        },
+        {
+          "seconds": 0.08981564198620617,
+          "operations": 5000,
+          "ops_per_sec": 55669.59039014492,
+          "baseline_rss_bytes": 26832896,
+          "peak_rss_bytes": 30797824,
+          "peak_rss_delta_bytes": 3964928
+        }
+      ]
+    }
+  ]
+}

@@ -1,5 +1,9 @@
 # Event Loop Benchmark
 
+The [full comparison at commit 9011c9f](full-benchmark-9011c9f.md) records fresh
+microbenchmarks, all 12 network workloads, and nine-block idle activation results
+against uvloop and zuvloop, with compact run-level data.
+
 See the [five-path optimization experiment](optimization-results.md) for
 before/after socket, buffered-I/O, timer, write, and callback measurements,
 including application-level regressions and reproducible alternating A/B runs.
