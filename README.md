@@ -332,6 +332,10 @@ These gaps are visible in the current implementation.
 
 ## Build
 
+Local development uses Python 3.14.7, pinned in `.python-version`. Install that
+interpreter before running the `uv` commands below. This development pin does
+not change the package's Python 3.10+ support or the multi-version test matrix.
+
 Local builds and build/test CI use Rust `1.98.1`, pinned in
 [`rust-toolchain.toml`](./rust-toolchain.toml). Rustup selects it automatically
 inside this repository. LLVM tools remain optional for PGO builds.
