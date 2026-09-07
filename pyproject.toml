@@ -53,9 +53,16 @@ dev = [
     "rust-just>=1.54.0",
     "typing-extensions>=4.0",
     { include-group = "test" },
+    { include-group = "integration" },
 ]
-# Dependencies for the library/framework tests in tests/packages
+# Core unittest dependencies, including on free-threaded Python.
 test = [
+    "typing-extensions>=4.0",
+    "websockets>=13.0",
+]
+# Optional library/framework scripts in tests/packages. Native dependencies
+# here may not support every interpreter in the core test matrix.
+integration = [
     "aiohttp>=3.14.3",
     "aiosqlite>=0.20.0",
     "anyio>=4.14.2",

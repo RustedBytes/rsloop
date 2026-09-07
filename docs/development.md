@@ -16,6 +16,18 @@ Build the extension and install it into the current environment:
 uv run --with maturin maturin develop --release
 ```
 
+## Run the Python test matrix
+
+```bash
+scripts/test-supported-pythons.sh --debug
+```
+
+The matrix explicitly installs the `test` dependency group, including the
+WebSocket dependency used by the TLS tests. Optional framework scripts in
+`tests/packages` use the separate `integration` group, which is also included
+in `dev`. Those frameworks may have native dependencies that do not support
+free-threaded Python; they are not required for the core unittest suite.
+
 ## Run Rust lints
 
 Clippy uses a risk-focused policy in `Cargo.toml`: `correctness` is denied,

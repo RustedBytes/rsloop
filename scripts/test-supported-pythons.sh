@@ -98,7 +98,9 @@ except ValueError as exc:
 if test_timeout <= 0:
     raise SystemExit("RSLOOP_TEST_TIMEOUT_SECONDS must be greater than zero")
 
-maturin_cmd = ["maturin", "develop"]
+# Select the core group explicitly: maturin's default dev group also includes
+# optional framework integrations whose native dependencies may reject 3.14t.
+maturin_cmd = ["maturin", "develop", "--group", "test"]
 if build_mode == "release":
     maturin_cmd.append("--release")
 
