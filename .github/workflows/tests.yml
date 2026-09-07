@@ -62,54 +62,7 @@ jobs:
         run: python3 scripts/run_rust_tests.py ${{ matrix.test_args }}
 
   vibeio-native:
-    name: embedded runtime (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.98.1"
-          components: clippy, rustfmt
-
-      - name: Cache runtime harness build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: tools/vibeio-check
-
-      - name: Check embedded runtime formatting
-        run: cargo fmt --manifest-path tools/vibeio-check/Cargo.toml --all -- --check
-
-      - name: Check embedded runtime documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --manifest-path tools/vibeio-check/Cargo.toml --all-features --no-deps --locked
-
-      - name: Lint embedded runtime on the native target
-        run: cargo clippy --manifest-path tools/vibeio-check/Cargo.toml --all-targets --all-features --locked -- -D warnings
-
-      - name: Check isolated embedded runtime features
-        shell: bash
-        run: |
-          for feature in '' fs process signal pipe stdio splice blocking-default; do
-            cargo clippy --manifest-path tools/vibeio-check/Cargo.toml --all-targets --no-default-features --features "$feature" --locked -- -D warnings
-            cargo test --manifest-path tools/vibeio-check/Cargo.toml --no-default-features --features "$feature" --locked
-          done
-
-      - name: Run default-feature embedded runtime tests
-        run: cargo test --manifest-path tools/vibeio-check/Cargo.toml --locked
-
-      - name: Run all-feature embedded runtime tests
-        run: cargo test --manifest-path tools/vibeio-check/Cargo.toml --all-features --locked
+    uses: ./.github/workflows/vibeio-native.yml
 
   clippy:
     name: clippy (risk-focused)

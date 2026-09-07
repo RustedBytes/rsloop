@@ -19,9 +19,34 @@ cargo check --manifest-path tools/vibeio-check/Cargo.toml --all-targets --all-fe
 
 Install cross-compilation targets with `rustup target add` first. A successful
 `cargo check` verifies compilation, not execution. Native Linux, Windows, and
-macOS jobs in `.github/workflows/tests.yml` run formatting, strict Clippy under
-the root crate's risk-focused policy, and default/all-feature tests (including
-doctests). That workflow is manually dispatched; editing it does not run CI.
+macOS jobs in `.github/workflows/vibeio-native.yml` run formatting, documentation,
+strict Clippy under the root crate's risk-focused policy, and native tests
+(including doctests). The main Tests workflow reuses this workflow.
+
+## Run native cleanup verification in CI
+
+After pushing the workflow, open **Actions → Vibeio native tests → Run workflow**
+and select the branch to test. The manual defaults run the all-feature suite
+three times on Linux, Windows and macOS, plus separate lint/test runs for each
+feature. Choose 1, 3 or 10 repetitions; isolated-feature checks can be disabled
+for a quicker all-feature run. No Python setup or extension build is required.
+
+With GitHub CLI:
+
+```sh
+gh workflow run vibeio-native.yml --ref master -f repetitions=3 -F isolated_features=true
+```
+
+Each platform uploads a `vibeio-native-*` artifact containing the commit and
+compiler details, native test inventory, and full test output (including skip
+messages). Failures propagate through log capture, jobs have a 30-minute timeout,
+and one platform's failure does not cancel the others. Inspect the logs for
+capability-based skips before treating a green run as coverage of a specific
+kernel operation. Existing platform-gated IOCP/AFD, process callback, kqueue,
+buffer and cancellation regressions execute where enabled; this does not add
+fault injection for every remaining exceptional lifecycle path.
+
+Both workflows are manually dispatched; editing them does not run CI.
 
 Keep Clippy policy, dependency versions and feature wiring aligned with the root
 manifest when updating them. The initial lockfile was resolved from the root lockfile. This
