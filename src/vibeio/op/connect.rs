@@ -753,6 +753,50 @@ mod ownership_tests {
         }
     }
 
+    // Client-side connect completion does not guarantee that the server's
+    // nonblocking accept is ready on its first attempt.
+    async fn accept_peer(
+        mut accept: impl FnMut() -> io::Result<std::net::SocketAddr>,
+    ) -> io::Result<std::net::SocketAddr> {
+        loop {
+            match accept() {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    crate::vibeio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    #[test]
+    fn accept_peer_retries_transient_errors_and_preserves_terminal_errors() {
+        crate::vibeio::executor::Runtime::new(AnyDriver::new_mock()).block_on(
+            crate::vibeio::test_support::with_watchdog(async {
+                let peer = "127.0.0.1:12345".parse().unwrap();
+                let mut outcomes = [
+                    Err(io::ErrorKind::WouldBlock.into()),
+                    Err(io::ErrorKind::Interrupted.into()),
+                    Ok(peer),
+                ]
+                .into_iter();
+                assert_eq!(
+                    accept_peer(|| outcomes.next().unwrap()).await.unwrap(),
+                    peer
+                );
+                assert!(outcomes.next().is_none());
+                let error = accept_peer(|| Err(io::ErrorKind::PermissionDenied.into()))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+            }),
+        );
+    }
+
     #[test]
     fn tcp_connect_uses_owned_address_on_live_driver() {
         use crate::vibeio::net::{PollTcpStream, TcpStream};
@@ -782,7 +826,8 @@ mod ownership_tests {
         for driver in drivers {
             let runtime = crate::vibeio::executor::Runtime::new(driver);
             for bind_address in ["127.0.0.1:0", "[::1]:0"] {
-                let listener = std::net::TcpListener::bind(bind_address).unwrap();
+                let listener = std::net::TcpListener::bind(bind_address)
+                    .unwrap_or_else(|error| panic!("bind {bind_address}: {error}"));
                 listener.set_nonblocking(true).unwrap();
                 let address = listener.local_addr().unwrap();
                 runtime.block_on(async move {
@@ -791,22 +836,50 @@ mod ownership_tests {
                         TcpStream::connect(address),
                     )
                     .await
-                    .unwrap()
-                    .unwrap();
+                    .unwrap_or_else(|error| {
+                        panic!("TcpStream connect {address} timed out: {error}")
+                    })
+                    .unwrap_or_else(|error| panic!("TcpStream connect {address}: {error}"));
                     assert_eq!(stream.peer_addr().unwrap(), address);
-                    let (_, peer) = listener.accept().unwrap();
-                    assert_eq!(peer, stream.local_addr().unwrap());
+                    let peer = crate::vibeio::time::timeout(
+                        crate::vibeio::test_support::WATCHDOG,
+                        accept_peer(|| listener.accept().map(|(_, peer)| peer)),
+                    )
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("accept TcpStream on {address} timed out: {error}")
+                    })
+                    .unwrap_or_else(|error| panic!("accept TcpStream on {address}: {error}"));
+                    assert_eq!(
+                        peer,
+                        stream.local_addr().unwrap(),
+                        "TcpStream accepted peer on {address}"
+                    );
 
                     let stream = crate::vibeio::time::timeout(
                         crate::vibeio::test_support::WATCHDOG,
                         PollTcpStream::connect(address),
                     )
                     .await
-                    .unwrap()
-                    .unwrap();
+                    .unwrap_or_else(|error| {
+                        panic!("PollTcpStream connect {address} timed out: {error}")
+                    })
+                    .unwrap_or_else(|error| panic!("PollTcpStream connect {address}: {error}"));
                     assert_eq!(stream.peer_addr().unwrap(), address);
-                    let (_, peer) = listener.accept().unwrap();
-                    assert_eq!(peer, stream.local_addr().unwrap());
+                    let peer = crate::vibeio::time::timeout(
+                        crate::vibeio::test_support::WATCHDOG,
+                        accept_peer(|| listener.accept().map(|(_, peer)| peer)),
+                    )
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("accept PollTcpStream on {address} timed out: {error}")
+                    })
+                    .unwrap_or_else(|error| panic!("accept PollTcpStream on {address}: {error}"));
+                    assert_eq!(
+                        peer,
+                        stream.local_addr().unwrap(),
+                        "PollTcpStream accepted peer on {address}"
+                    );
                 });
             }
         }
