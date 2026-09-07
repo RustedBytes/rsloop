@@ -55,8 +55,9 @@ dev = [
     { include-group = "test" },
     { include-group = "integration" },
 ]
-# Core unittest dependencies, including on free-threaded Python.
+# Core pytest dependencies, including on free-threaded Python.
 test = [
+    "pytest>=8.4",
     "typing-extensions>=4.0",
     "websockets>=13.0",
 ]
@@ -88,3 +89,9 @@ integration = [
     "tortoise-orm>=1.0.0",
     "uvicorn>=0.33.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/packages/*_test.py are standalone, optional integration scripts.
+python_files = ["test_*.py"]
+pythonpath = ["."]

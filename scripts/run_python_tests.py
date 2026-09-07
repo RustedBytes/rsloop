@@ -1,12 +1,13 @@
-"""Run the unittest suite with diagnostics for tests that stop making progress."""
+"""Run pytest with recurring diagnostics for tests that stop making progress."""
 
 from __future__ import annotations
 
 import faulthandler
 import os
 import sys
-import unittest
 from pathlib import Path
+
+import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
@@ -32,11 +33,11 @@ def main() -> int:
     faulthandler.enable()
     faulthandler.dump_traceback_later(_traceback_interval(), repeat=True)
     try:
-        suite = unittest.defaultTestLoader.discover("tests")
-        result = unittest.TextTestRunner(verbosity=2, buffer=False).run(suite)
+        # Own the recurring watchdog: pytest's faulthandler plugin otherwise
+        # cancels it after each test. Forward selectors and other pytest flags.
+        return int(pytest.main(["-v", "-s", "-p", "no:faulthandler", *sys.argv[1:]]))
     finally:
         faulthandler.cancel_dump_traceback_later()
-    return 0 if result.wasSuccessful() else 1
 
 
 if __name__ == "__main__":

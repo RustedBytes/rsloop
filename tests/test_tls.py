@@ -10,10 +10,9 @@ import ssl
 import subprocess
 import sys
 import tempfile
-import unittest
 
+import pytest
 import rsloop
-
 
 TLS_FIXTURES_DIR = pathlib.Path(__file__).with_name("fixtures").joinpath("tls")
 TLS_GENERATOR = (
@@ -80,16 +79,16 @@ def make_ssl_contexts(tmpdir: str):
     return server_ctx, client_ctx
 
 
-class TlsTests(unittest.TestCase):
+class TestTls:
     def test_create_default_context_marks_default_verify_paths(self) -> None:
         context = ssl.create_default_context()
-        self.assertTrue(context.__dict__.get("_rsloop_use_default_verify_paths"))
+        assert context.__dict__.get("_rsloop_use_default_verify_paths")
 
     def test_create_default_context_with_explicit_ca_skips_default_paths(self) -> None:
         context = ssl.create_default_context(
             cafile=TLS_FIXTURES_DIR.joinpath("ca-cert.pem")
         )
-        self.assertIsNone(context.__dict__.get("_rsloop_use_default_verify_paths"))
+        assert context.__dict__.get("_rsloop_use_default_verify_paths") is None
 
     def test_client_config_cache_reuses_and_invalidates(self) -> None:
         async def main() -> tuple[bool, bool]:
@@ -120,7 +119,7 @@ class TlsTests(unittest.TestCase):
                     )
                     writer.write(b"x")
                     await writer.drain()
-                    self.assertEqual(await reader.readexactly(1), b"x")
+                    assert await reader.readexactly(1) == b"x"
                     writer.close()
                     await writer.wait_closed()
 
@@ -140,7 +139,7 @@ class TlsTests(unittest.TestCase):
                     server.close()
                     await server.wait_closed()
 
-        self.assertEqual(rsloop.run(main()), (True, True))
+        assert rsloop.run(main()) == (True, True)
 
     def test_server_close_cancels_pending_tls_handshake(self) -> None:
         async def main() -> None:
@@ -219,10 +218,10 @@ class TlsTests(unittest.TestCase):
                         ssl=client_ctx,
                         server_hostname="localhost",
                     )
-                    self.assertEqual(
-                        await asyncio.wait_for(client_protocol.result, 5.0), "TLS-OK"
+                    assert (
+                        await asyncio.wait_for(client_protocol.result, 5.0) == "TLS-OK"
                     )
-                    self.assertEqual(await asyncio.wait_for(done, 5.0), "server-closed")
+                    assert await asyncio.wait_for(done, 5.0) == "server-closed"
                     result = "ok"
                 finally:
                     server.close()
@@ -232,10 +231,10 @@ class TlsTests(unittest.TestCase):
             return result, server_fds
 
         result, server_fds = rsloop.run(main())
-        self.assertEqual(result, "ok")
-        self.assertEqual(server_fds, (-1,))
+        assert result == "ok"
+        assert server_fds == (-1,)
 
-    @unittest.skipIf(os.name == "nt", "Unix sockets are Unix-only")
+    @pytest.mark.skipif(os.name == "nt", reason="Unix sockets are Unix-only")
     def test_create_unix_connection_and_server_tls_round_trip(self) -> None:
         async def main() -> tuple[str, tuple[int, ...]]:
             loop = asyncio.get_running_loop()
@@ -290,8 +289,8 @@ class TlsTests(unittest.TestCase):
             return result, server_fds
 
         result, server_fds = rsloop.run(main())
-        self.assertEqual(result, "unix:tls")
-        self.assertEqual(server_fds, (-1,))
+        assert result == "unix:tls"
+        assert server_fds == (-1,)
 
     def test_connect_accepted_socket_tls_round_trip(self) -> None:
         async def main() -> str:
@@ -348,7 +347,7 @@ class TlsTests(unittest.TestCase):
                 finally:
                     listener.close()
 
-        self.assertEqual(rsloop.run(main()), "accepted:socket")
+        assert rsloop.run(main()) == "accepted:socket"
 
     def test_start_tls_upgrades_existing_transport(self) -> None:
         async def main(*, client_first: bool) -> str:
@@ -438,16 +437,17 @@ class TlsTests(unittest.TestCase):
 
         # Both scheduling orders must retire plaintext readers before either
         # side can put handshake bytes on the socket.
-        self.assertEqual(rsloop.run(main(client_first=False)), "upgraded:starttls")
-        self.assertEqual(rsloop.run(main(client_first=True)), "upgraded:starttls")
+        assert rsloop.run(main(client_first=False)) == "upgraded:starttls"
+        assert rsloop.run(main(client_first=True)) == "upgraded:starttls"
 
-    @unittest.skipIf(
+    @pytest.mark.skipif(
         importlib.util.find_spec("websockets") is None,
-        "websockets package is required",
+        reason="websockets package is required",
     )
     def test_wsbench_websockets_respects_cert_none_context(self) -> None:
-        from examples import wsbench_websockets
         from websockets import serve
+
+        from examples import wsbench_websockets
 
         async def main() -> list[tuple[str, str]]:
             async def echo(websocket) -> None:
@@ -479,11 +479,4 @@ class TlsTests(unittest.TestCase):
                         count=2,
                     )
 
-        self.assertEqual(
-            rsloop.run(main()),
-            [("hello 0", "HELLO 0"), ("hello 1", "HELLO 1")],
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert rsloop.run(main()) == [("hello 0", "HELLO 0"), ("hello 1", "HELLO 1")]

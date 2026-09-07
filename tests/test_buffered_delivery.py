@@ -3,7 +3,6 @@
 import array
 import asyncio
 import concurrent.futures
-import unittest
 
 import rsloop
 
@@ -69,11 +68,11 @@ def transfer(seed):
         loop.close()
 
 
-class BufferedDeliveryTests(unittest.TestCase):
+class TestBufferedDelivery:
     def test_typed_buffer_can_resize_and_replace_after_delivery(self):
         transfer(0)
 
     def test_independent_loop_threads_preserve_typed_buffers(self):
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             for result in executor.map(transfer, range(4)):
-                self.assertIsNone(result)
+                assert result is None

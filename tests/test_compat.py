@@ -1,30 +1,30 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import errno
 import gc
 import inspect
 import os
+import pathlib
 import signal
 import socket
 import struct
 import sys
 import tempfile
-import time
 import threading
-import unittest
+import time
 import warnings
 import weakref
-import builtins
-import pathlib
 from unittest import mock
 
+import pytest
 import rsloop
 
 EXCEPTION_GROUP = getattr(builtins, "ExceptionGroup", None)
 
 
-class CompatibilityTests(unittest.TestCase):
+class TestCompatibility:
     def test_stop_drains_ready_callbacks_beyond_io_budget(self) -> None:
         loop = rsloop.new_event_loop()
         observed = []
@@ -33,7 +33,7 @@ class CompatibilityTests(unittest.TestCase):
             for index in range(4096):
                 loop.call_soon(observed.append, index)
             loop.run_forever()
-            self.assertEqual(observed, list(range(4096)))
+            assert observed == list(range(4096))
         finally:
             loop.close()
 
@@ -47,7 +47,7 @@ class CompatibilityTests(unittest.TestCase):
             while not startup.done():
                 if time.monotonic() >= deadline:
                     startup.cancel()
-                    self.fail("server startup starved behind a busy ready queue")
+                    pytest.fail("server startup starved behind a busy ready queue")
                 await asyncio.sleep(0)
             server = await startup
             server.close()
@@ -69,7 +69,9 @@ class CompatibilityTests(unittest.TestCase):
                 while True:
                     await asyncio.sleep(0)
 
-            server = await asyncio.get_running_loop().create_server(Echo, "127.0.0.1", 0)
+            server = await asyncio.get_running_loop().create_server(
+                Echo, "127.0.0.1", 0
+            )
             reader, writer = await asyncio.open_connection(
                 *server.sockets[0].getsockname()[:2]
             )
@@ -77,9 +79,7 @@ class CompatibilityTests(unittest.TestCase):
             try:
                 writer.write(b"ping")
                 await writer.drain()
-                self.assertEqual(
-                    await asyncio.wait_for(reader.readexactly(4), 1), b"ping"
-                )
+                assert await asyncio.wait_for(reader.readexactly(4), 1) == b"ping"
             finally:
                 spinner.cancel()
                 await asyncio.gather(spinner, return_exceptions=True)
@@ -90,7 +90,9 @@ class CompatibilityTests(unittest.TestCase):
 
         rsloop.run(main())
 
-    @unittest.skipUnless(os.path.isdir("/dev/fd"), "requires descriptor enumeration")
+    @pytest.mark.skipif(
+        not (os.path.isdir("/dev/fd")), reason="requires descriptor enumeration"
+    )
     def test_closed_streams_do_not_retain_descriptors_across_loops(self) -> None:
         async def exercise() -> None:
             async def echo(
@@ -111,7 +113,7 @@ class CompatibilityTests(unittest.TestCase):
             for reader, writer in connections:
                 writer.write(b"x")
                 await writer.drain()
-                self.assertEqual(await reader.readexactly(1), b"x")
+                assert await reader.readexactly(1) == b"x"
                 writer.close()
             await asyncio.gather(*(writer.wait_closed() for _, writer in connections))
             server.close()
@@ -122,10 +124,12 @@ class CompatibilityTests(unittest.TestCase):
         after_first = len(os.listdir("/dev/fd"))
         rsloop.run(exercise())
         after_second = len(os.listdir("/dev/fd"))
-        self.assertLessEqual(after_first, before + 2)
-        self.assertLessEqual(after_second, after_first + 1)
+        assert after_first <= before + 2
+        assert after_second <= after_first + 1
 
-    @unittest.skipUnless(os.path.isdir("/dev/fd"), "requires descriptor enumeration")
+    @pytest.mark.skipif(
+        not (os.path.isdir("/dev/fd")), reason="requires descriptor enumeration"
+    )
     def test_serving_servers_release_their_listening_socket_on_close(self) -> None:
         # rsloop hands the accept loop its own dup of the listening socket, so
         # the accept task has to be cancelled on close or that descriptor stays
@@ -146,7 +150,7 @@ class CompatibilityTests(unittest.TestCase):
             before = len(os.listdir("/dev/fd"))
             for _ in range(cycles):
                 server = await asyncio.start_server(lambda r, w: None, "127.0.0.1", 0)
-                self.assertTrue(server.is_serving())
+                assert server.is_serving()
                 server.close()
                 await server.wait_closed()
             # Teardown is handed to the runtime thread, so allow a bounded
@@ -158,13 +162,13 @@ class CompatibilityTests(unittest.TestCase):
             return len(os.listdir("/dev/fd")) - before
 
         leaked = rsloop.run(churn())
-        self.assertLessEqual(
-            leaked,
-            2,
-            f"{cycles} create/close server cycles leaked {leaked} descriptors",
+        assert leaked <= 2, (
+            f"{cycles} create/close server cycles leaked {leaked} descriptors"
         )
 
-    @unittest.skipUnless(os.path.isdir("/dev/fd"), "requires descriptor enumeration")
+    @pytest.mark.skipif(
+        not (os.path.isdir("/dev/fd")), reason="requires descriptor enumeration"
+    )
     def test_closed_server_releases_its_port_for_rebinding(self) -> None:
         # The user-visible half of the same bug: a leaked listening descriptor
         # keeps the port bound, so rebinding it fails.
@@ -196,7 +200,7 @@ class CompatibilityTests(unittest.TestCase):
             probe.close()
 
             loop = asyncio.get_running_loop()
-            with self.assertRaises(ConnectionRefusedError):
+            with pytest.raises(ConnectionRefusedError):
                 await asyncio.wait_for(
                     loop.create_connection(
                         asyncio.Protocol,
@@ -233,20 +237,20 @@ class CompatibilityTests(unittest.TestCase):
                 error = exc.__cause__
 
             await asyncio.sleep(0)
-            self.assertIsNotNone(error)
+            assert error is not None
             referrers = gc.get_referrers(error)
-            self.assertFalse(any(isinstance(referrer, list) for referrer in referrers))
-            self.assertFalse(
-                any(
-                    inspect.iscoroutine(referrer)
-                    and referrer.cr_code.co_name == "__loop_create_connection"
-                    for referrer in referrers
-                )
+            assert not any(isinstance(referrer, list) for referrer in referrers)
+            assert not any(
+                inspect.iscoroutine(referrer)
+                and referrer.cr_code.co_name == "__loop_create_connection"
+                for referrer in referrers
             )
 
         rsloop.run(main())
 
-    @unittest.skipUnless(EXCEPTION_GROUP is not None, "requires ExceptionGroup")
+    @pytest.mark.skipif(
+        not (EXCEPTION_GROUP is not None), reason="requires ExceptionGroup"
+    )
     def test_create_connection_all_errors_returns_exception_group(self) -> None:
         async def main() -> int:
             loop = asyncio.get_running_loop()
@@ -264,19 +268,17 @@ class CompatibilityTests(unittest.TestCase):
                 with mock.patch.object(
                     rsloop.Loop, "sock_connect", new=fake_sock_connect
                 ):
-                    with self.assertRaises(EXCEPTION_GROUP) as ctx:
+                    with pytest.raises(EXCEPTION_GROUP) as ctx:
                         await loop.create_connection(
                             asyncio.Protocol,
                             "compat.test",
                             443,
                             all_errors=True,
                         )
-            self.assertTrue(
-                all(isinstance(exc, OSError) for exc in ctx.exception.exceptions)
-            )
-            return len(ctx.exception.exceptions)
+            assert all(isinstance(exc, OSError) for exc in ctx.value.exceptions)
+            return len(ctx.value.exceptions)
 
-        self.assertEqual(rsloop.run(main()), 2)
+        assert rsloop.run(main()) == 2
 
     def test_create_connection_interleave_reorders_attempts(self) -> None:
         async def main() -> list[int]:
@@ -302,7 +304,7 @@ class CompatibilityTests(unittest.TestCase):
                 with mock.patch.object(
                     rsloop.Loop, "_sock_connect_fast", new=fake_sock_connect
                 ):
-                    with self.assertRaises(OSError):
+                    with pytest.raises(OSError):
                         await loop.create_connection(
                             asyncio.Protocol,
                             "compat.test",
@@ -311,7 +313,7 @@ class CompatibilityTests(unittest.TestCase):
                         )
             return calls
 
-        self.assertEqual(rsloop.run(main()), [42001, 42003, 42002, 42004])
+        assert rsloop.run(main()) == [42001, 42003, 42002, 42004]
 
     def test_create_connection_happy_eyeballs_staggers_attempts(self) -> None:
         async def main() -> tuple[float, int]:
@@ -381,8 +383,8 @@ class CompatibilityTests(unittest.TestCase):
                 await server.wait_closed()
 
         elapsed, socket_fileno = rsloop.run(main())
-        self.assertLess(elapsed, 0.15)
-        self.assertEqual(socket_fileno, -1)
+        assert elapsed < 0.15
+        assert socket_fileno == -1
 
     def test_eof_after_data_reports_connection_lost(self) -> None:
         async def main() -> tuple[bytes, list[str]]:
@@ -421,8 +423,8 @@ class CompatibilityTests(unittest.TestCase):
                 await server.wait_closed()
 
         received, events = rsloop.run(main())
-        self.assertEqual(received, b"response-before-eof")
-        self.assertEqual(events, ["data", "eof", "lost"])
+        assert received == b"response-before-eof"
+        assert events == ["data", "eof", "lost"]
 
     def test_buffered_protocol_accepts_reads_larger_than_its_buffer(self) -> None:
         async def main() -> bytes:
@@ -461,7 +463,7 @@ class CompatibilityTests(unittest.TestCase):
                 server.close()
                 await server.wait_closed()
 
-        self.assertEqual(rsloop.run(main()), bytes(range(128)))
+        assert rsloop.run(main()) == bytes(range(128))
 
     def test_close_flushes_coalesced_server_writes(self) -> None:
         first = b"a" * 128
@@ -489,7 +491,7 @@ class CompatibilityTests(unittest.TestCase):
                 server.close()
                 await server.wait_closed()
 
-        self.assertEqual(rsloop.run(main()), first + second)
+        assert rsloop.run(main()) == first + second
 
     def test_close_preserves_kernel_buffered_bulk_tail(self) -> None:
         chunk = b"x" * (64 * 1024)
@@ -518,7 +520,7 @@ class CompatibilityTests(unittest.TestCase):
                         writer.write(b"!")
                         await writer.drain()
                         data = await reader.readexactly(len(chunk) * chunk_count)
-                        self.assertEqual(await reader.read(), b"")
+                        assert await reader.read() == b""
                         return data
                     finally:
                         writer.close()
@@ -530,7 +532,7 @@ class CompatibilityTests(unittest.TestCase):
                 await server.wait_closed()
 
         received = rsloop.run(main())
-        self.assertEqual(received, [chunk * chunk_count] * 4)
+        assert received == [chunk * chunk_count] * 4
 
     def test_writelines_coalesces_bytes_like_items(self) -> None:
         async def main() -> bytes:
@@ -554,9 +556,9 @@ class CompatibilityTests(unittest.TestCase):
                 server.close()
                 await server.wait_closed()
 
-        self.assertEqual(rsloop.run(main()), b"header:body")
+        assert rsloop.run(main()) == b"header:body"
 
-    @unittest.skipUnless(sys.platform == "win32", "requires Winsock")
+    @pytest.mark.skipif(sys.platform != "win32", reason="requires Winsock")
     def test_write_reports_reset_while_reading_is_paused(self) -> None:
         async def main() -> BaseException | None:
             loop = asyncio.get_running_loop()
@@ -596,7 +598,7 @@ class CompatibilityTests(unittest.TestCase):
             finally:
                 server_sock.close()
 
-        self.assertIsNotNone(rsloop.run(main()))
+        assert rsloop.run(main()) is not None
 
     def test_readexactly_larger_than_flow_control_window(self) -> None:
         # Regression test: a readexactly() waiting for more than 2 * limit
@@ -634,7 +636,7 @@ class CompatibilityTests(unittest.TestCase):
         async def main() -> bytes:
             return await asyncio.wait_for(echo_roundtrip(), 15.0)
 
-        self.assertEqual(rsloop.run(main()), payload)
+        assert rsloop.run(main()) == payload
 
     def test_add_reader_stale_fire_after_future_done(self) -> None:
         # Regression test for the anyio raw-socket wait pattern:
@@ -683,8 +685,8 @@ class CompatibilityTests(unittest.TestCase):
                 b.close()
 
         errors, removed = rsloop.run(main())
-        self.assertEqual(errors, [])
-        self.assertTrue(removed)
+        assert errors == []
+        assert removed
 
     def test_create_server_sock_listens_bound_socket(self) -> None:
         async def main() -> bytes:
@@ -710,7 +712,7 @@ class CompatibilityTests(unittest.TestCase):
                 server.close()
                 await server.wait_closed()
 
-        self.assertEqual(rsloop.run(main()), b"bound-socket-server")
+        assert rsloop.run(main()) == b"bound-socket-server"
 
     def test_external_socket_read_wakes_without_waiting_for_timer(self) -> None:
         ready = threading.Event()
@@ -754,9 +756,9 @@ class CompatibilityTests(unittest.TestCase):
             server.close()
             thread.join(1.0)
 
-        self.assertFalse(thread.is_alive(), "socket server thread did not finish")
-        self.assertEqual(received, b"external-socket-data")
-        self.assertLess(elapsed, 0.5)
+        assert not thread.is_alive(), "socket server thread did not finish"
+        assert received == b"external-socket-data"
+        assert elapsed < 0.5
 
     def test_call_later_raises_for_nan(self) -> None:
         # Regression for upstream issue #48: math.inf / oversized delays used to
@@ -765,11 +767,11 @@ class CompatibilityTests(unittest.TestCase):
         async def main() -> None:
             loop = asyncio.get_running_loop()
 
-            with self.assertRaises(ValueError):
+            with pytest.raises(ValueError):
                 loop.call_later(float("nan"), lambda: None)
-            with self.assertRaises(ValueError):
+            with pytest.raises(ValueError):
                 loop.call_at(float("nan"), lambda: None)
-            with self.assertRaises(ValueError):
+            with pytest.raises(ValueError):
                 await asyncio.sleep(float("nan"))
 
         rsloop.run(main())
@@ -782,7 +784,7 @@ class CompatibilityTests(unittest.TestCase):
             task = asyncio.create_task(asyncio.sleep(float("inf")))
             await asyncio.sleep(0.05)
             task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
+            with pytest.raises(asyncio.CancelledError):
                 await task
 
         rsloop.run(main())
@@ -812,11 +814,8 @@ class CompatibilityTests(unittest.TestCase):
             return calls, messages
 
         calls, messages = rsloop.run(main())
-        self.assertEqual(calls, [True, False])
-        self.assertTrue(
-            any("within 0.01 seconds" in message for message in messages),
-            messages,
-        )
+        assert calls == [True, False]
+        assert any("within 0.01 seconds" in message for message in messages), messages
 
     def test_shutdown_default_executor_blocks_later_default_submissions(self) -> None:
         async def main() -> str:
@@ -840,10 +839,7 @@ class CompatibilityTests(unittest.TestCase):
                 "run_in_executor(None, ...) should fail after shutdown"
             )
 
-        self.assertEqual(
-            rsloop.run(main()),
-            "Executor shutdown has been called",
-        )
+        assert rsloop.run(main()) == "Executor shutdown has been called"
 
     def test_close_shuts_down_default_executor_without_waiting(self) -> None:
         calls = []
@@ -857,7 +853,7 @@ class CompatibilityTests(unittest.TestCase):
         loop.close()
         loop.close()
 
-        self.assertEqual(calls, [False])
+        assert calls == [False]
 
     def test_shutdown_asyncgens_closes_active_generators(self) -> None:
         async def main() -> list[str]:
@@ -872,11 +868,11 @@ class CompatibilityTests(unittest.TestCase):
                     events.append("closed")
 
             agen = gen()
-            self.assertEqual(await agen.__anext__(), "value")
+            assert await agen.__anext__() == "value"
             await loop.shutdown_asyncgens()
             return events
 
-        self.assertEqual(rsloop.run(main()), ["closed"])
+        assert rsloop.run(main()) == ["closed"]
 
     def test_completed_asyncgens_are_released_before_loop_shutdown(self) -> None:
         async def main() -> None:
@@ -885,11 +881,11 @@ class CompatibilityTests(unittest.TestCase):
 
             agen = gen()
             reference = weakref.ref(agen)
-            self.assertEqual(await anext(agen), "value")
+            assert await anext(agen) == "value"
             await agen.aclose()
             del agen
             gc.collect()
-            self.assertIsNone(reference())
+            assert reference() is None
 
         rsloop.run(main())
 
@@ -904,7 +900,7 @@ class CompatibilityTests(unittest.TestCase):
                     finalized.set()
 
             agen = gen()
-            self.assertEqual(await anext(agen), "value")
+            assert await anext(agen) == "value"
             del agen
             gc.collect()
             await asyncio.wait_for(finalized.wait(), 1)
@@ -931,18 +927,17 @@ class CompatibilityTests(unittest.TestCase):
             with mock.patch.object(warnings, "warn", side_effect=capture_warning):
                 await loop.shutdown_asyncgens()
                 agen = gen()
-                self.assertEqual(await agen.__anext__(), "value")
+                assert await agen.__anext__() == "value"
                 await agen.aclose()
 
             return messages, sources
 
         messages, sources = rsloop.run(main())
-        self.assertTrue(
-            any("shutdown_asyncgens() call" in message for message in messages),
-            messages,
+        assert any("shutdown_asyncgens() call" in message for message in messages), (
+            messages
         )
-        self.assertEqual(len(sources), 1)
-        self.assertIsInstance(sources[0], rsloop.Loop)
+        assert len(sources) == 1
+        assert isinstance(sources[0], rsloop.Loop)
 
     def test_getaddrinfo_and_getnameinfo_use_default_executor(self) -> None:
         async def main() -> tuple[list[str], tuple[str, str]]:
@@ -965,12 +960,12 @@ class CompatibilityTests(unittest.TestCase):
             loop.set_default_executor(DummyExecutor())
             addrinfos = await loop.getaddrinfo("localhost", 80, type=socket.SOCK_STREAM)
             host, service = await loop.getnameinfo(("127.0.0.1", 80))
-            self.assertTrue(addrinfos)
+            assert addrinfos
             return calls, (host, service)
 
         calls, nameinfo = rsloop.run(main())
-        self.assertEqual(calls, ["getaddrinfo", "getnameinfo"])
-        self.assertEqual(nameinfo[1], "http")
+        assert calls == ["getaddrinfo", "getnameinfo"]
+        assert nameinfo[1] == "http"
 
     def test_getaddrinfo_honors_default_executor_shutdown(self) -> None:
         async def main() -> str:
@@ -993,10 +988,7 @@ class CompatibilityTests(unittest.TestCase):
                 "getaddrinfo should fail after default executor shutdown"
             )
 
-        self.assertEqual(
-            rsloop.run(main()),
-            "Executor shutdown has been called",
-        )
+        assert rsloop.run(main()) == "Executor shutdown has been called"
 
     def test_create_task_passes_kwargs_to_task_factory(self) -> None:
         async def main() -> tuple[dict[str, object], str]:
@@ -1033,10 +1025,10 @@ class CompatibilityTests(unittest.TestCase):
             return captured, await task
 
         captured, result = rsloop.run(main())
-        self.assertEqual(result, "ok")
-        self.assertEqual(captured["name"], "demo")
-        self.assertEqual(captured["eager_start"], False)
-        self.assertEqual(captured["custom_flag"], "seen")
+        assert result == "ok"
+        assert captured["name"] == "demo"
+        assert captured["eager_start"] == False
+        assert captured["custom_flag"] == "seen"
 
     def test_create_task_accepts_eager_start_without_task_factory(self) -> None:
         async def main() -> tuple[bool, str]:
@@ -1050,7 +1042,7 @@ class CompatibilityTests(unittest.TestCase):
             pending_before = not task.done()
             return pending_before, await task
 
-        self.assertEqual(rsloop.run(main()), (True, "done"))
+        assert rsloop.run(main()) == (True, "done")
 
     def test_create_task_rejects_unexpected_kwarg_without_task_factory(self) -> None:
         async def main() -> None:
@@ -1060,9 +1052,9 @@ class CompatibilityTests(unittest.TestCase):
                 return "done"
 
             pending = coro()
-            with self.assertRaisesRegex(
+            with pytest.raises(
                 TypeError,
-                r"create_task\(\) got an unexpected keyword argument 'custom_flag'",
+                match=r"create_task\(\) got an unexpected keyword argument 'custom_flag'",
             ):
                 loop.create_task(pending, custom_flag=True)
             pending.close()
@@ -1086,7 +1078,7 @@ class CompatibilityTests(unittest.TestCase):
                 await asyncio.sleep(0)
 
         expected = 8 if sys.platform == "darwin" else 1
-        self.assertEqual(rsloop.run(main()), expected)
+        assert rsloop.run(main()) == expected
 
     def test_create_datagram_endpoint_round_trip(self) -> None:
         async def main() -> str:
@@ -1123,16 +1115,16 @@ class CompatibilityTests(unittest.TestCase):
                 try:
                     # remote_addr connects the socket, so peername is populated.
                     peername = client_transport.get_extra_info("peername")
-                    self.assertEqual(peername[:2], ("127.0.0.1", port))
+                    assert peername[:2] == ("127.0.0.1", port)
                     sock = client_transport.get_extra_info("socket")
-                    self.assertEqual(tuple(sock.getpeername()), tuple(peername))
+                    assert tuple(sock.getpeername()) == tuple(peername)
                     return await asyncio.wait_for(done, 1.0)
                 finally:
                     client_transport.close()
             finally:
                 server_transport.close()
 
-        self.assertEqual(rsloop.run(main()), "echo:ping")
+        assert rsloop.run(main()) == "echo:ping"
 
     def test_sendfile_fallback_writes_file_contents(self) -> None:
         async def main(path: str, expected: bytes) -> tuple[int, bytes]:
@@ -1188,9 +1180,7 @@ class CompatibilityTests(unittest.TestCase):
             path = pathlib.Path(tmpdir) / "payload.bin"
             payload = b"sendfile-payload"
             path.write_bytes(payload)
-            self.assertEqual(
-                rsloop.run(main(str(path), payload)), (len(payload), payload)
-            )
+            assert rsloop.run(main(str(path), payload)) == (len(payload), payload)
 
     def test_sock_recvfrom_receives_datagram(self) -> None:
         async def main() -> tuple[bytes, tuple[str, int]]:
@@ -1208,8 +1198,8 @@ class CompatibilityTests(unittest.TestCase):
                 send_sock.close()
 
         data, addr = rsloop.run(main())
-        self.assertEqual(data, b"udp-data")
-        self.assertEqual(addr[0], "127.0.0.1")
+        assert data == b"udp-data"
+        assert addr[0] == "127.0.0.1"
 
     def test_sock_recvfrom_into_receives_datagram(self) -> None:
         async def main() -> tuple[int, bytes, tuple[str, int]]:
@@ -1231,9 +1221,9 @@ class CompatibilityTests(unittest.TestCase):
                 send_sock.close()
 
         nbytes, data, addr = rsloop.run(main())
-        self.assertEqual(nbytes, len(b"udp-into"))
-        self.assertEqual(data, b"udp-into")
-        self.assertEqual(addr[0], "127.0.0.1")
+        assert nbytes == len(b"udp-into")
+        assert data == b"udp-into"
+        assert addr[0] == "127.0.0.1"
 
     def test_sock_sendto_sends_datagram(self) -> None:
         async def main() -> tuple[int, bytes]:
@@ -1253,7 +1243,7 @@ class CompatibilityTests(unittest.TestCase):
                 recv_sock.close()
                 send_sock.close()
 
-        self.assertEqual(rsloop.run(main()), (len(b"udp-sendto"), b"udp-sendto"))
+        assert rsloop.run(main()) == (len(b"udp-sendto"), b"udp-sendto")
 
     def test_sock_sendfile_fallback_writes_file_contents(self) -> None:
         async def main(path: str) -> tuple[int, bytes]:
@@ -1299,18 +1289,20 @@ class CompatibilityTests(unittest.TestCase):
             path = pathlib.Path(tmpdir) / "payload.bin"
             payload = b"sock-sendfile"
             path.write_bytes(payload)
-            self.assertEqual(rsloop.run(main(str(path))), (len(payload), payload))
+            assert rsloop.run(main(str(path))) == (len(payload), payload)
 
     def test_slow_callback_duration_property(self) -> None:
         loop = rsloop.new_event_loop()
         try:
-            self.assertEqual(loop.slow_callback_duration, 0.1)
+            assert loop.slow_callback_duration == 0.1
             loop.slow_callback_duration = 0.25
-            self.assertEqual(loop.slow_callback_duration, 0.25)
+            assert loop.slow_callback_duration == 0.25
         finally:
             loop.close()
 
-    @unittest.skipUnless(hasattr(socket, "AF_UNIX"), "unix sockets required")
+    @pytest.mark.skipif(
+        not (hasattr(socket, "AF_UNIX")), reason="unix sockets required"
+    )
     def test_create_unix_server_cleanup_socket_false_leaves_path(self) -> None:
         async def main(path: str) -> bool:
             loop = asyncio.get_running_loop()
@@ -1325,9 +1317,9 @@ class CompatibilityTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "sock")
-            self.assertTrue(rsloop.run(main(path)))
+            assert rsloop.run(main(path))
 
-    @unittest.skipUnless(hasattr(signal, "SIGUSR1"), "unix only")
+    @pytest.mark.skipif(not (hasattr(signal, "SIGUSR1")), reason="unix only")
     def test_add_signal_handler_rejects_non_main_thread(self) -> None:
         loop = rsloop.new_event_loop()
         try:
@@ -1343,10 +1335,10 @@ class CompatibilityTests(unittest.TestCase):
             thread.start()
             thread.join(2.0)
 
-            self.assertFalse(thread.is_alive(), "signal worker did not finish")
-            self.assertEqual(len(errors), 1)
-            self.assertIsInstance(errors[0], ValueError)
-            self.assertIn("main thread", str(errors[0]))
+            assert not thread.is_alive(), "signal worker did not finish"
+            assert len(errors) == 1
+            assert isinstance(errors[0], ValueError)
+            assert "main thread" in str(errors[0])
         finally:
             loop.close()
 
@@ -1377,12 +1369,9 @@ class CompatibilityTests(unittest.TestCase):
 
             return create_connection_error, create_server_error
 
-        self.assertEqual(
-            rsloop.run(main()),
-            (
-                "ssl_shutdown_timeout is only meaningful with ssl",
-                "ssl_shutdown_timeout is only meaningful with ssl",
-            ),
+        assert rsloop.run(main()) == (
+            "ssl_shutdown_timeout is only meaningful with ssl",
+            "ssl_shutdown_timeout is only meaningful with ssl",
         )
 
     def test_loop_allows_weak_refs(self) -> None:
@@ -1393,13 +1382,13 @@ class CompatibilityTests(unittest.TestCase):
             loop = asyncio.get_running_loop()
             num_refs = weakref.getweakrefcount(loop)
             loop_ref = weakref.ref(loop)
-            self.assertEqual(weakref.getweakrefcount(loop), num_refs + 1)
-            self.assertIs(loop_ref(), loop)
+            assert weakref.getweakrefcount(loop) == num_refs + 1
+            assert loop_ref() is loop
 
         rsloop.run(main())
         assert loop_ref is not None
         gc.collect()
-        self.assertIsNone(loop_ref())
+        assert loop_ref() is None
 
     def test_create_subprocess_accepts_explicit_popen_defaults(self) -> None:
         async def main():
@@ -1425,9 +1414,9 @@ class CompatibilityTests(unittest.TestCase):
                 "import sys;sys.exit(0)",
             )
             await proc.wait()
-            self.assertIsNone(proc.stdin)
-            self.assertIsNone(proc.stdout)
-            self.assertIsNone(proc.stderr)
+            assert proc.stdin is None
+            assert proc.stdout is None
+            assert proc.stderr is None
 
         rsloop.run(main())
 
@@ -1443,9 +1432,9 @@ class CompatibilityTests(unittest.TestCase):
                 "import sys;sys.exit(0)",
             )
             try:
-                self.assertIsNotNone(transport.get_pipe_transport(0))
-                self.assertIsNotNone(transport.get_pipe_transport(1))
-                self.assertIsNotNone(transport.get_pipe_transport(2))
+                assert transport.get_pipe_transport(0) is not None
+                assert transport.get_pipe_transport(1) is not None
+                assert transport.get_pipe_transport(2) is not None
             finally:
                 transport.close()
 

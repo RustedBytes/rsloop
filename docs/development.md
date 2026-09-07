@@ -26,7 +26,7 @@ The matrix explicitly installs the `test` dependency group, including the
 WebSocket dependency used by the TLS tests. Optional framework scripts in
 `tests/packages` use the separate `integration` group, which is also included
 in `dev`. Those frameworks may have native dependencies that do not support
-free-threaded Python; they are not required for the core unittest suite.
+free-threaded Python; they are not required for the core pytest suite.
 
 ## Run Rust lints
 
@@ -77,7 +77,7 @@ with the test runner. Some modules have platform-specific implementations.
 Run the Python compatibility suite:
 
 ```bash
-uv run python -m unittest discover -s tests
+uv run python -m pytest
 ```
 
 The `just` recipe also regenerates the TLS fixtures before running the suite:
@@ -86,14 +86,19 @@ The `just` recipe also regenerates the TLS fixtures before running the suite:
 uv run just test
 ```
 
-If you want to focus on one area, use `unittest` discovery with a filename
-pattern:
+To focus on one area, pass a test file or use pytest's `-k` selector:
 
 ```bash
-uv run python -m unittest discover -s tests -p 'test_run.py'
-uv run python -m unittest discover -s tests -p 'test_compat.py'
-uv run python -m unittest discover -s tests -p 'test_tls.py'
+uv run python -m pytest tests/test_run.py
+uv run python -m pytest tests/test_compat.py
+uv run python -m pytest tests/test_tls.py -k start_tls
 ```
+
+CI and `just test` use `scripts/run_python_tests.py`, which forwards pytest
+arguments and prints recurring stack dumps when tests stop making progress.
+For the same diagnostics locally, run `uv run python scripts/run_python_tests.py`.
+Optional framework/database smoke scripts remain under `just test-frameworks`
+and `just test-databases`; pytest does not collect them by default.
 
 ## Build the docs
 

@@ -9,9 +9,9 @@ import subprocess
 import sys
 import threading
 import time
-import unittest
 import warnings
 
+import pytest
 import rsloop
 
 
@@ -54,27 +54,22 @@ async def run_in_thread(func, /, *args):
     return await loop.run_in_executor(None, func, *args)
 
 
-class RunTests(unittest.TestCase):
+class TestRun:
     def test_transport_stats_shape_and_reset(self) -> None:
         rsloop.reset_transport_stats()
         stats = rsloop.transport_stats()
-        self.assertEqual(
-            set(stats),
-            {
-                "enabled",
-                "read_events",
-                "read_bytes",
-                "read_wakeups",
-                "python_read_drains",
-                "staged_writes",
-                "direct_write_attempts",
-                "poll_rebinds",
-            },
-        )
-        self.assertIsInstance(stats["enabled"], bool)
-        self.assertTrue(
-            all(value == 0 for key, value in stats.items() if key != "enabled")
-        )
+        assert set(stats) == {
+            "enabled",
+            "read_events",
+            "read_bytes",
+            "read_wakeups",
+            "python_read_drains",
+            "staged_writes",
+            "direct_write_attempts",
+            "poll_rebinds",
+        }
+        assert isinstance(stats["enabled"], bool)
+        assert all((value == 0 for key, value in stats.items() if key != "enabled"))
 
     def test_build_info_describes_native_extension(self) -> None:
         info = rsloop.build_info()
@@ -93,31 +88,28 @@ class RunTests(unittest.TestCase):
             else "macOS 13"
         )
 
-        self.assertEqual(
-            set(info),
-            {
-                "version",
-                "profile",
-                "target_os",
-                "target_arch",
-                "free_threaded",
-                "reactor",
-                "runtime_profile",
-                "minimum_os",
-                "tls_backend",
-                "profiler",
-            },
-        )
-        self.assertEqual(info["version"], rsloop.__version__)
-        self.assertIn(info["profile"], {"debug", "release"})
-        self.assertTrue(info["target_os"])
-        self.assertTrue(info["target_arch"])
-        self.assertIsInstance(info["free_threaded"], bool)
-        self.assertEqual(info["reactor"], expected_reactor)
-        self.assertEqual(info["runtime_profile"], "rsloop")
-        self.assertEqual(info["minimum_os"], expected_minimum_os)
-        self.assertEqual(info["tls_backend"], "rustls")
-        self.assertEqual(info["profiler"], rsloop.profiler_compiled())
+        assert set(info) == {
+            "version",
+            "profile",
+            "target_os",
+            "target_arch",
+            "free_threaded",
+            "reactor",
+            "runtime_profile",
+            "minimum_os",
+            "tls_backend",
+            "profiler",
+        }
+        assert info["version"] == rsloop.__version__
+        assert info["profile"] in {"debug", "release"}
+        assert info["target_os"]
+        assert info["target_arch"]
+        assert isinstance(info["free_threaded"], bool)
+        assert info["reactor"] == expected_reactor
+        assert info["runtime_profile"] == "rsloop"
+        assert info["minimum_os"] == expected_minimum_os
+        assert info["tls_backend"] == "rustls"
+        assert info["profiler"] == rsloop.profiler_compiled()
 
     def test_install_makes_asyncio_create_rsloop_loops(self) -> None:
         original_policy = get_event_loop_policy()
@@ -125,14 +117,11 @@ class RunTests(unittest.TestCase):
             set_event_loop_policy(default_event_loop_policy())
 
             rsloop.install()
-            self.assertIsInstance(
-                get_event_loop_policy(),
-                rsloop.EventLoopPolicy,
-            )
+            assert isinstance(get_event_loop_policy(), rsloop.EventLoopPolicy)
 
             loop = asyncio.new_event_loop()
             try:
-                self.assertIsInstance(loop, rsloop.Loop)
+                assert isinstance(loop, rsloop.Loop)
             finally:
                 loop.close()
         finally:
@@ -148,7 +137,7 @@ class RunTests(unittest.TestCase):
             async def main() -> bool:
                 return isinstance(asyncio.get_running_loop(), rsloop.Loop)
 
-            self.assertTrue(asyncio.run(main()))
+            assert asyncio.run(main())
         finally:
             rsloop.uninstall()
             set_event_loop_policy(original_policy)
@@ -161,10 +150,10 @@ class RunTests(unittest.TestCase):
             rsloop.install()
             rsloop.uninstall()
 
-            self.assertIs(get_event_loop_policy(), previous_policy)
+            assert get_event_loop_policy() is previous_policy
             loop = asyncio.new_event_loop()
             try:
-                self.assertNotIsInstance(loop, rsloop.Loop)
+                assert not isinstance(loop, rsloop.Loop)
             finally:
                 loop.close()
         finally:
@@ -179,7 +168,7 @@ class RunTests(unittest.TestCase):
             set_event_loop_policy(other_policy)
             rsloop.uninstall()
 
-            self.assertIs(get_event_loop_policy(), other_policy)
+            assert get_event_loop_policy() is other_policy
         finally:
             rsloop.uninstall()
             set_event_loop_policy(original_policy)
@@ -188,7 +177,7 @@ class RunTests(unittest.TestCase):
         loop = rsloop.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
-            self.assertIs(asyncio.get_event_loop(), loop)
+            assert asyncio.get_event_loop() is loop
         finally:
             asyncio.set_event_loop(None)
             loop.close()
@@ -197,7 +186,7 @@ class RunTests(unittest.TestCase):
         async def main() -> str:
             return "ok"
 
-        self.assertEqual(rsloop.run(main()), "ok")
+        assert rsloop.run(main()) == "ok"
 
     def test_repeated_delayed_thread_completions_wake_loop(self) -> None:
         def delayed_result(value: int) -> int:
@@ -209,7 +198,7 @@ class RunTests(unittest.TestCase):
         async def main() -> None:
             for expected in range(500):
                 actual = await run_in_thread(delayed_result, expected)
-                self.assertEqual(actual, expected)
+                assert actual == expected
 
         rsloop.run(main())
 
@@ -220,7 +209,7 @@ class RunTests(unittest.TestCase):
             for expected in range(10_000):
                 future = loop.create_future()
                 loop.call_soon(future.set_result, expected)
-                self.assertEqual(loop.run_until_complete(future), expected)
+                assert loop.run_until_complete(future) == expected
         finally:
             asyncio.set_event_loop(None)
             loop.close()
@@ -231,7 +220,7 @@ class RunTests(unittest.TestCase):
             try:
                 future = loop.create_future()
                 loop.call_soon(future.set_result, expected)
-                self.assertEqual(loop.run_until_complete(future), expected)
+                assert loop.run_until_complete(future) == expected
             finally:
                 loop.close()
 
@@ -277,15 +266,15 @@ class RunTests(unittest.TestCase):
                 return await fut
 
             main_task = loop.create_task(main())
-            with self.assertRaises(SystemExit):
+            with pytest.raises(SystemExit):
                 loop.run_until_complete(main_task)
 
             # The future completed, but the task was suspended when SystemExit
             # unwound the loop. Its wakeup must have been preserved.
-            self.assertTrue(fut.done())
-            self.assertFalse(main_task.done())
+            assert fut.done()
+            assert not main_task.done()
 
-            self.assertEqual(loop.run_until_complete(main_task), "woken")
+            assert loop.run_until_complete(main_task) == "woken"
         finally:
             watchdog.cancel()
             asyncio.set_event_loop(None)
@@ -328,13 +317,13 @@ else:
             capture_output=True,
             timeout=5,
         )
-        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
-        self.assertIn("main-cancelled", proc.stdout)
-        self.assertIn("keyboard-interrupt", proc.stdout)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "main-cancelled" in proc.stdout
+        assert "keyboard-interrupt" in proc.stdout
 
-    @unittest.skipUnless(
-        os.name == "posix" and os.path.isdir("/proc/self/fd"),
-        "requires /proc/self/fd",
+    @pytest.mark.skipif(
+        not (os.name == "posix" and os.path.isdir("/proc/self/fd")),
+        reason="requires /proc/self/fd",
     )
     def test_create_connection_does_not_leak_file_descriptors(self) -> None:
         def fd_count() -> int:
@@ -375,7 +364,7 @@ else:
         rsloop.run(main())
         gc.collect()
         after = fd_count()
-        self.assertLessEqual(after, before + 4)
+        assert after <= before + 4
 
     def test_connect_pipe_round_trip(self) -> None:
         async def main() -> tuple[str, str]:
@@ -429,7 +418,7 @@ else:
 
             return read_value, write_value
 
-        self.assertEqual(rsloop.run(main()), ("pipe-read-demo", "pipe-write-demo"))
+        assert rsloop.run(main()) == ("pipe-read-demo", "pipe-write-demo")
 
     def test_write_pipe_transport_reports_write_buffer_flow_control(self) -> None:
         async def main() -> dict[str, object]:
@@ -492,24 +481,19 @@ else:
                 transport, _ = await loop.connect_write_pipe(WriteProtocol, wfile)
                 try:
                     result = await asyncio.wait_for(done, 3.0)
-                    self.assertEqual(
-                        await asyncio.wait_for(read_task, 3.0), len(payload)
-                    )
+                    assert await asyncio.wait_for(read_task, 3.0) == len(payload)
                     return result
                 finally:
                     transport.close()
 
-        self.assertEqual(
-            rsloop.run(main()),
-            {
-                "default_limits": (16384, 65536),
-                "updated_limits": (0, 1),
-                "invalid_limits_raised": True,
-                "size_after_write": 256 * 1024,
-                "size_after_resume": 0,
-                "events": ["pause", "resume"],
-            },
-        )
+        assert rsloop.run(main()) == {
+            "default_limits": (16384, 65536),
+            "updated_limits": (0, 1),
+            "invalid_limits_raised": True,
+            "size_after_write": 256 * 1024,
+            "size_after_resume": 0,
+            "events": ["pause", "resume"],
+        }
 
     def test_subprocess_exec_round_trip(self) -> None:
         async def main() -> dict[str, object]:
@@ -565,14 +549,11 @@ else:
             stdin_transport.close()
             return await asyncio.wait_for(done, 3.0)
 
-        self.assertEqual(
-            rsloop.run(main()),
-            {
-                "stdout": "HELLO SUBPROCESS",
-                "stderr": "stderr-ok",
-                "returncode": 0,
-            },
-        )
+        assert rsloop.run(main()) == {
+            "stdout": "HELLO SUBPROCESS",
+            "stderr": "stderr-ok",
+            "returncode": 0,
+        }
 
     def test_subprocess_exec_accepts_defaulted_popen_keywords(self) -> None:
         """Regression test for issue #68.
@@ -625,28 +606,29 @@ else:
             finally:
                 transport.close()
 
-        self.assertEqual(rsloop.run(main()), 0)
+        assert rsloop.run(main()) == 0
 
-    @unittest.skipIf(os.name == "nt", "POSIX-only platform validation")
-    def test_subprocess_exec_rejects_windows_only_keywords_on_posix(self) -> None:
-        for keyword, value in (("startupinfo", object()), ("creationflags", 8)):
-            with self.subTest(keyword=keyword):
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX-only platform validation")
+    @pytest.mark.parametrize(
+        "keyword,value",
+        [("startupinfo", object()), ("creationflags", 8)],
+        ids=["startupinfo", "creationflags"],
+    )
+    def test_subprocess_exec_rejects_windows_only_keywords_on_posix(
+        self, keyword, value
+    ) -> None:
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            await loop.subprocess_exec(
+                asyncio.SubprocessProtocol,
+                sys.executable,
+                "-c",
+                "pass",
+                **{keyword: value},
+            )
 
-                async def main(keyword: str = keyword, value: object = value) -> None:
-                    loop = asyncio.get_running_loop()
-                    await loop.subprocess_exec(
-                        asyncio.SubprocessProtocol,
-                        sys.executable,
-                        "-c",
-                        "pass",
-                        **{keyword: value},
-                    )
-
-                with self.assertRaises(ValueError) as caught:
-                    rsloop.run(main())
-                self.assertIn(
-                    "only supported on Windows platforms", str(caught.exception)
-                )
+        with pytest.raises(ValueError, match="only supported on Windows platforms"):
+            rsloop.run(main())
 
     def test_subprocess_shell_round_trip(self) -> None:
         async def main() -> dict[str, object]:
@@ -666,14 +648,11 @@ else:
             assert result is not None
             return result
 
-        self.assertEqual(
-            rsloop.run(main()),
-            {
-                "stdout": "shell-ok",
-                "stderr": "",
-                "returncode": 0,
-            },
-        )
+        assert rsloop.run(main()) == {
+            "stdout": "shell-ok",
+            "stderr": "",
+            "returncode": 0,
+        }
 
     def test_subprocess_exec_text_mode_round_trip(self) -> None:
         async def main() -> dict[str, object]:
@@ -712,18 +691,15 @@ else:
                 "returncode": await asyncio.wait_for(proc.wait(), 3.0),
             }
 
-        self.assertEqual(
-            rsloop.run(main()),
-            {
-                "stdin_type": "_TextStreamWriter",
-                "stdout_type": "_TextStreamReader",
-                "stderr_type": "_TextStreamReader",
-                "first_line": "out:cafe\n",
-                "rest": "second\n",
-                "stderr": "err:cafe\n",
-                "returncode": 0,
-            },
-        )
+        assert rsloop.run(main()) == {
+            "stdin_type": "_TextStreamWriter",
+            "stdout_type": "_TextStreamReader",
+            "stderr_type": "_TextStreamReader",
+            "first_line": "out:cafe\n",
+            "rest": "second\n",
+            "stderr": "err:cafe\n",
+            "returncode": 0,
+        }
 
     def test_subprocess_shell_text_mode_round_trip(self) -> None:
         async def main() -> dict[str, object]:
@@ -753,16 +729,13 @@ else:
                 "returncode": proc.returncode,
             }
 
-        self.assertEqual(
-            rsloop.run(main()),
-            {
-                "stdout": "shell-out\n",
-                "stderr": "shell-err\n",
-                "stdout_value_type": "str",
-                "stderr_value_type": "str",
-                "returncode": 0,
-            },
-        )
+        assert rsloop.run(main()) == {
+            "stdout": "shell-out\n",
+            "stderr": "shell-err\n",
+            "stdout_value_type": "str",
+            "stderr_value_type": "str",
+            "returncode": 0,
+        }
 
     def test_getaddrinfo_accepts_type_keyword(self) -> None:
         async def main() -> list[tuple[object, ...]]:
@@ -774,11 +747,5 @@ else:
             )
 
         addrinfos = rsloop.run(main())
-        self.assertTrue(addrinfos)
-        self.assertTrue(
-            all(addrinfo[1] == socket.SOCK_STREAM for addrinfo in addrinfos),
-        )
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert addrinfos
+        assert all(addrinfo[1] == socket.SOCK_STREAM for addrinfo in addrinfos)

@@ -1,18 +1,19 @@
 """Loop selection tests without optional native benchmark dependencies."""
 
-import sys
 import json
-import unittest
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benches"))
 import compare_event_loops as comparison
 import workload_matrix as matrix
 
 
-class BenchmarkLoopTests(unittest.TestCase):
+class TestBenchmarkLoop:
     def test_child_commands_and_results_preserve_zuvloop(self):
         with mock.patch.object(sys, "argv", ["benchmark"]):
             micro_args = comparison.parse_args()
@@ -21,7 +22,7 @@ class BenchmarkLoopTests(unittest.TestCase):
         command = matrix.child_command(
             matrix_args, "zuvloop", "http_keepalive", None, 1
         )
-        self.assertEqual(command[command.index("--loop") + 1], "zuvloop")
+        assert command[command.index("--loop") + 1] == "zuvloop"
         payload = {
             "loop": "zuvloop",
             "workload": "callbacks",
@@ -40,8 +41,8 @@ class BenchmarkLoopTests(unittest.TestCase):
                 "/tmp/benchmark.py", "zuvloop", "callbacks", micro_args
             )
         command = run.call_args.args[0]
-        self.assertEqual(command[command.index("--loop") + 1], "zuvloop")
-        self.assertEqual(result.loop, "zuvloop")
+        assert command[command.index("--loop") + 1] == "zuvloop"
+        assert result.loop == "zuvloop"
 
     def test_child_failure_is_not_replaced_with_another_loop(self):
         with mock.patch.object(sys, "argv", ["benchmark"]):
@@ -54,28 +55,30 @@ class BenchmarkLoopTests(unittest.TestCase):
                 returncode=1, stdout="", stderr="workload failed"
             ),
         ) as run:
-            with self.assertRaisesRegex(RuntimeError, "zuvloop/http_keepalive failed"):
+            with pytest.raises(RuntimeError, match="zuvloop/http_keepalive failed"):
                 matrix.run_child(args, "zuvloop", "http_keepalive")
             run.assert_called_once()
 
-    def test_platform_and_python_defaults(self):
-        for platform, backend in [
+    @pytest.mark.parametrize(
+        "platform,backend",
+        [
             ("linux", "uvloop"),
             ("darwin", "uvloop"),
             ("win32", "winloop"),
-        ]:
-            for version in [(3, 10), (3, 13), (3, 14), (3, 15)]:
-                with (
-                    self.subTest(platform=platform, version=version),
-                    mock.patch.object(sys, "platform", platform),
-                    mock.patch.object(sys, "version_info", version),
-                ):
-                    expected = ["asyncio", backend]
-                    if version >= (3, 14):
-                        expected.append("zuvloop")
-                    expected.append("rsloop")
-                    self.assertEqual(comparison.default_loops_csv(), ",".join(expected))
-                    self.assertEqual(matrix.default_loops_csv(), ",".join(expected))
+        ],
+    )
+    @pytest.mark.parametrize("version", [(3, 10), (3, 13), (3, 14), (3, 15)])
+    def test_platform_and_python_defaults(self, platform, backend, version):
+        with (
+            mock.patch.object(sys, "platform", platform),
+            mock.patch.object(sys, "version_info", version),
+        ):
+            expected = ["asyncio", backend]
+            if version >= (3, 14):
+                expected.append("zuvloop")
+            expected.append("rsloop")
+            assert comparison.default_loops_csv() == ",".join(expected)
+            assert matrix.default_loops_csv() == ",".join(expected)
 
     def test_zuvloop_factory(self):
         factory = mock.Mock()
@@ -87,7 +90,7 @@ class BenchmarkLoopTests(unittest.TestCase):
                 return_value=SimpleNamespace(new_event_loop=factory),
             ) as imported,
         ):
-            self.assertIs(comparison.loop_factory_for("zuvloop"), factory)
+            assert comparison.loop_factory_for("zuvloop") is factory
             imported.assert_called_once_with("zuvloop")
             factory.assert_not_called()
 
@@ -101,8 +104,8 @@ class BenchmarkLoopTests(unittest.TestCase):
             ),
         ):
             available, reason = comparison.is_loop_available("zuvloop")
-        self.assertFalse(available)
-        self.assertIn("no zuvloop", reason)
+        assert not available
+        assert "no zuvloop" in reason
 
     def test_older_python_rejects_before_import(self):
         with (
@@ -110,32 +113,21 @@ class BenchmarkLoopTests(unittest.TestCase):
             mock.patch.object(comparison.importlib, "import_module") as imported,
         ):
             available, reason = comparison.is_loop_available("zuvloop")
-            self.assertFalse(available)
-            self.assertIn("requires Python 3.14", reason)
+            assert not available
+            assert "requires Python 3.14" in reason
             imported.assert_not_called()
 
-    def test_both_parsers_accept_explicit_and_child_selection(self):
-        for runner in (comparison, matrix):
-            with (
-                self.subTest(runner=runner.__name__),
-                mock.patch.object(
-                    sys,
-                    "argv",
-                    [
-                        "benchmark",
-                        "--loops",
-                        "uvloop,zuvloop",
-                        "--child",
-                        "--loop",
-                        "zuvloop",
-                    ],
-                ),
-            ):
-                args = runner.parse_args()
-                self.assertEqual(args.loop, "zuvloop")
-                self.assertEqual(
-                    comparison.normalize_csv(
-                        args.loops, allowed=comparison.LOOP_CHOICES, label="loops"
-                    ),
-                    ["uvloop", "zuvloop"],
-                )
+    @pytest.mark.parametrize(
+        "runner", [comparison, matrix], ids=lambda runner: runner.__name__
+    )
+    def test_both_parsers_accept_explicit_and_child_selection(self, runner):
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["benchmark", "--loops", "uvloop,zuvloop", "--child", "--loop", "zuvloop"],
+        ):
+            args = runner.parse_args()
+            assert args.loop == "zuvloop"
+            assert comparison.normalize_csv(
+                args.loops, allowed=comparison.LOOP_CHOICES, label="loops"
+            ) == ["uvloop", "zuvloop"]

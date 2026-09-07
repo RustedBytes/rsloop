@@ -4,21 +4,23 @@ import array
 import asyncio
 import socket
 import threading
-import unittest
 
+import pytest
 import rsloop
 
 
-class LocalSocketTests(unittest.TestCase):
-    def setUp(self):
+class TestLocalSocket:
+    @pytest.fixture(autouse=True)
+    def setup_loop(self, request):
+        self.request = request
         self.loop = rsloop.new_event_loop()
-        self.addCleanup(self.loop.close)
+        request.addfinalizer(self.loop.close)
 
     def pair(self):
         a, b = socket.socketpair()
         for sock in (a, b):
             sock.setblocking(False)
-            self.addCleanup(sock.close)
+            self.request.addfinalizer(sock.close)
         return a, b
 
     def run_async(self, coro):
@@ -27,15 +29,15 @@ class LocalSocketTests(unittest.TestCase):
     def test_wait_created_before_run_and_immediate_completion(self):
         a, b = self.pair()
         pending = self.loop.sock_recv(a, 4)
-        self.assertFalse(pending.done())
+        assert not pending.done()
         self.loop.call_soon(b.send, b"test")
-        self.assertEqual(self.run_async(pending), b"test")
+        assert self.run_async(pending) == b"test"
         b.send(b"next")
         ready = self.loop.sock_recv(a, 4)
-        self.assertTrue(ready.done())
-        self.assertEqual(ready.result(), b"next")
+        assert ready.done()
+        assert ready.result() == b"next"
         b.close()
-        self.assertEqual(self.run_async(self.loop.sock_recv(a, 1)), b"")
+        assert self.run_async(self.loop.sock_recv(a, 1)) == b""
 
     def test_cancelled_receive_does_not_consume_packet_or_retain_export(self):
         a, b = self.pair()
@@ -43,14 +45,14 @@ class LocalSocketTests(unittest.TestCase):
         async def exercise():
             buffer = bytearray(4)
             pending = self.loop.sock_recv_into(a, buffer)
-            self.assertFalse(pending.done())
+            assert not pending.done()
             pending.cancel()
             buffer.extend(b"resize")
             b.send(b"next")
-            self.assertEqual(await self.loop.sock_recv(a, 4), b"next")
+            assert await self.loop.sock_recv(a, 4) == b"next"
             await asyncio.sleep(0)
-            self.assertEqual(buffer, bytearray(4) + b"resize")
-            self.assertTrue(pending.cancelled())
+            assert buffer == bytearray(4) + b"resize"
+            assert pending.cancelled()
 
         self.run_async(exercise())
 
@@ -66,13 +68,13 @@ class LocalSocketTests(unittest.TestCase):
                 buffer = bytearray(3137)
                 while len(received) < len(payload):
                     count = await self.loop.sock_recv_into(b, buffer)
-                    self.assertGreater(count, 0)
+                    assert count > 0
                     received.extend(buffer[:count])
 
             reader = asyncio.create_task(receive())
             await self.loop.sock_sendall(a, payload)
             await reader
-            self.assertEqual(received, payload)
+            assert received == payload
 
         self.run_async(exercise())
 
@@ -83,7 +85,7 @@ class LocalSocketTests(unittest.TestCase):
         async def exercise():
             payload = bytearray(b"x" * 1024 * 1024)
             pending = self.loop.sock_sendall(a, payload)
-            self.assertFalse(pending.done())
+            assert not pending.done()
             pending.cancel()
             payload.clear()
             await asyncio.sleep(0)
@@ -94,10 +96,10 @@ class LocalSocketTests(unittest.TestCase):
                     break
             await asyncio.sleep(0)
             await asyncio.sleep(0)
-            with self.assertRaises(BlockingIOError):
+            with pytest.raises(BlockingIOError):
                 b.recv(1)
             await self.loop.sock_sendall(a, b"after")
-            self.assertEqual(await self.loop.sock_recv(b, 5), b"after")
+            assert await self.loop.sock_recv(b, 5) == b"after"
 
         self.run_async(exercise())
 
@@ -107,7 +109,7 @@ class LocalSocketTests(unittest.TestCase):
 
         async def exercise():
             await self.loop.sock_sendall(a, payload)
-            self.assertEqual(await self.loop.sock_recv(b, 100), payload.tobytes())
+            assert await self.loop.sock_recv(b, 100) == payload.tobytes()
 
         self.run_async(exercise())
 
@@ -121,12 +123,12 @@ class LocalSocketTests(unittest.TestCase):
                 return super().accept()
 
         listener = Listener()
-        self.addCleanup(listener.close)
+        self.request.addfinalizer(listener.close)
         listener.bind(("127.0.0.1", 0))
         listener.listen()
         listener.setblocking(False)
         client = socket.socket()
-        self.addCleanup(client.close)
+        self.request.addfinalizer(client.close)
         client.setblocking(False)
 
         async def exercise():
@@ -134,28 +136,28 @@ class LocalSocketTests(unittest.TestCase):
             await self.loop.sock_connect(client, listener.getsockname())
             accepted, _ = await pending
             try:
-                self.assertFalse(accepted.getblocking())
+                assert not accepted.getblocking()
                 await self.loop.sock_sendall(client, b"x")
-                self.assertEqual(await self.loop.sock_recv(accepted, 1), b"x")
+                assert await self.loop.sock_recv(accepted, 1) == b"x"
             finally:
                 accepted.close()
-            self.assertGreaterEqual(len(calls), 2)
-            self.assertEqual(set(calls), {owner})
+            assert len(calls) >= 2
+            assert set(calls) == {owner}
 
         self.run_async(exercise())
 
     def test_blocking_socket_is_rejected_without_entering_recv(self):
         a, _ = self.pair()
         a.setblocking(True)
-        with self.assertRaisesRegex(ValueError, "non-blocking"):
+        with pytest.raises(ValueError, match="non-blocking"):
             self.loop.sock_recv(a, 1)
 
     def test_closed_socket_and_empty_operations(self):
         a, b = self.pair()
-        self.assertIsNone(self.run_async(self.loop.sock_sendall(a, b"")))
-        self.assertEqual(self.run_async(self.loop.sock_recv(a, 0)), b"")
-        self.assertEqual(self.run_async(self.loop.sock_recv_into(a, bytearray())), 0)
+        assert self.run_async(self.loop.sock_sendall(a, b"")) is None
+        assert self.run_async(self.loop.sock_recv(a, 0)) == b""
+        assert self.run_async(self.loop.sock_recv_into(a, bytearray())) == 0
         a.close()
-        with self.assertRaises(OSError):
+        with pytest.raises(OSError):
             self.run_async(self.loop.sock_recv(a, 1))
-        self.assertGreaterEqual(b.fileno(), 0)
+        assert b.fileno() >= 0

@@ -3,13 +3,13 @@ from __future__ import annotations
 import contextvars
 import gc
 import threading
-import unittest
 import weakref
 
+import pytest
 import rsloop
 
 
-class FastCallbackTests(unittest.TestCase):
+class TestFastCallback:
     def test_arguments_keywords_and_context_capture(self):
         loop = rsloop.new_event_loop()
         events = []
@@ -29,17 +29,14 @@ class FastCallbackTests(unittest.TestCase):
             variable.set("changed")
             loop.call_soon(loop.stop)
             loop.run_forever()
-            self.assertEqual(
-                events,
-                [
-                    ((), "captured"),
-                    ((None,), "captured"),
-                    ((1, 2, 3), "captured"),
-                    ((), "captured"),
-                    ((), "default"),
-                    ((), "captured"),
-                ],
-            )
+            assert events == [
+                ((), "captured"),
+                ((None,), "captured"),
+                ((1, 2, 3), "captured"),
+                ((), "captured"),
+                ((), "default"),
+                ((), "captured"),
+            ]
         finally:
             loop.close()
 
@@ -47,20 +44,20 @@ class FastCallbackTests(unittest.TestCase):
         loop = rsloop.new_event_loop()
         try:
             for schedule in (loop.call_soon, loop.call_soon_threadsafe):
-                with self.assertRaises(TypeError):
+                with pytest.raises(TypeError):
                     schedule()
-                with self.assertRaises(TypeError):
+                with pytest.raises(TypeError):
                     schedule(context=None)
-                with self.assertRaises(TypeError):
+                with pytest.raises(TypeError):
                     schedule(lambda: None, callback=lambda: None)
-                with self.assertRaises(TypeError):
+                with pytest.raises(TypeError):
                     schedule(lambda: None, unsupported=True)
         finally:
             loop.close()
 
     def test_unbound_descriptor_rejects_wrong_receiver_and_accepts_subclass(self):
         descriptor = rsloop.Loop.call_soon
-        with self.assertRaises(TypeError):
+        with pytest.raises(TypeError):
             descriptor(object(), lambda: None)
 
         class SubLoop(rsloop.Loop):
@@ -72,7 +69,7 @@ class FastCallbackTests(unittest.TestCase):
             descriptor(loop, events.append, "subclass")
             descriptor(loop, loop.stop)
             loop.run_forever()
-            self.assertEqual(events, ["subclass"])
+            assert events == ["subclass"]
         finally:
             loop.close()
 
@@ -87,14 +84,14 @@ class FastCallbackTests(unittest.TestCase):
             loop.call_soon(loop.stop)
             loop.run_forever()
             gc.collect()
-            self.assertIsNone(reference())
+            assert reference() is None
             for _ in range(3):
                 for value in range(100):
                     loop.call_soon(events.append, value)
                 loop.call_soon(loop.stop)
                 loop.run_forever()
-            self.assertEqual(events, list(range(100)) * 3)
-            self.assertIsNone(reference())
+            assert events == list(range(100)) * 3
+            assert reference() is None
         finally:
             loop.close()
 
@@ -112,7 +109,7 @@ class FastCallbackTests(unittest.TestCase):
             thread.start()
             loop.run_forever()
             thread.join()
-            self.assertEqual(events, list(range(1000)))
+            assert events == list(range(1000))
         finally:
             thread.join()
             loop.close()

@@ -13,8 +13,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sys
-import unittest
 
+import pytest
 import rsloop
 from rsloop._loop import PyFastStreamReader
 
@@ -276,7 +276,7 @@ READER_CASES = [
 ]
 
 
-class FastStreamReaderCompatTests(unittest.TestCase):
+class TestFastStreamReaderCompat:
     def _run_case(self, limit, script, call):
         results = {}
 
@@ -293,24 +293,21 @@ class FastStreamReaderCompatTests(unittest.TestCase):
         rsloop.run(main())
         return results
 
-    def test_matches_asyncio_stream_reader(self) -> None:
-        for name, limit, script, call in READER_CASES:
-            with self.subTest(case=name):
-                if name in TUPLE_SEPARATOR_CASES and not STDLIB_HAS_TUPLE_SEPARATORS:
-                    self.skipTest("asyncio gained tuple separators in 3.13")
-                results = self._run_case(limit, script, call)
-                native_outcome, native_buffer = results["native"]
-                stdlib_outcome, stdlib_buffer = results["stdlib"]
-                self.assertEqual(
-                    native_outcome,
-                    stdlib_outcome,
-                    f"{name}: native reader disagrees with asyncio.StreamReader",
-                )
-                self.assertEqual(
-                    native_buffer,
-                    stdlib_buffer,
-                    f"{name}: buffer left behind differs from asyncio.StreamReader",
-                )
+    @pytest.mark.parametrize(
+        "name,limit,script,call", READER_CASES, ids=[case[0] for case in READER_CASES]
+    )
+    def test_matches_asyncio_stream_reader(self, name, limit, script, call) -> None:
+        if name in TUPLE_SEPARATOR_CASES and not STDLIB_HAS_TUPLE_SEPARATORS:
+            pytest.skip("asyncio gained tuple separators in 3.13")
+        results = self._run_case(limit, script, call)
+        native_outcome, native_buffer = results["native"]
+        stdlib_outcome, stdlib_buffer = results["stdlib"]
+        assert native_outcome == stdlib_outcome, (
+            f"{name}: native reader disagrees with asyncio.StreamReader"
+        )
+        assert native_buffer == stdlib_buffer, (
+            f"{name}: buffer left behind differs from asyncio.StreamReader"
+        )
 
     def test_readline_defaults_and_readuntil_default_separator_agree(self) -> None:
         async def main() -> tuple[bytes, bytes]:
@@ -322,8 +319,8 @@ class FastStreamReaderCompatTests(unittest.TestCase):
             return (await with_default.readuntil(), await explicit.readuntil(b"\n"))
 
         first, second = rsloop.run(main())
-        self.assertEqual(first, b"first\n")
-        self.assertEqual(second, b"first\n")
+        assert first == b"first\n"
+        assert second == b"first\n"
 
     def test_tuple_separators(self) -> None:
         """The tuple form, pinned on every supported version.
@@ -358,14 +355,13 @@ class FastStreamReaderCompatTests(unittest.TestCase):
             return results
 
         results = rsloop.run(main())
-        self.assertEqual(results["earliest"], b"hello\r\n")
-        self.assertEqual(results["shortest"], b"xxab")
-        self.assertEqual(results["single_element"], b"a;")
-        self.assertEqual(
-            results["empty_tuple"], "Separator should contain at least one element"
-        )
-        self.assertEqual(
-            results["tuple_with_empty"], "Separator should be at least one-byte string"
+        assert results["earliest"] == b"hello\r\n"
+        assert results["shortest"] == b"xxab"
+        assert results["single_element"] == b"a;"
+        assert results["empty_tuple"] == "Separator should contain at least one element"
+        assert (
+            results["tuple_with_empty"]
+            == "Separator should be at least one-byte string"
         )
 
     def test_readline_rejects_a_second_concurrent_reader(self) -> None:
@@ -375,7 +371,7 @@ class FastStreamReaderCompatTests(unittest.TestCase):
             pending = asyncio.ensure_future(reader.readline())
             await asyncio.sleep(0)
             try:
-                with self.assertRaises((ValueError, RuntimeError)):
+                with pytest.raises((ValueError, RuntimeError)):
                     await reader.readline()
             finally:
                 pending.cancel()
@@ -385,7 +381,7 @@ class FastStreamReaderCompatTests(unittest.TestCase):
         rsloop.run(main())
 
 
-class FastStreamReaderNetworkTests(unittest.TestCase):
+class TestFastStreamReaderNetwork:
     """The reported break: `readline()` over a real `asyncio.open_connection()`."""
 
     @staticmethod
@@ -426,7 +422,7 @@ class FastStreamReaderNetworkTests(unittest.TestCase):
             await writer.drain()
             return [await reader.readline() for _ in range(3)]
 
-        self.assertEqual(self._round_trip(send), [b"ONE\n", b"TWO\n", b"THREE\n"])
+        assert self._round_trip(send) == [b"ONE\n", b"TWO\n", b"THREE\n"]
 
     def test_readline_reassembles_a_line_split_across_writes(self) -> None:
         async def send(reader, writer):
@@ -438,7 +434,7 @@ class FastStreamReaderNetworkTests(unittest.TestCase):
             await writer.drain()
             return await reader.readline()
 
-        self.assertEqual(self._round_trip(send), b"SPLIT LINE\n")
+        assert self._round_trip(send) == b"SPLIT LINE\n"
 
     def test_readuntil_round_trip(self) -> None:
         async def send(reader, writer):
@@ -446,7 +442,7 @@ class FastStreamReaderNetworkTests(unittest.TestCase):
             await writer.drain()
             return await reader.readuntil(b"\n")
 
-        self.assertEqual(self._round_trip(send), b"ALPHA\n")
+        assert self._round_trip(send) == b"ALPHA\n"
 
     def test_readline_returns_empty_bytes_at_eof(self) -> None:
         async def send(reader, writer):
@@ -456,10 +452,11 @@ class FastStreamReaderNetworkTests(unittest.TestCase):
             writer.write_eof()
             return (first, await reader.readline())
 
-        self.assertEqual(self._round_trip(send), (b"ONLY\n", b""))
+        assert self._round_trip(send) == (b"ONLY\n", b"")
 
-    @unittest.skipUnless(
-        FAST_STREAMS_ACTIVE, "requires the fast-stream patch (RSLOOP_USE_FAST_STREAMS)"
+    @pytest.mark.skipif(
+        not (FAST_STREAMS_ACTIVE),
+        reason="requires the fast-stream patch (RSLOOP_USE_FAST_STREAMS)",
     )
     def test_open_connection_really_uses_the_native_reader(self) -> None:
         # Without this the round-trip tests above would still pass against the
@@ -467,8 +464,4 @@ class FastStreamReaderNetworkTests(unittest.TestCase):
         async def send(reader, writer):
             return type(reader)
 
-        self.assertIs(self._round_trip(send), PyFastStreamReader)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert self._round_trip(send) is PyFastStreamReader

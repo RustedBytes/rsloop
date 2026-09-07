@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import unittest
 
 import rsloop
 
 
-class LocalTimerTests(unittest.TestCase):
+class TestLocalTimer:
     def test_timer_scheduled_by_stopping_callback_survives_next_run(self):
         loop = rsloop.new_event_loop()
         events = []
@@ -23,9 +22,9 @@ class LocalTimerTests(unittest.TestCase):
         try:
             loop.call_later(0, first)
             loop.run_forever()
-            self.assertEqual(events, ["first"])
+            assert events == ["first"]
             loop.run_forever()
-            self.assertEqual(events, ["first", "second"])
+            assert events == ["first", "second"]
         finally:
             loop.close()
 
@@ -51,7 +50,7 @@ class LocalTimerTests(unittest.TestCase):
             watchdog = loop.call_later(5, loop.stop)
             loop.run_forever()
             watchdog.cancel()
-            self.assertEqual(events, ["released", "finished"])
+            assert events == ["released", "finished"]
         finally:
             loop.close()
 
@@ -72,7 +71,7 @@ class LocalTimerTests(unittest.TestCase):
 
         loop.call_later(3600, Callback())
         loop.close()
-        self.assertEqual(events, ["released", "closed"])
+        assert events == ["released", "closed"]
 
     def test_positive_timers_progress_with_a_busy_ready_queue(self):
         async def main():
@@ -84,8 +83,8 @@ class LocalTimerTests(unittest.TestCase):
             while not done.done() and loop.time() < deadline:
                 spins += 1
                 await asyncio.sleep(0)
-            self.assertTrue(done.done(), "timer starved behind ready callbacks")
-            self.assertGreater(spins, 0)
-            self.assertEqual(done.result(), "expired")
+            assert done.done(), "timer starved behind ready callbacks"
+            assert spins > 0
+            assert done.result() == "expired"
 
         rsloop.run(main())

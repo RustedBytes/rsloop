@@ -12,8 +12,8 @@ import asyncio
 import socket
 import sys
 import threading
-import unittest
 
+import pytest
 import rsloop
 
 LOOP_THREADS = 4
@@ -116,15 +116,15 @@ def join_all(threads: list[threading.Thread], timeout: float = 120.0) -> None:
             raise AssertionError(f"{thread.name} did not finish within {timeout}s")
 
 
-class FreeThreadingTests(unittest.TestCase):
+class TestFreeThreading:
     def test_extension_does_not_force_the_gil_back_on(self) -> None:
         if not hasattr(sys, "_is_gil_enabled"):
-            self.skipTest("interpreter predates sys._is_gil_enabled")
+            pytest.skip("interpreter predates sys._is_gil_enabled")
         if not rsloop.build_info()["free_threaded"]:
-            self.skipTest("requires a free-threaded build of the extension")
+            pytest.skip("requires a free-threaded build of the extension")
         # Importing a module declared `gil_used = true` makes CPython re-enable
         # the GIL for the whole process, silently undoing free-threading.
-        self.assertFalse(sys._is_gil_enabled())
+        assert not sys._is_gil_enabled()
 
     def test_parallel_loops_echo_over_fast_streams(self) -> None:
         self._run_parallel_echo(asyncio.start_server, asyncio.open_connection)
@@ -182,13 +182,13 @@ class FreeThreadingTests(unittest.TestCase):
         if failures:
             raise failures[0]
 
-        self.assertEqual(len(results), LOOP_THREADS)
+        assert len(results) == LOOP_THREADS
         for thread_index in range(LOOP_THREADS):
             expected = [
                 payload_for(thread_index, round_index)
                 for round_index in range(ROUND_TRIPS)
             ]
-            self.assertEqual(results[thread_index], expected)
+            assert results[thread_index] == expected
 
     def test_call_soon_threadsafe_fan_in_from_many_threads(self) -> None:
         callbacks_per_thread = 500
@@ -223,13 +223,13 @@ class FreeThreadingTests(unittest.TestCase):
             asyncio.set_event_loop(None)
             loop.close()
 
-        self.assertTrue(done.is_set(), "not every scheduled callback ran")
-        self.assertEqual(len(seen), producer_threads * callbacks_per_thread)
+        assert done.is_set(), "not every scheduled callback ran"
+        assert len(seen) == producer_threads * callbacks_per_thread
         # Callbacks all run on the loop thread, so ordering within one producer
         # must be preserved even though the producers interleaved.
         for thread_index in range(producer_threads):
             sequences = [sequence for index, sequence in seen if index == thread_index]
-            self.assertEqual(sequences, list(range(callbacks_per_thread)))
+            assert sequences == list(range(callbacks_per_thread))
 
     def test_parallel_loops_share_one_getaddrinfo_cache(self) -> None:
         # getaddrinfo and the TLS material caches are process-global; hammer
@@ -262,7 +262,3 @@ class FreeThreadingTests(unittest.TestCase):
 
         if failures:
             raise failures[0]
-
-
-if __name__ == "__main__":
-    unittest.main()
