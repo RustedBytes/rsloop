@@ -515,51 +515,51 @@ The production-shaped workload matrix exercises HTTP, WebSocket libraries,
 TLS, mixed message sizes, backpressure, and connection lifecycle behavior:
 
 ```bash
-uv run --with uvloop python benches/workload_matrix.py \
-  --loops rsloop,uvloop \
+uv run --with uvloop --with zuvloop python benches/workload_matrix.py \
+  --loops rsloop,uvloop,zuvloop \
   --sustained \
-  --json-output target/matrix-opt-final.json
+  --scenarios http_keepalive,tls_http,websocket_messages,websocket_tls,websockets_messages,websockets_tls,aiohttp_websocket_messages,aiohttp_websocket_tls,starlette_websocket_messages,starlette_websocket_tls,mixed_streams,bulk_transfer \
+  --json-output target/matrix-zuvloop.json
 ```
 
-Measured on September 6, 2026 with an Intel Core i9-9900K, Linux
-7.0.0-31-generic (x86_64), CPython 3.14.0, rsloop 0.1.47 (release build), and
-uvloop 0.22.1. Each row reports the median of seven measured runs after two
+Measured on September 7, 2026 with an Intel Core i9-9900K, Linux
+7.0.0-31-generic (x86_64), CPython 3.14.7, rsloop 0.1.48 (release build),
+uvloop 0.22.1, and zuvloop 0.0.14. Each row reports the median of seven measured runs after two
 warmups, using 16 concurrent connections and 500 requests per
 connection. Throughput is traffic-only operations per second, except for
 `bulk_transfer`, which reports traffic MiB/s. The p95 columns are the medians
-of each run's p95 latency; the difference is `(rsloop / uvloop - 1) × 100%`.
+of each run's p95 latency. Higher throughput and lower latency are better.
+Each loop/scenario pair runs in its own subprocess, with warmups and measured
+runs sharing that process. Loops run sequentially in the order shown.
 
-WebSocket library versions were websockets 17.0.1, aiohttp 3.14.3, Starlette
+WebSocket library versions were websockets 17.1, aiohttp 3.14.3, Starlette
 1.6.0, and uvicorn 0.52.3. The run used unrestricted CPU affinity, with other
 host services running but no concurrent builds or tests. These measurements
 are from a different host than the macOS microbenchmark example above.
 
-| Scenario | rsloop | uvloop | rsloop difference | rsloop p95 | uvloop p95 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| HTTP keep-alive | 51,561 | 51,410 | +0.3% | 0.354 ms | 0.351 ms |
-| TLS HTTP | 72,465 | 25,493 | +184.3% | 0.241 ms | 0.668 ms |
-| Raw WebSocket | 5,197 | 5,296 | -1.9% | 5.023 ms | 3.504 ms |
-| Raw WebSocket over TLS | 5,395 | 4,824 | +11.8% | 3.945 ms | 3.870 ms |
-| `websockets` | 22,756 | 24,780 | -8.2% | 0.830 ms | 0.690 ms |
-| `websockets` over TLS | 26,044 | 15,081 | +72.7% | 0.672 ms | 1.109 ms |
-| aiohttp WebSocket | 29,879 | 33,895 | -11.8% | 0.656 ms | 0.511 ms |
-| aiohttp WebSocket over TLS | 32,983 | 19,063 | +73.0% | 0.526 ms | 0.890 ms |
-| Starlette WebSocket | 18,524 | 20,325 | -8.9% | 0.997 ms | 0.832 ms |
-| Starlette WebSocket over TLS | 18,058 | 13,555 | +33.2% | 0.942 ms | 1.257 ms |
-| Mixed streams | 42,797 | 34,642 | +23.5% | 0.484 ms | 0.521 ms |
-| Bulk transfer (MiB/s) | 1,993.5 | 1,223.7 | +62.9% | 14.768 ms | 26.061 ms |
+| Scenario | rsloop | uvloop | zuvloop | rsloop p95 | uvloop p95 | zuvloop p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| HTTP keep-alive | 54,357 | 48,364 | 56,826 | 0.335 ms | 0.366 ms | 0.297 ms |
+| TLS HTTP | 69,047 | 25,267 | 24,076 | 0.287 ms | 0.663 ms | 0.700 ms |
+| Raw WebSocket | 4,834 | 4,858 | 4,932 | 5.244 ms | 3.878 ms | 3.381 ms |
+| Raw WebSocket over TLS | 4,875 | 4,457 | 4,421 | 4.425 ms | 4.020 ms | 3.770 ms |
+| `websockets` | 23,878 | 26,237 | 27,928 | 0.784 ms | 0.640 ms | 0.606 ms |
+| `websockets` over TLS | 26,946 | 14,933 | 13,640 | 0.640 ms | 1.103 ms | 1.319 ms |
+| aiohttp WebSocket | 31,145 | 34,552 | 37,733 | 0.625 ms | 0.498 ms | 0.458 ms |
+| aiohttp WebSocket over TLS | 33,730 | 18,576 | 18,245 | 0.517 ms | 0.905 ms | 0.929 ms |
+| Starlette WebSocket | 18,992 | 20,695 | 21,176 | 0.964 ms | 0.816 ms | 0.873 ms |
+| Starlette WebSocket over TLS | 17,876 | 13,454 | 12,487 | 0.955 ms | 1.243 ms | 1.437 ms |
+| Mixed streams | 41,260 | 35,805 | 37,094 | 0.483 ms | 0.504 ms | 0.476 ms |
+| Bulk transfer (MiB/s) | 2,120.0 | 1,269.6 | 1,287.8 | 14.114 ms | 25.134 ms | 24.801 ms |
 
 The former single-burst idle-activation row has been retired: its traffic
 phase lasted only a few milliseconds and produced unstable throughput rankings.
 Idle activation now has a separate, versioned latency benchmark described below.
-The other measurements above are unchanged. HTTP's 0.3% difference is too small
-to call a win.
-
-Compared with the same sustained workload on the pre-optimization build,
-plain-text `websockets`, aiohttp, and Starlette throughput improved by 10.2%,
-19.4%, and 22.3%, respectively. They still trail uvloop. The historical regression
-gate also flagged HTTP tail latency and legacy idle activation; this is not an
-across-the-board performance win. See the
+In this run, zuvloop had the highest plaintext HTTP and WebSocket throughput,
+while rsloop led TLS throughput, mixed streams, and bulk transfer. Throughput
+and tail latency do not always agree: rsloop's raw WebSocket p95 was higher
+than both alternatives, including over TLS. These results are not an
+across-the-board performance win or a before/after regression measurement. See the
 [benchmark documentation](./benches/README.md) for workload definitions and
 reproduction commands.
 
