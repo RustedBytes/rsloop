@@ -198,6 +198,7 @@ mod storage_tests {
             .unwrap();
         let runtime = crate::vibeio::RuntimeBuilder::new()
             .driver(crate::vibeio::DriverKind::Iocp)
+            .enable_timer(true)
             .build()
             .unwrap();
         runtime.block_on(async move {

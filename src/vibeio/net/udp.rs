@@ -1444,7 +1444,6 @@ mod tests {
             let server_addr = server.local_addr().unwrap();
             let client_addr = client.local_addr().unwrap();
             server.connect(client_addr).await.unwrap();
-            client.connect(server_addr).await.unwrap();
             let mut cx = Context::from_waker(Waker::noop());
             let mut buffer = [b'_'; 16];
             assert!(
@@ -1471,6 +1470,8 @@ mod tests {
             buffer.fill(b'x');
 
             crate::vibeio::time::timeout(std::time::Duration::from_secs(5), async {
+                // macOS rejects an explicit destination on connected UDP
+                // sockets, so exercise send_to before connecting the sender.
                 for payload in [&b"ping"[..], &b""[..]] {
                     let sent =
                         poll_fn(|cx| Pin::new(&mut client).poll_send_to(cx, payload, server_addr))
@@ -1502,6 +1503,7 @@ mod tests {
                     );
                     buffer.fill(b'x');
                 }
+                client.connect(server_addr).await.unwrap();
                 assert_eq!(
                     poll_fn(|cx| Pin::new(&mut client).poll_send(cx, b"fresh"))
                         .await
