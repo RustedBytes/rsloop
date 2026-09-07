@@ -935,7 +935,7 @@ dependencies = [
 
 [[package]]
 name = "rsloop"
-version = "0.1.48"
+version = "0.1.49"
 dependencies = [
  "async-channel 2.5.0",
  "async-io",
