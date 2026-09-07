@@ -73,6 +73,15 @@ async def raw_socket() -> None:
         b.close()
 
 
+async def numeric_dns() -> None:
+    import socket
+
+    loop = asyncio.get_running_loop()
+    for _ in range(10_000):
+        result = await loop.getaddrinfo("127.0.0.1", 443, type=socket.SOCK_STREAM)
+        assert result[0][4] == ("127.0.0.1", 443)
+
+
 async def protocol_transfer(buffered: bool, lines: bool) -> None:
     loop = asyncio.get_running_loop()
     done = loop.create_future()
@@ -150,6 +159,7 @@ async def protocol_transfer(buffered: bool, lines: bool) -> None:
 
 SCENARIOS = (
     "raw_socket",
+    "numeric_dns",
     "callbacks_zero",
     "callbacks_one",
     "callbacks_recycled",
@@ -165,6 +175,8 @@ async def measure(scenario):
     start = time.perf_counter()
     if scenario == "raw_socket":
         await raw_socket()
+    elif scenario == "numeric_dns":
+        await numeric_dns()
     elif scenario in ("protocol_read", "buffered_read", "writelines"):
         await protocol_transfer(scenario == "buffered_read", scenario == "writelines")
     else:
@@ -233,9 +245,12 @@ def main():
                     command,
                     capture_output=True,
                     text=True,
-                    check=True,
+                    check=False,
                     timeout=90,
                 )
+                if result.returncode:
+                    print(result.stderr, file=sys.stderr, flush=True)
+                    result.check_returncode()
                 if block:
                     rows[scenario][name].append(json.loads(result.stdout))
         print(

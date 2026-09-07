@@ -504,9 +504,17 @@ impl ReadBufferPool {
 
     pub(super) fn release(&self, buffer: Vec<u8>) {
         let mut state = self.state.lock().expect("poisoned stream read buffer pool");
+        // Waiters can sleep only when all slots are checked out. Capture that
+        // condition under the same mutex used by wait_timeout/has_available,
+        // before release either stores a buffer or frees an oversized slot.
+        // Unconditional Condvar notification makes an otherwise uncontended
+        // read handoff issue a futex wake on Linux, once per received chunk.
+        let was_exhausted = state.buffers.is_empty() && state.allocated >= READ_BUFFER_POOL_LIMIT;
         state.release(buffer);
         drop(state);
-        self.notify_all();
+        if was_exhausted {
+            self.notify_all();
+        }
     }
 }
 
@@ -629,7 +637,7 @@ mod verification {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use super::{
@@ -818,6 +826,87 @@ mod tests {
         pool.release(held.into_iter().next().expect("held buffer"));
 
         assert!(pool.has_available());
+    }
+
+    #[test]
+    fn exhausted_read_pool_wakes_async_waiter_for_reused_and_discarded_buffers() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Wake, Waker};
+
+        struct WakeCount(AtomicUsize);
+        impl Wake for WakeCount {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        for oversized in [false, true] {
+            let pool = ReadBufferPool::new();
+            let mut held = (0..READ_BUFFER_POOL_LIMIT)
+                .map(|_| pool.try_acquire(64).unwrap())
+                .collect::<Vec<_>>();
+            let wake = Arc::new(WakeCount(AtomicUsize::new(0)));
+            let waker = Waker::from(wake.clone());
+            let mut context = Context::from_waker(&waker);
+            let mut wait = std::pin::pin!(pool.wait_async());
+            assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
+            let mut returned = held.pop().unwrap();
+            if oversized {
+                returned.reserve(MAX_STREAM_READ_BUFFER_SIZE + 1);
+            }
+            // Worker-thread releases must wake a reader on the loop thread.
+            std::thread::scope(|scope| {
+                scope.spawn(|| pool.release(returned)).join().unwrap();
+            });
+            assert_eq!(wake.0.load(Ordering::Relaxed), 1);
+            assert_eq!(wait.as_mut().poll(&mut context), Poll::Ready(()));
+            assert!(pool.try_acquire(64).is_some());
+            for buffer in held {
+                pool.release(buffer);
+            }
+        }
+    }
+
+    #[test]
+    fn read_pool_release_before_wait_registration_is_observed() {
+        let pool = ReadBufferPool::new();
+        let mut held = (0..READ_BUFFER_POOL_LIMIT)
+            .map(|_| pool.try_acquire(64).unwrap())
+            .collect::<Vec<_>>();
+        let wait = pool.wait_async();
+        pool.release(held.pop().unwrap());
+        assert_eq!(futures::FutureExt::now_or_never(wait), Some(()));
+        for buffer in held {
+            pool.release(buffer);
+        }
+    }
+
+    #[test]
+    fn exhausted_read_pool_release_wakes_blocking_reader() {
+        let pool = ReadBufferPool::new();
+        let mut held = (0..READ_BUFFER_POOL_LIMIT)
+            .map(|_| pool.try_acquire(64).unwrap())
+            .collect::<Vec<_>>();
+        std::thread::scope(|scope| {
+            let (started, start_rx) = std::sync::mpsc::channel();
+            let (done, done_rx) = std::sync::mpsc::channel();
+            let pool = &pool;
+            scope.spawn(move || {
+                started.send(()).unwrap();
+                pool.wait_timeout(std::time::Duration::from_secs(5));
+                done.send(pool.try_acquire(64).is_some()).unwrap();
+            });
+            start_rx.recv().unwrap();
+            pool.release(held.pop().unwrap());
+            assert!(
+                done_rx
+                    .recv_timeout(std::time::Duration::from_secs(1))
+                    .unwrap()
+            );
+        });
+        for buffer in held {
+            pool.release(buffer);
+        }
     }
 
     #[test]

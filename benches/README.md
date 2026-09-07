@@ -1,5 +1,9 @@
 # Event Loop Benchmark
 
+The [systems performance investigation](systems-performance.md) explains the
+remaining callback/protocol gap, measures numeric resolution and read-pool
+notifications, and records a pre-existing intermittent transfer failure.
+
 The [full comparison at commit 9011c9f](full-benchmark-9011c9f.md) records fresh
 microbenchmarks, all 12 network workloads, and nine-block idle activation results
 against uvloop and zuvloop, with compact run-level data.

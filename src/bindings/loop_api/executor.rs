@@ -1,14 +1,15 @@
 //! Work that runs off the loop thread: executors and name resolution.
 //!
-//! `getaddrinfo`/`getnameinfo` are here because `asyncio` defines them in terms
-//! of `run_in_executor`, and they dispatch back through Python so a subclass that
-//! overrides `run_in_executor` still sees them.
+//! General name resolution dispatches through Python's `run_in_executor` so
+//! subclass overrides remain authoritative. Exact loops can resolve numeric
+//! addresses without a worker when no custom default executor is configured.
 
+use std::net::IpAddr;
 use std::time::Duration;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
 
 use super::PyLoop;
 
@@ -91,6 +92,9 @@ pub(super) fn getaddrinfo<'py>(
     py: Python<'py>,
     request: AddrInfoRequest,
 ) -> PyResult<Bound<'py, PyAny>> {
+    if let Some(result) = numeric_addrinfo(&slf, py, &request)? {
+        return Ok(result);
+    }
     let socket = py.import("socket")?;
     let host = request.host.unwrap_or_else(|| py.None());
     let port = request.port.unwrap_or_else(|| py.None());
@@ -109,6 +113,77 @@ pub(super) fn getaddrinfo<'py>(
     )?;
     slf.call_method1(py, "run_in_executor", run_args)
         .map(|awaitable| awaitable.into_bound(py))
+}
+
+/// Construct the single unambiguous TCP/UDP result for an IP literal and an
+/// integer port. Leave resolver flags, services, scoped addresses, unspecified
+/// socket types and invalid combinations to the system resolver. Custom loop
+/// and executor behavior, including shutdown errors, keeps its existing path.
+fn numeric_addrinfo<'py>(
+    slf: &Py<PyLoop>,
+    py: Python<'py>,
+    request: &AddrInfoRequest,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    if request.flags != 0 || !slf.bind(py).is_exact_instance_of::<PyLoop>() {
+        return Ok(None);
+    }
+    let protocol = if request.sock_type == i32::from(socket2::Type::STREAM) {
+        i32::from(socket2::Protocol::TCP)
+    } else if request.sock_type == i32::from(socket2::Type::DGRAM) {
+        i32::from(socket2::Protocol::UDP)
+    } else {
+        return Ok(None);
+    };
+    if request.proto != 0 && request.proto != protocol {
+        return Ok(None);
+    }
+    let (Some(host), Some(port)) = (&request.host, &request.port) else {
+        return Ok(None);
+    };
+    let (Ok(host_str), Ok(port_int)) = (
+        host.bind(py).cast_exact::<PyString>(),
+        port.bind(py).cast_exact::<PyInt>(),
+    ) else {
+        return Ok(None);
+    };
+    let Ok(host_text) = host_str.to_str() else {
+        return Ok(None);
+    };
+    let (Ok(address), Ok(port)) = (host_text.parse::<IpAddr>(), port_int.extract::<u16>()) else {
+        return Ok(None);
+    };
+    let family = i32::from(if address.is_ipv4() {
+        socket2::Domain::IPV4
+    } else {
+        socket2::Domain::IPV6
+    });
+    if request.family != 0 && request.family != family {
+        return Ok(None);
+    }
+    {
+        let loop_ref = slf.borrow(py);
+        let state = loop_ref.core.state.lock().expect("poisoned loop state");
+        if state.default_executor.is_some() || state.executor_shutdown_called {
+            return Ok(None);
+        }
+    }
+    let sockaddr = match address {
+        IpAddr::V4(address) => (address.to_string(), port).into_pyobject(py)?.into_any(),
+        IpAddr::V6(address) => {
+            // Match the system's IPv6 spelling, including IPv4-compatible
+            // addresses: Rust formats ::192.0.2.1 as ::c000:201. inet_ntop
+            // only formats packed bytes; it performs no name resolution.
+            let host = py
+                .import("socket")?
+                .call_method1("inet_ntop", (family, PyBytes::new(py, &address.octets())))?;
+            (host, port, 0, 0).into_pyobject(py)?.into_any()
+        }
+    };
+    let info = (family, request.sock_type, protocol, "", sockaddr).into_pyobject(py)?;
+    let result = PyList::new(py, [info])?;
+    let future = super::tasks::create_future(slf.clone_ref(py), py)?;
+    future.call_method1(py, "set_result", (result,))?;
+    Ok(Some(future.into_bound(py)))
 }
 
 pub(super) fn getnameinfo<'py>(
