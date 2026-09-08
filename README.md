@@ -457,8 +457,12 @@ The repository also includes:
 
 - [`examples/fastapi_service.py`](./examples/fastapi_service.py) for running the same
   FastAPI app on stdlib `asyncio`, `uvloop`, or `rsloop`
+- [`examples/granian_service.py`](./examples/granian_service.py) for registering
+  `rsloop` as Granian's worker event loop
 - [`benches/compare_event_loops.py`](./benches/compare_event_loops.py)
   for callback, task, and TCP stream comparisons
+- [`benches/compare_granian.py`](./benches/compare_granian.py) for Granian HTTP
+  throughput and latency comparisons with `oha`
 
 ## Benchmark
 

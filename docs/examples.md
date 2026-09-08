@@ -4,6 +4,36 @@ This page shows practical ways to use `rsloop`.
 
 All examples use normal Python `asyncio` patterns. The difference is that `rsloop` provides the event loop implementation.
 
+## Run Granian with rsloop
+
+Granian exposes a registry for customizing how its worker event loops are
+created. Register an `rsloop` builder for Granian's `auto` loop and set the
+new loop as current before returning it:
+
+```python
+import asyncio
+
+import rsloop
+from granian import Granian, loops
+
+
+@loops.register("auto")
+def build_loop():
+    loop = rsloop.new_event_loop()
+    asyncio.set_event_loop(loop)
+    return loop
+
+
+Granian("myapp:app", interface="asgi", loop="auto").serve()
+```
+
+The repository's runnable
+[`examples/granian_service.py`](https://github.com/RustedBytes/rsloop/blob/main/examples/granian_service.py)
+adds command-line loop selection and an endpoint that reports the worker's
+actual loop type. The
+[`Granian benchmark`](https://github.com/RustedBytes/rsloop/blob/main/benches/compare_granian.py)
+uses that endpoint to validate each server before measuring it.
+
 ## Run one coroutine
 
 This is the simplest starting point:

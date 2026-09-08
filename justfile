@@ -75,3 +75,6 @@ test-anyio:
 
 bench-real-world:
     uv run --with {{benchmark-backend}} --with 'zuvloop; python_version >= "3.14"' python benches/workload_matrix.py
+
+bench-granian:
+    uv run --with granian --with {{benchmark-backend}} python benches/compare_granian.py
