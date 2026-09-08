@@ -72,7 +72,7 @@ pub fn unix_server_listener(listener: StdUnixListener) -> ServerListener {
     ServerListener::Unix(listener)
 }
 #[cfg(unix)]
-pub fn remove_unix_socket_if_present(path: &str) -> io::Result<()> {
+pub fn remove_unix_socket_if_present(path: impl AsRef<std::path::Path>) -> io::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),

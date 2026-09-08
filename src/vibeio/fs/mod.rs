@@ -10,10 +10,10 @@
 //! Implementation notes:
 //! - On Linux with io_uring support, some operations use native async syscalls (e.g. `statx`, `linkat`)
 //!   via the async driver. When io_uring completion is available, operations complete directly.
-//! - For platforms without native async support, operations either offload to a blocking thread pool
-//!   (if file I/O offload is enabled) or fall back to synchronous std::fs calls.
-//! - Outside a runtime, filesystem operations use synchronous fallbacks when
-//!   polled. Offloading inside a runtime requires a configured blocking pool.
+//! - For platforms without native async support, operations run on a blocking
+//!   thread pool so they never block the thread polling the async operation.
+//! - A runtime-configured pool is preferred when file I/O offload is enabled;
+//!   otherwise the shared `async-std` blocking pool is used.
 //!
 //! # Examples
 //!
@@ -46,6 +46,25 @@ use crate::vibeio::op::RenameOp;
 use crate::vibeio::op::SymlinkOp;
 #[cfg(target_os = "linux")]
 use crate::vibeio::op::UnlinkOp;
+
+/// Run a filesystem operation away from the async executor thread.
+///
+/// A caller-selected runtime pool takes precedence. The shared async-std pool
+/// keeps the async filesystem API non-blocking when that optional integration
+/// is disabled or when the future is polled by another executor.
+async fn run_blocking_fs<T, F>(operation: F) -> std::io::Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> std::io::Result<T> + Send + 'static,
+{
+    if crate::vibeio::executor::offload_fs() {
+        crate::vibeio::spawn_blocking(operation)
+            .await
+            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
+    } else {
+        async_std::task::spawn_blocking(operation).await
+    }
+}
 
 /// Creates a symbolic link to a directory on Windows.
 ///
@@ -106,13 +125,7 @@ pub fn windows_symlink_file(path: String, target: String) -> std::io::Result<()>
 /// - The process lacks permissions to access components of the path
 pub async fn canonicalize<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<PathBuf> {
     let path = path.as_ref().to_path_buf();
-    if crate::vibeio::executor::offload_fs() {
-        crate::vibeio::spawn_blocking(move || path.canonicalize())
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        path.canonicalize()
-    }
+    run_blocking_fs(move || path.canonicalize()).await
 }
 
 /// Reads the entire contents of a file into a vector of bytes.
@@ -244,14 +257,10 @@ pub async fn hard_link(
 
         let mut op = HardLinkOp::new(driver.clone(), src_cstr, dst_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
-    } else if crate::vibeio::executor::offload_fs() {
+    } else {
         let src = src.to_owned();
         let dst = dst.to_owned();
-        crate::vibeio::spawn_blocking(move || std::fs::hard_link(src, dst))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::fs::hard_link(src, dst)
+        run_blocking_fs(move || std::fs::hard_link(src, dst)).await
     }
 }
 
@@ -276,15 +285,9 @@ pub async fn hard_link(
     src: impl AsRef<std::path::Path>,
     dst: impl AsRef<std::path::Path>,
 ) -> std::io::Result<()> {
-    if crate::vibeio::executor::offload_fs() {
-        let src = src.as_ref().to_owned();
-        let dst = dst.as_ref().to_owned();
-        crate::vibeio::spawn_blocking(move || std::fs::hard_link(src, dst))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::fs::hard_link(src, dst)
-    }
+    let src = src.as_ref().to_owned();
+    let dst = dst.as_ref().to_owned();
+    run_blocking_fs(move || std::fs::hard_link(src, dst)).await
 }
 
 /// Creates a symbolic link to a directory.
@@ -311,15 +314,9 @@ pub async fn symlink_dir(
     src: impl AsRef<std::path::Path>,
     dst: impl AsRef<std::path::Path>,
 ) -> std::io::Result<()> {
-    if crate::vibeio::executor::offload_fs() {
-        let src = src.as_ref().to_path_buf();
-        let dst = dst.as_ref().to_path_buf();
-        crate::vibeio::spawn_blocking(move || std::os::windows::fs::symlink_dir(src, dst))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::os::windows::fs::symlink_dir(src, dst)
-    }
+    let src = src.as_ref().to_path_buf();
+    let dst = dst.as_ref().to_path_buf();
+    run_blocking_fs(move || std::os::windows::fs::symlink_dir(src, dst)).await
 }
 
 /// Creates a symbolic link to a directory.
@@ -365,14 +362,10 @@ pub async fn symlink_dir(
         })?;
         let mut op = SymlinkOp::new(driver.clone(), src_cstr, dst_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
-    } else if crate::vibeio::executor::offload_fs() {
+    } else {
         let src = src.to_owned();
         let dst = dst.to_owned();
-        crate::vibeio::spawn_blocking(move || std::os::unix::fs::symlink(src, dst))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::os::unix::fs::symlink(src, dst)
+        run_blocking_fs(move || std::os::unix::fs::symlink(src, dst)).await
     }
 }
 
@@ -397,15 +390,9 @@ pub async fn symlink_dir(
     src: impl AsRef<std::path::Path>,
     dst: impl AsRef<std::path::Path>,
 ) -> std::io::Result<()> {
-    if crate::vibeio::executor::offload_fs() {
-        let src = src.as_ref().to_owned();
-        let dst = dst.as_ref().to_owned();
-        crate::vibeio::spawn_blocking(move || std::os::unix::fs::symlink(src, dst))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::os::unix::fs::symlink(src, dst)
-    }
+    let src = src.as_ref().to_owned();
+    let dst = dst.as_ref().to_owned();
+    run_blocking_fs(move || std::os::unix::fs::symlink(src, dst)).await
 }
 
 /// Creates a symbolic link to a file.
@@ -432,15 +419,9 @@ pub async fn symlink_file(
     src: impl AsRef<std::path::Path>,
     dst: impl AsRef<std::path::Path>,
 ) -> std::io::Result<()> {
-    if crate::vibeio::executor::offload_fs() {
-        let src = src.as_ref().to_path_buf();
-        let dst = dst.as_ref().to_path_buf();
-        crate::vibeio::spawn_blocking(move || std::os::windows::fs::symlink_file(src, dst))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::os::windows::fs::symlink_file(src, dst)
-    }
+    let src = src.as_ref().to_path_buf();
+    let dst = dst.as_ref().to_path_buf();
+    run_blocking_fs(move || std::os::windows::fs::symlink_file(src, dst)).await
 }
 
 /// Creates a symbolic link to a file.
@@ -486,14 +467,10 @@ pub async fn symlink_file(
         })?;
         let mut op = SymlinkOp::new(driver.clone(), src_cstr, dst_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
-    } else if crate::vibeio::executor::offload_fs() {
+    } else {
         let src = src.to_owned();
         let dst = dst.to_owned();
-        crate::vibeio::spawn_blocking(move || std::os::unix::fs::symlink(src, dst))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::os::unix::fs::symlink(src, dst)
+        run_blocking_fs(move || std::os::unix::fs::symlink(src, dst)).await
     }
 }
 
@@ -518,15 +495,9 @@ pub async fn symlink_file(
     src: impl AsRef<std::path::Path>,
     dst: impl AsRef<std::path::Path>,
 ) -> std::io::Result<()> {
-    if crate::vibeio::executor::offload_fs() {
-        let src = src.as_ref().to_owned();
-        let dst = dst.as_ref().to_owned();
-        crate::vibeio::spawn_blocking(move || std::os::unix::fs::symlink(src, dst))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::os::unix::fs::symlink(src, dst)
-    }
+    let src = src.as_ref().to_owned();
+    let dst = dst.as_ref().to_owned();
+    run_blocking_fs(move || std::os::unix::fs::symlink(src, dst)).await
 }
 
 /// Creates a symbolic link.
@@ -592,14 +563,10 @@ pub async fn rename(
         })?;
         let mut op = RenameOp::new(driver.clone(), from_cstr, to_cstr);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
-    } else if crate::vibeio::executor::offload_fs() {
+    } else {
         let from = from.to_owned();
         let to = to.to_owned();
-        crate::vibeio::spawn_blocking(move || std::fs::rename(from, to))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::fs::rename(from, to)
+        run_blocking_fs(move || std::fs::rename(from, to)).await
     }
 }
 
@@ -624,15 +591,9 @@ pub async fn rename(
     from: impl AsRef<std::path::Path>,
     to: impl AsRef<std::path::Path>,
 ) -> std::io::Result<()> {
-    if crate::vibeio::executor::offload_fs() {
-        let from = from.as_ref().to_owned();
-        let to = to.as_ref().to_owned();
-        crate::vibeio::spawn_blocking(move || std::fs::rename(from, to))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::fs::rename(from, to)
-    }
+    let from = from.as_ref().to_owned();
+    let to = to.as_ref().to_owned();
+    run_blocking_fs(move || std::fs::rename(from, to)).await
 }
 
 /// Removes an empty directory.
@@ -667,13 +628,9 @@ pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
         })?;
         let mut op = UnlinkOp::new(driver.clone(), path_cstr, true);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
-    } else if crate::vibeio::executor::offload_fs() {
-        let path = path.to_owned();
-        crate::vibeio::spawn_blocking(move || std::fs::remove_dir(path))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
     } else {
-        std::fs::remove_dir(path)
+        let path = path.to_owned();
+        run_blocking_fs(move || std::fs::remove_dir(path)).await
     }
 }
 
@@ -695,14 +652,8 @@ pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 /// - The process lacks permissions
 #[cfg(not(target_os = "linux"))]
 pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
-    if crate::vibeio::executor::offload_fs() {
-        let path = path.as_ref().to_owned();
-        crate::vibeio::spawn_blocking(move || std::fs::remove_dir(path))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::fs::remove_dir(path)
-    }
+    let path = path.as_ref().to_owned();
+    run_blocking_fs(move || std::fs::remove_dir(path)).await
 }
 
 /// Removes a file.
@@ -735,13 +686,9 @@ pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<(
         })?;
         let mut op = UnlinkOp::new(driver.clone(), path_cstr, false);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
-    } else if crate::vibeio::executor::offload_fs() {
-        let path = path.to_owned();
-        crate::vibeio::spawn_blocking(move || std::fs::remove_file(path))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
     } else {
-        std::fs::remove_file(path)
+        let path = path.to_owned();
+        run_blocking_fs(move || std::fs::remove_file(path)).await
     }
 }
 
@@ -761,14 +708,8 @@ pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<(
 /// - The process lacks permissions
 #[cfg(not(target_os = "linux"))]
 pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
-    if crate::vibeio::executor::offload_fs() {
-        let path = path.as_ref().to_owned();
-        crate::vibeio::spawn_blocking(move || std::fs::remove_file(path))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::fs::remove_file(path)
-    }
+    let path = path.as_ref().to_owned();
+    run_blocking_fs(move || std::fs::remove_file(path)).await
 }
 
 /// Creates a directory.
@@ -804,13 +745,9 @@ pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
         // mode 0o777 is standard for mkdir, umask will be applied
         let mut op = MkDirOp::new(driver.clone(), path_cstr, 0o777);
         std::future::poll_fn(|cx| op.poll_completion(cx, driver.as_ref())).await
-    } else if crate::vibeio::executor::offload_fs() {
-        let path = path.to_owned();
-        crate::vibeio::spawn_blocking(move || std::fs::create_dir(path))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
     } else {
-        std::fs::create_dir(path)
+        let path = path.to_owned();
+        run_blocking_fs(move || std::fs::create_dir(path)).await
     }
 }
 
@@ -832,14 +769,8 @@ pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 /// - The directory already exists
 #[cfg(not(target_os = "linux"))]
 pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
-    if crate::vibeio::executor::offload_fs() {
-        let path = path.as_ref().to_owned();
-        crate::vibeio::spawn_blocking(move || std::fs::create_dir(path))
-            .await
-            .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
-    } else {
-        std::fs::create_dir(path)
-    }
+    let path = path.as_ref().to_owned();
+    run_blocking_fs(move || std::fs::create_dir(path)).await
 }
 
 /// Creates a new, empty directory and all its parent components if they don't exist.
@@ -945,15 +876,11 @@ pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Meta
         );
         let statx = std::future::poll_fn(move |cx| op.poll_completion(cx, &driver)).await?;
         Ok(Metadata::from_statx(statx))
-    } else if crate::vibeio::executor::offload_fs() {
+    } else {
         let path = path.to_owned();
         Ok(Metadata::from_std(
-            crate::vibeio::spawn_blocking(move || std::fs::metadata(path))
-                .await
-                .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())??,
+            run_blocking_fs(move || std::fs::metadata(path)).await?,
         ))
-    } else {
-        Ok(Metadata::from_std(std::fs::metadata(path)?))
     }
 }
 
@@ -973,16 +900,10 @@ pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Meta
 /// - The process lacks permissions to access the path
 #[cfg(not(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3))))]
 pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Metadata> {
-    if crate::vibeio::executor::offload_fs() {
-        let path = path.as_ref().to_owned();
-        Ok(Metadata::from_std(
-            crate::vibeio::spawn_blocking(move || std::fs::metadata(path))
-                .await
-                .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())??,
-        ))
-    } else {
-        Ok(Metadata::from_std(std::fs::metadata(path)?))
-    }
+    let path = path.as_ref().to_owned();
+    Ok(Metadata::from_std(
+        run_blocking_fs(move || std::fs::metadata(path)).await?,
+    ))
 }
 
 /// Returns metadata about a file or directory without following symlinks.
@@ -1023,15 +944,11 @@ pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Res
         );
         let statx = std::future::poll_fn(move |cx| op.poll_completion(cx, &driver)).await?;
         Ok(Metadata::from_statx(statx))
-    } else if crate::vibeio::executor::offload_fs() {
+    } else {
         let path = path.to_owned();
         Ok(Metadata::from_std(
-            crate::vibeio::spawn_blocking(move || std::fs::symlink_metadata(path))
-                .await
-                .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())??,
+            run_blocking_fs(move || std::fs::symlink_metadata(path)).await?,
         ))
-    } else {
-        Ok(Metadata::from_std(std::fs::symlink_metadata(path)?))
     }
 }
 
@@ -1051,16 +968,10 @@ pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Res
 /// - The process lacks permissions to access the path
 #[cfg(not(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3))))]
 pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Metadata> {
-    if crate::vibeio::executor::offload_fs() {
-        let path = path.as_ref().to_owned();
-        Ok(Metadata::from_std(
-            crate::vibeio::spawn_blocking(move || std::fs::symlink_metadata(path))
-                .await
-                .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())??,
-        ))
-    } else {
-        Ok(Metadata::from_std(std::fs::symlink_metadata(path)?))
-    }
+    let path = path.as_ref().to_owned();
+    Ok(Metadata::from_std(
+        run_blocking_fs(move || std::fs::symlink_metadata(path)).await?,
+    ))
 }
 
 #[cfg(test)]
@@ -1085,6 +996,7 @@ mod tests {
         }
         crate::vibeio::RuntimeBuilder::new()
             .driver(crate::vibeio::DriverKind::Mock)
+            .enable_fs_offload(true)
             .blocking_pool(Box::new(TestPool))
             .build()
             .unwrap()
@@ -1099,6 +1011,19 @@ mod tests {
             .expect("system clock should be after epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("vibeio_{name}_{pid}_{id}_{now}.tmp"))
+    }
+
+    #[test]
+    fn filesystem_fallback_runs_off_the_runtime_thread() {
+        let runtime_thread = std::thread::current().id();
+        let runtime = crate::vibeio::RuntimeBuilder::new()
+            .driver(crate::vibeio::DriverKind::Mock)
+            .build()
+            .unwrap();
+        let operation_thread = runtime
+            .block_on(super::run_blocking_fs(|| Ok(std::thread::current().id())))
+            .unwrap();
+        assert_ne!(operation_thread, runtime_thread);
     }
 
     #[test]

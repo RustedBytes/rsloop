@@ -411,9 +411,9 @@ where
     runtime.spawn_blocking(f).await
 }
 
-/// Check if file I/O should be offloaded to blocking threads.
+/// Check if file I/O should use this runtime's configured blocking pool.
 ///
-/// Returns `true` if fs offload is enabled and we're inside a runtime.
+/// Returns `true` if runtime-specific fs offload is enabled and we're inside a runtime.
 #[cfg(feature = "fs")]
 #[inline]
 pub(crate) fn offload_fs() -> bool {

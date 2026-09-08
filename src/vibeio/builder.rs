@@ -201,9 +201,11 @@ impl RuntimeBuilder {
         self
     }
 
-    /// Enables or disables the offload of file I/O to blocking threads for the runtime.
+    /// Selects the runtime's configured blocking pool for filesystem operations.
     ///
-    /// By default, the fs offload is disabled.
+    /// When disabled (the default), filesystem path operations use the shared
+    /// `async-std` blocking pool. They never run blocking filesystem calls on
+    /// the async executor thread.
     pub fn enable_fs_offload(mut self, enable: bool) -> Self {
         self.enable_fs_offload = enable;
         self

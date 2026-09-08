@@ -6,7 +6,6 @@
 //! hands out a guard whose `Drop` releases the slot, so a handshake flood is
 //! shed at accept time rather than exhausting worker threads.
 
-use std::fs;
 use std::net::TcpStream as StdTcpStream;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
@@ -25,6 +24,8 @@ use pyo3_async_runtimes::TaskLocals;
 use super::platform::tcp_listener_raw_fd;
 #[cfg(unix)]
 use super::platform::unix_raw_fd;
+#[cfg(unix)]
+use super::remove_unix_socket_if_present;
 #[cfg(unix)]
 use super::run_unix_accept_loop;
 use super::tuning::max_pending_tls_handshakes;
@@ -176,8 +177,14 @@ impl ServerCore {
 
         self.close_python_sockets();
 
-        if let Some(path) = &self.cleanup_path {
-            let _ = fs::remove_file(path);
+        #[cfg(unix)]
+        if let Some(path) = &self.cleanup_path
+            && let Err(err) = remove_unix_socket_if_present(path)
+        {
+            self.report_error(
+                PyRuntimeError::new_err(err.to_string()),
+                "failed to remove Unix server socket",
+            );
         }
 
         self.closed_notify.notify_all();

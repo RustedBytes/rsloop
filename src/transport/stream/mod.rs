@@ -226,6 +226,7 @@ pub struct ServerCore {
     pending_tls_handshakes: AtomicUsize,
     tls_overload_reported: AtomicBool,
     closed_notify: AsyncEvent,
+    #[cfg_attr(not(unix), allow(dead_code))]
     cleanup_path: Option<PathBuf>,
     tls: Option<Arc<ServerTlsSettings>>,
 }

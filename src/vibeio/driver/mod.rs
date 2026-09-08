@@ -8,6 +8,8 @@ mod mock;
 #[cfg(target_os = "linux")]
 mod uring;
 
+#[cfg(any(windows, test))]
+use std::collections::HashSet;
 use std::task::Waker;
 #[cfg(target_os = "linux")]
 use std::task::{Context, Poll};
@@ -110,8 +112,12 @@ fn resolve_base_socket_with(
     mut base: impl FnMut(usize) -> io::Result<usize>,
     mut layered: impl FnMut(usize) -> io::Result<usize>,
 ) -> io::Result<usize> {
-    let mut visited = Vec::new();
-    loop {
+    // Layered service providers are expected to form a very short chain. Keep
+    // a generous limit so a corrupt provider cannot force unbounded work even
+    // when it returns a fresh bogus handle at every step.
+    const MAX_PROVIDER_CHAIN_DEPTH: usize = 64;
+    let mut visited = HashSet::from([socket]);
+    for _ in 0..MAX_PROVIDER_CHAIN_DEPTH {
         if let Ok(resolved) = base(socket) {
             if resolved != usize::MAX {
                 return Ok(resolved);
@@ -122,15 +128,19 @@ fn resolve_base_socket_with(
             ));
         }
         let next = layered(socket)?;
-        if next == usize::MAX || next == socket || visited.contains(&next) {
+        if next == usize::MAX || !visited.insert(next) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "invalid or cyclic socket provider chain",
             ));
         }
-        visited.push(socket);
         socket = next;
     }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "socket provider chain exceeds the supported depth",
+    ))
 }
 
 #[cfg(test)]
@@ -165,6 +175,14 @@ mod base_socket_tests {
                     .unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         }
+        let mut fallback_calls = 0;
+        let error = resolve_base_socket_with(0, unsupported, |socket| {
+            fallback_calls += 1;
+            Ok(socket + 1)
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fallback_calls, 64);
         assert_eq!(
             resolve_base_socket_with(
                 1,
