@@ -399,6 +399,10 @@ impl LoopCore {
             Ok(()) => return Ok(()),
             Err(command) => command,
         };
+        self.send_remote_command(command)
+    }
+
+    fn send_remote_command(&self, command: LoopCommand) -> Result<(), LoopCoreError> {
         self.command_tx
             .send(command)
             .map_err(|_| LoopCoreError::ChannelClosed)?;
@@ -414,6 +418,26 @@ impl LoopCore {
             waker.wake_by_ref();
         }
         Ok(())
+    }
+
+    #[inline]
+    fn schedule_ready_handle(
+        &self,
+        handle: Py<super::callbacks::PyHandle>,
+    ) -> Result<(), LoopCoreError> {
+        let item = ReadyItem::HandleCallback(handle);
+        let item = match self.try_enqueue_local_ready(item) {
+            Ok(()) => return Ok(()),
+            Err(item) => item,
+        };
+        let item = match self.try_enqueue_active_ready(item) {
+            Ok(()) => return Ok(()),
+            Err(item) => item,
+        };
+        let ReadyItem::HandleCallback(handle) = item else {
+            unreachable!("ready handle enqueue preserves item kind")
+        };
+        self.send_remote_command(LoopCommand::ScheduleReadyHandle(handle))
     }
 
     /// Reports whether a run session is currently active.
@@ -487,9 +511,9 @@ impl LoopCore {
         );
         let handle = Py::new(py, super::callbacks::PyHandle::new(ready))?;
 
-        // send_command falls through local enqueue, the active-run pending
-        // queue, and finally the runtime command channel.
-        self.send_command(LoopCommand::ScheduleReadyHandle(handle.clone_ref(py)))
+        // Keep the common loop-thread path out of the generic command router;
+        // fall back to the active-run queue and then the runtime channel.
+        self.schedule_ready_handle(handle.clone_ref(py))
             .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
         Ok(handle)
     }
@@ -513,7 +537,7 @@ impl LoopCore {
             needs_run,
         );
         let handle = Py::new(py, super::callbacks::PyHandle::new(ready))?;
-        self.send_command(LoopCommand::ScheduleReadyHandle(handle.clone_ref(py)))
+        self.schedule_ready_handle(handle.clone_ref(py))
             .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
         Ok(handle)
     }
