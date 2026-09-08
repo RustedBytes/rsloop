@@ -100,6 +100,7 @@ def test_stop_server_reaps_forkserver_process_group(
         benchmark.os,
         "killpg",
         side_effect=[None, ProcessLookupError],
+        create=True,
     )
     monkeypatch.setattr(benchmark.sys, "platform", "linux")
 
