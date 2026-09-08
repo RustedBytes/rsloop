@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from granian import Granian, loops
-from granian.constants import HTTPModes, Interfaces, Loops, RuntimeModes
+from granian.constants import HTTPModes, Interfaces, Loops, RuntimeModes, TaskImpl
 
 EVENT_LOOP_ENV = "RSLOOP_GRANIAN_EVENT_LOOP"
 EVENT_LOOP_CHOICES = ("asyncio", "uvloop", "winloop", "rsloop")
@@ -110,6 +110,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--runtime-threads", type=int, default=1)
     parser.add_argument("--backpressure", type=int, default=1024)
+    parser.add_argument(
+        "--task-impl",
+        choices=("asyncio", "rust"),
+        default="asyncio",
+        help="Granian task implementation (default: asyncio).",
+    )
     parser.add_argument("--access-log", action="store_true")
     parser.add_argument("--no-log", action="store_true")
     return parser.parse_args()
@@ -143,6 +149,7 @@ def main() -> None:
         runtime_threads=args.runtime_threads,
         runtime_mode=RuntimeModes.auto,
         loop=Loops.auto,
+        task_impl=TaskImpl(args.task_impl),
         http=HTTPModes.http1,
         websockets=False,
         backpressure=args.backpressure,

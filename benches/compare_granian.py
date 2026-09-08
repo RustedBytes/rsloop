@@ -43,6 +43,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--runtime-threads", type=int, default=1)
     parser.add_argument("--backpressure", type=int, default=1024)
+    parser.add_argument(
+        "--task-impl",
+        choices=("asyncio", "rust"),
+        default="asyncio",
+        help="Granian task implementation used for every selected loop.",
+    )
     parser.add_argument("--concurrency", type=int, default=128)
     parser.add_argument(
         "--warmup-duration", type=float, default=3.0, help="Warmup seconds per loop"
@@ -104,6 +110,8 @@ def server_command(args: argparse.Namespace, loop_name: str) -> list[str]:
         str(args.runtime_threads),
         "--backpressure",
         str(args.backpressure),
+        "--task-impl",
+        args.task_impl,
         "--no-log",
     ]
 
@@ -127,21 +135,52 @@ def start_server(args: argparse.Namespace, loop_name: str) -> subprocess.Popen[b
 
 
 def stop_server(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
-    try:
-        if sys.platform == "win32":
-            process.send_signal(signal.CTRL_BREAK_EVENT)
-        else:
-            os.killpg(process.pid, signal.SIGINT)
-        process.wait(timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        process.terminate()
+    if sys.platform == "win32":
+        if process.poll() is not None:
+            return
         try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+            process.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        return
+
+    process_group = process.pid
+    if process.poll() is None:
+        try:
+            os.killpg(process_group, signal.SIGINT)
+            process.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    # Python 3.15 defaults to a forkserver start method. Granian's supervisor
+    # can exit before that forkserver, its resource tracker, and its worker.
+    # They inherit this dedicated process group, so explicitly reap anything
+    # left after the graceful shutdown before the next loop binds the port.
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process_group, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    if process.poll() is None:
+        process.wait()
 
 
 def wait_until_ready(
@@ -328,6 +367,7 @@ def main() -> int:
                 "workers": args.workers,
                 "runtime_threads": args.runtime_threads,
                 "backpressure": args.backpressure,
+                "task_impl": args.task_impl,
                 "concurrency": args.concurrency,
                 "warmup_duration": args.warmup_duration,
                 "duration": args.duration,

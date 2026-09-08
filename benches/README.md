@@ -33,10 +33,15 @@ uv run --with granian --with uvloop python benches/compare_granian.py \
 ```
 
 Useful controls include `--loops`, `--workers`, `--runtime-threads`,
-`--backpressure`, and `--concurrency`. Keep those settings identical when
-comparing loops. The server uses HTTP/1, disables WebSockets and access logs,
-and serves a fixed 10 KiB body at `/benchmark`. Treat loopback results as local
-comparisons, not production capacity estimates.
+`--backpressure`, `--concurrency`, and Granian's `--task-impl` (`asyncio` by
+default, or `rust`). Keep those settings identical when comparing loops. The
+server uses HTTP/1, disables WebSockets and access logs, and serves a fixed
+10 KiB body at `/benchmark`. Treat loopback results as local comparisons, not
+production capacity estimates.
+
+The [Python 3.15 Granian profiling report](granian-python315-profile.md) records
+a local comparison and shows how to attach Python 3.15's sampling profiler to
+the Granian worker while `oha` is generating load.
 
 ## Asyncio microbenchmarks
 
