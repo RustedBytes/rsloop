@@ -33,7 +33,6 @@ Examples:
   scripts/build-wheels.sh --target aarch64-apple-darwin
   scripts/build-wheels.sh --target x86_64-pc-windows-msvc
   scripts/build-wheels.sh --target aarch64-pc-windows-msvc
-  RSLOOP_PYTHON_VERSIONS="3.12 3.13 3.14" scripts/build-wheels.sh -- --features profiler
 EOF
 }
 

@@ -32,7 +32,6 @@ Important files:
   loop policy
 - `_loop_compat.py`: compatibility helpers and monkeypatches
 - `_bootstrap.py`: startup helpers, including Windows DLL and SSL-related setup
-- `_profile.py`: small Python wrappers around the profiler API
 
 This layer is a thin adapter. It keeps the user-facing API pleasant while the heavy lifting happens in Rust.
 
@@ -58,7 +57,7 @@ Important files:
 - `platform/fd/`: lower-level cross-platform descriptor work
 - `context.rs`: running-loop and context management helpers
 - `errors.rs`: shared error types
-- `profiler.rs`: Tracy profiler support
+- `profiler.rs`: temporary no-op compatibility macros for former profiling scopes
 - `rust_async.rs`: public Rust/Python async interop helpers for downstream extensions
 - `async_event.rs`, `blocking.rs`, `python_names.rs`: support code used by the public pieces
 - `platform/windows_vibeio.rs`: Windows-specific runtime support

@@ -43,6 +43,5 @@ pub(crate) fn build_info(py: Python<'_>) -> PyResult<Py<PyDict>> {
         },
     )?;
     info.set_item("tls_backend", "rustls")?;
-    info.set_item("profiler", cfg!(feature = "profiler"))?;
     Ok(info.unbind())
 }

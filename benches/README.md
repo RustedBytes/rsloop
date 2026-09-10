@@ -103,21 +103,19 @@ uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/c
   --payload-size 512
 ```
 
-To launch an unmeasured Tracy session for each `rsloop` workload before the
-measured runs, add a label directory:
+To write an interactive Python 3.15 sampling-profiler flame graph for each
+`rsloop` workload before the measured runs, add an output directory:
 
 ```bash
-uv run --with maturin maturin develop --release --features profiler
-uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/compare_event_loops.py \
+uv run --python 3.15 --with maturin maturin develop --release
+uv run --python 3.15 --with uvloop --with zuvloop python benches/compare_event_loops.py \
   --loops rsloop \
   --workloads callbacks,tasks,tcp_streams \
   --profile-rsloop-dir benches/profiles
 ```
 
-No files are written by Tracy. The directory argument is only used to derive a
-human-readable label for the unmeasured profiling pass before the warmup and
-measured runs. Open the Tracy desktop profiler and connect while that pass is
-running.
+The directory receives one `rsloop-<workload>.html` flame graph per workload.
+These profiling passes are kept separate from warmups and measured runs.
 
 The runner executes each loop/workload in a fresh subprocess and reports:
 
@@ -217,21 +215,19 @@ cross-platform when needed with:
 uv run --no-project python scripts/generate_test_tls_certs.py tests/fixtures/tls
 ```
 
-For Tracy, build with the profiler feature and request an unmeasured profiling
-pass before each rsloop scenario:
+Request an unmeasured Python 3.15 sampling-profiler pass before each rsloop
+scenario with:
 
 ```bash
-uv run --with maturin maturin develop --release --features profiler
-uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/workload_matrix.py \
+uv run --python 3.15 --with maturin maturin develop --release
+uv run --python 3.15 --with uvloop --with zuvloop python benches/workload_matrix.py \
   --loops rsloop \
-  --profile-rsloop-dir benches/profiles \
-  --allow-profiler-build
+  --profile-rsloop-dir benches/profiles
 ```
 
-`--allow-profiler-build` is required because this invocation also reports
-measurements from the Tracy-enabled binary. Treat those measurements as
-profiling diagnostics, not as comparable release-build results. Rebuild without
-`--features profiler` before collecting the normal comparison matrix.
+The directory receives one `rsloop-<scenario>.html` flame graph per scenario.
+No profiler-enabled build is needed, and measured runs are still launched
+without the profiler wrapper.
 
 On Windows, replace `--with uvloop` with `--with winloop` in the quick and
 profiling commands.

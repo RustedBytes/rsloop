@@ -5,7 +5,6 @@ import argparse
 import asyncio
 import base64
 import hashlib
-import importlib
 import json
 import math
 import os
@@ -33,6 +32,7 @@ from compare_event_loops import (
     normalize_csv,
 )
 from idle_statistics import latency_comparison
+from sampling_profiler import sampling_profiler_command
 
 SCENARIO_CHOICES = (
     "http_keepalive",
@@ -193,18 +193,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--profile-rsloop-dir",
         type=Path,
-        help="Run one unmeasured Tracy pass per rsloop scenario before measurements.",
-    )
-    parser.add_argument(
-        "--allow-profiler-build",
-        action="store_true",
-        help="Allow measured rsloop runs from a Tracy-enabled build.",
+        help="Write one Python 3.15 sampling-profiler flamegraph per rsloop scenario.",
     )
     parser.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--child-runs", type=int, default=1, help=argparse.SUPPRESS)
     parser.add_argument("--loop", choices=LOOP_CHOICES, help=argparse.SUPPRESS)
     parser.add_argument("--scenario", choices=SCENARIO_CHOICES, help=argparse.SUPPRESS)
-    parser.add_argument("--profile-label", help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -1030,29 +1024,7 @@ def child_main(args: argparse.Namespace) -> int:
     )
     ensure_idle_connection_capacity(connection_count)
 
-    if args.profile_label:
-        if args.loop != "rsloop":
-            raise RuntimeError("Tracy profiling is only supported for rsloop")
-        import rsloop
-
-        if not rsloop.profiler_compiled():
-            raise RuntimeError(
-                "Tracy profiling was requested, but rsloop was built without profiler "
-                "support; rebuild with `uv run --with maturin maturin develop "
-                "--release --features profiler`"
-            )
-    elif args.loop == "rsloop":
-        import rsloop
-
-        if rsloop.profiler_compiled() and not args.allow_profiler_build:
-            raise RuntimeError(
-                "refusing to measure a Tracy-enabled rsloop build; rebuild without "
-                "--features profiler or pass --allow-profiler-build explicitly"
-            )
-
     results: list[MatrixResult] = []
-    if args.profile_label:
-        print(f"[profile] Tracy session label: {args.profile_label}", flush=True)
     for _ in range(args.child_runs):
         environment = {
             "platform": platform.platform(),
@@ -1066,14 +1038,8 @@ def child_main(args: argparse.Namespace) -> int:
             else None,
             "pid": os.getpid(),
         }
-        if args.profile_label:
-            rsloop = importlib.import_module("rsloop")
-            with rsloop.profile():
-                awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
-                result = run_with_loop(args.loop, awaitable)
-        else:
-            awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
-            result = run_with_loop(args.loop, awaitable)
+        awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
+        result = run_with_loop(args.loop, awaitable)
         environment["load_average_end"] = (
             cast(Any, os).getloadavg() if hasattr(os, "getloadavg") else None
         )
@@ -1099,7 +1065,6 @@ def child_command(
     args: argparse.Namespace,
     loop_name: str,
     scenario: str,
-    profile_label: str | None = None,
     child_runs: int = 1,
 ) -> list[str]:
     cmd = [
@@ -1141,12 +1106,8 @@ def child_command(
         "--child-runs",
         str(child_runs),
     ]
-    if profile_label:
-        cmd.extend(("--profile-label", profile_label))
     if args.cpu_affinity:
         cmd.extend(("--cpu-affinity", args.cpu_affinity))
-    if args.allow_profiler_build:
-        cmd.append("--allow-profiler-build")
     return cmd
 
 
@@ -1154,14 +1115,20 @@ def run_child_batch(
     args: argparse.Namespace,
     loop_name: str,
     scenario: str,
-    profile_label: str | None = None,
+    profile_output: Path | None = None,
     child_runs: int = 1,
 ) -> list[MatrixResult]:
     env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, (str(Path(__file__).resolve().parent), env.get("PYTHONPATH")))
+    )
     if loop_name == "rsloop":
         env["RSLOOP_USE_FAST_STREAMS"] = "1"
+    cmd = child_command(args, loop_name, scenario, child_runs)
+    if profile_output is not None:
+        cmd = sampling_profiler_command(cmd, profile_output)
     proc = subprocess.run(
-        child_command(args, loop_name, scenario, profile_label, child_runs),
+        cmd,
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -1188,7 +1155,11 @@ def run_child_batch(
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
     if not lines:
         raise RuntimeError(f"{loop_name}/{scenario} produced no output")
-    payload = json.loads(lines[-1])
+    payload = next(
+        json.loads(line)
+        for line in reversed(lines)
+        if line.lstrip().startswith(("{", "["))
+    )
     if isinstance(payload, dict):
         payload = [payload]
     return [MatrixResult(**item) for item in payload]
@@ -1198,9 +1169,9 @@ def run_child(
     args: argparse.Namespace,
     loop_name: str,
     scenario: str,
-    profile_label: str | None = None,
+    profile_output: Path | None = None,
 ) -> MatrixResult:
-    return run_child_batch(args, loop_name, scenario, profile_label)[0]
+    return run_child_batch(args, loop_name, scenario, profile_output)[0]
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -1297,22 +1268,8 @@ def parent_main(args: argparse.Namespace) -> int:
     if not available:
         raise SystemExit("no benchmarkable loops are available")
 
-    if args.profile_rsloop_dir:
-        if "rsloop" not in available:
-            raise SystemExit("--profile-rsloop-dir requires rsloop in --loops")
-        import rsloop
-
-        if not rsloop.profiler_compiled():
-            raise SystemExit(
-                "--profile-rsloop-dir requires a Tracy-enabled rsloop build. Run:\n"
-                "  uv run --with maturin maturin develop --release --features profiler"
-            )
-        if not args.allow_profiler_build:
-            raise SystemExit(
-                "this invocation profiles and then measures the same Tracy-enabled build; "
-                "pass --allow-profiler-build to acknowledge that its measured results are "
-                "not comparable to a normal release build"
-            )
+    if args.profile_rsloop_dir and "rsloop" not in available:
+        raise SystemExit("--profile-rsloop-dir requires rsloop in --loops")
 
     output: list[dict[str, object]] = []
     for scenario in scenarios:
@@ -1331,7 +1288,7 @@ def parent_main(args: argparse.Namespace) -> int:
                     args,
                     "rsloop",
                     scenario,
-                    str(args.profile_rsloop_dir / "rsloop-idle_connections"),
+                    args.profile_rsloop_dir / "rsloop-idle_connections.html",
                 )
             for block in range(args.repeat):
                 # AB/BA for two loops; rotate the first loop for larger sets.
@@ -1396,8 +1353,9 @@ def parent_main(args: argparse.Namespace) -> int:
             print(f"Running {scenario} on {loop_name}...")
             if args.profile_rsloop_dir and loop_name == "rsloop":
                 args.profile_rsloop_dir.mkdir(parents=True, exist_ok=True)
-                label = str(args.profile_rsloop_dir / f"rsloop-{scenario}")
-                run_child(args, loop_name, scenario, label)
+                output_path = args.profile_rsloop_dir / f"rsloop-{scenario}.html"
+                print(f"  writing sampling profile to {output_path}")
+                run_child(args, loop_name, scenario, output_path)
             if args.measurement_mode == "warm":
                 batch = run_child_batch(
                     args,

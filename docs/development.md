@@ -147,26 +147,18 @@ Those four questions usually point you to the right part of the codebase.
 
 ## Profiling
 
-Profiling support exists behind the Rust `profiler` feature and uses Tracy.
-Published wheels do not currently include this feature. Local development
-builds must enable it explicitly.
-
-Example build:
+Use Python 3.15's external sampling profiler. It requires no Cargo feature or
+instrumented build:
 
 ```bash
-uv run --with maturin maturin develop --release --features profiler
+uv run --python 3.15 --with maturin maturin develop --release
+uv run --python 3.15 python -m profiling.sampling run \
+  --all-threads --native --flamegraph \
+  -o rsloop-profile.html examples/01_basics.py
 ```
 
-The Python API then exposes:
-
-- `rsloop.profile()`
-- `rsloop.profiler_compiled()`
-- `rsloop.profiler_running()`
-- `rsloop.start_profiler()`
-- `rsloop.stop_profiler()`
-
-Use `rsloop.profiler_compiled()` to check whether the installed build includes
-Tracy support before starting a profiling session.
+For repeatable workload profiles, use `--profile-rsloop-dir` with either
+benchmark runner. Profile passes are unmeasured and produce HTML flame graphs.
 
 ## Current state of the project
 

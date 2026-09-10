@@ -103,10 +103,6 @@ fn cancel_watch_task(task: WatchTask) {
 
 pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>) {
     crate::profile_scope!("runtime.run_thread");
-    #[cfg(feature = "profiler")]
-    if tracy_client::Client::is_running() {
-        tracy_client::set_thread_name!("rsloop-runtime");
-    }
     let runtime = crate::vibeio::RuntimeBuilder::new()
         .rsloop_profile()
         .enable_timer(true)

@@ -91,11 +91,10 @@ used for optimization conclusions.
    `loop.create_task()`. rsloop already uses FASTCALL/vectorcall for both, but a
    cross-thread callback still allocates a Python `Handle`, captures context,
    locks `active_ready_dispatch`, locks its pending `VecDeque`, and signals the
-   loop. Existing Tracy spans should be extended around those individual
-   stages, then the Granian load should be repeated with a profiler-enabled
-   build. A stable active-dispatch reference or a lower-contention FIFO is
-   worth testing only if those spans confirm contention; FIFO ordering and
-   run/stop lifecycle safety must be preserved.
+   loop. A native system profiler should measure those individual stages. A
+   stable active-dispatch reference or a lower-contention FIFO is worth testing
+   only if those samples confirm contention; FIFO ordering and run/stop
+   lifecycle safety must be preserved.
 
 2. **Do not prioritize a custom task path yet.** Switching Granian from
    `--task-impl asyncio` to `--task-impl rust` changed rsloop's median
@@ -124,8 +123,8 @@ used for optimization conclusions.
    attribution was unavailable; no reactor or allocator change is justified by
    the Python-only samples.
 
-The highest-value next experiment is therefore a Tracy-instrumented Granian
-run focused on `schedule_callback_args`, the active ready-queue locks, wake
+The highest-value next experiment is therefore a native system-profiler run
+focused on `schedule_callback_args`, the active ready-queue locks, wake
 signalling, and ready-handle execution. The application and Granian wrapper
 consume most Python-visible GIL samples, while rsloop is already the fastest
 loop in the end-to-end comparison.

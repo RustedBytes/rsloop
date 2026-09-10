@@ -18,9 +18,7 @@ class TestBenchmarkLoop:
         micro_args = comparison.parse_args()
         matrix_args = matrix.parse_args()
         matrix.validate_args(matrix_args)
-        command = matrix.child_command(
-            matrix_args, "zuvloop", "http_keepalive", None, 1
-        )
+        command = matrix.child_command(matrix_args, "zuvloop", "http_keepalive", 1)
         assert command[command.index("--loop") + 1] == "zuvloop"
         payload = {
             "loop": "zuvloop",

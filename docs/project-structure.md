@@ -21,7 +21,6 @@ This is the Python-facing side of the project.
 - `_run.py`: friendly helpers for starting the loop
 - `_loop_compat.py`: behavior that makes `rsloop` fit into `asyncio`
 - `_bootstrap.py`: import-time environment setup
-- `_profile.py`: profiler helpers
 
 Think of this directory as the "Python wrapper layer".
 

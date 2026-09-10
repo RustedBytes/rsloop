@@ -8,7 +8,6 @@ use crate::bindings::{
 };
 use crate::build_metadata::build_info;
 use crate::engine::{PyHandle, PyTimerHandle};
-use crate::profiler::{profiler_compiled, profiler_running, start_profiler, stop_profiler};
 use crate::transport::process::{PyProcessPipeTransport, PyProcessTransport};
 use crate::transport::stream::{
     PyFastStreamReader, PyFastStreamWriter, PyServer, PyStreamTransport, open_connection,
@@ -19,7 +18,6 @@ pub(crate) fn add_module_contents(m: &Bound<'_, PyModule>) -> PyResult<()> {
     add_module_classes(m)?;
     add_event_loop_functions(m)?;
     add_stream_functions(m)?;
-    add_profiler_functions(m)?;
     add_diagnostic_functions(m)?;
     add_module_compat_aliases(m)?;
     Ok(())
@@ -51,14 +49,6 @@ fn add_event_loop_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
 fn add_stream_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_connection, m)?)?;
     m.add_function(wrap_pyfunction!(start_server, m)?)?;
-    Ok(())
-}
-
-fn add_profiler_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(profiler_compiled, m)?)?;
-    m.add_function(wrap_pyfunction!(profiler_running, m)?)?;
-    m.add_function(wrap_pyfunction!(start_profiler, m)?)?;
-    m.add_function(wrap_pyfunction!(stop_profiler, m)?)?;
     Ok(())
 }
 

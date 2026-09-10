@@ -1,8 +1,6 @@
-from __future__ import annotations
-
 from asyncio import DefaultEventLoopPolicy
 from collections.abc import Callable, Coroutine
-from typing import Any, ContextManager, TypeVar
+from typing import Any, TypeVar
 
 from ._loop import PyLoop
 
@@ -28,10 +26,15 @@ def run(
     loop_factory: Callable[[], Loop] = ...,
     debug: bool | None = ...,
 ) -> _T: ...
-def profiler_compiled() -> bool: ...
-def profiler_running() -> bool: ...
-def start_profiler() -> None: ...
-def stop_profiler() -> None: ...
-def profile() -> ContextManager[None]: ...
-
-__all__: tuple[str, ...]
+__all__: tuple[str, ...] = (
+    "EventLoopPolicy",
+    "Loop",
+    "__version__",
+    "build_info",
+    "install",
+    "new_event_loop",
+    "reset_transport_stats",
+    "run",
+    "transport_stats",
+    "uninstall",
+)

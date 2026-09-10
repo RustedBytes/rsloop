@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from typing_extensions import assert_type
-
 import rsloop
+from typing_extensions import assert_type
 
 
 async def result() -> int:
@@ -24,8 +23,3 @@ def check_public_api() -> None:
     assert_type(rsloop.build_info(), dict[str, str | bool])
     assert_type(rsloop.transport_stats(), dict[str, int | bool])
     assert_type(rsloop.reset_transport_stats(), None)
-    assert_type(rsloop.profiler_compiled(), bool)
-    assert_type(rsloop.profiler_running(), bool)
-
-    with rsloop.profile():
-        pass

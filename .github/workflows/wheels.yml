@@ -27,8 +27,6 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      # The profiler retains state for every short-lived readiness worker, so it
-      # is reserved for explicit local builds instead of published wheels.
       matrix:
         include:
           - os_name: linux

@@ -189,7 +189,7 @@ Pipes, subprocesses, and signals:
 
 Profiling:
 
-- `profile(...)`, `profiler_running()`, `start_profiler()`, `stop_profiler()`
+- Python 3.15's external `profiling.sampling` profiler
 - opt-in transport counters through `transport_stats()` and
   `reset_transport_stats()`
 
@@ -390,49 +390,22 @@ uses `uv python install` / `uv python find` to locate interpreters.
 
 ## Profiling
 
-Profiling is behind the Cargo feature `profiler` and is disabled by default.
-Build or install with that feature first:
+Python 3.15 includes a low-overhead sampling profiler that can run rsloop
+without a special build or in-process instrumentation. Generate an interactive
+flame graph with:
 
 ```bash
-cargo build --release --features profiler
-uv run --with maturin maturin develop --release --features profiler
+uv run --python 3.15 --with maturin maturin develop --release
+uv run --python 3.15 python -m profiling.sampling run \
+  --all-threads --native --flamegraph \
+  -o rsloop-profile.html examples/01_basics.py
 ```
 
-Then wrap the code you want to inspect:
-
-```python
-import rsloop
-
-with rsloop.profile():
-    rsloop.run(main())
-```
-
-Or manage the session manually:
-
-```python
-import rsloop
-
-rsloop.start_profiler()
-try:
-    rsloop.run(main())
-finally:
-    rsloop.stop_profiler()
-```
-
-This starts a Tracy client inside the process. Build a release binary, open the
-Tracy desktop profiler, then connect to the running process while the profiled
-code is executing.
-
-Release wheels do not include profiler support. Build locally with
-`--features profiler` to enable it. The Tracy feature set is aimed at local
-profiling: `enable`, `only-localhost`, and `sampling`.
-
-For very short-lived runs you can force the process to block on exit until a
-server has connected and drained all data by setting `TRACY_NO_EXIT=1` in the
-environment.
-
-If the extension was built without `--features profiler`, `profile()` and
-`start_profiler()` raise a runtime error.
+`--all-threads` includes rsloop's runtime thread and `--native` marks time below
+the Python/native boundary. The profiler and target must use the same Python
+3.15 interpreter. Python 3.15 does not allow these options together with
+`--async-aware`; use a separate async-aware pass when coroutine reconstruction
+is more important than native and multi-thread visibility.
 
 ## Examples
 

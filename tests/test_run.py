@@ -99,7 +99,6 @@ class TestRun:
             "runtime_profile",
             "minimum_os",
             "tls_backend",
-            "profiler",
         }
         assert info["version"] == rsloop.__version__
         assert info["profile"] in {"debug", "release"}
@@ -110,7 +109,6 @@ class TestRun:
         assert info["runtime_profile"] == "rsloop"
         assert info["minimum_os"] == expected_minimum_os
         assert info["tls_backend"] == "rustls"
-        assert info["profiler"] == rsloop.profiler_compiled()
 
     def test_install_makes_asyncio_create_rsloop_loops(self) -> None:
         original_policy = get_event_loop_policy()

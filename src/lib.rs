@@ -49,7 +49,6 @@ pub use engine::{
     LoopCommand, LoopCore, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
     LoopTransportCommand, PyHandle, PyTimerHandle, ReadyCallback,
 };
-pub use profiler::{profiler_compiled, profiler_running, start_profiler, stop_profiler};
 pub use transport::process::{PyProcessPipeTransport, PyProcessTransport};
 pub use transport::stream::{
     PyFastStreamReader, PyFastStreamWriter, open_connection, start_server,

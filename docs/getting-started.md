@@ -34,11 +34,6 @@ The package exports a small public surface:
 - `rsloop.run(...)`
 - `rsloop.install()`
 - `rsloop.uninstall()`
-- `rsloop.profile()`
-- `rsloop.profiler_compiled()`
-- `rsloop.start_profiler()`
-- `rsloop.stop_profiler()`
-- `rsloop.profiler_running()`
 
 For most programs, `rsloop.run(...)` is enough.
 
@@ -55,7 +50,7 @@ print(rsloop.build_info())
 
 It returns the package version, debug or release profile, target OS and
 architecture, whether the build interpreter was free-threaded, selected I/O
-reactor, TLS backend, and whether profiler support was compiled in. The
+reactor, and TLS backend. The
 `free_threaded` diagnostic reports whether this build targets a free-threaded
 interpreter. rsloop supports free-threaded CPython 3.14 (`3.14t`) and declares
 `gil_used = false`, so importing it does not re-enable the GIL. The exact values
