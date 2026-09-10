@@ -9,7 +9,6 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benches"))
 import compare_event_loops as comparison
-import sampling_profiler as sampling
 import workload_matrix as matrix
 
 
@@ -17,11 +16,13 @@ class TestBenchmarkLoop:
     def test_python315_profiler_command_writes_native_thread_flamegraph(
         self, tmp_path, monkeypatch, mocker
     ):
-        monkeypatch.setattr(sampling.sys, "version_info", (3, 15))
-        mocker.patch.object(sampling.importlib.util, "find_spec", return_value=object())
+        monkeypatch.setattr(comparison.sys, "version_info", (3, 15))
+        mocker.patch.object(
+            comparison.importlib.util, "find_spec", return_value=object()
+        )
         output = tmp_path / "callbacks.profile"
 
-        command = sampling.sampling_profiler_command(
+        command = comparison.sampling_profiler_command(
             [sys.executable, "benchmark.py", "--child"], output
         )
 
@@ -40,10 +41,10 @@ class TestBenchmarkLoop:
         assert command[-2:] == ["benchmark.py", "--child"]
 
     def test_profiler_command_rejects_python_before_315(self, monkeypatch):
-        monkeypatch.setattr(sampling.sys, "version_info", (3, 14))
+        monkeypatch.setattr(comparison.sys, "version_info", (3, 14))
 
         with pytest.raises(RuntimeError, match="Python 3.15 or newer"):
-            sampling.sampling_profiler_command(
+            comparison.sampling_profiler_command(
                 [sys.executable, "benchmark.py"], Path("profile.html")
             )
 

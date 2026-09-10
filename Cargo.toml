@@ -95,11 +95,3 @@ incremental = false
 
 [profile.bench]
 inherits = "release"
-
-[[bench]]
-name = "runtime"
-harness = false
-
-[[bench]]
-name = "timer"
-harness = false

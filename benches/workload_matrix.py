@@ -9,6 +9,7 @@ import json
 import math
 import os
 import platform
+import random
 import socket
 import ssl
 import statistics
@@ -30,9 +31,8 @@ from compare_event_loops import (
     loop_factory_for,
     maybe_wait_closed,
     normalize_csv,
+    sampling_profiler_command,
 )
-from idle_statistics import latency_comparison
-from sampling_profiler import sampling_profiler_command
 
 SCENARIO_CHOICES = (
     "http_keepalive",
@@ -75,6 +75,60 @@ WEBSOCKET_RESPONSE = (
     "Connection: Upgrade\r\n"
     f"Sec-WebSocket-Accept: {WEBSOCKET_ACCEPT}\r\n\r\n"
 ).encode("ascii")
+
+
+def latency_comparison(
+    reference: list[float],
+    candidate: list[float],
+    *,
+    paired: bool = True,
+    threshold: float = 5.0,
+    samples: int = 10_000,
+    seed: int = 0,
+) -> dict[str, object]:
+    """Bootstrap whole process runs; negative change means lower latency."""
+    if not reference or not candidate or (paired and len(reference) != len(candidate)):
+        raise ValueError("nonempty matched runs are required for paired comparison")
+    if any(not math.isfinite(value) or value <= 0 for value in reference + candidate):
+        raise ValueError("latencies must be finite and positive")
+    if samples <= 0 or not math.isfinite(threshold) or threshold < 0:
+        raise ValueError("samples must be positive and threshold nonnegative")
+
+    old = [math.log(value) for value in reference]
+    new = [math.log(value) for value in candidate]
+    differences = [new_value - old_value for old_value, new_value in zip(old, new)]
+    rng = random.Random(seed)
+    estimate = statistics.mean(new) - statistics.mean(old)
+    bootstrap = sorted(
+        statistics.mean(rng.choices(differences, k=len(differences)))
+        if paired
+        else statistics.mean(rng.choices(new, k=len(new)))
+        - statistics.mean(rng.choices(old, k=len(old)))
+        for _ in range(samples)
+    )
+    low, high = (
+        100 * math.expm1(bootstrap[int(quantile * (samples - 1))])
+        for quantile in (0.025, 0.975)
+    )
+    enough = min(len(old), len(new)) >= 7
+    classification = "inconclusive"
+    if enough and high < -threshold:
+        classification = "improved"
+    elif enough and low > threshold:
+        classification = "regressed"
+    return {
+        "metric": "median_cycle_p95_ms",
+        "change_percent": 100 * math.expm1(estimate),
+        "ci95_percent": [low, high] if enough else None,
+        "classification": classification,
+        "threshold_percent": threshold,
+        "reference_runs": len(old),
+        "candidate_runs": len(new),
+        "paired": paired,
+        "bootstrap_samples": samples,
+        "seed": seed,
+        "reason": "fewer than 7 process runs" if not enough else "run-level bootstrap",
+    }
 
 
 @dataclass(frozen=True)

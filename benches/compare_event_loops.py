@@ -6,6 +6,7 @@ import asyncio
 import ctypes
 import gc
 import importlib
+import importlib.util
 import json
 import os
 import statistics
@@ -18,10 +19,40 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
-from sampling_profiler import sampling_profiler_command
-
 LOOP_CHOICES = ("asyncio", "uvloop", "winloop", "zuvloop", "rsloop")
 WORKLOAD_CHOICES = ("callbacks", "tasks", "tcp_streams")
+
+
+def sampling_profiler_command(command: list[str], output: Path) -> list[str]:
+    """Wrap a Python command with Python 3.15's sampling profiler."""
+    if sys.version_info < (3, 15):
+        raise RuntimeError(
+            "profiling requires Python 3.15 or newer; rerun with "
+            "`uv run --python 3.15 ...`"
+        )
+    if importlib.util.find_spec("profiling.sampling") is None:
+        raise RuntimeError(
+            "this interpreter does not provide the `profiling.sampling` module"
+        )
+    if not command or Path(command[0]).resolve() != Path(sys.executable).resolve():
+        raise ValueError("the profiled command must use the current Python interpreter")
+
+    output = output.expanduser().resolve().with_suffix(".html")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    return [
+        sys.executable,
+        "-m",
+        "profiling.sampling",
+        "run",
+        "--all-threads",
+        "--native",
+        "--flamegraph",
+        "-o",
+        str(output),
+        *command[1:],
+    ]
+
+
 def default_loops_csv() -> str:
     loops = ["asyncio", "rsloop"]
     if sys.platform == "win32":
