@@ -1,7 +1,7 @@
 import asyncio
 import rsloop
 
-from picows import (
+from picows import (  # pyright: ignore[reportMissingImports]
     ws_create_server,
     WSFrame,
     WSTransport,

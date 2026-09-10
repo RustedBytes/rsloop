@@ -1,6 +1,13 @@
 import rsloop
 
-from picows import ws_connect, WSFrame, WSTransport, WSListener, WSMsgType, WSCloseCode
+from picows import (  # pyright: ignore[reportMissingImports]
+    WSFrame,
+    WSCloseCode,
+    WSListener,
+    WSMsgType,
+    WSTransport,
+    ws_connect,
+)
 
 
 class ClientListener(WSListener):

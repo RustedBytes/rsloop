@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 
 import rsloop
-from rsloop_rust_example import sleep_and_tag, race_sum
+from rsloop_rust_example import (  # pyright: ignore[reportMissingImports]
+    race_sum,
+    sleep_and_tag,
+)
 
 
 async def main() -> None:
