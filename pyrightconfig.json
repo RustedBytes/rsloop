@@ -1,7 +1,8 @@
 {
-  "include": ["tests/test_public_api.py"],
-  "extraPaths": ["python"],
+  "include": ["python", "tests", "scripts", "benches", "examples"],
+  "strict": ["tests/test_public_api.py"],
+  "extraPaths": ["python", "benches"],
   "stubPath": "python",
   "pythonVersion": "3.10",
-  "typeCheckingMode": "strict"
+  "typeCheckingMode": "off"
 }
