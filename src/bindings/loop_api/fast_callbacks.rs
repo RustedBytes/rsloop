@@ -26,6 +26,45 @@ unsafe fn schedule(
     // SAFETY: that descriptor guarantee makes a second Python type check
     // redundant; the borrowed receiver remains live for this invocation.
     let slf = unsafe { Borrowed::from_ptr(py, slf).cast_unchecked::<PyLoop>() };
+
+    // CPython passes a null `kwnames` for the normal
+    // `loop.call_soon(callback, *args)` form. Keep that hot path independent
+    // of keyword parsing so LLVM can see the callback and argument layout
+    // directly.
+    if kwnames.is_null() {
+        if nargs == 0 {
+            return Err(PyTypeError::new_err("missing required argument 'callback'"));
+        }
+
+        let positional = nargs as usize;
+        // SAFETY: FASTCALL supplies `nargs` live positional entries.
+        let values = unsafe { std::slice::from_raw_parts(args, positional) };
+        // SAFETY: the missing-callback case was rejected above.
+        let callback = unsafe { Bound::from_borrowed_ptr(py, values[0]) }.unbind();
+        let callback_args = match positional - 1 {
+            0 => CallbackArgs::None,
+            1 => {
+                // SAFETY: this arm proves a second positional entry exists.
+                CallbackArgs::One(unsafe { Bound::from_borrowed_ptr(py, values[1]) }.unbind())
+            }
+            _ => CallbackArgs::Many(
+                PyTuple::new(
+                    py,
+                    (1..positional).map(|index| {
+                        // SAFETY: the range is bounded by the FASTCALL array.
+                        unsafe { Bound::from_borrowed_ptr(py, values[index]) }
+                    }),
+                )?
+                .unbind(),
+            ),
+        };
+        let handle =
+            slf.borrow()
+                .core
+                .schedule_callback_args(py, kind, callback, callback_args, None)?;
+        return Ok(handle.into_ptr());
+    }
+
     let names = if kwnames.is_null() {
         None
     } else {
