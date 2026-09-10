@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 use std::io::{self, ErrorKind};
+use std::mem::MaybeUninit;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::ptr;
 use std::sync::Arc;
@@ -1102,7 +1103,10 @@ impl IocpDriver {
 
     #[inline]
     fn process_batch(&self, timeout_ms: u32) -> Result<usize, io::Error> {
-        let mut entries = [OVERLAPPED_ENTRY::default(); IOCP_BATCH_SIZE];
+        // GetQueuedCompletionStatusEx initializes exactly the entries it
+        // reports. Avoid clearing the full 4 KiB batch on every empty or
+        // lightly populated poll.
+        let mut entries = [MaybeUninit::<OVERLAPPED_ENTRY>::uninit(); IOCP_BATCH_SIZE];
         let mut entries_removed: u32 = 0;
 
         // SAFETY: self retains the live port throughout this synchronous call.
@@ -1112,7 +1116,7 @@ impl IocpDriver {
         let success = unsafe {
             GetQueuedCompletionStatusEx(
                 self.iocp_handle(),
-                entries.as_mut_ptr(),
+                entries.as_mut_ptr().cast::<OVERLAPPED_ENTRY>(),
                 entries.len() as u32,
                 &mut entries_removed,
                 timeout_ms,
@@ -1135,9 +1139,23 @@ impl IocpDriver {
             return Ok(0);
         }
 
-        self.process_entries(&entries[..entries_removed as usize]);
+        let entries_removed = entries_removed as usize;
+        if entries_removed > entries.len() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "IOCP returned more entries than the supplied batch capacity",
+            ));
+        }
 
-        Ok(entries_removed as usize)
+        // SAFETY: a successful GetQueuedCompletionStatusEx call initialized
+        // the first `entries_removed` records, and the count was checked
+        // against the output buffer capacity above.
+        let initialized = unsafe {
+            std::slice::from_raw_parts(entries.as_ptr().cast::<OVERLAPPED_ENTRY>(), entries_removed)
+        };
+        self.process_entries(initialized);
+
+        Ok(entries_removed)
     }
 
     #[inline]
