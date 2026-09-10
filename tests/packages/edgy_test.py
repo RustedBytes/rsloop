@@ -20,7 +20,7 @@ async def main() -> None:
         class Message(edgy.Model):
             body = edgy.CharField(max_length=100)
 
-            class Meta:
+            class Meta:  # pyright: ignore[reportIncompatibleVariableOverride]
                 registry = models_registry
 
         async with models_registry:

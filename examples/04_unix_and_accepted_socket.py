@@ -4,6 +4,7 @@ import asyncio
 import os
 import socket
 import tempfile
+from typing import cast
 
 import rsloop
 
@@ -13,6 +14,7 @@ class UppercaseProtocol(asyncio.Protocol):
         self.done = done
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        transport = cast(asyncio.Transport, transport)
         self.transport = transport
         if self.done is not None:
             transport.write(b"hello over unix")
@@ -57,6 +59,7 @@ class AcceptedSocketProtocol(asyncio.Protocol):
         self.done = done
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        transport = cast(asyncio.Transport, transport)
         self.transport = transport
 
     def data_received(self, data: bytes) -> None:

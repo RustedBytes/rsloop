@@ -3,6 +3,7 @@ from __future__ import annotations
 import os as __os
 import ssl as __ssl
 import sys as __sys
+import typing as __typing
 
 __DLL_DIR_HANDLES: list[object] = []
 
@@ -73,7 +74,7 @@ def install_ssl_tracking() -> None:
         if isinstance(password_value, str):
             password_value = password_value.encode()
         if password_value is not None and not isinstance(password_value, bytes):
-            password_value = bytes(password_value)
+            password_value = bytes(__typing.cast(__typing.Any, password_value))
         self.__dict__["_rsloop_certfile"] = __os.fspath(certfile)
         self.__dict__["_rsloop_keyfile"] = (
             __os.fspath(keyfile) if keyfile is not None else __os.fspath(certfile)
@@ -103,7 +104,7 @@ def install_ssl_tracking() -> None:
     context_cls.load_default_certs = load_default_certs
     context_cls.load_verify_locations = load_verify_locations
     context_cls.set_default_verify_paths = set_default_verify_paths
-    context_cls._rsloop_tracking_installed = True
+    __typing.cast(__typing.Any, context_cls)._rsloop_tracking_installed = True
 
 
 def bootstrap() -> None:

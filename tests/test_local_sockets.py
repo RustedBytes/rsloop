@@ -4,6 +4,7 @@ import array
 import asyncio
 import socket
 import threading
+from typing import Any, cast
 
 import pytest
 import rsloop
@@ -28,12 +29,12 @@ class TestLocalSocket:
 
     def test_wait_created_before_run_and_immediate_completion(self):
         a, b = self.pair()
-        pending = self.loop.sock_recv(a, 4)
+        pending = cast(asyncio.Future[bytes], self.loop.sock_recv(a, 4))
         assert not pending.done()
         self.loop.call_soon(b.send, b"test")
         assert self.run_async(pending) == b"test"
         b.send(b"next")
-        ready = self.loop.sock_recv(a, 4)
+        ready = cast(asyncio.Future[bytes], self.loop.sock_recv(a, 4))
         assert ready.done()
         assert ready.result() == b"next"
         b.close()
@@ -44,7 +45,7 @@ class TestLocalSocket:
 
         async def exercise():
             buffer = bytearray(4)
-            pending = self.loop.sock_recv_into(a, buffer)
+            pending = cast(asyncio.Future[int], self.loop.sock_recv_into(a, buffer))
             assert not pending.done()
             pending.cancel()
             buffer.extend(b"resize")
@@ -148,7 +149,10 @@ class TestLocalSocket:
 
         async def exercise():
             payload = bytearray(b"x" * 1024 * 1024)
-            pending = self.loop.sock_sendall(sender, payload)
+            pending = cast(
+                asyncio.Future[None],
+                cast(Any, self.loop.sock_sendall)(sender, payload),
+            )
             assert not pending.done()
             assert 0 < sender.sent < len(payload)
             assert sender.attempts == 2
@@ -222,7 +226,7 @@ class TestLocalSocket:
         a, _ = self.pair()
         a.setblocking(True)
         with pytest.raises(ValueError, match="non-blocking"):
-            self.loop.sock_recv(a, 1)
+            _ = self.loop.sock_recv(a, 1)
 
     def test_closed_socket_and_empty_operations(self):
         a, b = self.pair()

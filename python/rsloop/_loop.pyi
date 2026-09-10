@@ -3,8 +3,8 @@ from asyncio import (
     Future,
     Server,
     StreamReader,
-    Task,
     StreamWriter,
+    Task,
 )
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from contextvars import Context
@@ -19,6 +19,7 @@ def transport_stats() -> dict[str, int | bool]: ...
 def reset_transport_stats() -> None: ...
 
 class PyLoop(AbstractEventLoop):
+    slow_callback_duration: float
     def __init__(self) -> None: ...
     def create_future(self) -> Future[Any]: ...
     def create_task(
@@ -31,28 +32,25 @@ class PyLoop(AbstractEventLoop):
         **kwargs: Any,
     ) -> Task[_T]: ...
     def set_slow_callback_duration(self, value: float) -> None: ...
-    def slow_callback_duration(self) -> float: ...
 
 async def start_server(
-    client_connected_cb:Callable[[StreamReader, StreamWriter], Awaitable[None]] | Callable[[StreamReader, StreamWriter], None],
+    client_connected_cb: Callable[[StreamReader, StreamWriter], Awaitable[None]]
+    | Callable[[StreamReader, StreamWriter], None],
     host: str | Sequence[str] | None = None,
     port: int | str | None = None,
     *,
     limit: int = 65536,
     ssl_handshake_timeout: float | None = None,
-    **kwds: Any
-) -> Server:
-    ...
-
+    **kwds: Any,
+) -> Server: ...
 async def open_connection(
     host: str | None = None,
     port: int | str | None = None,
     *,
     limit: int = 65536,
     ssl_handshake_timeout: float | None = None,
-    **kwds: Any
-) -> tuple[StreamReader, StreamWriter]:...
-
+    **kwds: Any,
+) -> tuple[StreamReader, StreamWriter]: ...
 def profiler_compiled() -> bool: ...
 def profiler_running() -> bool: ...
 def start_profiler() -> None: ...

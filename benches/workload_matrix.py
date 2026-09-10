@@ -5,6 +5,7 @@ import argparse
 import asyncio
 import base64
 import hashlib
+import importlib
 import json
 import math
 import os
@@ -19,6 +20,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
 from compare_event_loops import (
     LOOP_CHOICES,
@@ -242,7 +244,7 @@ def validate_args(args: argparse.Namespace) -> None:
             cpus = {int(cpu) for cpu in args.cpu_affinity.split(",")}
             if not cpus or min(cpus) < 0:
                 raise ValueError("CPU IDs must be nonnegative")
-            os.sched_setaffinity(0, cpus)
+            cast(Any, os).sched_setaffinity(0, cpus)
         except (ValueError, OSError) as exc:
             raise SystemExit(f"invalid --cpu-affinity: {exc}") from exc
     for attribute, option in (
@@ -574,12 +576,12 @@ async def run_library_websocket_messages(
     if library == "websockets":
         from websockets.asyncio.server import serve
 
-        async def echo(websocket: object) -> None:
+        async def websockets_echo(websocket: Any) -> None:
             async for message in websocket:
                 await websocket.send(message)
 
         server = await serve(
-            echo,
+            websockets_echo,
             "127.0.0.1",
             0,
             ssl=server_ssl,
@@ -595,7 +597,7 @@ async def run_library_websocket_messages(
     elif library == "aiohttp":
         from aiohttp import WSMsgType, web
 
-        async def echo(request: object) -> object:
+        async def aiohttp_echo(request: Any) -> Any:
             websocket = web.WebSocketResponse(compress=False)
             await websocket.prepare(request)
             async for message in websocket:
@@ -606,12 +608,13 @@ async def run_library_websocket_messages(
             return websocket
 
         app = web.Application()
-        app.router.add_get("/socket", echo)
+        app.router.add_get("/socket", aiohttp_echo)
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=server_ssl)
         await site.start()
-        sockets = site._server.sockets
+        assert site._server is not None
+        sockets = cast(Any, site._server).sockets
         host, port = sockets[0].getsockname()[:2]
 
         async def stop_server() -> None:
@@ -623,7 +626,7 @@ async def run_library_websocket_messages(
         from starlette.routing import WebSocketRoute
         from starlette.websockets import WebSocketDisconnect
 
-        async def echo(websocket: object) -> None:
+        async def starlette_echo(websocket: Any) -> None:
             await websocket.accept()
             try:
                 while True:
@@ -631,7 +634,7 @@ async def run_library_websocket_messages(
             except WebSocketDisconnect:
                 pass
 
-        app = Starlette(routes=[WebSocketRoute("/socket", echo)])
+        app = Starlette(routes=[WebSocketRoute("/socket", starlette_echo)])
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", 0))
@@ -668,10 +671,10 @@ async def run_library_websocket_messages(
 
     scheme = "wss" if use_tls else "ws"
     uri = f"{scheme}://{host}:{port}/socket"
-    connections: list[object] = []
+    connections: list[Any] = []
     latencies: list[float] = []
 
-    async def open_client() -> object:
+    async def open_client() -> Any:
         websocket = await connect(
             uri,
             ssl=client_ssl,
@@ -681,7 +684,7 @@ async def run_library_websocket_messages(
         connections.append(websocket)
         return websocket
 
-    async def client(client_id: int, websocket: object) -> int:
+    async def client(client_id: int, websocket: Any) -> int:
         transferred = 0
         for index in range(args.requests_per_connection):
             size = args.websocket_payload_sizes[
@@ -1055,15 +1058,16 @@ def child_main(args: argparse.Namespace) -> int:
             "platform": platform.platform(),
             "python": sys.version,
             "cpu_count": os.cpu_count(),
-            "cpu_affinity": sorted(os.sched_getaffinity(0))
+            "cpu_affinity": sorted(cast(Any, os).sched_getaffinity(0))
             if hasattr(os, "sched_getaffinity")
             else None,
-            "load_average_start": os.getloadavg()
+            "load_average_start": cast(Any, os).getloadavg()
             if hasattr(os, "getloadavg")
             else None,
             "pid": os.getpid(),
         }
         if args.profile_label:
+            rsloop = importlib.import_module("rsloop")
             with rsloop.profile():
                 awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
                 result = run_with_loop(args.loop, awaitable)
@@ -1071,7 +1075,7 @@ def child_main(args: argparse.Namespace) -> int:
             awaitable = SCENARIO_RUNNERS[args.scenario](args.loop, args)
             result = run_with_loop(args.loop, awaitable)
         environment["load_average_end"] = (
-            os.getloadavg() if hasattr(os, "getloadavg") else None
+            cast(Any, os).getloadavg() if hasattr(os, "getloadavg") else None
         )
         results.append(
             MatrixResult(
@@ -1355,7 +1359,7 @@ def parent_main(args: argparse.Namespace) -> int:
                             for run in measured
                         ],
                     )
-                    interval = comparison["ci95_percent"]
+                    interval = cast(list[float] | None, comparison["ci95_percent"])
                     ci_text = (
                         f"95% CI [{interval[0]:+.1f}%, {interval[1]:+.1f}%]"
                         if interval

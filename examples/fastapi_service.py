@@ -9,11 +9,10 @@ import signal
 import sys
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
-from fastapi import FastAPI, Query
 import uvicorn
-
+from fastapi import FastAPI, Query
 
 EventLoopFactory = Callable[[], asyncio.AbstractEventLoop]
 EVENT_LOOP_CHOICES = ("asyncio", "std-async", "uvloop", "winloop", "rsloop")
@@ -57,9 +56,9 @@ def loop_factory_for(loop_name: str) -> EventLoopFactory:
                 "winloop is not installed. Run with `uv run --with winloop ...`."
             ) from exc
 
-        factory = getattr(winloop, "new_event_loop", None)
-        if callable(factory):
-            return factory
+        winloop_factory: Any = getattr(winloop, "new_event_loop", None)
+        if callable(winloop_factory):
+            return cast(EventLoopFactory, winloop_factory)
 
         policy_cls = getattr(winloop, "EventLoopPolicy", None) or getattr(
             winloop, "WinLoopPolicy", None

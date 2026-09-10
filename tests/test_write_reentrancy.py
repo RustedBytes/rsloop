@@ -3,6 +3,7 @@
 import asyncio
 import socket
 import sys
+from typing import cast
 
 import pytest
 import rsloop
@@ -28,6 +29,7 @@ def test_flow_control_callback_preserves_unsent_data(callback, finish):
 
         class Sender(asyncio.Protocol):
             def connection_made(self, transport):
+                transport = cast(asyncio.Transport, transport)
                 self.transport = transport
                 loop.call_soon(self.send)
 

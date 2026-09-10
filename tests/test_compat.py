@@ -16,6 +16,7 @@ import threading
 import time
 import warnings
 import weakref
+from typing import Any, cast
 
 import pytest
 import rsloop
@@ -59,6 +60,7 @@ class TestCompatibility:
         async def main() -> None:
             class Echo(asyncio.Protocol):
                 def connection_made(self, transport):
+                    transport = cast(asyncio.Transport, transport)
                     self.transport = transport
 
                 def data_received(self, data):
@@ -268,15 +270,17 @@ class TestCompatibility:
             with monkeypatch.context() as patch:
                 patch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
                 patch.setattr(rsloop.Loop, "sock_connect", fake_sock_connect)
+                assert EXCEPTION_GROUP is not None
                 with pytest.raises(EXCEPTION_GROUP) as ctx:
-                    await loop.create_connection(
+                    await cast(Any, loop.create_connection)(
                         asyncio.Protocol,
                         "compat.test",
                         443,
                         all_errors=True,
                     )
-            assert all(isinstance(exc, OSError) for exc in ctx.value.exceptions)
-            return len(ctx.value.exceptions)
+            exceptions = cast(Any, ctx.value).exceptions
+            assert all(isinstance(exc, OSError) for exc in exceptions)
+            return len(exceptions)
 
         assert rsloop.run(main()) == 2
 
@@ -361,7 +365,7 @@ class TestCompatibility:
                     if address[1] == slow_port:
                         await asyncio.sleep(0.2)
                         raise OSError(errno.ECONNREFUSED, "slow fail")
-                    return await orig_sock_connect(self, sock, address)
+                    return await cast(Any, orig_sock_connect)(self, sock, address)
 
                 started = time.monotonic()
                 with monkeypatch.context() as patch:
@@ -395,6 +399,7 @@ class TestCompatibility:
 
             class ServerProtocol(asyncio.Protocol):
                 def connection_made(self, transport):
+                    transport = cast(asyncio.Transport, transport)
                     transport.write(b"response-before-eof")
                     transport.close()
 
@@ -434,6 +439,7 @@ class TestCompatibility:
 
             class ServerProtocol(asyncio.Protocol):
                 def connection_made(self, transport):
+                    transport = cast(asyncio.Transport, transport)
                     transport.write(payload)
                     transport.close()
 
@@ -566,6 +572,7 @@ class TestCompatibility:
 
             class ClientProtocol(asyncio.Protocol):
                 def connection_made(self, transport):
+                    transport = cast(asyncio.Transport, transport)
                     transport.set_write_buffer_limits(0)
                     transport.pause_reading()
 
@@ -697,6 +704,7 @@ class TestCompatibility:
 
             class ServerProtocol(asyncio.Protocol):
                 def connection_made(self, transport):
+                    transport = cast(asyncio.Transport, transport)
                     transport.write(b"bound-socket-server")
                     transport.close()
 
@@ -804,7 +812,7 @@ class TestCompatibility:
                     if wait:
                         time.sleep(0.2)
 
-            loop.set_default_executor(DummyExecutor())
+            loop.set_default_executor(cast(Any, DummyExecutor()))
 
             def capture_warning(message, category=None, stacklevel=1, source=None):
                 messages.append(str(message))
@@ -812,7 +820,7 @@ class TestCompatibility:
 
             with monkeypatch.context() as patch:
                 patch.setattr(warnings, "warn", capture_warning)
-                await loop.shutdown_default_executor(timeout=0.01)
+                await cast(Any, loop.shutdown_default_executor)(timeout=0.01)
             return calls, messages
 
         calls, messages = rsloop.run(main())
@@ -830,7 +838,7 @@ class TestCompatibility:
                 def shutdown(self, wait):
                     return None
 
-            loop.set_default_executor(DummyExecutor())
+            loop.set_default_executor(cast(Any, DummyExecutor()))
             await loop.shutdown_default_executor()
 
             try:
@@ -851,7 +859,7 @@ class TestCompatibility:
                 calls.append(wait)
 
         loop = rsloop.new_event_loop()
-        loop.set_default_executor(DummyExecutor())
+        loop.set_default_executor(cast(Any, DummyExecutor()))
         loop.close()
         loop.close()
 
@@ -962,7 +970,7 @@ class TestCompatibility:
                 def shutdown(self, wait):
                     return None
 
-            loop.set_default_executor(DummyExecutor())
+            loop.set_default_executor(cast(Any, DummyExecutor()))
             addrinfos = await loop.getaddrinfo("localhost", 80, type=socket.SOCK_STREAM)
             host, service = await loop.getnameinfo(("127.0.0.1", 80))
             assert addrinfos
@@ -983,7 +991,7 @@ class TestCompatibility:
                 def shutdown(self, wait):
                     return None
 
-            loop.set_default_executor(DummyExecutor())
+            loop.set_default_executor(cast(Any, DummyExecutor()))
             await loop.shutdown_default_executor()
             try:
                 await loop.getaddrinfo("localhost", 80)
@@ -1021,7 +1029,7 @@ class TestCompatibility:
                 return asyncio.Task(coro, loop=loop, **forwarded)
 
             loop.set_task_factory(factory)
-            task = loop.create_task(
+            task = cast(Any, loop.create_task)(
                 coro(),
                 name="demo",
                 eager_start=False,
@@ -1061,7 +1069,7 @@ class TestCompatibility:
                 TypeError,
                 match=r"create_task\(\) got an unexpected keyword argument 'custom_flag'",
             ):
-                loop.create_task(pending, custom_flag=True)
+                cast(Any, loop.create_task)(pending, custom_flag=True)
             pending.close()
 
         rsloop.run(main())
@@ -1311,7 +1319,7 @@ class TestCompatibility:
     def test_create_unix_server_cleanup_socket_false_leaves_path(self) -> None:
         async def main(path: str) -> bool:
             loop = asyncio.get_running_loop()
-            server = await loop.create_unix_server(
+            server = await cast(Any, loop.create_unix_server)(
                 asyncio.Protocol,
                 path,
                 cleanup_socket=False,
@@ -1332,7 +1340,7 @@ class TestCompatibility:
 
             def worker():
                 try:
-                    loop.add_signal_handler(signal.SIGUSR1, lambda: None)
+                    loop.add_signal_handler(cast(Any, signal).SIGUSR1, lambda: None)
                 except BaseException as exc:
                     errors.append(exc)
 
@@ -1350,8 +1358,8 @@ class TestCompatibility:
     def test_ssl_shutdown_timeout_requires_ssl(self) -> None:
         async def main() -> tuple[str, str]:
             loop = asyncio.get_running_loop()
-            create_connection_error = None
-            create_server_error = None
+            create_connection_error = ""
+            create_server_error = ""
             try:
                 await loop.create_connection(
                     asyncio.Protocol,

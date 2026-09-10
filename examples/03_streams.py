@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from typing import cast
 
 import rsloop
 
 
 class EchoServerProtocol(asyncio.Protocol):
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        transport = cast(asyncio.Transport, transport)
         self.transport = transport
 
     def data_received(self, data: bytes) -> None:
@@ -18,6 +20,7 @@ class ClientProtocol(asyncio.Protocol):
         self.done = done
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        transport = cast(asyncio.Transport, transport)
         self.transport = transport
         transport.write(b"hello over tcp")
 

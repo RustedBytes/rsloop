@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from typing import Any, cast
 
 import rsloop
 from granian.server.embed import Server
@@ -63,7 +64,7 @@ async def main() -> None:
         app,
         address="127.0.0.1",
         port=port,
-        interface="asgi",
+        interface=cast(Any, "asgi"),
         log_enabled=False,
         log_access=False,
     )

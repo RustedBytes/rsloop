@@ -1,22 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import rsloop
+from _smoke import reserve_port, wait_for_http
 from hypercorn.asyncio import serve
 from hypercorn.config import Config
-from quart import Quart
-from quart import jsonify
-
-from _smoke import reserve_port
-from _smoke import wait_for_http
-
+from quart import Quart, jsonify
 
 app = Quart(__name__)
 
 
 @app.get("/")
-async def index() -> object:
+async def index() -> Any:
     loop = asyncio.get_running_loop()
     return jsonify(
         {

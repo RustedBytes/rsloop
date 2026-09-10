@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -124,7 +125,7 @@ class TestIdleBenchmark:
             async def never_reply(n):
                 await asyncio.Future()
 
-            reader.readexactly = never_reply
+            cast(Any, reader).readexactly = never_reply
             return reader, writer
 
         with monkeypatch.context() as patch:

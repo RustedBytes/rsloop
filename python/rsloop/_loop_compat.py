@@ -11,10 +11,10 @@ import typing as __typing
 from ._loop import PyLoop as Loop
 from ._loop import __version__ as __version__
 from ._loop import build_info as build_info
-from ._loop import reset_transport_stats as reset_transport_stats
-from ._loop import transport_stats as transport_stats
 from ._loop import open_connection as __open_connection
+from ._loop import reset_transport_stats as reset_transport_stats
 from ._loop import start_server as __start_server
+from ._loop import transport_stats as transport_stats
 
 _T = __typing.TypeVar("_T")
 __ORIG_SET_EVENT_LOOP = __asyncio.set_event_loop
@@ -61,14 +61,14 @@ __ORIG_SOCK_RECVFROM = getattr(Loop, "sock_recvfrom", None)
 __ORIG_SOCK_RECVFROM_INTO = getattr(Loop, "sock_recvfrom_into", None)
 __ORIG_SOCK_SENDTO = getattr(Loop, "sock_sendto", None)
 __ORIG_SOCK_SENDFILE = getattr(Loop, "sock_sendfile", None)
-__ORIG_RUN_FOREVER = Loop.run_forever
-__ORIG_RUN_UNTIL_COMPLETE = Loop.run_until_complete
+__ORIG_RUN_FOREVER: __typing.Any = Loop.run_forever
+__ORIG_RUN_UNTIL_COMPLETE: __typing.Any = Loop.run_until_complete
 __ORIG_SHUTDOWN_ASYNCGENS = Loop.shutdown_asyncgens
-__ORIG_CLOSE = Loop.close
+__ORIG_CLOSE: __typing.Any = Loop.close
 __ORIG_CREATE_TASK = Loop.create_task
 __USE_FAST_STREAMS = __os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
-__ASYNCGEN_STATE: dict[Loop, dict[str, object]] = {}
-__LOOP_CONFIG: dict[Loop, dict[str, object]] = {}
+__ASYNCGEN_STATE: dict[Loop, dict[str, __typing.Any]] = {}
+__LOOP_CONFIG: dict[Loop, dict[str, __typing.Any]] = {}
 
 if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
     __asyncio.open_connection = __open_connection
@@ -80,7 +80,7 @@ _io = __io
 _os = __os
 
 
-def __get_asyncgen_state(loop: Loop) -> dict[str, object]:
+def __get_asyncgen_state(loop: Loop) -> dict[str, __typing.Any]:
     state = __ASYNCGEN_STATE.get(loop)
     if state is None:
         state = {
@@ -92,7 +92,7 @@ def __get_asyncgen_state(loop: Loop) -> dict[str, object]:
     return state
 
 
-def __get_loop_config(loop: Loop) -> dict[str, object]:
+def __get_loop_config(loop: Loop) -> dict[str, __typing.Any]:
     config = __LOOP_CONFIG.get(loop)
     if config is None:
         config = {
@@ -557,7 +557,8 @@ async def __loop_create_datagram_endpoint(
         if reuse_port:
             if not hasattr(__socket, "SO_REUSEPORT"):
                 raise ValueError("reuse_port not supported by socket module")
-            sock.setsockopt(__socket.SOL_SOCKET, __socket.SO_REUSEPORT, 1)
+            reuse_port_option = __typing.cast(__typing.Any, __socket).SO_REUSEPORT
+            sock.setsockopt(__socket.SOL_SOCKET, reuse_port_option, 1)
         if allow_broadcast:
             sock.setsockopt(__socket.SOL_SOCKET, __socket.SO_BROADCAST, 1)
         if local_addr is not None:
@@ -604,8 +605,11 @@ def __subprocess_text_requested(kwds: dict[str, object]) -> bool:
     )
 
 
+_DEFAULT_STREAM_LIMIT = 2**16
+
+
 class _TextStreamReader:
-    def __init__(self, limit=_asyncio.streams._DEFAULT_LIMIT, loop=None):
+    def __init__(self, limit=_DEFAULT_STREAM_LIMIT, loop=None):
         if limit <= 0:
             raise ValueError("Limit cannot be <= 0")
 
@@ -689,7 +693,8 @@ class _TextStreamReader:
     def _maybe_resume_transport(self):
         if self._paused and len(self._buffer) <= self._limit:
             self._paused = False
-            self._transport.resume_reading()
+            if self._transport is not None:
+                self._transport.resume_reading()
 
     async def _wait_for_data(self, func_name):
         if self._waiter is not None:
@@ -702,7 +707,8 @@ class _TextStreamReader:
 
         if self._paused:
             self._paused = False
-            self._transport.resume_reading()
+            if self._transport is not None:
+                self._transport.resume_reading()
 
         self._waiter = self._loop.create_future()
         try:
@@ -775,7 +781,9 @@ class _TextStreamReader:
             if self._eof:
                 chunk = self._buffer
                 self._buffer = ""
-                raise _asyncio.exceptions.IncompleteReadError(chunk, None)
+                raise _asyncio.exceptions.IncompleteReadError(
+                    __typing.cast(__typing.Any, chunk), None
+                )
 
             await self._wait_for_data("readuntil")
 
@@ -804,7 +812,9 @@ class _TextStreamReader:
             if self._eof:
                 partial = self._buffer
                 self._buffer = ""
-                raise _asyncio.exceptions.IncompleteReadError(partial, n)
+                raise _asyncio.exceptions.IncompleteReadError(
+                    __typing.cast(__typing.Any, partial), n
+                )
             await self._wait_for_data("readexactly")
 
         data = self._buffer[:n]
@@ -893,13 +903,14 @@ class _TextSubprocessStreamProtocol(
 ):
     def __init__(self, limit, loop, encoding, errors):
         super().__init__(loop=loop)
+        self._loop = loop
         self._limit = limit
         self._encoding = encoding
         self._errors = errors
         self._stdout_decoder = None
         self._stderr_decoder = None
         self.stdin = self.stdout = self.stderr = None
-        self._transport = None
+        self._transport: __typing.Any = None
         self._process_exited = False
         self._pipe_fds = []
         self._stdin_closed = self._loop.create_future()
@@ -914,7 +925,7 @@ class _TextSubprocessStreamProtocol(
             info.append(f"stderr={self.stderr!r}")
         return "<{}>".format(" ".join(info))
 
-    def connection_made(self, transport):
+    def connection_made(self, transport: __typing.Any):
         self._transport = transport
 
         stdout_transport = transport.get_pipe_transport(1)
@@ -1018,7 +1029,9 @@ def __subprocess_text_config(kwds: dict[str, object]) -> tuple[bool, str, str]:
     return text_enabled, str(encoding), str(errors)
 
 
-def __without_text_kwds(kwds: dict[str, object]) -> dict[str, object]:
+def __without_text_kwds(
+    kwds: dict[str, __typing.Any],
+) -> dict[str, __typing.Any]:
     filtered = dict(kwds)
     filtered.pop("text", None)
     filtered.pop("encoding", None)
@@ -1052,7 +1065,7 @@ async def __create_text_subprocess_exec(
     stdin=None,
     stdout=None,
     stderr=None,
-    limit=_asyncio.streams._DEFAULT_LIMIT,
+    limit=_DEFAULT_STREAM_LIMIT,
     **kwds,
 ):
     loop = _asyncio.events.get_running_loop()
@@ -1094,7 +1107,7 @@ async def __create_text_subprocess_shell(
     stdin=None,
     stdout=None,
     stderr=None,
-    limit=_asyncio.streams._DEFAULT_LIMIT,
+    limit=_DEFAULT_STREAM_LIMIT,
     **kwds,
 ):
     loop = _asyncio.events.get_running_loop()
@@ -1527,7 +1540,9 @@ if Loop.create_connection is __ORIG_CREATE_CONNECTION:
     Loop.create_connection = __loop_create_connection
 
 if __ORIG_CREATE_DATAGRAM_ENDPOINT is None:
-    Loop.create_datagram_endpoint = __loop_create_datagram_endpoint
+    __typing.cast(
+        __typing.Any, Loop
+    ).create_datagram_endpoint = __loop_create_datagram_endpoint
 
 if __ORIG_SENDFILE is None:
     Loop.sendfile = __loop_sendfile
@@ -1542,12 +1557,11 @@ if __ORIG_SOCK_SENDTO is None:
     Loop.sock_sendto = __loop_sock_sendto
 
 if __ORIG_SOCK_SENDFILE is None:
-    Loop.sock_sendfile = __loop_sock_sendfile
+    __typing.cast(__typing.Any, Loop).sock_sendfile = __loop_sock_sendfile
 
 if not hasattr(Loop, "slow_callback_duration"):
-    Loop.slow_callback_duration = property(
-        __get_slow_callback_duration,
-        __set_slow_callback_duration,
+    __typing.cast(__typing.Any, Loop).slow_callback_duration = property(
+        __get_slow_callback_duration, __set_slow_callback_duration
     )
 
 # Keep the Rust implementation on the hot path. It already handles task

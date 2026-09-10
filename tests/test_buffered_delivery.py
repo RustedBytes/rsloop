@@ -3,6 +3,7 @@
 import array
 import asyncio
 import concurrent.futures
+from typing import cast
 
 import pytest
 import rsloop
@@ -17,6 +18,7 @@ def transfer(seed, finish="close", buffered=True, server_sender=True):
 
         class Sender(asyncio.Protocol):
             def connection_made(self, transport):
+                transport = cast(asyncio.Transport, transport)
                 transport.writelines(
                     (
                         payload[:17],
@@ -48,8 +50,8 @@ def transfer(seed, finish="close", buffered=True, server_sender=True):
             def get_buffer(self, sizehint):
                 return self.buffer
 
-            def buffer_updated(self, count):
-                self.received.extend(self.buffer.tobytes()[:count])
+            def buffer_updated(self, nbytes):
+                self.received.extend(self.buffer.tobytes()[:nbytes])
                 # Both resizing the old exporter and replacing it are legal:
                 # delivery must not retain its export across this callback.
                 self.buffer.append(0)

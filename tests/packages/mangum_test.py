@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import rsloop
 from mangum import Mangum
@@ -63,7 +63,9 @@ EVENT = {
 def main() -> None:
     rsloop.install()
     try:
-        response = Mangum(app, lifespan="off")(EVENT, LambdaContext())
+        response = cast(Any, Mangum)(app, lifespan="off")(
+            EVENT, cast(Any, LambdaContext())
+        )
         assert response["statusCode"] == 200, response
         assert "mangum-rsloop" in response["body"], response
         print("mangum ok")

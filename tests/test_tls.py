@@ -10,6 +10,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+from typing import cast
 
 import pytest
 import rsloop
@@ -174,6 +175,7 @@ class TestTls:
 
             class ServerProtocol(asyncio.Protocol):
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    transport = cast(asyncio.Transport, transport)
                     self.transport = transport
 
                 def data_received(self, data: bytes) -> None:
@@ -190,6 +192,7 @@ class TestTls:
                     self.result: asyncio.Future[str] = loop.create_future()
 
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    transport = cast(asyncio.Transport, transport)
                     self.transport = transport
                     transport.write(b"tls-ok")
 
@@ -243,6 +246,7 @@ class TestTls:
 
             class ServerProtocol(asyncio.Protocol):
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    transport = cast(asyncio.Transport, transport)
                     self.transport = transport
 
                 def data_received(self, data: bytes) -> None:
@@ -255,6 +259,7 @@ class TestTls:
                     self.done: asyncio.Future[str] = loop.create_future()
 
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    transport = cast(asyncio.Transport, transport)
                     transport.write(b"tls")
 
                 def data_received(self, data: bytes) -> None:
@@ -298,6 +303,7 @@ class TestTls:
 
             class AcceptedProtocol(asyncio.Protocol):
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    transport = cast(asyncio.Transport, transport)
                     self.transport = transport
 
                 def data_received(self, data: bytes) -> None:
@@ -310,6 +316,7 @@ class TestTls:
                     self.done: asyncio.Future[str] = loop.create_future()
 
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    transport = cast(asyncio.Transport, transport)
                     transport.write(b"socket")
 
                 def data_received(self, data: bytes) -> None:
@@ -360,6 +367,7 @@ class TestTls:
                     self.connected = asyncio.Event()
 
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    transport = cast(asyncio.Transport, transport)
                     self.transport = transport
                     self.connected.set()
                     if not isinstance(
@@ -370,12 +378,14 @@ class TestTls:
                             server_upgraded.set()
 
                 async def upgrade(self, ssl_context) -> None:
-                    self.transport = await loop.start_tls(
+                    transport = await loop.start_tls(
                         self.transport,
                         self,
                         ssl_context,
                         server_side=True,
                     )
+                    transport = cast(asyncio.Transport, transport)
+                    self.transport = transport
 
                 def data_received(self, data: bytes) -> None:
                     self.transport.write(b"upgraded:" + data)
@@ -386,6 +396,7 @@ class TestTls:
                     self.done: asyncio.Future[str] = loop.create_future()
 
                 def connection_made(self, transport: asyncio.BaseTransport) -> None:
+                    transport = cast(asyncio.Transport, transport)
                     self.transport = transport
 
                 def data_received(self, data: bytes) -> None:
@@ -393,12 +404,14 @@ class TestTls:
                         self.done.set_result(data.decode())
 
                 async def upgrade(self, ssl_context) -> None:
-                    self.transport = await loop.start_tls(
+                    transport = await loop.start_tls(
                         self.transport,
                         self,
                         ssl_context,
                         server_hostname="localhost",
                     )
+                    transport = cast(asyncio.Transport, transport)
+                    self.transport = transport
                     await asyncio.wait_for(server_upgraded.wait(), 5.0)
                     self.transport.write(b"starttls")
 

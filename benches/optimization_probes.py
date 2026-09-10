@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any, cast
 
 
 async def callbacks(mode: str) -> None:
@@ -90,6 +91,7 @@ async def protocol_transfer(buffered: bool, lines: bool) -> None:
 
     class Sender(asyncio.Protocol):
         def connection_made(self, transport):
+            transport = cast(asyncio.Transport, transport)
             self.transport = transport
             self.sent = 0
             self.paused = False
@@ -138,8 +140,8 @@ async def protocol_transfer(buffered: bool, lines: bool) -> None:
         def get_buffer(self, sizehint):
             return self.buffer
 
-        def buffer_updated(self, count):
-            self.count += count
+        def buffer_updated(self, nbytes):
+            self.count += nbytes
 
     server = await loop.create_server(Sender, "127.0.0.1", 0)
     transport = None
@@ -208,9 +210,11 @@ def main():
             sys.path.insert(0, args.baseline_pythonpath)
             name = "rsloop"
         module = importlib.import_module(name)
-        if args.child[0] == "rsloop_before" and not Path(
-            module.__file__
-        ).is_relative_to(args.baseline_pythonpath):
+        module_file = module.__file__
+        assert module_file is not None
+        if args.child[0] == "rsloop_before" and not Path(module_file).is_relative_to(
+            args.baseline_pythonpath
+        ):
             raise RuntimeError(
                 "baseline import did not use the supplied wheel directory"
             )
@@ -282,7 +286,7 @@ def main():
                     for n in names
                 },
                 "baseline_pythonpath": args.baseline_pythonpath,
-                "cpu_affinity": sorted(os.sched_getaffinity(0))
+                "cpu_affinity": sorted(cast(Any, os).sched_getaffinity(0))
                 if hasattr(os, "sched_getaffinity")
                 else None,
                 "method": "fresh process per scenario/run; rotating loop order; first block discarded",

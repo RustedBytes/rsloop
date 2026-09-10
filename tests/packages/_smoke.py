@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from typing import Any
+from typing import Any, Literal
 
 
 def reserve_port() -> int:
@@ -55,7 +55,7 @@ async def run_uvicorn_app(
     marker: bytes,
     *,
     name: str,
-    lifespan: str = "on",
+    lifespan: Literal["auto", "on", "off"] = "on",
 ) -> None:
     import uvicorn
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
 import rsloop
 from asgiref.sync import sync_to_async
@@ -41,7 +42,7 @@ async def main() -> None:
     assert "rsloop" in loop_name, loop_name
 
     with tempfile.TemporaryDirectory() as directory:
-        message = configure_django(Path(directory) / "django.sqlite")
+        message = cast(Any, configure_django(Path(directory) / "django.sqlite"))
 
         def create_table() -> None:
             with connection.schema_editor() as editor:

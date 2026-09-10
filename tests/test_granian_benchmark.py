@@ -7,6 +7,7 @@ import signal
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -104,7 +105,7 @@ def test_stop_server_reaps_forkserver_process_group(
     )
     monkeypatch.setattr(benchmark.sys, "platform", "linux")
 
-    benchmark.stop_server(process)
+    benchmark.stop_server(cast(Any, process))
 
     assert killpg.call_args_list == [
         mocker.call(1234, signal.SIGTERM),

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import rsloop
 from _smoke import reserve_port, wait_for_http
@@ -35,7 +35,9 @@ async def main() -> None:
     config.accesslog = None
     config.errorlog = None
 
-    task = asyncio.create_task(serve(app, config, shutdown_trigger=shutdown.wait))
+    task = asyncio.create_task(
+        serve(cast(Any, app), config, shutdown_trigger=shutdown.wait)
+    )
     try:
         response = await wait_for_http(port)
         assert b"hypercorn-rsloop" in response, response

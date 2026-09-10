@@ -4,6 +4,7 @@ import asyncio
 import os
 import signal
 import sys
+from typing import cast
 
 import rsloop
 
@@ -27,6 +28,7 @@ class WritePipeProtocol(asyncio.Protocol):
         self.payload = payload
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        transport = cast(asyncio.WriteTransport, transport)
         self.transport = transport
         transport.write(self.payload)
         transport.close()
@@ -41,9 +43,10 @@ class ProcessProtocol(asyncio.SubprocessProtocol):
         self.done = done
         self.stdout = bytearray()
         self.stderr = bytearray()
-        self.events: list[tuple[str, object]] = []
+        self.events: list[tuple[object, ...]] = []
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        transport = cast(asyncio.SubprocessTransport, transport)
         self.transport = transport
         self.events.append(("pid", transport.get_pid()))
 
@@ -147,6 +150,7 @@ async def demo_subprocesses() -> None:
         stderr=asyncio.subprocess.PIPE,
     )
     stdin_transport = transport.get_pipe_transport(0)
+    stdin_transport = cast(asyncio.WriteTransport, stdin_transport)
     stdin_transport.write(b"subprocess-exec-demo")
     stdin_transport.close()
     print("subprocess_exec:", await asyncio.wait_for(exec_done, 2.0))
@@ -183,6 +187,7 @@ async def demo_high_level_subprocesses() -> None:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
+    assert proc.stdin is not None
     proc.stdin.write(b"create-subprocess-exec-demo")
     proc.stdin.write_eof()
     await proc.stdin.wait_closed()

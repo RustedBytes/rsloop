@@ -3,6 +3,7 @@
 import asyncio
 import concurrent.futures
 import socket
+from typing import Any, cast
 
 import pytest
 import rsloop
@@ -31,7 +32,7 @@ def test_numeric_results_match_system_resolver(host, kind, proto, port, monkeypa
         loop = asyncio.get_running_loop()
         for requested_family in (socket.AF_UNSPEC, family):
             for requested_proto in (0, proto):
-                future = loop.getaddrinfo(
+                future = cast(Any, loop.getaddrinfo)(
                     host,
                     port,
                     family=requested_family,
@@ -97,7 +98,7 @@ def test_numeric_resolution_respects_custom_executor_and_shutdown():
 
     async def main():
         loop = asyncio.get_running_loop()
-        loop.set_default_executor(Executor())
+        loop.set_default_executor(cast(Any, Executor()))
         assert await loop.getaddrinfo("127.0.0.1", 80, type=socket.SOCK_STREAM) == [
             "custom executor"
         ]

@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import ctypes
-from ctypes import wintypes
 import gc
 import importlib
 import json
@@ -13,9 +12,10 @@ import statistics
 import subprocess
 import sys
 import time
+from collections.abc import Awaitable
+from ctypes import wintypes
 from dataclasses import dataclass, replace
-from typing import Callable
-
+from typing import Any, Callable, cast
 
 LOOP_CHOICES = ("asyncio", "uvloop", "winloop", "zuvloop", "rsloop")
 WORKLOAD_CHOICES = ("callbacks", "tasks", "tcp_streams")
@@ -179,9 +179,9 @@ def loop_factory_for(loop_name: str) -> Callable[[], asyncio.AbstractEventLoop]:
             raise RuntimeError("winloop is only supported on Windows")
 
         winloop = importlib.import_module("winloop")
-        factory = getattr(winloop, "new_event_loop", None)
-        if callable(factory):
-            return factory
+        winloop_factory: Any = getattr(winloop, "new_event_loop", None)
+        if callable(winloop_factory):
+            return cast(Callable[[], asyncio.AbstractEventLoop], winloop_factory)
 
         policy_cls = getattr(winloop, "EventLoopPolicy", None) or getattr(
             winloop, "WinLoopPolicy", None
@@ -285,7 +285,7 @@ def format_bytes(num_bytes: int) -> str:
     raise AssertionError("unreachable")
 
 
-def run_with_loop(loop_name: str, coro: asyncio.coroutines) -> ChildResult:
+def run_with_loop(loop_name: str, coro: Awaitable[ChildResult]) -> ChildResult:
     loop_factory = loop_factory_for(loop_name)
     if sys.version_info[:2] >= (3, 12):
         return asyncio.run(coro, loop_factory=loop_factory)

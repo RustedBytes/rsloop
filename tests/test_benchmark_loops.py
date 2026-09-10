@@ -97,6 +97,7 @@ class TestBenchmarkLoop:
             patch.setattr(comparison.importlib, "import_module", imported)
             available, reason = comparison.is_loop_available("zuvloop")
         assert not available
+        assert reason is not None
         assert "no zuvloop" in reason
 
     def test_older_python_rejects_before_import(self, monkeypatch, mocker):
@@ -106,6 +107,7 @@ class TestBenchmarkLoop:
             patch.setattr(comparison.importlib, "import_module", imported)
             available, reason = comparison.is_loop_available("zuvloop")
             assert not available
+            assert reason is not None
             assert "requires Python 3.14" in reason
             imported.assert_not_called()
 

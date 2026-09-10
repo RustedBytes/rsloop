@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 
 import rsloop
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -28,7 +29,9 @@ async def main() -> None:
             session.add_all([Message(body="hello"), Message(body="from-sqlmodel")])
 
         async with session_factory() as session:
-            result = await session.scalars(select(Message).order_by(Message.id))
+            result = await session.scalars(
+                select(Message).order_by(cast(Any, Message.id))
+            )
             assert [message.body for message in result] == [
                 "hello",
                 "from-sqlmodel",

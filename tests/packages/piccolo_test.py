@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
 import rsloop
 from piccolo.columns import Varchar
@@ -27,7 +28,7 @@ async def main() -> None:
             Message(body="from-piccolo"),
         )
 
-        rows = await Message.select(Message.body).order_by(Message.id)
+        rows = await Message.select(Message.body).order_by(cast(Any, Message).id)
         assert rows == [
             {"body": "hello"},
             {"body": "from-piccolo"},

@@ -13,10 +13,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sys
+from typing import Any, cast
 
 import pytest
 import rsloop
-from rsloop._loop import PyFastStreamReader
+import rsloop._loop as loop_module
+
+PyFastStreamReader = cast(Any, loop_module).PyFastStreamReader
 
 FEED = "feed"
 EOF = "eof"
@@ -288,7 +291,7 @@ class TestFastStreamReaderCompat:
             ):
                 reader = factory()
                 outcome = await drive(reader, script, call)
-                results[label] = (outcome, bytes(reader._buffer))
+                results[label] = (outcome, bytes(cast(Any, reader)._buffer))
 
         rsloop.run(main())
         return results

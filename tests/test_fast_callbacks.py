@@ -4,6 +4,7 @@ import contextvars
 import gc
 import threading
 import weakref
+from typing import Any, cast
 
 import pytest
 import rsloop
@@ -44,6 +45,7 @@ class TestFastCallback:
         loop = rsloop.new_event_loop()
         try:
             for schedule in (loop.call_soon, loop.call_soon_threadsafe):
+                schedule = cast(Any, schedule)
                 with pytest.raises(TypeError):
                     schedule()
                 with pytest.raises(TypeError):
@@ -56,7 +58,7 @@ class TestFastCallback:
             loop.close()
 
     def test_unbound_descriptor_rejects_wrong_receiver_and_accepts_subclass(self):
-        descriptor = rsloop.Loop.call_soon
+        descriptor = cast(Any, rsloop.Loop.call_soon)
         with pytest.raises(TypeError):
             descriptor(object(), lambda: None)
 

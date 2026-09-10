@@ -13,11 +13,13 @@ from __future__ import annotations
 import asyncio
 import socket
 import sys
+from typing import Any
 
 import anyio
 import anyio.to_thread
 import rsloop
 from _smoke import reserve_port
+from anyio.abc import SocketStream
 
 CHILD_ARGS = (sys.executable, "-c", "print('anyio-subprocess-ok')")
 
@@ -53,8 +55,8 @@ async def check_open_process() -> None:
 async def check_tcp_round_trip() -> None:
     port = reserve_port()
 
-    async def serve(listener: anyio.abc.SocketListener) -> None:
-        async def handle(stream: anyio.abc.SocketStream) -> None:
+    async def serve(listener: Any) -> None:
+        async def handle(stream: SocketStream) -> None:
             async with stream:
                 await stream.send(await stream.receive())
 
@@ -73,7 +75,7 @@ async def check_concurrent_send_backpressure() -> None:
     """A full Windows send buffer must not block the event-loop thread."""
     server = socket.create_server(("127.0.0.1", 0))
 
-    async def send_forever(stream: anyio.abc.SocketStream) -> None:
+    async def send_forever(stream: SocketStream) -> None:
         while True:
             await stream.send(b"\0" * 4096)
 
