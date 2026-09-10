@@ -22,7 +22,6 @@ mod engine;
 mod errors;
 mod module_init;
 mod platform;
-mod profiler;
 mod python_names;
 pub mod rust_async;
 mod transport;
@@ -36,7 +35,6 @@ mod verification;
 pub(crate) mod vibeio;
 
 pub(crate) use platform::fd as fd_ops;
-pub(crate) use profiler::{profile_function, profile_scope};
 
 // Compatibility re-exports for the crate's existing Rust API. Internal module
 // registration imports from the owning modules directly, so these can be

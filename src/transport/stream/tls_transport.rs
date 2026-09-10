@@ -51,7 +51,6 @@ pub fn prepare_start_tls_transport(
     transport: Py<PyStreamTransport>,
     protocol: Py<PyAny>,
 ) -> PyResult<PreparedTlsTransport> {
-    crate::profile_scope!("stream.prepare_start_tls_transport");
     let (mut spawn_context, stream) = transport.borrow(py).core.upgrade_stream(py)?;
     spawn_context.protocol = protocol;
     Ok(PreparedTlsTransport {
@@ -66,7 +65,6 @@ pub fn start_tls_transport(
     client_tls: Option<ClientTlsSettings>,
     server_tls: Option<ServerTlsSettings>,
 ) -> PyResult<Py<PyStreamTransport>> {
-    crate::profile_scope!("stream.start_tls_transport");
     let PreparedTlsTransport {
         spawn_context,
         stream,

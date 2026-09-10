@@ -34,7 +34,6 @@ pub(super) fn spawn_writer_worker(
     writer: WriterTarget,
     writer_rx: WriterReceiver,
 ) -> io::Result<()> {
-    crate::profile_scope!("stream.spawn_writer_worker");
     let thread_core = Arc::clone(&core);
     let worker = WorkerThread::spawn("rsloop-stream-writer", move |stop| {
         run_stream_writer(thread_core, writer, writer_rx, stop)
@@ -64,7 +63,6 @@ pub(super) fn run_stream_writer(
     writer_rx: WriterReceiver,
     stop: Arc<AtomicBool>,
 ) {
-    crate::profile_scope!("stream.run_stream_writer");
     let mut pending_command = None;
 
     loop {
@@ -208,7 +206,6 @@ pub(super) fn run_tls_writer(
     writer_rx: WriterReceiver,
     stop: Arc<AtomicBool>,
 ) {
-    crate::profile_scope!("stream.run_tls_writer");
     let mut pending_command = None;
 
     loop {

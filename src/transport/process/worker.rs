@@ -146,7 +146,6 @@ pub(super) fn run_process_reader(
     fd: i32,
     mut reader: BoxedProcessReader,
 ) {
-    crate::profile_scope!("process.run_reader");
     let mut buf = vec![0_u8; PROCESS_READER_BUFFER_SIZE].into_boxed_slice();
     loop {
         match reader.read(&mut buf) {
@@ -186,7 +185,6 @@ pub(super) fn run_process_waiter(
     mut child: Child,
     control_rx: Receiver<ProcessCommand>,
 ) {
-    crate::profile_scope!("process.run_waiter");
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {

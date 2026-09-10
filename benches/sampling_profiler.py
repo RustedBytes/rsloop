@@ -19,7 +19,7 @@ def sampling_profiler_command(command: list[str], output: Path) -> list[str]:
     if not command or Path(command[0]).resolve() != Path(sys.executable).resolve():
         raise ValueError("the profiled command must use the current Python interpreter")
 
-    output = output.with_suffix(".html")
+    output = output.expanduser().resolve().with_suffix(".html")
     output.parent.mkdir(parents=True, exist_ok=True)
     return [
         sys.executable,

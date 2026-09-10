@@ -18,7 +18,6 @@ use super::{PyStreamTransport, WriterCommand, stop_socket_reader_nowait};
 
 impl PyStreamTransport {
     pub(crate) fn write_data(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
-        crate::profile_scope!("PyStreamTransport::write_data");
         if self.core.is_closing() {
             return Ok(());
         }

@@ -70,7 +70,6 @@ pub fn client_tls_settings(
 }
 
 fn cached_client_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<Arc<ClientConfig>> {
-    crate::profile_scope!("tls.cached_client_config");
     // The Python `SSLContext` owns the capsule, so repeated connections can
     // reuse an `Arc<ClientConfig>` until compatibility metadata changes.
     let context_dict = ssl_context.bind(py).getattr("__dict__")?;
@@ -116,7 +115,6 @@ pub fn server_tls_settings(
     ssl_handshake_timeout: Option<f64>,
     ssl_shutdown_timeout: Option<f64>,
 ) -> PyResult<ServerTlsSettings> {
-    crate::profile_scope!("tls.server_settings");
     let ssl_context = normalize_server_ssl_context(py, ssl)?;
     let config = build_server_config(py, &ssl_context)?;
     let handshake_timeout = handshake_timeout(ssl_handshake_timeout)?;

@@ -37,7 +37,6 @@ pub(super) fn create_connection<'py>(
     py: Python<'py>,
     params: CreateConnectionParams,
 ) -> PyResult<Bound<'py, PyAny>> {
-    crate::profile_scope!("PyLoop::create_connection");
     let CreateConnectionParams {
         protocol_factory,
         host,
@@ -146,7 +145,6 @@ pub(super) fn create_connection_transport(
     sock: Py<PyAny>,
     tls: TlsParams,
 ) -> PyResult<Py<PyAny>> {
-    crate::profile_scope!("PyLoop::_create_connection_transport");
     tls.validate()?;
 
     let env = LoopSpawnEnv::capture(py, &slf)?;
@@ -214,7 +212,6 @@ pub(super) fn connect_accepted_socket<'py>(
     sock: Py<PyAny>,
     tls: TlsParams,
 ) -> PyResult<Bound<'py, PyAny>> {
-    crate::profile_scope!("PyLoop::connect_accepted_socket");
     tls.validate()?;
 
     let locals = PyLoop::task_locals(py, &slf)?;
@@ -250,7 +247,6 @@ pub(super) fn start_tls<'py>(
     tls: TlsParams,
     server_side: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    crate::profile_scope!("PyLoop::start_tls");
     let locals = PyLoop::task_locals(py, &slf)?;
     let locals_for_barrier = locals.clone();
     let transport: Py<PyStreamTransport> = transport.extract(py)?;

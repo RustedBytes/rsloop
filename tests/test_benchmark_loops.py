@@ -9,10 +9,80 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benches"))
 import compare_event_loops as comparison
+import sampling_profiler as sampling
 import workload_matrix as matrix
 
 
 class TestBenchmarkLoop:
+    def test_python315_profiler_command_writes_native_thread_flamegraph(
+        self, tmp_path, monkeypatch, mocker
+    ):
+        monkeypatch.setattr(sampling.sys, "version_info", (3, 15))
+        mocker.patch.object(sampling.importlib.util, "find_spec", return_value=object())
+        output = tmp_path / "callbacks.profile"
+
+        command = sampling.sampling_profiler_command(
+            [sys.executable, "benchmark.py", "--child"], output
+        )
+
+        assert command[:4] == [
+            sys.executable,
+            "-m",
+            "profiling.sampling",
+            "run",
+        ]
+        assert "--all-threads" in command
+        assert "--native" in command
+        assert "--flamegraph" in command
+        assert command[command.index("-o") + 1] == str(
+            output.resolve().with_suffix(".html")
+        )
+        assert command[-2:] == ["benchmark.py", "--child"]
+
+    def test_profiler_command_rejects_python_before_315(self, monkeypatch):
+        monkeypatch.setattr(sampling.sys, "version_info", (3, 14))
+
+        with pytest.raises(RuntimeError, match="Python 3.15 or newer"):
+            sampling.sampling_profiler_command(
+                [sys.executable, "benchmark.py"], Path("profile.html")
+            )
+
+    def test_matrix_profile_wraps_child_and_parses_output(
+        self, tmp_path, monkeypatch, mocker
+    ):
+        monkeypatch.setattr(sys, "argv", ["benchmark"])
+        args = matrix.parse_args()
+        matrix.validate_args(args)
+        wrapped_command = [sys.executable, "-m", "profiling.sampling", "run"]
+        wrapper = mocker.patch.object(
+            matrix, "sampling_profiler_command", return_value=wrapped_command
+        )
+        payload = {
+            "loop": "rsloop",
+            "scenario": "http_keepalive",
+            "seconds": 0.1,
+            "operations": 10,
+            "bytes_transferred": 100,
+            "latency_ms": [1.0],
+        }
+        run = mocker.patch.object(
+            matrix.subprocess,
+            "run",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout=f"{json.dumps(payload)}\nFlamegraph saved\n",
+                stderr="",
+            ),
+        )
+        output = tmp_path / "matrix.html"
+
+        result = matrix.run_child(args, "rsloop", "http_keepalive", output)
+
+        assert result.scenario == "http_keepalive"
+        wrapper.assert_called_once()
+        assert wrapper.call_args.args[1] == output
+        assert run.call_args.args[0] == wrapped_command
+
     def test_child_commands_and_results_preserve_zuvloop(self, monkeypatch, mocker):
         monkeypatch.setattr(sys, "argv", ["benchmark"])
         micro_args = comparison.parse_args()

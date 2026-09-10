@@ -394,7 +394,6 @@ impl LoopCore {
     /// avoid a channel round trip. `LoopCoreError::ChannelClosed` means the
     /// dispatcher has already terminated.
     pub fn send_command(&self, command: LoopCommand) -> Result<(), LoopCoreError> {
-        crate::profile_scope!("LoopCore::send_command");
         let command = match self.try_handle_local_command(command) {
             Ok(()) => return Ok(()),
             Err(command) => command,
@@ -498,7 +497,6 @@ impl LoopCore {
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
     ) -> PyResult<Py<super::callbacks::PyHandle>> {
-        crate::profile_scope!("LoopCore::schedule_callback");
         let (captured, context_needs_run) = capture_context(py, context)?;
         let ready = ReadyCallback::new(
             py,
@@ -554,7 +552,6 @@ impl LoopCore {
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
     ) -> PyResult<(Arc<ReadyCallback>, f64)> {
-        crate::profile_scope!("LoopCore::schedule_timer");
         let (captured, context_needs_run) = capture_context(py, context)?;
         let ready = Arc::new(ReadyCallback::new(
             py,
@@ -609,7 +606,6 @@ impl LoopCore {
     ///
     /// Returns an error if the loop is closed or already running.
     pub fn run_forever(self: &Arc<Self>, py: Python<'_>, loop_obj: Py<PyAny>) -> PyResult<()> {
-        crate::profile_function!();
         {
             let mut state = self.state.lock().expect("poisoned loop state");
             if state.closed {
@@ -735,11 +731,9 @@ impl LoopCore {
                     .expect("ready batch was checked as non-empty");
                 match item {
                     ReadyItem::Stop => {
-                        crate::profile_scope!("ready.stop");
                         self.state.lock().expect("poisoned loop state").stopping = true;
                     }
                     ReadyItem::Callback(callback) => {
-                        crate::profile_scope!("ready.callback");
                         let should_rearm = matches!(
                             callback.kind(),
                             CallbackKind::Reader(_) | CallbackKind::Writer(_)
@@ -755,7 +749,6 @@ impl LoopCore {
                         }
                     }
                     ReadyItem::HandleCallback(handle) => {
-                        crate::profile_scope!("ready.handle_callback");
                         if let Some(err) =
                             self.execute_ready(py, Some(&loop_obj), handle.get().ready())?
                         {
@@ -764,7 +757,6 @@ impl LoopCore {
                         }
                     }
                     ReadyItem::FutureSetResult { future, value } => {
-                        crate::profile_scope!("ready.future_set_result");
                         let future = future.bind(py);
                         if !crate::python_names::call_method0(
                             py,
@@ -783,7 +775,6 @@ impl LoopCore {
                         }
                     }
                     ReadyItem::FutureSetException { future, value } => {
-                        crate::profile_scope!("ready.future_set_exception");
                         let future = future.bind(py);
                         if !crate::python_names::call_method0(
                             py,
@@ -802,11 +793,9 @@ impl LoopCore {
                         }
                     }
                     ReadyItem::StreamTransportRead(core) => {
-                        crate::profile_scope!("ready.stream_transport_read");
                         core.drain_pending_read_events_with_py(py)?;
                     }
                     ReadyItem::StreamTransportWrite(core) => {
-                        crate::profile_scope!("ready.stream_transport_write");
                         core.flush_pending_direct_write();
                     }
                     #[cfg(unix)]
@@ -818,11 +807,9 @@ impl LoopCore {
                         ));
                     }
                     ReadyItem::ProcessTransport(core) => {
-                        crate::profile_scope!("ready.process_transport");
                         core.drain_pending_events_with_py(py)?;
                     }
                     ReadyItem::ServerAccepted { server, stream } => {
-                        crate::profile_scope!("ready.server_accepted");
                         if let Err(err) = crate::transport::stream::spawn_accepted_transport_with_py(
                             py, &server, stream,
                         ) {
@@ -835,7 +822,6 @@ impl LoopCore {
                         fd,
                         wait_errno,
                     } => {
-                        crate::profile_scope!("ready.connect_completed");
                         self.resolve_connect_completed(py, future, fd, wait_errno)?;
                     }
                 }
@@ -1022,7 +1008,6 @@ impl LoopCore {
     /// Already-ready callbacks are still processed according to asyncio's
     /// stop semantics before `run_forever` returns.
     pub fn schedule_stop(&self) -> Result<(), LoopCoreError> {
-        crate::profile_scope!("LoopCore::schedule_stop");
         self.send_command(LoopCommand::RequestStop)
     }
 
@@ -1032,7 +1017,6 @@ impl LoopCore {
     /// `LoopCoreError::Running`. Tracked I/O tasks are cancelled before the
     /// on-thread runtime is dropped.
     pub fn close(&self) -> Result<(), LoopCoreError> {
-        crate::profile_scope!("LoopCore::close");
         {
             let mut state = self.state.lock().expect("poisoned loop state");
             if state.running {
@@ -1148,7 +1132,6 @@ impl LoopCore {
         loop_obj: Option<&Py<PyAny>>,
         ready: &ReadyCallback,
     ) -> PyResult<Option<PyErr>> {
-        crate::profile_scope!("LoopCore::execute_ready");
         if ready.cancelled() {
             return Ok(None);
         }

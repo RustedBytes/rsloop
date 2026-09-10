@@ -146,7 +146,6 @@ impl StreamTransportCore {
     }
 
     pub(super) fn try_direct_tasked_write(&self, data: &[u8]) -> io::Result<usize> {
-        crate::profile_scope!("StreamTransportCore::try_direct_tasked_write");
         if transport_stats_enabled() {
             TRANSPORT_DIRECT_WRITE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
         }
@@ -282,7 +281,6 @@ impl StreamTransportCore {
     }
 
     pub(crate) fn flush_pending_direct_write(self: &Arc<Self>) {
-        crate::profile_scope!("StreamTransportCore::flush_pending_direct_write");
         #[cfg(windows)]
         if self.poll_reader_requested() && !self.poll_reader_ready.load(Ordering::Acquire) {
             return;
@@ -357,7 +355,6 @@ impl StreamTransportCore {
     }
 
     pub(super) fn try_write_bytes(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
-        crate::profile_scope!("StreamTransportCore::try_write_bytes");
         #[cfg(windows)]
         if self.direct_writer.is_some()
             && (!self.server_side || data.len() >= SERVER_POLL_READER_WRITE_THRESHOLD)

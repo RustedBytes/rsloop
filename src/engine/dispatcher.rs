@@ -102,7 +102,6 @@ fn cancel_watch_task(task: WatchTask) {
 }
 
 pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>) {
-    crate::profile_scope!("runtime.run_thread");
     let runtime = crate::vibeio::RuntimeBuilder::new()
         .rsloop_profile()
         .enable_timer(true)
@@ -130,7 +129,6 @@ impl Future for RuntimeDispatcher {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        crate::profile_scope!("runtime.dispatcher.poll");
         // Register before inspecting the command channel so a concurrent send
         // either wakes this poll or remains visible when the channel is
         // drained.  The retained waker is intentional: consuming it while the
@@ -179,54 +177,43 @@ impl RuntimeDispatcher {
     }
 
     fn handle_command(&mut self, command: LoopCommand) -> bool {
-        crate::profile_scope!("runtime.handle_command");
         match command {
             LoopCommand::ScheduleReady(callback) => {
-                crate::profile_scope!("runtime.cmd.schedule_ready");
                 self.ready_batch.push_back(ReadyItem::Callback(callback));
             }
             LoopCommand::ScheduleReadyHandle(handle) => {
-                crate::profile_scope!("runtime.cmd.schedule_ready_handle");
                 self.ready_batch
                     .push_back(ReadyItem::HandleCallback(handle));
             }
             LoopCommand::Future(LoopFutureCommand::SetResult { future, value }) => {
-                crate::profile_scope!("runtime.cmd.future_set_result");
                 self.ready_batch
                     .push_back(ReadyItem::FutureSetResult { future, value });
             }
             LoopCommand::Future(LoopFutureCommand::SetException { future, value }) => {
-                crate::profile_scope!("runtime.cmd.future_set_exception");
                 self.ready_batch
                     .push_back(ReadyItem::FutureSetException { future, value });
             }
             LoopCommand::Transport(LoopTransportCommand::StreamRead(core)) => {
-                crate::profile_scope!("runtime.cmd.stream_transport_read");
                 self.ready_batch
                     .push_back(ReadyItem::StreamTransportRead(core));
             }
             LoopCommand::Transport(LoopTransportCommand::StreamWrite(core)) => {
-                crate::profile_scope!("runtime.cmd.stream_transport_write");
                 self.ready_batch
                     .push_back(ReadyItem::StreamTransportWrite(core));
             }
             LoopCommand::Transport(LoopTransportCommand::Process(core)) => {
-                crate::profile_scope!("runtime.cmd.process_transport");
                 self.ready_batch
                     .push_back(ReadyItem::ProcessTransport(core));
             }
             LoopCommand::Transport(LoopTransportCommand::ServerAccepted { server, stream }) => {
-                crate::profile_scope!("runtime.cmd.server_accepted");
                 self.ready_batch
                     .push_back(ReadyItem::ServerAccepted { server, stream });
             }
             LoopCommand::Run(LoopRunCommand::EnterRun { pending_ready }) => {
-                crate::profile_scope!("runtime.cmd.enter_run");
                 self.active_run = Some(ActiveRun { pending_ready });
                 self.dispatch_ready_batch();
             }
             LoopCommand::Run(LoopRunCommand::FinishRun { done_tx }) => {
-                crate::profile_scope!("runtime.cmd.finish_run");
                 self.finish_run();
                 let _ = done_tx.send(());
             }
@@ -425,7 +412,6 @@ impl RuntimeDispatcher {
             }
             #[cfg(unix)]
             LoopCommand::Io(LoopIoCommand::WatchConnect { fd, future }) => {
-                crate::profile_scope!("runtime.cmd.watch_connect");
                 // Detached: the task self-reports via ConnectCompleted, and a
                 // vibeio JoinHandle has no Drop, so dropping it detaches (does
                 // not cancel) the running task.
@@ -440,7 +426,6 @@ impl RuntimeDispatcher {
                 fd,
                 wait_errno,
             } => {
-                crate::profile_scope!("runtime.cmd.connect_completed");
                 self.ready_batch.push_back(ReadyItem::ConnectCompleted {
                     future,
                     fd,
@@ -448,11 +433,9 @@ impl RuntimeDispatcher {
                 });
             }
             LoopCommand::RequestStop => {
-                crate::profile_scope!("runtime.cmd.request_stop");
                 self.ready_batch.push_back(ReadyItem::Stop);
             }
             LoopCommand::Close => {
-                crate::profile_scope!("runtime.cmd.close");
                 self.finish_run();
                 self.cleanup_watchers();
                 self.shutting_down = true;
@@ -464,7 +447,6 @@ impl RuntimeDispatcher {
     }
 
     fn dispatch_ready_batch(&mut self) {
-        crate::profile_scope!("runtime.dispatch_ready_batch");
         let Some(active_run) = self.active_run.as_ref() else {
             return;
         };
@@ -485,7 +467,6 @@ impl RuntimeDispatcher {
     }
 
     fn finish_run(&mut self) {
-        crate::profile_scope!("runtime.finish_run");
         let Some(active_run) = self.active_run.take() else {
             return;
         };
@@ -502,7 +483,6 @@ impl RuntimeDispatcher {
     }
 
     fn cleanup_watchers(&mut self) {
-        crate::profile_scope!("runtime.cleanup_watchers");
         #[cfg(unix)]
         for (_, watcher) in self.signal_tasks.drain() {
             watcher.handle.close();

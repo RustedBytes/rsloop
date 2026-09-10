@@ -138,12 +138,10 @@ impl PyLoop {
     }
 
     fn run_forever(slf: Py<Self>, py: Python<'_>) -> PyResult<()> {
-        crate::profile_function!();
         lifecycle::run_forever(slf, py)
     }
 
     fn run_until_complete(slf: Py<Self>, py: Python<'_>, future: Py<PyAny>) -> PyResult<Py<PyAny>> {
-        crate::profile_function!();
         lifecycle::run_until_complete(slf, py, future)
     }
 

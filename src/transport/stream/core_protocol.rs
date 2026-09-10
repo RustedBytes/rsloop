@@ -189,7 +189,6 @@ impl StreamTransportCore {
         pending_data: &mut Option<PendingReadBuffer<'_>>,
         fast_path: Option<&StreamReaderFastPath>,
     ) -> PyResult<()> {
-        crate::profile_scope!("StreamTransportCore::flush_pending_data_with_py");
         let Some(data) = pending_data.take() else {
             return Ok(());
         };
@@ -221,7 +220,6 @@ impl StreamTransportCore {
     }
 
     pub fn connection_made(&self, transport: Py<PyStreamTransport>) -> PyResult<()> {
-        crate::profile_scope!("StreamTransportCore::connection_made");
         self.call_in_loop_context(|py| {
             let (callback, fast_path, context, context_needs_run) = {
                 let state = self.state.lock().expect("poisoned transport state");
@@ -278,7 +276,6 @@ impl StreamTransportCore {
     }
 
     pub(super) fn data_received_with_py(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
-        crate::profile_scope!("StreamTransportCore::data_received_with_py");
         let fast_path = {
             let state = self.state.lock().expect("poisoned transport state");
             state
@@ -358,7 +355,6 @@ impl StreamTransportCore {
     }
 
     pub(super) fn eof_received_with_py(&self, py: Python<'_>) -> PyResult<bool> {
-        crate::profile_scope!("StreamTransportCore::eof_received_with_py");
         let (callback, fast_path, context, context_needs_run) = {
             let state = self.state.lock().expect("poisoned transport state");
             (
@@ -391,7 +387,6 @@ impl StreamTransportCore {
         py: Python<'_>,
         exc: Option<PyErr>,
     ) -> PyResult<()> {
-        crate::profile_scope!("StreamTransportCore::connection_lost_with_py");
         let (callback, fast_path, context, context_needs_run, server) = {
             let mut state = self.state.lock().expect("poisoned transport state");
             if self.detached.load(Ordering::Acquire) {

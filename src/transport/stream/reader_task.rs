@@ -40,7 +40,6 @@ pub(crate) async fn run_tcp_socket_reader_task(
     core: Arc<StreamTransportCore>,
     stream: Arc<StdTcpStream>,
 ) {
-    crate::profile_scope!("stream.run_tcp_socket_reader_task");
     let mut reader = match VibePollTcpStream::from_shared(stream) {
         Ok(reader) => reader,
         Err(err) => {
@@ -102,8 +101,6 @@ pub(crate) async fn run_tcp_socket_reader_task(
     core: Arc<StreamTransportCore>,
     stream: Arc<StdTcpStream>,
 ) {
-    crate::profile_scope!("stream.run_tcp_socket_reader_task");
-
     // Client protocols can initiate an unbounded stream of writes without
     // receiving anything first. Start their shared socket in nonblocking poll
     // mode so a full send buffer can never block the event-loop thread.
@@ -315,7 +312,6 @@ pub(crate) async fn run_unix_socket_reader_task(
     core: Arc<StreamTransportCore>,
     stream: StdUnixStream,
 ) {
-    crate::profile_scope!("stream.run_unix_socket_reader_task");
     let mut reader = match VibePollUnixStream::from_std(stream) {
         Ok(reader) => reader,
         Err(err) => {
