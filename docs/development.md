@@ -160,6 +160,14 @@ uv run --python 3.15 python -m profiling.sampling run \
 For repeatable workload profiles, use `--profile-rsloop-dir` with either
 benchmark runner. Profile passes are unmeasured and produce HTML flame graphs.
 
+`--native` adds synthetic native-boundary markers; it does not unwind and name
+individual Rust frames. See Python's [special-frame documentation](https://docs.python.org/3.15/library/profiling.sampling.html#special-frames).
+Use a native stack profiler when attributing CPU time to individual Rust functions.
+
+For isolated Rust/LLVM optimization experiments, runtime-only PGO training,
+LLM review packets, and randomized paired comparisons, see the
+[hot-path experiment harness](hotpath-lab.md).
+
 ## Current state of the project
 
 This is still an alpha-stage project.

@@ -88,6 +88,9 @@ if [[ -n "$RUST_TARGET" && "$RUST_TARGET" != "$HOST_RUST_TARGET" ]]; then
   echo "host target: ${HOST_RUST_TARGET}; requested target: ${RUST_TARGET}" >&2
   exit 1
 fi
+# An explicit --target prevents RUSTFLAGS instrumentation from reaching host
+# build scripts and proc macros, even when building for the native platform.
+RUST_TARGET="${RUST_TARGET:-$HOST_RUST_TARGET}"
 if [[ "$RUST_TARGET" == *-apple-darwin ]]; then
   export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
 fi
@@ -177,9 +180,11 @@ for version in "${PYTHON_VERSIONS[@]}"; do
   "$training_python" scripts/generate_test_tls_certs.py "$tls_dir"
 
   echo "Training Python ${version} PGO with sustained representative network traffic"
-  "$training_python" benches/workload_matrix.py --loops rsloop --scenarios "$PGO_SCENARIOS" --sustained --tls-dir "$tls_dir"
+  LLVM_PROFILE_FILE="$(native_path "$PROFILE_DIR")/runtime-%p-%m.profraw" \
+    "$training_python" benches/workload_matrix.py --loops rsloop --scenarios "$PGO_SCENARIOS" --sustained --tls-dir "$tls_dir"
   echo "Training Python ${version} PGO with callbacks, tasks, and TCP streams"
-  "$training_python" benches/compare_event_loops.py --loops rsloop
+  LLVM_PROFILE_FILE="$(native_path "$PROFILE_DIR")/runtime-%p-%m.profraw" \
+    "$training_python" benches/compare_event_loops.py --loops rsloop
 
   shopt -s nullglob
   raw_profiles=("$PROFILE_DIR"/*.profraw)
@@ -195,6 +200,6 @@ for version in "${PYTHON_VERSIONS[@]}"; do
   RSLOOP_PYTHON_VERSIONS="$version" \
     CARGO_TARGET_DIR="$TARGET_USE" \
     RUSTFLAGS="$USE_RUSTFLAGS" \
-    "${ROOT_DIR}/scripts/build-wheels.sh" "${BUILD_WHEEL_ARGS[@]}"
+    "${ROOT_DIR}/scripts/build-wheels.sh" --target "$HOST_RUST_TARGET" "${BUILD_WHEEL_ARGS[@]}"
   rm -rf -- "$version_dir"
 done
