@@ -1,21 +1,23 @@
-import asyncio
-import rsloop
+from __future__ import annotations
 
+import asyncio
+
+import rsloop
 from picows import (  # pyright: ignore[reportMissingImports]
-    ws_create_server,
     WSFrame,
-    WSTransport,
     WSListener,
     WSMsgType,
+    WSTransport,
     WSUpgradeRequest,
+    ws_create_server,
 )
 
 
 class ServerClientListener(WSListener):
-    def on_ws_connected(self, transport: WSTransport):
+    def on_ws_connected(self, transport: WSTransport) -> None:
         print("New client connected")
 
-    def on_ws_frame(self, transport: WSTransport, frame: WSFrame):
+    def on_ws_frame(self, transport: WSTransport, frame: WSFrame) -> None:
         if frame.msg_type == WSMsgType.CLOSE:
             transport.send_close(frame.get_close_code(), frame.get_close_message())
             transport.disconnect()
@@ -23,16 +25,17 @@ class ServerClientListener(WSListener):
             transport.send(frame.msg_type, frame.get_payload_as_memoryview())
 
 
-async def main():
-    def listener_factory(r: WSUpgradeRequest):
+async def main() -> None:
+    def listener_factory(_request: WSUpgradeRequest) -> ServerClientListener:
         # Routing can be implemented here by analyzing request content
         return ServerClientListener()
 
     server: asyncio.Server = await ws_create_server(listener_factory, "127.0.0.1", 9001)
-    for s in server.sockets:
-        print(f"Server started on {s.getsockname()}")
+    for server_socket in server.sockets:
+        print(f"Server started on {server_socket.getsockname()}")
 
-    await server.serve_forever()
+    async with server:
+        await server.serve_forever()
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ import rsloop
 
 
 class UppercaseProtocol(asyncio.Protocol):
+    transport: asyncio.Transport
+
     def __init__(self, done: asyncio.Future[str] | None = None) -> None:
         self.done = done
 
@@ -40,21 +42,26 @@ async def demo_unix_streams() -> None:
         path = os.path.join(tmpdir, "rsloop-rust.sock")
         server = await loop.create_unix_server(UppercaseProtocol, path)
 
-        done: asyncio.Future[str] = loop.create_future()
-        transport, _ = await loop.create_unix_connection(
-            lambda: UppercaseProtocol(done), path
-        )
-        print(
-            "create_unix_connection/create_unix_server:",
-            await asyncio.wait_for(done, 1.0),
-        )
-
-        transport.close()
-        server.close()
-        await server.wait_closed()
+        transport: asyncio.BaseTransport | None = None
+        try:
+            done: asyncio.Future[str] = loop.create_future()
+            transport, _ = await loop.create_unix_connection(
+                lambda: UppercaseProtocol(done), path
+            )
+            print(
+                "create_unix_connection/create_unix_server:",
+                await asyncio.wait_for(done, 1.0),
+            )
+        finally:
+            if transport is not None:
+                transport.close()
+            server.close()
+            await server.wait_closed()
 
 
 class AcceptedSocketProtocol(asyncio.Protocol):
+    transport: asyncio.Transport
+
     def __init__(self, done: asyncio.Future[str]) -> None:
         self.done = done
 
@@ -74,32 +81,41 @@ async def demo_connect_accepted_socket() -> None:
     loop = asyncio.get_running_loop()
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.bind(("127.0.0.1", 0))
-    listener.listen(1)
-
-    host, port = listener.getsockname()[:2]
-    accept_future = loop.run_in_executor(None, listener.accept)
-
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.setblocking(False)
-    await loop.sock_connect(client, (host, port))
+    transport: asyncio.BaseTransport | None = None
+    accepted: socket.socket | None = None
+    try:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
 
-    accepted, _ = await asyncio.wait_for(accept_future, 1.0)
-    accepted.setblocking(False)
+        host, port = listener.getsockname()[:2]
+        accept_future = loop.run_in_executor(None, listener.accept)
 
-    done: asyncio.Future[str] = loop.create_future()
-    transport, _ = await loop.connect_accepted_socket(
-        lambda: AcceptedSocketProtocol(done), accepted
-    )
+        client.setblocking(False)
+        await loop.sock_connect(client, (host, port))
 
-    await loop.sock_sendall(client, b"accepted socket")
-    reply = await loop.sock_recv(client, 32)
-    print("connect_accepted_socket:", reply.decode())
+        accepted, _ = await asyncio.wait_for(accept_future, 1.0)
+        accepted.setblocking(False)
 
-    transport.close()
-    await asyncio.wait_for(done, 1.0)
-    client.close()
-    listener.close()
+        done: asyncio.Future[str] = loop.create_future()
+        transport, _ = await loop.connect_accepted_socket(
+            lambda: AcceptedSocketProtocol(done), accepted
+        )
+        accepted = None  # Ownership moved to the transport.
+
+        await loop.sock_sendall(client, b"accepted socket")
+        reply = await loop.sock_recv(client, 32)
+        print("connect_accepted_socket:", reply.decode())
+
+        transport.close()
+        await asyncio.wait_for(done, 1.0)
+    finally:
+        if transport is not None:
+            transport.close()
+        if accepted is not None:
+            accepted.close()
+        client.close()
+        listener.close()
 
 
 async def main() -> None:

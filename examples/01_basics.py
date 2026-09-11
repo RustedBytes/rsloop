@@ -15,11 +15,13 @@ def demo_run_forever() -> None:
         events.append("call_later:stop")
         loop.stop()
 
-    loop.call_soon(record_soon, "alpha")
-    loop.call_later(0.05, stop_later)
-    loop.run_forever()
-    print("run_forever events:", events)
-    loop.close()
+    try:
+        loop.call_soon(record_soon, "alpha")
+        loop.call_later(0.05, stop_later)
+        loop.run_forever()
+        print("run_forever events:", events)
+    finally:
+        loop.close()
 
 
 async def demo_async_features() -> None:

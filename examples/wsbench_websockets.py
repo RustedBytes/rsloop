@@ -1,6 +1,4 @@
-"""
-uv run --with websockets examples/wsbench_websockets.py
-"""
+"""Exercise a WebSocket echo server with either rsloop or stdlib asyncio."""
 
 from __future__ import annotations
 
@@ -10,7 +8,6 @@ import ssl
 
 import rsloop
 from websockets import connect
-
 
 HOST = "127.0.0.1"
 PORT = 9001
@@ -39,7 +36,7 @@ async def run_messages(
     return replies
 
 
-async def main():
+async def main() -> None:
     for message, reply in await run_messages():
         print(f"sent: {message} received: {reply}")
 

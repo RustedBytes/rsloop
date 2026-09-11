@@ -1,60 +1,46 @@
-# Service Examples
+# rsloop Examples
 
-## Granian with rsloop
+The examples are ordered from event-loop fundamentals to integrations. Run all
+commands from the repository root unless a section says otherwise.
 
-[`granian_service.py`](./granian_service.py) registers `rsloop` as Granian's
-`auto` event-loop builder. Granian calls that builder in every worker, following
-its [documented Python customization API](https://github.com/emmett-framework/granian#asyncio-event-loop-initialization).
+## Setup
 
-Build rsloop in release mode, then start the ASGI service:
-
-```bash
-uv run --with maturin maturin develop --release
-uv run --with granian python examples/granian_service.py --event-loop rsloop
-```
-
-Verify the loop selected inside the worker:
-
-```bash
-curl http://127.0.0.1:8000/loop
-```
-
-For comparison, the same application can run on stdlib asyncio or uvloop:
-
-```bash
-uv run --with granian python examples/granian_service.py --event-loop asyncio
-uv run --with granian --with uvloop python examples/granian_service.py --event-loop uvloop
-```
-
-The service exposes `/`, `/health`, and `/loop` for inspection. Its
-`/benchmark` endpoint returns a fixed 10 KiB response used by
-[`benches/compare_granian.py`](../benches/compare_granian.py).
-
-## FastAPI with Uvicorn
-
-This example runs the same FastAPI service on three event loops:
-
-- stdlib `asyncio`
-- `uvloop`
-- `rsloop`
-
-When started with `--event-loop rsloop`, the example explicitly enables
-`rsloop` fast streams before importing the loop implementation.
-
-## Prerequisites
-
-If the Rust extension is not already built locally:
+Build the local extension before running an example:
 
 ```bash
 uv run --with maturin maturin develop --release
 ```
 
-The example uses temporary dependencies from `uv`, so nothing needs to be
-added to the project package metadata.
+## Guided feature tour
 
-## Run
+| Example | Demonstrates |
+| --- | --- |
+| [`01_basics.py`](./01_basics.py) | `run_forever`, callbacks, futures, threadsafe scheduling, tasks, and executors |
+| [`02_fd_and_sockets.py`](./02_fd_and_sockets.py) | File-descriptor readiness and low-level asynchronous socket methods |
+| [`03_streams.py`](./03_streams.py) | TCP servers and clients built with asyncio protocols and transports |
+| [`04_unix_and_accepted_socket.py`](./04_unix_and_accepted_socket.py) | Unix-domain streams and `connect_accepted_socket` |
+| [`05_pipes_signals_subprocesses.py`](./05_pipes_signals_subprocesses.py) | Pipes, Unix signals, and low- and high-level subprocess APIs |
 
-From the repository root:
+Run any example directly:
+
+```bash
+uv run python examples/01_basics.py
+uv run python examples/02_fd_and_sockets.py
+uv run python examples/03_streams.py
+uv run python examples/04_unix_and_accepted_socket.py
+uv run python examples/05_pipes_signals_subprocesses.py
+```
+
+Unix-domain sockets and POSIX signal handlers report that they are skipped on
+Windows. The other demonstrations in those files still run.
+
+## Web services
+
+### FastAPI with Uvicorn
+
+[`fastapi_service.py`](./fastapi_service.py) runs one FastAPI application on
+stdlib asyncio, uvloop, winloop, or rsloop. In rsloop mode it enables rsloop's
+fast streams before constructing the event loop.
 
 ```bash
 uv run --with fastapi --with uvicorn python examples/fastapi_service.py --event-loop asyncio --no-access-log
@@ -62,26 +48,50 @@ uv run --with fastapi --with uvicorn --with uvloop python examples/fastapi_servi
 uv run --with fastapi --with uvicorn python examples/fastapi_service.py --event-loop rsloop --no-access-log
 ```
 
-Service entrypoint: [`examples/fastapi_service.py`](./fastapi_service.py)
-
-`std-async` is also accepted as an alias for stdlib `asyncio`:
+On Windows, winloop is another available comparison:
 
 ```bash
-uv run --with fastapi --with uvicorn --with uvloop python examples/fastapi_service.py --event-loop std-async
+uv run --with fastapi --with uvicorn --with winloop python examples/fastapi_service.py --event-loop winloop --no-access-log
 ```
 
-## Endpoints
+The service exposes:
 
-- `/` returns the selected loop and basic service info
-- `/health` returns a simple readiness payload
-- `/sleep?delay=0.05` exercises timer scheduling
-- `/fanout?tasks=500&delay=0` exercises concurrent task scheduling
-- `/stream-loopback?roundtrips=100&payload_size=256` exercises `asyncio.start_server()` and `asyncio.open_connection()`, which use `rsloop` fast streams in `rsloop` mode
+- `/` and `/health` for service and loop information
+- `/sleep?delay=0.05` for timer scheduling
+- `/fanout?tasks=500&delay=0` for concurrent task scheduling
+- `/stream-loopback?roundtrips=100&payload_size=256` for stream I/O
 
-Example:
+`std-async` is accepted as an alias for `asyncio`.
+
+### Granian
+
+[`granian_service.py`](./granian_service.py) registers rsloop through Granian's
+custom event-loop builder and creates the selected loop in each worker.
 
 ```bash
-curl http://127.0.0.1:8000/
-curl "http://127.0.0.1:8000/fanout?tasks=1000&delay=0"
-curl "http://127.0.0.1:8000/stream-loopback?roundtrips=200&payload_size=512"
+uv run --with granian python examples/granian_service.py --event-loop rsloop
+uv run --with granian python examples/granian_service.py --event-loop asyncio
+uv run --with granian --with uvloop python examples/granian_service.py --event-loop uvloop
 ```
+
+The service exposes `/`, `/health`, and `/loop`. Its `/benchmark` endpoint
+returns the fixed 10 KiB response used by
+[`benches/compare_granian.py`](../benches/compare_granian.py).
+
+## WebSocket clients and server
+
+Start the Picows echo server, then run either client in another terminal:
+
+```bash
+uv run --with picows python examples/picows_server.py
+uv run --with picows python examples/picows_test.py
+uv run --with websockets python examples/wsbench_websockets.py
+```
+
+All three scripts use `127.0.0.1:9001` by default.
+
+## Rust extension
+
+The [`rust`](./rust/) directory contains a separate PyO3 extension that turns
+Rust futures into Python awaitables using `rsloop::rust_async::future_into_py`.
+See its [README](./rust/README.md) for build and run instructions.
