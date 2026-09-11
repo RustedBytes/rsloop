@@ -1,43 +1,12 @@
 threads = 0
 exclude_paths = [
     "target",
-    "vendor",
     ".git",
     "node_modules",
 ]
-ignore_findings = [
-    # This crate is a Python extension with large binding/transport modules.
-    # Splitting these mechanically would add indirection without reducing risk.
-    "Q0001",
-    "Q0002",
-    "Q0004",
-    "Q0011",
-    "Q0016",
-    "Q0017",
-    "Q0019",
-    "Q0022",
-    "Q0025",
-    "Q0027",
-    "Q0040",
-    "Q0041",
-    "Q0042",
-    "Q0066",
-    "Q0072",
-    "Q0076",
-    "Q0077",
-    # Qualirs ignores the other consumers of the sorted separator list: stable
-    # ordering and last() are required, so replacing the sort with min() is wrong.
-    "Q0056",
-    # Misidentifies AsyncRead::read in vibeio::io::copy as acquiring a lock.
-    # That function has no lock guard to hold across an await.
-    "Q0085",
-    # Flags safe Pin::as_mut() reborrows (e.g. Runtime::block_on) as unsafe
-    # mutable aliasing. This syntactic check does not establish overlapping refs.
-    # Rule-wide suppression is not a claim that all unsafe aliasing is sound;
-    # lifetime and ownership invariants still require review and runtime checks.
-    "Q0090",
-]
+ignore_findings = []
 min_severity = "info"
+precision = "conservative"
 
 [thresholds.arch]
 god_module_loc = 1000
@@ -92,6 +61,10 @@ test_path_markers = [
     "fuzz",
     "fuzz_targets",
 ]
+skip_examples = true
+skip_benches = true
+skip_generated = true
+skip_macro_heavy_files = true
 skip_data_carrier_structs = true
 skip_template_structs = true
 data_carrier_struct_suffixes = [
