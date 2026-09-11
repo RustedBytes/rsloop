@@ -37,7 +37,10 @@ class TestCompatibility:
         finally:
             loop.close()
 
-    def test_repeated_server_startup_with_busy_ready_queue(self) -> None:
+    @pytest.mark.stress
+    def test_repeated_server_startup_with_busy_ready_queue(
+        self, iteration_count
+    ) -> None:
         async def main() -> None:
             loop = asyncio.get_running_loop()
             startup = asyncio.ensure_future(
@@ -53,7 +56,7 @@ class TestCompatibility:
             server.close()
             await server.wait_closed()
 
-        for _ in range(10):
+        for _ in range(iteration_count(3, 10)):
             rsloop.run(main())
 
     def test_tcp_progresses_while_python_task_continually_yields(self) -> None:
@@ -190,6 +193,7 @@ class TestCompatibility:
 
         rsloop.run(exercise())
 
+    @pytest.mark.slow_network
     def test_create_connection_refused_does_not_hang(self) -> None:
         async def main() -> None:
             # Close a bound socket to obtain a port with no listener. On some

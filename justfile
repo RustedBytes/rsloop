@@ -15,7 +15,7 @@ clippy:
     uv run cargo clippy --all-targets --all-features -- -D warnings
 
 test-rust:
-    uv run python scripts/run_rust_tests.py
+    uv run --no-project python scripts/run_rust_tests.py
 
 # Fast merge-gating proofs; `merge_` harnesses must fit the PR runtime budget.
 kani-core:
@@ -36,8 +36,17 @@ kani-coverage:
 kani-coverage-core:
     cargo kani --harness merge_ --coverage -Z source-coverage --output-format terse
 
-test: tls-test-certs test-rust
+test: tls-test-certs
+    uv run python -u scripts/run_all_tests.py
+
+test-python:
     uv run python -u scripts/run_python_tests.py
+
+test-fast: tls-test-certs
+    uv run python -u scripts/run_python_tests.py -m "not tooling and not stress and not slow_network"
+
+test-stress: tls-test-certs
+    uv run python -u scripts/run_python_tests.py --stress-iterations -m stress
 
 test-tooling:
     uv run python -m pytest -m tooling tests/tooling

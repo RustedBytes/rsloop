@@ -4,6 +4,7 @@ import sys
 
 import pytest
 
+from scripts import run_all_tests as all_runner
 from scripts import run_python_tests as runner
 
 pytestmark = pytest.mark.tooling
@@ -85,3 +86,19 @@ def test_wrapper_cancels_watchdog_on_runner_error(wrapper_calls):
     with pytest.raises(RuntimeError, match="runner failed"):
         runner.main()
     wrapper_calls.cancel.assert_called_once_with()
+
+
+@pytest.mark.parametrize("exit_codes,expected", [((0, 0), 0), ((0, 5), 5)])
+def test_combined_runner_waits_for_both_suites(exit_codes, expected, mocker):
+    rust = mocker.Mock()
+    rust.wait.return_value = exit_codes[0]
+    python = mocker.Mock()
+    python.wait.return_value = exit_codes[1]
+    popen = mocker.patch.object(
+        all_runner.subprocess, "Popen", side_effect=[rust, python]
+    )
+
+    assert all_runner.main() == expected
+    assert popen.call_count == 2
+    rust.wait.assert_called_once_with()
+    python.wait.assert_called_once_with()

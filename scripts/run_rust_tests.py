@@ -16,7 +16,7 @@ def project_python(project_root: Path) -> Path:
     return candidate if candidate.is_file() else Path(sys.executable)
 
 
-def python_link_config(interpreter: Path) -> tuple[str, str | None]:
+def python_link_config(interpreter: Path) -> tuple[str, str | None, str]:
     code = """
 import json
 import sys
@@ -25,6 +25,10 @@ import sysconfig
 print(json.dumps({
     "python_home": sys.base_prefix,
     "libdir": sysconfig.get_config_var("LIBDIR"),
+    "python_abi": (
+        f"cp{sys.version_info.major}{sys.version_info.minor}"
+        f"{'t' if sysconfig.get_config_var('Py_GIL_DISABLED') else ''}"
+    ),
 }))
 """
     result = subprocess.run(
@@ -34,7 +38,7 @@ print(json.dumps({
         text=True,
     )
     config = json.loads(result.stdout)
-    return config["python_home"], config["libdir"]
+    return config["python_home"], config["libdir"], config["python_abi"]
 
 
 def main() -> int:
@@ -44,13 +48,17 @@ def main() -> int:
     args = parser.parse_args()
     project_root = Path(__file__).resolve().parent.parent
     interpreter = project_python(project_root)
-    python_home, libdir = python_link_config(interpreter)
+    python_home, libdir, python_abi = python_link_config(interpreter)
 
     env = os.environ.copy()
     env["PYO3_PYTHON"] = str(interpreter)
     env["PYTHONHOME"] = python_home
     if os.name == "nt":
         env["PATH"] = os.pathsep.join((python_home, env.get("PATH", "")))
+        env.setdefault(
+            "CARGO_TARGET_DIR",
+            str(project_root / "target" / "rust-tests" / python_abi),
+        )
     elif libdir:
         rpath = f"-C link-arg=-Wl,-rpath,{libdir}"
         env["RUSTFLAGS"] = f"{env.get('RUSTFLAGS', '')} {rpath}".strip()

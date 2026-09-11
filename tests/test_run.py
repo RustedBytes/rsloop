@@ -187,7 +187,10 @@ class TestRun:
 
         assert rsloop.run(main()) == "ok"
 
-    def test_repeated_delayed_thread_completions_wake_loop(self) -> None:
+    @pytest.mark.stress
+    def test_repeated_delayed_thread_completions_wake_loop(
+        self, iteration_count
+    ) -> None:
         def delayed_result(value: int) -> int:
             # Let the loop leave its short spin window and park in the OS
             # selector before the worker schedules its completion.
@@ -195,17 +198,18 @@ class TestRun:
             return value
 
         async def main() -> None:
-            for expected in range(500):
+            for expected in range(iteration_count(100, 500)):
                 actual = await run_in_thread(delayed_result, expected)
                 assert actual == expected
 
         rsloop.run(main())
 
-    def test_repeated_command_dispatch_across_runs(self) -> None:
+    @pytest.mark.stress
+    def test_repeated_command_dispatch_across_runs(self, iteration_count) -> None:
         loop = rsloop.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
-            for expected in range(10_000):
+            for expected in range(iteration_count(2_000, 10_000)):
                 future = loop.create_future()
                 loop.call_soon(future.set_result, expected)
                 assert loop.run_until_complete(future) == expected
@@ -213,8 +217,11 @@ class TestRun:
             asyncio.set_event_loop(None)
             loop.close()
 
-    def test_repeated_command_dispatch_across_loop_lifecycles(self) -> None:
-        for expected in range(1_000):
+    @pytest.mark.stress
+    def test_repeated_command_dispatch_across_loop_lifecycles(
+        self, iteration_count
+    ) -> None:
+        for expected in range(iteration_count(200, 1_000)):
             loop = rsloop.new_event_loop()
             try:
                 future = loop.create_future()
@@ -223,7 +230,10 @@ class TestRun:
             finally:
                 loop.close()
 
-    def test_run_waits_for_runtime_finish_acknowledgement(self) -> None:
+    @pytest.mark.stress
+    def test_run_waits_for_runtime_finish_acknowledgement(
+        self, iteration_count
+    ) -> None:
         async def main() -> None:
             loop = asyncio.get_running_loop()
             reader, writer = socket.socketpair()
@@ -231,7 +241,7 @@ class TestRun:
                 # Replacing an FD watcher queues work for the runtime thread.
                 # Finishing the run must wait for that queue instead of using
                 # the much shorter signal-polling interval as a deadline.
-                for _ in range(10_000):
+                for _ in range(iteration_count(2_000, 10_000)):
                     loop.add_reader(reader, lambda: None)
 
                 loop.remove_reader(reader)
@@ -637,21 +647,17 @@ else:
 
     def test_subprocess_shell_round_trip(self) -> None:
         async def main() -> dict[str, object]:
-            result: dict[str, object] | None = None
-            for _ in range(10):
-                proc = await asyncio.create_subprocess_shell(
-                    "echo shell-ok",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), 3.0)
-                result = {
-                    "stdout": stdout.decode().strip(),
-                    "stderr": stderr.decode().strip(),
-                    "returncode": proc.returncode,
-                }
-            assert result is not None
-            return result
+            proc = await asyncio.create_subprocess_shell(
+                "echo shell-ok",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), 3.0)
+            return {
+                "stdout": stdout.decode().strip(),
+                "stderr": stderr.decode().strip(),
+                "returncode": proc.returncode,
+            }
 
         assert rsloop.run(main()) == {
             "stdout": "shell-ok",

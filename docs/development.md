@@ -69,6 +69,11 @@ uv run python scripts/run_rust_tests.py
 uv run python scripts/run_rust_tests.py --all-features
 ```
 
+On Windows, the runner keeps Cargo artifacts under an interpreter-specific
+directory such as `target/rust-tests/cp314` or `target/rust-tests/cp314t`.
+This avoids a full relink when switching between regular, free-threaded, or
+newer Python environments. The first run for each ABI builds its own cache.
+
 CI runs both configurations. Networking and timers are always compiled; embedded
 `fs`, `process`, `signal`, `pipe`, `stdio`, `splice`, and `blocking-default`
 modules are opt-in Cargo features. They do not change the default wheel build.
@@ -85,6 +90,19 @@ The `just` recipe also regenerates the TLS fixtures before running the suite:
 
 ```bash
 uv run just test
+```
+
+The complete recipe runs the independent Rust and Python suites concurrently
+after generating their shared TLS fixtures.
+
+For a shorter local feedback loop, skip high-repetition and real-network slow
+tests. The normal suite uses merge-gating repetition counts; the stress recipe
+reruns marked tests with their original high counts:
+
+```bash
+uv run just test-fast
+uv run just test-python
+uv run just test-stress
 ```
 
 To focus on one area, pass a test file or use pytest's `-k` selector:

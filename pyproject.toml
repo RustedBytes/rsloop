@@ -97,5 +97,7 @@ python_files = ["test_*.py"]
 pythonpath = ["."]
 addopts = ["-m", "not tooling"]
 markers = [
+    "slow_network: real operating-system network behavior that may be slow",
+    "stress: correctness tests with an optional high-repetition profile",
     "tooling: tests for repository benchmark and test infrastructure",
 ]
