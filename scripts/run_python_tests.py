@@ -35,7 +35,7 @@ def main() -> int:
     try:
         # Own the recurring watchdog: pytest's faulthandler plugin otherwise
         # cancels it after each test. Forward selectors and other pytest flags.
-        return int(pytest.main(["-v", "-s", "-p", "no:faulthandler", *sys.argv[1:]]))
+        return int(pytest.main(["-p", "no:faulthandler", *sys.argv[1:]]))
     finally:
         faulthandler.cancel_dump_traceback_later()
 

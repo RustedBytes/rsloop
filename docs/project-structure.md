@@ -69,9 +69,11 @@ The tests tell you what behavior the project promises today.
 
 - `test_run.py`: basic lifecycle and common operations
 - `test_compat.py`: `asyncio` compatibility behaviors
+- `test_subprocesses.py`: subprocess API default behavior
 - `test_tls.py`: TLS-related behavior
-- `test_public_api.py`: static type checks for the exported Python API
-- `packages/`: smoke tests against supported frameworks, ASGI servers, and async
+- `typing/public_api.py`: static type checks for the exported Python API
+- `tooling/`: tests for benchmark and test-runner infrastructure
+- `integration/packages/`: smoke tests against supported frameworks, ASGI servers, and async
   database libraries. The Beanie smoke test requires MongoDB and is run
   separately with `just test-beanie`.
 

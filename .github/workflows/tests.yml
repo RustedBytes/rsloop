@@ -114,8 +114,29 @@ jobs:
 
       - name: Run pyright
         run: |
-          uv sync --group dev --no-install-project
+          uv sync --group dev --group integration --no-install-project
           uv run --no-sync pyright
+
+  tooling-test:
+    name: tooling tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: "3.13"
+          cache-suffix: tooling-tests
+
+      - name: Run repository tooling tests
+        run: |
+          uv sync --group test --no-install-project
+          uv run --no-sync python -m pytest -m tooling tests/tooling
 
   anyio-test:
     # AnyIO drives the loop through APIs the other package tests never touch —
@@ -169,7 +190,7 @@ jobs:
           # the same one that then imports rsloop below.
           subprocess.run(maturin, check=True)
           subprocess.run(
-              [sys.executable, "-u", "tests/packages/anyio_test.py"], check=True
+              [sys.executable, "-u", "tests/integration/packages/anyio_test.py"], check=True
           )
           PY
 

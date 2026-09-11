@@ -10,9 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.tooling
+
 SPEC = importlib.util.spec_from_file_location(
-    "hotpath_lab", Path(__file__).resolve().parents[1] / "scripts" / "hotpath_lab.py"
+    "hotpath_lab", Path(__file__).resolve().parents[2] / "scripts" / "hotpath_lab.py"
 )
+assert SPEC is not None and SPEC.loader is not None
 lab = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(lab)
 

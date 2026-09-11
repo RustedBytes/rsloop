@@ -24,9 +24,10 @@ scripts/test-supported-pythons.sh --debug
 
 The matrix explicitly installs the `test` dependency group, including the
 WebSocket dependency used by the TLS tests. Optional framework scripts in
-`tests/packages` use the separate `integration` group, which is also included
-in `dev`. Those frameworks may have native dependencies that do not support
-free-threaded Python; they are not required for the core pytest suite.
+`tests/integration/packages` use the separate `integration` group. Install that
+group explicitly when working on integrations; it is intentionally excluded
+from the default `dev` environment because some frameworks have native
+dependencies that do not support every Python interpreter.
 
 ## Run Rust lints
 
@@ -97,8 +98,10 @@ uv run python -m pytest tests/test_tls.py -k start_tls
 CI and `just test` use `scripts/run_python_tests.py`, which forwards pytest
 arguments and prints recurring stack dumps when tests stop making progress.
 For the same diagnostics locally, run `uv run python scripts/run_python_tests.py`.
-Optional framework/database smoke scripts remain under `just test-frameworks`
-and `just test-databases`; pytest does not collect them by default.
+Repository benchmark and runner tests are kept out of the OS/Python matrix; run
+them with `uv run just test-tooling`. Optional framework/database smoke scripts
+remain under `just test-frameworks` and `just test-databases`; pytest does not
+collect them by default.
 
 Use pytest's `monkeypatch` fixture for attribute and environment overrides, and
 pytest-mock's `mocker` fixture for mocks, spies, and call assertions. Use

@@ -213,19 +213,21 @@ class TestCompatibility:
 
         rsloop.run(main())
 
-    def test_create_connection_error_does_not_retain_exception(self) -> None:
-        async def connect() -> None:
-            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
-            probe.close()
+    def test_create_connection_error_does_not_retain_exception(
+        self, monkeypatch
+    ) -> None:
+        async def fake_sock_connect(self, sock, address):
+            raise OSError(errno.ECONNREFUSED, f"connect failed: {address!r}")
 
+        monkeypatch.setattr(rsloop.Loop, "_sock_connect_fast", fake_sock_connect)
+
+        async def connect() -> None:
             loop = asyncio.get_running_loop()
             try:
                 await loop.create_connection(
                     asyncio.Protocol,
                     host="127.0.0.1",
-                    port=port,
+                    port=41000,
                 )
             except OSError as exc:
                 raise OSError("connection attempt failed") from exc
@@ -269,7 +271,7 @@ class TestCompatibility:
 
             with monkeypatch.context() as patch:
                 patch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
-                patch.setattr(rsloop.Loop, "sock_connect", fake_sock_connect)
+                patch.setattr(rsloop.Loop, "_sock_connect_fast", fake_sock_connect)
                 assert EXCEPTION_GROUP is not None
                 with pytest.raises(EXCEPTION_GROUP) as ctx:
                     await cast(Any, loop.create_connection)(
@@ -1402,54 +1404,6 @@ class TestCompatibility:
         assert loop_ref is not None
         gc.collect()
         assert loop_ref() is None
-
-    def test_create_subprocess_accepts_explicit_popen_defaults(self) -> None:
-        async def main():
-            await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-c",
-                "import sys;sys.exit(0)",
-                cwd=None,
-                env=None,
-                executable=None,
-                umask=-1,
-            )
-
-        rsloop.run(main())
-
-    def test_create_subprocess_exec_defaults_to_inherit(self) -> None:
-        # High-level create_subprocess_exec leaves stdin/stdout/stderr at None,
-        # which means "inherit the parent's fds" -> no pipe streams are created.
-        async def main() -> None:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-c",
-                "import sys;sys.exit(0)",
-            )
-            await proc.wait()
-            assert proc.stdin is None
-            assert proc.stdout is None
-            assert proc.stderr is None
-
-        rsloop.run(main())
-
-    def test_loop_subprocess_exec_defaults_to_pipe(self) -> None:
-        # Low-level loop.subprocess_exec defaults omitted stdio to PIPE, so a
-        # pipe transport is created for each of stdin/stdout/stderr.
-        async def main() -> None:
-            loop = asyncio.get_running_loop()
-            transport, _ = await loop.subprocess_exec(
-                asyncio.SubprocessProtocol,
-                sys.executable,
-                "-c",
-                "import sys;sys.exit(0)",
-            )
-            try:
-                assert transport.get_pipe_transport(0) is not None
-                assert transport.get_pipe_transport(1) is not None
-                assert transport.get_pipe_transport(2) is not None
-            finally:
-                transport.close()
 
     def test_set_write_buffer_limits_arguments_are_optional(self) -> None:
         # Regression test for issue #49: both arguments must be optional,

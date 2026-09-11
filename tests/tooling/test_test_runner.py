@@ -6,6 +6,8 @@ import pytest
 
 from scripts import run_python_tests as runner
 
+pytestmark = pytest.mark.tooling
+
 
 @pytest.mark.parametrize("value,expected", [(None, 60), ("1", 1), ("120", 120)])
 def test_traceback_interval(monkeypatch, value, expected):
@@ -65,8 +67,6 @@ def test_wrapper_forwards_arguments_and_exit_code(wrapper_calls, exit_code, mock
             mocker.call.start(17, repeat=True),
             mocker.call.pytest(
                 [
-                    "-v",
-                    "-s",
                     "-p",
                     "no:faulthandler",
                     "tests/test_run.py",

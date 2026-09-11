@@ -11,7 +11,9 @@ from typing import Any, cast
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benches"))
+pytestmark = pytest.mark.tooling
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "benches"))
 import compare_granian as benchmark
 
 
