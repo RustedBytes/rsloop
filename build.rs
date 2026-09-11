@@ -1,4 +1,10 @@
 fn main() {
+    // PyO3's link target depends on the selected interpreter. Explicitly make
+    // that dependency part of this crate's build-script fingerprint so a
+    // recreated `.venv` cannot leave tests linked to the previous Python DLL.
+    println!("cargo:rerun-if-env-changed=PYO3_PYTHON");
+    println!("cargo:rerun-if-env-changed=PYO3_CONFIG_FILE");
+
     pyo3_build_config::use_pyo3_cfgs();
     pyo3_build_config::add_extension_module_link_args();
 
