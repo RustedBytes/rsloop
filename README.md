@@ -385,7 +385,7 @@ crash on that target ([rust-lang/rust#156675](https://github.com/rust-lang/rust/
 so it temporarily falls back to the normal fat-LTO release build.
 
 [`scripts/build-wheels.sh`](./scripts/build-wheels.sh) currently defaults to
-CPython `3.10 3.11 3.12 3.13 3.14`, and
+CPython `3.10 3.11 3.12 3.13 3.14 3.14t 3.15`, and
 uses `uv python install` / `uv python find` to locate interpreters.
 
 ## Profiling

@@ -29,6 +29,10 @@ group explicitly when working on integrations; it is intentionally excluded
 from the default `dev` environment because some frameworks have native
 dependencies that do not support every Python interpreter.
 
+The default matrix covers CPython 3.10 through 3.15 plus the free-threaded
+CPython 3.14 build (`3.14t`). Until Python 3.15 is final, uv resolves `3.15` to
+the latest available prerelease standalone build.
+
 ## Run Rust lints
 
 Clippy uses a risk-focused policy in `Cargo.toml`: `correctness` is denied,

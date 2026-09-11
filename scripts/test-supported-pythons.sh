@@ -23,7 +23,7 @@ Options:
 
 Environment:
   RSLOOP_PYTHON_VERSIONS    Space-separated version list to override the defaults
-                            (default: 3.10 3.11 3.12 3.13 3.14 3.14t)
+                            (default: 3.10 3.11 3.12 3.13 3.14 3.14t 3.15)
   RSLOOP_TEST_TIMEOUT_SECONDS
                             Hard limit for one Python test suite (default: 300)
   RSLOOP_TEST_TRACEBACK_INTERVAL_SECONDS

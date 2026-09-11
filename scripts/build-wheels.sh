@@ -22,7 +22,7 @@ Options:
 
 Environment:
   RSLOOP_PYTHON_VERSIONS  Space-separated version list to override the defaults
-                          (default: 3.10 3.11 3.12 3.13 3.14 3.14t)
+                          (default: 3.10 3.11 3.12 3.13 3.14 3.14t 3.15)
   RSLOOP_RUST_TARGET      Rust compilation target to pass to maturin
   MACOSX_DEPLOYMENT_TARGET
                           macOS wheel floor (defaults to 13.0 for Apple targets)
