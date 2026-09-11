@@ -165,7 +165,7 @@ fn initialize_ctrl_c_state<'a>(
 }
 
 #[cfg(windows)]
-unsafe extern "system" fn ctrl_c_handler(ctrl_type: u32) -> i32 {
+extern "system" fn ctrl_c_handler(ctrl_type: u32) -> i32 {
     if ctrl_type == CTRL_C_EVENT {
         if let Some(state) = CTRL_C_STATE.get() {
             dispatch_ctrl_c(state);
@@ -331,11 +331,7 @@ mod tests {
         let result = rt.block_on(async {
             let ctrlc = ctrl_c()?;
             crate::vibeio::test_support::notify_after_pending(ctrlc, move || {
-                // SAFETY: invoke our handler directly with a supported integer
-                // event code; it accesses only synchronized process-lifetime state.
-                unsafe {
-                    let _ = ctrl_c_handler(CTRL_C_EVENT);
-                }
+                let _ = ctrl_c_handler(CTRL_C_EVENT);
             })
             .await
         });
