@@ -50,6 +50,7 @@ signal-hook = "0.4"
 slab = "0.4"
 socket2 = "0.6"
 tokio = { version = "1", default-features = false, features = ["io-util"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.7"
 
