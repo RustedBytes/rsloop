@@ -429,13 +429,14 @@ impl LoopCore {
             Ok(()) => return Ok(()),
             Err(item) => item,
         };
-        let item = match self.try_enqueue_active_ready(item) {
-            Ok(()) => return Ok(()),
-            Err(item) => item,
-        };
         let ReadyItem::HandleCallback(handle) = item else {
             unreachable!("ready handle enqueue preserves item kind")
         };
+        // Keep every off-thread callback on the runtime command queue. During
+        // run_forever startup, callbacks queued before EnterRun already live
+        // there; sending later callbacks directly to pending_ready can overtake
+        // that older batch before the dispatcher processes EnterRun. The local
+        // loop-thread path above remains direct and allocation-free.
         self.send_remote_command(LoopCommand::ScheduleReadyHandle(handle))
     }
 
