@@ -9,7 +9,8 @@ use super::callbacks::{PyHandle, ReadyCallback};
 use crate::fd_ops::RawFd;
 use crate::transport::process::ProcessTransportCore;
 use crate::transport::stream::{
-    AcceptedStream, ReaderTarget, ServerCore, ServerListener, StreamTransportCore,
+    AcceptedStream, ReaderTarget, ServerAcceptTaskGuard, ServerCore, ServerListener,
+    StreamTransportCore,
 };
 
 /// Work that must be completed on the Python loop thread, usually under the GIL.
@@ -155,6 +156,8 @@ pub enum LoopIoCommand {
         server: Arc<ServerCore>,
         /// Listener consumed by the accept task.
         listener: ServerListener,
+        /// Lifetime token released after the task drops its listener.
+        task_guard: ServerAcceptTaskGuard,
     },
     /// Stops the accept task registered for the given descriptor.
     StopServerAccept(RawFd),

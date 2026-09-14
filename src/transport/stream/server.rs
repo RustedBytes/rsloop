@@ -51,6 +51,7 @@ pub fn create_server(py: Python<'_>, params: ServerCreateParams) -> PyResult<Py<
                 }),
                 accept_tasks: Mutex::new(accept_tasks),
                 accept_fds: Mutex::new(Vec::new()),
+                active_accept_tasks: AtomicUsize::new(0),
                 active_connections: AtomicUsize::new(0),
                 pending_tls_handshakes: AtomicUsize::new(0),
                 tls_overload_reported: AtomicBool::new(false),

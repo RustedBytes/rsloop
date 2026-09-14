@@ -42,7 +42,10 @@ use super::socket_transport::spawn_tcp_transport;
 use super::socket_transport::spawn_unix_transport;
 use super::tls_transport::spawn_tls_server_transport;
 use super::tuning::max_pending_tls_handshakes;
-use super::{AcceptedStream, PyStreamTransport, ServerCore, ServerListener, TransportSpawnContext};
+use super::{
+    AcceptedStream, PyStreamTransport, ServerAcceptTaskGuard, ServerCore, ServerListener,
+    TransportSpawnContext,
+};
 use crate::engine::{LoopCommand, LoopTransportCommand};
 #[cfg(unix)]
 use crate::fd_ops;
@@ -275,12 +278,17 @@ pub(super) fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
         }
     }
 }
-pub(crate) async fn run_server_accept_task(server: Arc<ServerCore>, listener: ServerListener) {
+pub(crate) async fn run_server_accept_task(
+    server: Arc<ServerCore>,
+    listener: ServerListener,
+    task_guard: ServerAcceptTaskGuard,
+) {
     match listener {
         ServerListener::Tcp(listener) => run_tcp_accept_task(server, listener).await,
         #[cfg(unix)]
         ServerListener::Unix(listener) => run_unix_accept_task(server, listener).await,
     }
+    drop(task_guard);
 }
 
 pub(super) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {

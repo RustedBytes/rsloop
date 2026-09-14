@@ -222,6 +222,7 @@ pub struct ServerCore {
     state: Mutex<ServerState>,
     accept_tasks: Mutex<Vec<WorkerThread>>,
     accept_fds: Mutex<Vec<fd_ops::RawFd>>,
+    active_accept_tasks: AtomicUsize,
     active_connections: AtomicUsize,
     pending_tls_handshakes: AtomicUsize,
     tls_overload_reported: AtomicBool,
@@ -229,6 +230,36 @@ pub struct ServerCore {
     #[cfg_attr(not(unix), allow(dead_code))]
     cleanup_path: Option<PathBuf>,
     tls: Option<Arc<ServerTlsSettings>>,
+}
+
+/// Counts one accept task until its listener-owning future or worker exits.
+///
+/// The guard is created before a task is queued so `wait_closed()` cannot race
+/// ahead of a pending `StartServerAccept` command. Cancellation drops the task
+/// future synchronously on its owning runtime, which drops this guard only after
+/// the duplicated listener has been released.
+pub struct ServerAcceptTaskGuard {
+    server: Arc<ServerCore>,
+}
+
+impl ServerAcceptTaskGuard {
+    fn new(server: &Arc<ServerCore>) -> Self {
+        server.active_accept_tasks.fetch_add(1, Ordering::AcqRel);
+        Self {
+            server: Arc::clone(server),
+        }
+    }
+}
+
+impl Drop for ServerAcceptTaskGuard {
+    fn drop(&mut self) {
+        let previous = self
+            .server
+            .active_accept_tasks
+            .fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "accept task count underflow");
+        self.server.closed_notify.notify_all();
+    }
 }
 
 struct PendingTlsHandshake {

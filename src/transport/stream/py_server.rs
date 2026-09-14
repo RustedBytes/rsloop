@@ -41,6 +41,7 @@ impl PyServer {
         pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
             loop {
                 if core.is_closed()
+                    && core.active_accept_tasks.load(Ordering::Acquire) == 0
                     && core.active_connections.load(Ordering::SeqCst) == 0
                     && core.pending_tls_handshakes.load(Ordering::Acquire) == 0
                 {
@@ -48,6 +49,7 @@ impl PyServer {
                 }
                 let wait = core.closed_notify.listen();
                 if core.is_closed()
+                    && core.active_accept_tasks.load(Ordering::Acquire) == 0
                     && core.active_connections.load(Ordering::SeqCst) == 0
                     && core.pending_tls_handshakes.load(Ordering::Acquire) == 0
                 {

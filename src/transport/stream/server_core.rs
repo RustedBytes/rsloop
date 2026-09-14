@@ -31,8 +31,8 @@ use super::run_unix_accept_loop;
 use super::tuning::max_pending_tls_handshakes;
 use super::worker::WorkerThread;
 use super::{
-    BlockingAcceptLoop, PendingTlsHandshake, ServerCore, ServerListener, run_server_accept_task,
-    run_tcp_accept_loop, task_locals_for_loop,
+    BlockingAcceptLoop, PendingTlsHandshake, ServerAcceptTaskGuard, ServerCore, ServerListener,
+    run_server_accept_task, run_tcp_accept_loop, task_locals_for_loop,
 };
 use crate::context::{ensure_running_loop, run_in_context};
 use crate::engine::{LoopCommand, LoopIoCommand};
@@ -204,6 +204,7 @@ impl ServerCore {
             let mut tasks = self.accept_tasks.lock().expect("poisoned accept tasks");
             for listener in listeners {
                 let server = Arc::clone(self);
+                let task_guard = ServerAcceptTaskGuard::new(&server);
                 let task = match listener {
                     ServerListener::Tcp(listener) => {
                         let wake_addr = listener.local_addr().ok();
@@ -215,6 +216,7 @@ impl ServerCore {
                                 }
                             },
                             move |stop| {
+                                let _task_guard = task_guard;
                                 run_tcp_accept_loop(BlockingAcceptLoop::new(server, listener, stop))
                             },
                         )
@@ -233,6 +235,7 @@ impl ServerCore {
                                 }
                             },
                             move |stop| {
+                                let _task_guard = task_guard;
                                 run_unix_accept_loop(BlockingAcceptLoop::new(
                                     server, listener, stop,
                                 ))
@@ -260,19 +263,21 @@ impl ServerCore {
             };
             accept_fds.push(fd);
             let server = Arc::clone(self);
+            let task_guard = ServerAcceptTaskGuard::new(&server);
             // On the loop thread, host the accept loop directly on the loop's
             // own runtime so accepted connections are delivered without a
             // cross-thread hop. Off-thread callers fall back to the transitional
             // runtime-thread command path.
             if self.loop_core.on_runtime_thread() {
                 self.loop_core
-                    .spawn_io_tracked(fd, run_server_accept_task(server, listener));
+                    .spawn_io_tracked(fd, run_server_accept_task(server, listener, task_guard));
             } else {
                 let _ = self.loop_core.send_command(LoopCommand::Io(
                     LoopIoCommand::StartServerAccept {
                         fd,
                         server,
                         listener,
+                        task_guard,
                     },
                 ));
             }
@@ -375,6 +380,7 @@ pub(super) mod tests {
             }),
             accept_tasks: Mutex::new(Vec::new()),
             accept_fds: Mutex::new(Vec::new()),
+            active_accept_tasks: AtomicUsize::new(0),
             active_connections: AtomicUsize::new(0),
             pending_tls_handshakes: AtomicUsize::new(0),
             tls_overload_reported: AtomicBool::new(false),
@@ -417,6 +423,13 @@ pub(super) mod tests {
                 connection_notice.try_recv().expect("connection notice"),
                 Some(())
             );
+
+            let mut accept_notice = server.closed_notify.listen();
+            let accept_guard = ServerAcceptTaskGuard::new(&server);
+            assert_eq!(server.active_accept_tasks.load(Ordering::Acquire), 1);
+            drop(accept_guard);
+            assert_eq!(server.active_accept_tasks.load(Ordering::Acquire), 0);
+            assert_eq!(accept_notice.try_recv().expect("accept notice"), Some(()));
 
             let mut close_notice = server.closed_notify.listen();
             server.close();

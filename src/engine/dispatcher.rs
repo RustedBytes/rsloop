@@ -394,13 +394,14 @@ impl RuntimeDispatcher {
                 fd,
                 server,
                 listener,
+                task_guard,
             }) => {
                 if let Some(task) = self.accept_tasks.remove(&fd) {
                     cancel_watch_task(task);
                 }
 
                 let task = WatchTask::Vibeio(crate::vibeio::spawn(
-                    crate::transport::stream::run_server_accept_task(server, listener),
+                    crate::transport::stream::run_server_accept_task(server, listener, task_guard),
                 ));
 
                 self.accept_tasks.insert(fd, task);
