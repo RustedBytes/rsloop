@@ -118,7 +118,7 @@ Your extension crate should depend on:
 [dependencies]
 async-std = "1"
 pyo3 = "0.29.2"
-rsloop = { version = "0.1.32" }
+rsloop = { version = "0.1.52" }
 ```
 
 Keep your PyO3 version aligned with the version used by `rsloop`, because the

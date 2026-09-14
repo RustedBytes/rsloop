@@ -1,6 +1,6 @@
 [project]
 name = "rsloop"
-version = "0.1.51"
+version = "0.1.52"
 description = "An event loop for asyncio written in Rust"
 readme = "README.md"
 license = { file = "LICENSE" }
