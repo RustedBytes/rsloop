@@ -3,22 +3,23 @@
 ```bash
 uv run --with maturin maturin develop --release
 uv run --with uvloop --with 'zuvloop; python_version >= "3.14"' python benches/compare_event_loops.py \
-  --loops asyncio,uvloop,zuvloop,rsloop --repeat 7 --warmups 2
+  --loops asyncio,uvloop,zuvloop,rsloop --repeat 7 --warmups 2 \
+  --json-output target/event-loops-0.1.52.json
 ```
 
 ## Four-loop comparison on Linux
 
-Measured on September 14, 2026 at commit `ccbebb6` on an Intel Core i9-9900K,
-Linux 7.0.0-31-generic (x86_64), and CPython 3.14.7, with rsloop 0.1.51 built
+Measured on September 14, 2026 at commit `5d0a2bb` on an Intel Core i9-9900K,
+Linux 7.0.0-31-generic (x86_64), and CPython 3.14.7, with rsloop 0.1.52 built
 in release mode, uvloop 0.22.1, and zuvloop 0.0.16. Each entry is the median
 of seven measured runs after two warmups, with each run in a fresh subprocess.
 Times are milliseconds; lower is better.
 
 | Workload | asyncio | uvloop | zuvloop | rsloop |
 |---|---:|---:|---:|---:|
-| 200,000 callbacks | 109.97 | 51.71 | **36.10** | 47.87 |
-| 50,000 tasks | 146.98 | 89.96 | **78.60** | 87.18 |
-| 5,000 TCP roundtrips | 150.57 | 125.78 | 104.51 | **82.01** |
+| 200,000 callbacks | 113.46 | 52.67 | **36.77** | 47.77 |
+| 50,000 tasks | 150.13 | 92.85 | **82.21** | 88.29 |
+| 5,000 TCP roundtrips | 151.77 | 127.87 | 104.26 | **83.30** |
 
 The TCP workload uses 1,024-byte payloads and rsloop's native fast streams;
 the other loops use stdlib asyncio streams. Use `--no-rsloop-fast-streams`
