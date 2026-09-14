@@ -310,6 +310,8 @@ def import_artifact(directory: Path) -> dict:
         raise ValueError("Artifact must be imported in a fresh process")
     sys.path.insert(0, str(directory / "package"))
     native = importlib.import_module("rsloop._loop")
+    if native.__file__ is None:
+        raise ValueError("Native extension has no filesystem path")
     actual = Path(native.__file__).resolve()
     if actual != (directory / manifest["extension"]).resolve():
         raise ValueError(f"Wrong extension loaded: {actual}")
@@ -336,6 +338,7 @@ def child(args) -> None:
         "bulk_chunk_size",
     ):
         argv.extend(["--" + key.replace("_", "-"), str(config[key])])
+    matrix_args = None
     if name not in WORKLOADS[:3]:
         sys.argv = argv
         matrix_args = matrix.parse_args()
@@ -348,17 +351,21 @@ def child(args) -> None:
             started = time.process_time()
             if name == "callbacks":
                 coro = small.bench_callbacks("rsloop", config["callbacks"])
+                result = asdict(small.run_with_loop("rsloop", coro))
             elif name == "tasks":
                 coro = small.bench_tasks(
                     "rsloop", config["tasks"], config["task_batch_size"]
                 )
+                result = asdict(small.run_with_loop("rsloop", coro))
             elif name == "tcp_streams":
                 coro = small.bench_tcp_streams(
                     "rsloop", config["tcp_roundtrips"], config["payload_size"]
                 )
+                result = asdict(small.run_with_loop("rsloop", coro))
             else:
+                assert matrix_args is not None
                 coro = matrix.SCENARIO_RUNNERS[name]("rsloop", matrix_args)
-            result = asdict(small.run_with_loop("rsloop", coro))
+                result = asdict(matrix.run_with_loop("rsloop", coro))
             result["process_cpu_seconds"] = time.process_time() - started
         finally:
             gc.enable()
@@ -593,7 +600,10 @@ def compare(args) -> None:
         }
         reliable &= min(values["baseline"] + values["candidate"]) >= args.min_seconds
         estimates[name] = paired_estimate(
-            **values, alpha=0.05 / len(names), seed=args.seed + index
+            baseline=values["baseline"],
+            candidate=values["candidate"],
+            alpha=0.05 / len(names),
+            seed=args.seed + index,
         )
         estimates[name]["min_observed_seconds"] = min(
             values["baseline"] + values["candidate"]

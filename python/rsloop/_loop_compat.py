@@ -1043,8 +1043,9 @@ def __without_text_kwds(
 def __windows_command_line_to_argv(cmd: str) -> list[str]:
     import ctypes as __ctypes
 
+    windll = __typing.cast(__typing.Any, __ctypes).windll
     argc = __ctypes.c_int()
-    command_line_to_argv = __ctypes.windll.shell32.CommandLineToArgvW
+    command_line_to_argv = windll.shell32.CommandLineToArgvW
     command_line_to_argv.argtypes = [
         __ctypes.c_wchar_p,
         __ctypes.POINTER(__ctypes.c_int),
@@ -1056,7 +1057,7 @@ def __windows_command_line_to_argv(cmd: str) -> list[str]:
     try:
         return [argv[index] for index in range(argc.value)]
     finally:
-        __ctypes.windll.kernel32.LocalFree(argv)
+        windll.kernel32.LocalFree(argv)
 
 
 async def __create_text_subprocess_exec(
