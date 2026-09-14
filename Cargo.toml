@@ -3,43 +3,35 @@ name = "rsloop"
 version = "0.1.51"
 edition = "2024"
 description = "An event loop for asyncio written in Rust"
-license = "Apache-2.0"
-readme = "README.md"
-repository = "https://github.com/RustedBytes/rsloop"
-homepage = "https://github.com/RustedBytes/rsloop"
 documentation = "https://github.com/RustedBytes/rsloop#readme"
+readme = "README.md"
+homepage = "https://github.com/RustedBytes/rsloop"
+repository = "https://github.com/RustedBytes/rsloop"
+license = "Apache-2.0"
+
+[package.metadata.kani.flags]
+# Force every proof that reaches a loop to state and review its own bound.
+default-unwind = "1"
 
 [lib]
-name = "rsloop"
 crate-type = ["cdylib", "rlib"]
-
-[features]
-default = []
-# Embedded-runtime modules are opt-in; production wheels retain the default
-# networking/timer build unless a feature is explicitly requested.
-fs = []
-process = ["dep:async-channel"]
-signal = ["dep:once_cell", "dep:errno"]
-pipe = []
-stdio = []
-splice = []
-blocking-default = ["dep:rusty_pool"]
+name = "rsloop"
 
 [dependencies]
-errno = { version = "0.3", optional = true }
 async-channel = { version = "2", optional = true }
 async-io = "2"
 async-std = "1"
 crossbeam-channel = "0.5"
 crossbeam-queue = "0.3"
+errno = { version = "0.3", optional = true }
 futures = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = "0.3"
 libc = "0.2"
 memchr = "2"
 mio = "1"
+once_cell = { version = "1", optional = true }
 oneshot = { version = "0.2", features = ["async", "std"] }
 pin-project-lite = "0.2"
-once_cell = { version = "1", optional = true }
 pyo3 = { version = "0.29.2" }
 pyo3-async-runtimes = { version = "0.29", features = ["async-std-runtime"] }
 rustls = "0.23"
@@ -51,48 +43,56 @@ slab = "0.4"
 socket2 = "0.6"
 tokio = { version = "1", default-features = false, features = ["io-util"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-io-uring = "0.7"
-
-[target.'cfg(unix)'.dependencies]
-mio = { version = "1", features = ["os-poll", "os-ext"] }
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Wdk_System_SystemServices", "Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
 
 [build-dependencies]
 pyo3-build-config = "0.29.2"
 
-[dev-dependencies]
-proptest = { version = "1", default-features = false, features = ["std"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7"
+
+[target."cfg(unix)".dependencies]
+mio = { version = "1", features = ["os-ext", "os-poll"] }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Wdk_System_SystemServices", "Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+
+[features]
+default = []
+blocking-default = ["dep:rusty_pool"]
+# Embedded-runtime modules are opt-in; production wheels retain the default
+# networking/timer build unless a feature is explicitly requested.
+fs = []
+pipe = []
+process = ["dep:async-channel"]
+signal = ["dep:errno", "dep:once_cell"]
+splice = []
+stdio = []
 
 [lints.clippy]
-# Enforce bug, concurrency, and performance checks rather than style preferences.
-correctness = { level = "deny", priority = -1 }
-suspicious = { level = "warn", priority = -1 }
-perf = { level = "warn", priority = -1 }
-complexity = { level = "warn", priority = -1 }
-style = { level = "allow", priority = -1 }
-pedantic = { level = "allow", priority = -1 }
-# Keep safety checks even when they belong to an otherwise disabled group.
-missing_safety_doc = "warn"
-cast_ptr_alignment = "warn"
 await_holding_lock = "warn"
 await_holding_refcell_ref = "warn"
+cast_ptr_alignment = "warn"
+complexity = { level = "warn", priority = -1 }
+# Enforce bug, concurrency, and performance checks rather than style preferences.
+correctness = { level = "deny", priority = -1 }
+# Keep safety checks even when they belong to an otherwise disabled group.
+missing_safety_doc = "warn"
+pedantic = { level = "allow", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "allow", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(musl_v1_2_3)", "cfg(syscall_accept4)", "cfg(feature, values(\"blocking-default\", \"fs\", \"pipe\", \"process\", \"signal\", \"splice\", \"stdio\"))"] }
 
-[package.metadata.kani.flags]
-# Force every proof that reaches a loop to state and review its own bound.
-default-unwind = "1"
+[profile.bench]
+inherits = "release"
 
 [profile.release]
 opt-level = 3
 lto = "fat"
-codegen-units = 1
 incremental = false
+codegen-units = 1
 # strip = true
-
-[profile.bench]
-inherits = "release"

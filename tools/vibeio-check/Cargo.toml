@@ -4,21 +4,10 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-# Compile the actual embedded sources without PyO3/TLS native build dependencies.
-[features]
-default = []
-fs = []
-process = ["dep:async-channel"]
-signal = ["dep:once_cell", "dep:errno"]
-pipe = []
-stdio = []
-splice = []
-blocking-default = ["dep:rusty_pool"]
-
 [dependencies]
-errno = { version = "0.3", optional = true }
 async-channel = { version = "2", optional = true }
 crossbeam-queue = "0.3"
+errno = { version = "0.3", optional = true }
 futures-util = "0.3"
 libc = "0.2"
 mio = "1"
@@ -30,30 +19,41 @@ slab = "0.4"
 socket2 = "0.6"
 tokio = { version = "1", default-features = false, features = ["io-util"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-io-uring = "0.7"
-
-[target.'cfg(unix)'.dependencies]
-mio = { version = "1", features = ["os-poll", "os-ext"] }
-
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Wdk_System_SystemServices", "Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_Threading"] }
-
 [dev-dependencies]
 futures = { version = "0.3", default-features = false, features = ["std"] }
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(musl_v1_2_3)", "cfg(syscall_accept4)"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = "0.7"
+
+[target."cfg(unix)".dependencies]
+mio = { version = "1", features = ["os-ext", "os-poll"] }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_FileSystem", "Wdk_System_IO", "Wdk_System_SystemServices", "Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+
+# Compile the actual embedded sources without PyO3/TLS native build dependencies.
+[features]
+default = []
+blocking-default = ["dep:rusty_pool"]
+fs = []
+pipe = []
+process = ["dep:async-channel"]
+signal = ["dep:errno", "dep:once_cell"]
+splice = []
+stdio = []
 
 [lints.clippy]
-# Keep the embedded-source harness aligned with the root crate's lint policy.
-correctness = { level = "deny", priority = -1 }
-suspicious = { level = "warn", priority = -1 }
-perf = { level = "warn", priority = -1 }
-complexity = { level = "warn", priority = -1 }
-style = { level = "allow", priority = -1 }
-pedantic = { level = "allow", priority = -1 }
-missing_safety_doc = "warn"
-cast_ptr_alignment = "warn"
 await_holding_lock = "warn"
 await_holding_refcell_ref = "warn"
+cast_ptr_alignment = "warn"
+complexity = { level = "warn", priority = -1 }
+# Keep the embedded-source harness aligned with the root crate's lint policy.
+correctness = { level = "deny", priority = -1 }
+missing_safety_doc = "warn"
+pedantic = { level = "allow", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "allow", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(musl_v1_2_3)", "cfg(syscall_accept4)"] }

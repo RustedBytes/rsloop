@@ -10,6 +10,7 @@ tls-test-certs outdir="tests/fixtures/tls":
 fmt:
     uv run ruff format .
     cargo fmt --all
+    uvx tombi format .
 
 clippy:
     uv run cargo clippy --all-targets --all-features -- -D warnings

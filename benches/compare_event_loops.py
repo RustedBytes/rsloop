@@ -533,9 +533,7 @@ def run_child(
     if not lines:
         raise RuntimeError(f"{loop_name}/{workload} produced no output")
     payload = next(
-        json.loads(line)
-        for line in reversed(lines)
-        if line.lstrip().startswith("{")
+        json.loads(line) for line in reversed(lines) if line.lstrip().startswith("{")
     )
     return ChildResult(
         loop=payload["loop"],

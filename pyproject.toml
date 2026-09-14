@@ -1,7 +1,3 @@
-[build-system]
-requires = ["maturin>=1.9.4,<2"]
-build-backend = "maturin"
-
 [project]
 name = "rsloop"
 version = "0.1.51"
@@ -36,68 +32,72 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/RustedBytes/rsloop"
-Repository = "https://github.com/RustedBytes/rsloop"
 Issues = "https://github.com/RustedBytes/rsloop/issues"
-
-[tool.maturin]
-python-source = "python"
-module-name = "rsloop._loop"
-include = ["python/rsloop/_loop.pyi"]
+Repository = "https://github.com/RustedBytes/rsloop"
 
 [dependency-groups]
 dev = [
-    "maturin>=1.14.1",
-    "mkdocs>=1.6.1",
-    "pyright>=1.1.400",
-    "ruff>=0.15.19",
-    "rust-just>=1.54.0",
-    "typing-extensions>=4.0",
-    { include-group = "test" },
-]
-# Core pytest dependencies, including on free-threaded Python.
-test = [
-    "pytest>=8.4",
-    "pytest-mock>=3.14",
-    "typing-extensions>=4.0",
-    "websockets>=13.0",
+  "maturin>=1.14.1",
+  "mkdocs>=1.6.1",
+  "pyright>=1.1.400",
+  "ruff>=0.15.19",
+  "rust-just>=1.54.0",
+  "typing-extensions>=4.0",
+  { include-group = "test" },
 ]
 # Optional library/framework scripts in tests/integration/packages. Native dependencies
 # here may not support every interpreter in the core test matrix.
 integration = [
-    "aiohttp>=3.14.3",
-    "aiosqlite>=0.20.0",
-    "anyio>=4.14.2",
-    "beanie>=2.0.0",
-    "daphne>=4.2.3",
-    "django>=5.2.17",
-    "edgy>=0.30.0",
-    "falcon>=4.1.0",
-    "fastapi>=0.124.4",
-    "faststream[nats]>=0.5.48",
-    "granian>=1.6.4",
-    "hypercorn>=0.17.3",
-    "litestar>=2.24.0",
-    "mangum>=0.21.0",
-    "ormar>=0.22.0",
-    "piccolo>=1.30.0",
-    "quart>=0.19.9",
-    "sanic>=23.12.1,<24; python_version < '3.10'",
-    "sanic>=25.3.0; python_version >= '3.10'",
-    "sqlalchemy[asyncio]>=2.0.0",
-    "sqlmodel>=0.0.24",
-    "starlette>=0.44.0",
-    "tortoise-orm>=1.0.0",
-    "uvicorn>=0.33.0",
+  "aiohttp>=3.14.3",
+  "aiosqlite>=0.20.0",
+  "anyio>=4.14.2",
+  "beanie>=2.0.0",
+  "daphne>=4.2.3",
+  "django>=5.2.17",
+  "edgy>=0.30.0",
+  "falcon>=4.1.0",
+  "fastapi>=0.124.4",
+  "faststream[nats]>=0.5.48",
+  "granian>=1.6.4",
+  "hypercorn>=0.17.3",
+  "litestar>=2.24.0",
+  "mangum>=0.21.0",
+  "ormar>=0.22.0",
+  "piccolo>=1.30.0",
+  "quart>=0.19.9",
+  "sanic>=23.12.1,<24; python_version < '3.10'",
+  "sanic>=25.3.0; python_version >= '3.10'",
+  "sqlalchemy[asyncio]>=2.0.0",
+  "sqlmodel>=0.0.24",
+  "starlette>=0.44.0",
+  "tortoise-orm>=1.0.0",
+  "uvicorn>=0.33.0",
+]
+# Core pytest dependencies, including on free-threaded Python.
+test = [
+  "pytest>=8.4",
+  "pytest-mock>=3.14",
+  "typing-extensions>=4.0",
+  "websockets>=13.0",
 ]
 
+[build-system]
+requires = ["maturin>=1.9.4,<2"]
+build-backend = "maturin"
+
+[tool.maturin]
+include = ["python/rsloop/_loop.pyi"]
+module-name = "rsloop._loop"
+python-source = "python"
+
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+addopts = ["-m", "not tooling"]
+markers = [
+  "slow_network: real operating-system network behavior that may be slow",
+  "stress: correctness tests with an optional high-repetition profile",
+  "tooling: tests for repository benchmark and test infrastructure",
+]
 # tests/integration/packages/*_test.py are standalone, optional integration scripts.
 python_files = ["test_*.py"]
 pythonpath = ["."]
-addopts = ["-m", "not tooling"]
-markers = [
-    "slow_network: real operating-system network behavior that may be slow",
-    "stress: correctness tests with an optional high-repetition profile",
-    "tooling: tests for repository benchmark and test infrastructure",
-]
+testpaths = ["tests"]

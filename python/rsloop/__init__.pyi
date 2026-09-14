@@ -26,6 +26,7 @@ def run(
     loop_factory: Callable[[], Loop] = ...,
     debug: bool | None = ...,
 ) -> _T: ...
+
 __all__: tuple[str, ...] = (
     "EventLoopPolicy",
     "Loop",
