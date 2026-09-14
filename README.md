@@ -42,8 +42,10 @@ If you are new to the repository, start with:
 
 - [`docs/index.md`](./docs/index.md)
 - [`docs/getting-started.md`](./docs/getting-started.md)
+- [`docs/supported-features.md`](./docs/supported-features.md)
 - [`docs/how-it-works.md`](./docs/how-it-works.md)
 - [`docs/project-structure.md`](./docs/project-structure.md)
+- [`docs/development.md`](./docs/development.md) for building, testing, and profiling
 
 To browse the docs locally with MkDocs:
 
@@ -134,70 +136,6 @@ The public entry point is `rsloop::rust_async`:
 
 See [`examples/rust/README.md`](./examples/rust/README.md) for a complete
 extension example built with `maturin`.
-
-## Verified Surface Area
-
-The current codebase implements these user-facing areas.
-
-Loop lifecycle and scheduling:
-
-- `run_forever`, `run_until_complete`, `stop`, `close`
-- `time`, `is_running`, `is_closed`
-- `get_debug`, `set_debug`
-- `call_soon`, `call_soon_threadsafe`, `call_later`, `call_at`
-- returned `Handle` and `TimerHandle` objects with `cancel()` / `cancelled()`
-
-Tasks, futures, and execution helpers:
-
-- `create_future`, `create_task`
-- `set_task_factory`, `get_task_factory`
-- `set_exception_handler`, `get_exception_handler`,
-  `call_exception_handler`, `default_exception_handler`
-- `set_default_executor`, `run_in_executor`
-- `shutdown_asyncgens`, `shutdown_default_executor`
-- callback execution under captured `contextvars.Context`
-- `asyncio.get_running_loop()` support while running on `rsloop`
-- `rsloop.run(...)` helper, with `asyncio.run(..., loop_factory=...)`
-  integration on Python 3.12+
-
-I/O and networking:
-
-- `add_reader`, `remove_reader`, `add_writer`, `remove_writer`
-- `sock_recv`, `sock_recv_into`, `sock_sendall`, `sock_accept`, `sock_connect`
-- `getaddrinfo`, `getnameinfo`
-- `create_server`, `create_connection`
-- `create_unix_server`, `create_unix_connection`
-- `connect_accepted_socket`
-- returned `Server` objects with `close()`, `is_serving()`, `get_loop()`,
-  and `sockets()`
-- returned `StreamTransport` objects with `write()`, `writelines()`, `close()`,
-  `abort()`, `is_closing()`, `write_eof()`, `can_write_eof()`,
-  `get_extra_info()`, `get_protocol()`, `set_protocol()`,
-  `pause_reading()`, `resume_reading()`, `is_reading()`
-
-Pipes, subprocesses, and signals:
-
-- `connect_read_pipe`, `connect_write_pipe`
-- `subprocess_exec`, `subprocess_shell`
-- returned `ProcessTransport` and `ProcessPipeTransport` objects
-- higher-level compatibility with `asyncio.create_subprocess_exec()` and
-  `asyncio.create_subprocess_shell()`
-- Unix subprocess options including `cwd`, `env`, `executable`, `pass_fds`,
-  `start_new_session`, `process_group`, `user`, `group`, `extra_groups`,
-  `umask`, and `restore_signals`
-- `add_signal_handler`, `remove_signal_handler`
-
-Profiling:
-
-- Python 3.15's external `profiling.sampling` profiler
-- opt-in transport counters through `transport_stats()` and
-  `reset_transport_stats()`
-
-Set `RSLOOP_TRANSPORT_STATS=1` before importing rsloop to enable the transport
-counters. They report read completions and bytes, Python-thread read drains,
-wakeups, staged and direct writes, and Windows completion-to-poll rebinds.
-Counters remain disabled by default so diagnostics add only one predictable
-branch to transport hot paths.
 
 ## Fast Streams
 
@@ -329,83 +267,6 @@ These gaps are visible in the current implementation.
 - The transport runtime model is still in transition: protocol readers on Unix
   avoid a coordination-thread hop, but native streams, generic descriptor
   watches, and TLS-heavy paths do not share one single-threaded I/O path.
-
-## Build
-
-Local development uses Python 3.14.7, pinned in `.python-version`. Install that
-interpreter before running the `uv` commands below. This development pin does
-not change the package's Python 3.10+ support or the multi-version test matrix.
-
-Local builds and build/test CI use Rust `1.98.1`, pinned in
-[`rust-toolchain.toml`](./rust-toolchain.toml). Rustup selects it automatically
-inside this repository. LLVM tools remain optional for PGO builds.
-
-Quick check:
-
-```bash
-cargo check
-```
-
-Release build and editable install:
-
-```bash
-cargo build --release
-uv run --with maturin maturin develop --release
-```
-
-Build release wheels into `dist/wheels`:
-
-```bash
-scripts/build-wheels.sh
-```
-
-Optionally build wheels with profile-guided optimization:
-
-```bash
-rustup component add llvm-tools-preview
-scripts/build-pgo-wheels.sh
-```
-
-For each requested Python ABI, the PGO wrapper creates an instrumented wheel,
-trains it on sustained HTTP, TLS, WebSocket, mixed-stream, bulk-transfer,
-idle-connection, callback, task, and TCP workloads, merges the resulting LLVM
-profiles, and builds that ABI's final wheel with its matching profile. Per-ABI
-training avoids discarding counters when PyO3's generated control flow differs
-between Python versions or free-threaded builds. The target must be native
-because the instrumented extension runs during training.
-
-Set `RSLOOP_PGO_SCENARIOS` to override the comma-separated network scenarios.
-The **Wheels** CI workflow disables PGO by default: tagged releases and ordinary
-manual runs use the normal release-wheel builder. To opt in, enable the `pgo`
-checkbox when manually running the workflow. LLVM tools are installed only for
-PGO runs; source-distribution and publishing steps are unchanged.
-When enabled, PGO is used on every supported platform except Windows ARM64.
-Rust profile-generation binaries currently
-crash on that target ([rust-lang/rust#156675](https://github.com/rust-lang/rust/issues/156675)),
-so it temporarily falls back to the normal fat-LTO release build.
-
-[`scripts/build-wheels.sh`](./scripts/build-wheels.sh) currently defaults to
-CPython `3.10 3.11 3.12 3.13 3.14 3.14t 3.15`, and
-uses `uv python install` / `uv python find` to locate interpreters.
-
-## Profiling
-
-Python 3.15 includes a low-overhead sampling profiler that can run rsloop
-without a special build or in-process instrumentation. Generate an interactive
-flame graph with:
-
-```bash
-uv run --python 3.15 --with maturin maturin develop --release
-uv run --python 3.15 python -m profiling.sampling run \
-  --all-threads --native --flamegraph \
-  -o rsloop-profile.html examples/01_basics.py
-```
-
-`--all-threads` includes rsloop's runtime thread and `--native` marks time below
-the Python/native boundary. The profiler and target must use the same Python
-3.15 interpreter. Python 3.15 does not allow these options together with
-`--async-aware`; use a separate async-aware pass when coroutine reconstruction
-is more important than native and multi-thread visibility.
 
 ## Examples
 

@@ -76,6 +76,7 @@ rsloop.run(main())
 ## Recommended reading order
 
 - Start with [Getting Started](getting-started.md) if you want to use the package.
+- Check [Verified Surface Area](supported-features.md) for the currently supported APIs.
 - Read [Rust Extensions](rust-extensions.md) if you want to add your own async Rust functions and await them from Python.
 - Read [Examples](examples.md) if you want copy-paste usage patterns.
 - Read [How It Works](how-it-works.md) if you want the big picture.

@@ -4,6 +4,15 @@ This page is for contributors and readers of the codebase.
 
 ## Build the project
 
+Local development uses Python 3.14.7, pinned in `.python-version`. Install that
+interpreter before running the `uv` commands below. This development pin does
+not change the package's Python 3.10+ support or the multi-version test matrix.
+
+Local builds and build/test CI use Rust `1.98.1`, pinned in
+[`rust-toolchain.toml`](https://github.com/RustedBytes/rsloop/blob/master/rust-toolchain.toml).
+Rustup selects it automatically
+inside this repository. LLVM tools remain optional for PGO builds.
+
 Quick Rust check:
 
 ```bash
@@ -13,8 +22,48 @@ cargo check
 Build the extension and install it into the current environment:
 
 ```bash
+cargo build --release
 uv run --with maturin maturin develop --release
 ```
+
+Build release wheels into `dist/wheels`:
+
+```bash
+scripts/build-wheels.sh
+```
+
+[`scripts/build-wheels.sh`](https://github.com/RustedBytes/rsloop/blob/master/scripts/build-wheels.sh)
+currently defaults to
+CPython `3.10 3.11 3.12 3.13 3.14 3.14t 3.15`, and uses
+`uv python install` / `uv python find` to locate interpreters.
+
+### Profile-guided wheel builds
+
+Optionally build wheels with profile-guided optimization (PGO):
+
+```bash
+rustup component add llvm-tools-preview
+scripts/build-pgo-wheels.sh
+```
+
+For each requested Python ABI, the PGO wrapper creates an instrumented wheel,
+trains it on sustained HTTP, TLS, WebSocket, mixed-stream, bulk-transfer,
+idle-connection, callback, task, and TCP workloads, merges the resulting LLVM
+profiles, and builds that ABI's final wheel with its matching profile. Per-ABI
+training avoids discarding counters when PyO3's generated control flow differs
+between Python versions or free-threaded builds. The target must be native
+because the instrumented extension runs during training.
+
+Set `RSLOOP_PGO_SCENARIOS` to override the comma-separated network scenarios.
+The **Wheels** CI workflow disables PGO by default: tagged releases and ordinary
+manual runs use the normal release-wheel builder. To opt in, enable the `pgo`
+checkbox when manually running the workflow. LLVM tools are installed only for
+PGO runs; source-distribution and publishing steps are unchanged.
+
+When enabled, PGO is used on every supported platform except Windows ARM64.
+Rust profile-generation binaries currently crash on that target
+([rust-lang/rust#156675](https://github.com/rust-lang/rust/issues/156675)), so it
+temporarily falls back to the normal fat-LTO release build.
 
 ## Run the Python test matrix
 
@@ -172,8 +221,9 @@ Those four questions usually point you to the right part of the codebase.
 
 ## Profiling
 
-Use Python 3.15's external sampling profiler. It requires no Cargo feature or
-instrumented build:
+Python 3.15 includes a low-overhead external sampling profiler that can run
+rsloop without a Cargo feature, special build, or in-process instrumentation.
+Generate an interactive flame graph with:
 
 ```bash
 uv run --python 3.15 --with maturin maturin develop --release
@@ -182,12 +232,19 @@ uv run --python 3.15 python -m profiling.sampling run \
   -o rsloop-profile.html examples/01_basics.py
 ```
 
+`--all-threads` includes rsloop's runtime thread. `--native` adds synthetic
+native-boundary markers; it does not unwind and name individual Rust frames.
+The profiler and target must use the same Python 3.15 interpreter. Python 3.15
+does not allow these options together with `--async-aware`; use a separate
+async-aware pass when coroutine reconstruction is more important than native
+and multi-thread visibility.
+
 For repeatable workload profiles, use `--profile-rsloop-dir` with either
 benchmark runner. Profile passes are unmeasured and produce HTML flame graphs.
 
-`--native` adds synthetic native-boundary markers; it does not unwind and name
-individual Rust frames. See Python's [special-frame documentation](https://docs.python.org/3.15/library/profiling.sampling.html#special-frames).
-Use a native stack profiler when attributing CPU time to individual Rust functions.
+See Python's [special-frame documentation](https://docs.python.org/3.15/library/profiling.sampling.html#special-frames).
+Use a native stack profiler when attributing CPU time to individual Rust
+functions.
 
 For isolated Rust/LLVM optimization experiments, runtime-only PGO training,
 LLM review packets, and randomized paired comparisons, see the
