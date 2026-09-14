@@ -67,27 +67,31 @@ useful entry points.
 
 ## Runtime model
 
-Each loop currently uses two related execution contexts:
+Each loop combines a coordination runtime with a loop-thread I/O runtime:
 
-- a per-loop `vibeio` runtime lives on the thread running the Python event loop;
-  it drives direct I/O while the loop is parked
-- a dedicated Rust coordination thread dispatches loop commands, timers, and
-  compatibility paths through a separate `vibeio` runtime
+- the coordination thread handles commands, timers, and cross-thread work
+- on Unix, generic TCP protocol readers run on the Python loop thread;
+  native fast streams and Unix-domain readers retain coordination-thread I/O
+- non-TLS accept loops use `vibeio` on the thread that starts them
+- bounded ready-callback turns service loop-thread I/O even when Python tasks
+  continually yield with `sleep(0)`
+- Windows TCP transports, including custom `asyncio.Protocol` implementations,
+  start in IOCP completion mode and rebind to readiness mode before `start_tls`
+  synchronously reclaims a socket
+- generic `add_reader` / `add_writer` descriptors use cancellable OS-poll
+  workers because `vibeio` does not expose arbitrary raw-descriptor registration
+- some transport paths still fall back to helper threads, especially TLS I/O,
+  TLS server accept, and parts of the legacy transport write path
 
-- Python tasks and callbacks still execute on the Python side
-- plain TCP / Unix reads and non-TLS accepts run directly on `vibeio`
-- generic descriptor watches and some TLS, write, and older transport paths
-  still use helper threads
+Python tasks and callbacks still execute on the Python side. The runtime
+dependency is now unified, but the codebase has not finished eliminating every
+helper thread yet.
 
-The separate coordination thread is transitional infrastructure. This hybrid
-model explains why some paths run directly through the loop-thread reactor while
-other paths still cross threads or use helper workers.
-
-Stream transports pause their socket reader when the pending inbound queue
-reaches 1 MiB and resume below 256 KiB. Buffered writes default to a 64 MiB
-safety cap (`RSLOOP_MAX_WRITE_BUFFER_BYTES`), while TLS servers default to 256
-simultaneous handshakes (`RSLOOP_MAX_PENDING_TLS_HANDSHAKES`). Set either
-environment variable before importing `rsloop` to tune the limit.
+Transport overload safeguards use conservative defaults: inbound reads pause
+at 1 MiB of pending data per connection and resume below 256 KiB, buffered
+writes are capped at 64 MiB, and a TLS server admits at most 256 simultaneous
+handshakes. The last two limits can be adjusted before importing `rsloop` with
+`RSLOOP_MAX_WRITE_BUFFER_BYTES` and `RSLOOP_MAX_PENDING_TLS_HANDSHAKES`.
 
 ## Compatibility goal
 
@@ -101,12 +105,21 @@ That is why the repository contains:
 
 ## Current limitations
 
-Some important limitations are already known:
+These gaps are visible in the current implementation:
 
-- TLS support is narrower than CPython's OpenSSL-based `ssl` support
-- encrypted private keys are not supported yet
-- some TLS and transport paths still rely on helper threads
-- `preexec_fn` for subprocesses is unsupported
-- Unix sockets and signal handlers are naturally Unix-only
-
-These are good things to know before using the project in production.
+- TLS uses a `rustls` backend with a narrower compatibility surface than
+  CPython's OpenSSL-backed `ssl` module. In particular, encrypted private keys
+  are not supported yet, and the fast-stream monkeypatch still falls back to
+  standard-library helpers whenever `ssl` is enabled. TLS transport internals
+  also still use helper-thread paths instead of the runtime-thread `vibeio`
+  socket path.
+- Subprocess support still has one notable gap: `preexec_fn` remains unsupported
+  because running arbitrary Python between `fork()` and `exec()` is unsafe in
+  this runtime model.
+- Unix-specific APIs remain Unix-specific: `create_unix_server`,
+  `create_unix_connection`, `add_signal_handler`, and `remove_signal_handler`.
+- Several subprocess options such as `pass_fds`, `user`, `group`, and `umask`
+  remain specific to Unix process spawning.
+- The transport runtime model is still in transition: protocol readers on Unix
+  avoid a coordination-thread hop, but native streams, generic descriptor
+  watches, and TLS-heavy paths do not share one single-threaded I/O path.

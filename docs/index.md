@@ -77,6 +77,8 @@ rsloop.run(main())
 
 - Start with [Getting Started](getting-started.md) if you want to use the package.
 - Check [Verified Surface Area](supported-features.md) for the currently supported APIs.
+- Read [Fast Streams](fast-streams.md) for the optimized stream path and its compatibility behavior.
+- Read [Free-Threaded CPython](free-threading.md) before running loops concurrently across threads.
 - Read [Rust Extensions](rust-extensions.md) if you want to add your own async Rust functions and await them from Python.
 - Read [Examples](examples.md) if you want copy-paste usage patterns.
 - Read [How It Works](how-it-works.md) if you want the big picture.

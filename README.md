@@ -31,7 +31,7 @@ The native runtime requires Linux 6.1+, macOS 13+, or Windows 10+ so its hot
 paths can rely on modern completion, timer, and scheduler primitives.
 Free-threaded CPython (`3.14t`) is supported: the extension declares
 `gil_used = false`, so importing it no longer re-enables the GIL. See
-[Free-Threaded CPython](#free-threaded-cpython) for what that does and does not
+[Free-Threaded CPython](./docs/free-threading.md) for what that does and does not
 buy you.
 
 ## Documentation
@@ -43,6 +43,9 @@ If you are new to the repository, start with:
 - [`docs/index.md`](./docs/index.md)
 - [`docs/getting-started.md`](./docs/getting-started.md)
 - [`docs/supported-features.md`](./docs/supported-features.md)
+- [`docs/fast-streams.md`](./docs/fast-streams.md)
+- [`docs/free-threading.md`](./docs/free-threading.md)
+- [`docs/rust-extensions.md`](./docs/rust-extensions.md)
 - [`docs/how-it-works.md`](./docs/how-it-works.md)
 - [`docs/project-structure.md`](./docs/project-structure.md)
 - [`docs/development.md`](./docs/development.md) for building, testing, and profiling
@@ -118,155 +121,6 @@ finally:
 Importing `rsloop` also patches `asyncio.set_event_loop()` so Python 3.10 can
 accept an `rsloop.Loop` instance, matching the behavior exercised by
 [`tests/test_run.py`](./tests/test_run.py).
-
-## Custom Async Rust Extensions
-
-`rsloop` now exposes a small Rust interop API for downstream PyO3 extensions.
-That lets you write your own async Rust code, return it to Python as an
-awaitable, and run it under the active `rsloop` event loop.
-
-The public entry point is `rsloop::rust_async`:
-
-- `get_current_locals(...)`
-- `future_into_py(...)`
-- `future_into_py_with_locals(...)`
-- `local_future_into_py(...)`
-- `local_future_into_py_with_locals(...)`
-- re-exports of `TaskLocals` and `into_future_with_locals(...)`
-
-See [`examples/rust/README.md`](./examples/rust/README.md) for a complete
-extension example built with `maturin`.
-
-## Fast Streams
-
-Importing `rsloop` patches `asyncio.open_connection()` and
-`asyncio.start_server()` by default.
-
-That import-time behavior is controlled by `RSLOOP_USE_FAST_STREAMS` and can be
-disabled with:
-
-```bash
-export RSLOOP_USE_FAST_STREAMS=0
-```
-
-The native fast-stream path is used only when:
-
-- the running loop is an `rsloop.Loop`
-- `ssl` is unset or `None`
-
-Otherwise `rsloop` falls back to the stdlib `asyncio.streams` helpers.
-
-On that path the reader handed to your code is the native
-`PyFastStreamReader` rather than `asyncio.StreamReader`. It implements the
-reading surface protocols actually use:
-
-- `read(n=-1)`, `readexactly(n)`
-- `readline()`, `readuntil(separator=b"\n")`, including the tuple-of-separators
-  form CPython 3.13+ accepts
-- `at_eof()`, `exception()`, `feed_data()`, `feed_eof()`, `set_exception()`
-
-These match `asyncio.StreamReader` down to the exception types and their
-attributes — `IncompleteReadError.partial`, `LimitOverrunError.consumed`, the
-`ValueError` that `readline()` raises on limit overrun — and down to what is
-left in the buffer afterwards.
-[`tests/test_stream_reader.py`](./tests/test_stream_reader.py) pins that by
-driving the same feed scripts through both readers and comparing the results.
-
-The implementation lives in
-[`src/transport/stream/fast.rs`](./src/transport/stream/fast.rs) and
-is backed by the lower level transport code in
-[`src/transport/stream/mod.rs`](./src/transport/stream/mod.rs).
-
-## Free-Threaded CPython
-
-`rsloop` builds and runs on free-threaded CPython 3.14 (`3.14t`). The extension
-declares `#[pymodule(gil_used = false)]`, which is what keeps CPython from
-silently switching the GIL back on for the whole process at import time:
-
-```python
-import sys
-import rsloop
-
-assert not sys._is_gil_enabled()
-assert rsloop.build_info()["free_threaded"]
-```
-
-What that buys you is that separate `rsloop.Loop` instances on separate threads
-run *concurrently* rather than taking turns. A loop is still single-threaded
-internally, and asyncio objects are still not thread-safe, so the model is one
-loop per thread — not one loop shared across threads. `call_soon_threadsafe()`
-remains the supported way to hand work to a loop from another thread, and it
-keeps its FIFO ordering guarantee.
-
-The pieces that made this safe:
-
-- the generic stream-reader fast path writes into `StreamReader._buffer`
-  through a raw pointer; the size read, resize, and copy now run inside a
-  critical section on that `bytearray`, so a concurrent mutation cannot leave
-  the copy writing into a freed allocation
-- the ready-queue refill preserves scheduling order when a drain slice leaves
-  older callbacks in the batch. Under the GIL a cross-thread producer could
-  only enqueue while the loop thread was parked, so the reordering was
-  essentially unreachable; without the GIL producers append throughout the
-  drain and it became routine
-
-`tests/test_free_threading.py` covers this: parallel loops over both the native
-and stdlib stream reader paths, `call_soon_threadsafe()` fan-in from eight
-threads, and a check that importing rsloop leaves the GIL off.
-
-Wheels are built for `3.14t` alongside the GIL builds, and the test matrix runs
-it as its own entry.
-
-## Runtime Model
-
-Each loop combines a coordination runtime with a loop-thread I/O runtime:
-
-- the coordination thread handles commands, timers, and cross-thread work
-- on Unix, generic TCP protocol readers run on the Python loop thread;
-  native fast streams and Unix-domain readers retain coordination-thread I/O
-- non-TLS accept loops use `vibeio` on the thread that starts them
-- bounded ready-callback turns service loop-thread I/O even when Python tasks
-  continually yield with `sleep(0)`
-- Windows TCP transports, including custom `asyncio.Protocol` implementations,
-  start in IOCP completion mode and rebind to readiness mode before `start_tls`
-  synchronously reclaims a socket
-- generic `add_reader` / `add_writer` descriptors use cancellable OS-poll
-  workers because `vibeio` does not expose arbitrary raw-descriptor registration
-- some transport paths still fall back to helper threads, especially TLS I/O,
-  TLS server accept, and parts of the legacy transport write path
-
-The runtime dependency is now unified, but the codebase has not finished
-eliminating every helper thread yet.
-
-Transport overload safeguards use conservative defaults: inbound reads pause
-at 1 MiB of pending data per connection, buffered writes are capped at 64 MiB,
-and a TLS server admits at most 256 simultaneous handshakes. The last two limits
-can be adjusted before importing `rsloop` with
-`RSLOOP_MAX_WRITE_BUFFER_BYTES` and `RSLOOP_MAX_PENDING_TLS_HANDSHAKES`.
-
-## Current Limitations
-
-These gaps are visible in the current implementation.
-
-- TLS uses a `rustls` backend with a narrower compatibility surface than
-  CPython's OpenSSL-backed `ssl` module. In particular, encrypted private keys
-  are not supported yet, and the fast-stream monkeypatch still falls back to
-  stdlib helpers whenever `ssl` is enabled. TLS transport internals also still
-  use helper-thread paths instead of the runtime-thread `vibeio` socket
-  path.
-- Subprocess support still has one notable gap:
-  `preexec_fn` remains unsupported because running arbitrary Python between
-  `fork()` and `exec()` is unsafe in this runtime model.
-- Unix-specific APIs remain Unix-specific:
-  `create_unix_server`, `create_unix_connection`,
-  `add_signal_handler`, `remove_signal_handler`.
-- Platform-specific limitations still apply:
-  Unix socket APIs and Unix signal handlers remain Unix-only, and several
-  subprocess options such as `pass_fds`, `user`, `group`, and `umask` are
-  still specific to Unix process spawning.
-- The transport runtime model is still in transition: protocol readers on Unix
-  avoid a coordination-thread hop, but native streams, generic descriptor
-  watches, and TLS-heavy paths do not share one single-threaded I/O path.
 
 ## Examples
 

@@ -7,6 +7,8 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Verified Surface Area: supported-features.md
+  - Fast Streams: fast-streams.md
+  - Free-Threaded CPython: free-threading.md
   - Rust Extensions: rust-extensions.md
   - Examples: examples.md
   - Benchmarks: benchmarks.md
