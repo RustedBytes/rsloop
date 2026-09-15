@@ -26,7 +26,7 @@ The package exposes:
   `rsloop.run(...)`, `rsloop.install()`, `rsloop.uninstall()`, and
   `rsloop.build_info()`
 
-Repository metadata currently targets Python `>=3.10`.
+Repository metadata supports CPython 3.10 through 3.15.
 The native runtime requires Linux 6.1+, macOS 13+, or Windows 10+ so its hot
 paths can rely on modern completion, timer, and scheduler primitives.
 Free-threaded CPython (`3.14t`) is supported: the extension declares
