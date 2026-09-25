@@ -51,6 +51,8 @@
 //! - `splice` - enables splice support (Linux).
 //! - `blocking-default` - enables the default blocking thread pool.
 
+#[cfg(test)]
+pub(crate) mod allocator;
 pub mod blocking;
 mod builder;
 mod driver;

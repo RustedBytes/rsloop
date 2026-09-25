@@ -47,9 +47,9 @@ jobs:
           persist-credentials: false
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.98.1"
+          toolchain: "nightly-2026-09-25"
           components: clippy, rustfmt
 
       - name: Cache runtime harness build

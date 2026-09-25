@@ -48,9 +48,9 @@ jobs:
           python-version: "3.13"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.98.1"
+          toolchain: "nightly-2026-09-25"
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@v2
@@ -80,9 +80,9 @@ jobs:
           python-version: "3.13"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.98.1"
+          toolchain: "nightly-2026-09-25"
           components: clippy
 
       - name: Cache Cargo registry
@@ -90,6 +90,30 @@ jobs:
 
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+  allocator-miri:
+    name: allocator miri (strict provenance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "nightly-2026-09-25"
+          components: miri,rust-src
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run allocator tests under Miri
+        env:
+          MIRIFLAGS: -Zmiri-strict-provenance
+        run: cargo miri test --manifest-path tools/vibeio-check/Cargo.toml allocator::native::tests
 
   type-check:
     name: pyright
@@ -165,9 +189,9 @@ jobs:
           cache-suffix: anyio
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.98.1"
+          toolchain: "nightly-2026-09-25"
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@v2
@@ -283,9 +307,9 @@ jobs:
           cache-suffix: ${{ matrix.os_name }}-py${{ matrix.python_version }}
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.98.1"
+          toolchain: "nightly-2026-09-25"
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@v2

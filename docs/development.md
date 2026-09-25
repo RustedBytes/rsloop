@@ -8,7 +8,7 @@ Local development uses Python 3.14.7, pinned in `.python-version`. Install that
 interpreter before running the `uv` commands below. This development pin does
 not change the package's Python 3.10+ support or the multi-version test matrix.
 
-Local builds and build/test CI use Rust `1.98.1`, pinned in
+Local builds and build/test CI use Rust `nightly-2026-09-25`, pinned in
 [`rust-toolchain.toml`](https://github.com/RustedBytes/rsloop/blob/master/rust-toolchain.toml).
 Rustup selects it automatically
 inside this repository. LLVM tools remain optional for PGO builds.
@@ -18,6 +18,19 @@ Quick Rust check:
 ```bash
 cargo check
 ```
+
+The nightly pin supplies the allocator API merged in
+[rust-lang/rust#156882](https://github.com/rust-lang/rust/pull/156882). Rsloop
+contains a tested internal prototype for a bounded, `System`-backed recycler:
+only blocks up to 4 KiB with alignment up to 64 bytes are cached, no bin retains
+more than 32 blocks, and total retained memory is capped at 256 KiB. Its first
+ready-queue, timer, task, and transport rollout was not enabled: the balanced
+holdout gate found no statistically supported primary speedup and did find
+workload regressions. Stream payload buffers therefore keep their existing
+purpose-built pools, and production collections still use the global allocator.
+The Python and public Rust APIs do not expose allocator selection. The remaining
+`allocator_ext` feature gate can be removed once the prototype is retired or its
+allocator-aware collections stabilize.
 
 Build the extension and install it into the current environment:
 

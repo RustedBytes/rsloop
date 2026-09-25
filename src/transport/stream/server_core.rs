@@ -116,6 +116,13 @@ impl ServerCore {
             return None;
         }
         let limit = max_pending_tls_handshakes();
+        #[cfg(not(kani))]
+        let reserved = self.pending_tls_handshakes.try_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |current| reserve_tls_slot(current, limit, false),
+        );
+        #[cfg(kani)]
         let reserved = self.pending_tls_handshakes.fetch_update(
             Ordering::AcqRel,
             Ordering::Acquire,
