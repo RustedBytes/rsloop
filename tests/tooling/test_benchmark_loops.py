@@ -1,5 +1,6 @@
 """Loop selection tests without optional native benchmark dependencies."""
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -15,6 +16,30 @@ import workload_matrix as matrix
 
 
 class TestBenchmarkLoop:
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="Task context needs 3.11+")
+    def test_task_options_workload_exercises_every_task(self, monkeypatch):
+        options = []
+
+        async def exercise():
+            loop = asyncio.get_running_loop()
+            create_task = loop.create_task
+
+            def capture(coro, **kwargs):
+                options.append(kwargs)
+                return create_task(coro, **kwargs)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(loop, "create_task", capture)
+                return await comparison.bench_task_options("asyncio", 5, 2)
+
+        result = asyncio.run(exercise())
+        assert result.operations == 5
+        assert result.workload == "task_options"
+        assert result.seconds > 0
+        assert len(options) == 5
+        assert all(option["name"] == "benchmark-task" for option in options)
+        assert all(option["context"] is options[0]["context"] for option in options)
+
     def test_python315_profiler_command_writes_native_thread_flamegraph(
         self, tmp_path, monkeypatch, mocker
     ):

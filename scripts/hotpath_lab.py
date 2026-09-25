@@ -37,6 +37,7 @@ WORKLOADS = (
     "bulk_transfer",
     "tls_http",
     "websocket_messages",
+    "task_options",
 )
 DEFAULT_WORKLOADS = ",".join(WORKLOADS[:6])
 
@@ -342,7 +343,7 @@ def child(args) -> None:
     ):
         argv.extend(["--" + key.replace("_", "-"), str(config[key])])
     matrix_args = None
-    if name not in WORKLOADS[:3]:
+    if name not in (*WORKLOADS[:3], "task_options"):
         sys.argv = argv
         matrix_args = matrix.parse_args()
         matrix.validate_args(matrix_args)
@@ -357,6 +358,11 @@ def child(args) -> None:
                 result = asdict(small.run_with_loop("rsloop", coro))
             elif name == "tasks":
                 coro = small.bench_tasks(
+                    "rsloop", config["tasks"], config["task_batch_size"]
+                )
+                result = asdict(small.run_with_loop("rsloop", coro))
+            elif name == "task_options":
+                coro = small.bench_task_options(
                     "rsloop", config["tasks"], config["task_batch_size"]
                 )
                 result = asdict(small.run_with_loop("rsloop", coro))

@@ -298,6 +298,9 @@ For isolated Rust/LLVM optimization experiments, runtime-only PGO training,
 LLM review packets, and randomized paired comparisons, see the
 [hot-path experiment harness](hotpath-lab.md).
 
+For rsloop's callback/task binding optimizations, their Rust API implications,
+and application-level measurements, see [binding hot paths](rsloop-bindings-performance.md).
+
 ## Current state of the project
 
 This is still an alpha-stage project.

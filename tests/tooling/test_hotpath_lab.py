@@ -29,6 +29,15 @@ def test_orders_are_balanced_and_deterministic():
         lab.balanced_orders(7, random.Random(0))
 
 
+def test_task_options_is_opt_in_and_has_a_distinct_holdout_shape():
+    assert lab.select_workloads("task_options") == ["task_options"]
+    assert "task_options" not in lab.DEFAULT_WORKLOADS.split(",")
+    training = lab.workload_config("task_options", "training")
+    holdout = lab.workload_config("task_options", "holdout")
+    assert training["tasks"] != holdout["tasks"]
+    assert training["task_batch_size"] != holdout["task_batch_size"]
+
+
 def test_paired_estimate_uses_ratios_not_unpaired_medians():
     baseline = [1.0, 10.0, 100.0, 1000.0]
     candidate = [value * 0.9 for value in baseline]

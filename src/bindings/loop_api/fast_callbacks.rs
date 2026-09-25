@@ -59,7 +59,7 @@ unsafe fn schedule(
             ),
         };
         let handle =
-            slf.borrow()
+            slf.get()
                 .core
                 .schedule_callback_args(py, kind, callback, callback_args, None)?;
         return Ok(handle.into_ptr());
@@ -125,7 +125,7 @@ unsafe fn schedule(
         _ => CallbackArgs::Many(PyTuple::new(py, (1..positional).map(value))?.unbind()),
     };
     let handle =
-        slf.borrow()
+        slf.get()
             .core
             .schedule_callback_args(py, kind, callback, callback_args, context)?;
     Ok(handle.into_ptr())
