@@ -79,7 +79,7 @@ This harness does not apply model output or create commits automatically.
   process performs one full warmup and one measured workload.
 - `samples.jsonl` is flushed after every process. It includes binary identity,
   elapsed time, process CPU time, peak RSS, and per-process latency summaries.
-  Warmups are retained but excluded from inference. Peak RSS includes warmups;
+  Warmups are retained but excluded from timing inference. Peak RSS includes warmups;
   process CPU time includes event-loop setup/teardown beyond the workload timer.
   `harness/` retains the exact runner and benchmark sources for audit (restore
   their usual repository layout when rerunning them).
@@ -87,11 +87,14 @@ This harness does not apply model output or create commits automatically.
   individual requests. The workload-family intervals use a Bonferroni-adjusted
   95% confidence target. Negative percentage changes mean faster. Twelve paired
   blocks are a minimum, not a promise of adequate statistical power.
-- The default gate requires the primary interval to be entirely below -1%, and
-  **every** workload's interval upper bound to be at most +3%. Any lower bound
-  above +3% rejects the candidate. Short runs (<0.25 s), fewer than 12 blocks,
+- The default balanced gate requires the primary timing interval to be entirely
+  below -1%, and **every** workload's timing and peak-RSS interval upper bound
+  to be at most +3%. Any lower bound above +3% rejects the candidate. Short runs
+  (<0.25 s), fewer than 12 blocks,
   or uncertain bounds cannot pass. The bulk workload is 64–128 MiB per connection,
   not the old very short 2 MiB transfer.
+- Peak RSS uses the same paired-process bootstrap as timing and participates in
+  the balanced gate; per-request latency and process CPU remain diagnostic.
 - Holdout changes concurrency, payloads, task batch size, and work volume.
   `tls_http` and `websocket_messages` can be added with `--workloads` for entirely
   untrained scenario families. Default profile training uses the six core
@@ -105,7 +108,7 @@ affinity/power controls where appropriate and record them externally. This
 harness does not pin CPUs on Windows or control thermal state. Child timeouts
 fail the experiment; incomplete results are retained, not promoted.
 
-`performance_gate_passed` is **not automatic acceptance**. Require both test
+`balanced_gate_passed` is **not automatic acceptance**. Require both test
 logs, inspect diagnostic latency/RSS regressions, and run a fresh confirmation
 experiment. Rust tests use a debug build of the preserved source; Python tests
 exercise the exact release extension. The current repository's Python tests are

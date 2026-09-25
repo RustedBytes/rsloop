@@ -49,8 +49,11 @@
 //! - `pipe` - enables pipe support.
 //! - `stdio` - enables standard I/O support.
 //! - `splice` - enables splice support (Linux).
+//! - `scheduler-batch-cache` - opts into scheduler batch allocation reuse;
+//!   benchmark your workload, since TCP workloads can regress.
 //! - `blocking-default` - enables the default blocking thread pool.
 
+mod batch_allocator;
 pub mod blocking;
 mod builder;
 mod driver;
