@@ -28,6 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
+use crate::vibeio::batch_allocator::{Batch, BatchAllocator, batch, drain_batch};
 use crossbeam_queue::SegQueue;
 use slab::Slab;
 
@@ -455,6 +456,7 @@ pub(crate) struct RuntimeInner {
 /// See "Spawning and joining tasks" in `tools/vibeio-check/EXAMPLES.md`.
 pub struct Runtime {
     inner: Option<Rc<RuntimeInner>>,
+    batch_allocator: BatchAllocator,
 }
 
 impl RuntimeInner {
@@ -513,7 +515,7 @@ impl RuntimeInner {
 
     /// Drain ready tasks into the given batch.
     #[inline]
-    fn drain_ready(&self, batch: &mut Vec<Rc<Task>>, mut budget: usize) {
+    fn drain_ready(&self, batch: &mut Batch<'_, Rc<Task>>, mut budget: usize) {
         if budget != 0 {
             let slab = self.token_to_task.borrow();
             while budget != 0 {
@@ -611,6 +613,7 @@ impl Runtime {
             interrupt_pending: Arc::new(AtomicBool::new(false)),
         });
         Runtime {
+            batch_allocator: BatchAllocator::default(),
             inner: Some(Rc::new(RuntimeInner {
                 queue: ready_queue,
                 next_task: Rc::new(RefCell::new(None)),
@@ -701,7 +704,7 @@ impl Runtime {
             Arc::clone(&inner.remote_wake.interrupt_pending),
         );
         let root_waker = root_notify.waker();
-        let mut batch = Vec::with_capacity(inner.task_batch_size);
+        let mut batch = batch(&self.batch_allocator, inner.task_batch_size);
 
         loop {
             if root_notify.take_ready() {
@@ -778,7 +781,7 @@ impl Runtime {
                 }
             }
 
-            for task in batch.drain(..) {
+            for task in drain_batch(&mut batch) {
                 let mut future_slot = task.future.borrow_mut();
                 if let Some(mut future) = future_slot.take() {
                     drop(future_slot);
@@ -845,6 +848,47 @@ impl Drop for Runtime {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(feature = "scheduler-batch-cache", not(kani)))]
+    #[test]
+    fn repeated_runtime_turns_allocate_batch_storage_only_once() {
+        let runtime = super::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
+        for _ in 0..32 {
+            runtime.poll_once();
+            let task = runtime.spawn(async { 77 });
+            assert_eq!(runtime.block_on(task), 77);
+        }
+        let allocator = &runtime.batch_allocator;
+        assert_eq!(allocator.system_allocations(), 1);
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(async { panic!("root future panic") });
+        }));
+        assert!(panic.is_err());
+        assert_eq!(runtime.block_on(async { 42 }), 42);
+        assert_eq!(allocator.system_allocations(), 1);
+    }
+
+    #[cfg(all(feature = "scheduler-batch-cache", not(kani)))]
+    #[test]
+    fn batch_poll_panic_releases_unpolled_task_owners() {
+        let runtime = super::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
+        let first = runtime.spawn(async { panic!("task poll panic") });
+        let second = runtime.spawn(std::future::pending::<()>());
+        let second_task = second.state.borrow().task.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(std::future::pending::<()>());
+        }));
+        assert!(result.is_err());
+        // Only the slab may retain the task after the abandoned batch unwinds.
+        assert_eq!(second_task.strong_count(), 1);
+        second.cancel();
+        assert_eq!(runtime.block_on(async { 42 }), 42);
+        assert_eq!(runtime.batch_allocator.system_allocations(), 1);
+        drop(first);
+        drop(runtime);
+        assert!(second_task.upgrade().is_none());
+    }
+
     #[cfg(feature = "process")]
     #[test]
     fn concurrent_reaper_requests_share_one_channel() {
@@ -881,7 +925,7 @@ mod tests {
             .map(|handle| handle.state.borrow().task.upgrade().unwrap())
             .collect();
         let inner = runtime.inner.as_ref().unwrap();
-        let mut batch = Vec::new();
+        let mut batch = batch(&runtime.batch_allocator, 0);
         inner.drain_ready(&mut batch, 0);
         assert!(batch.is_empty());
         assert_eq!(inner.queue.borrow().len(), 3);

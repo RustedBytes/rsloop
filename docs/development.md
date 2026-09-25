@@ -20,17 +20,52 @@ cargo check
 ```
 
 The nightly pin supplies the allocator API merged in
-[rust-lang/rust#156882](https://github.com/rust-lang/rust/pull/156882). Rsloop
-contains a tested internal prototype for a bounded, `System`-backed recycler:
-only blocks up to 4 KiB with alignment up to 64 bytes are cached, no bin retains
-more than 32 blocks, and total retained memory is capped at 256 KiB. Its first
-ready-queue, timer, task, and transport rollout was not enabled: the balanced
-holdout gate found no statistically supported primary speedup and did find
-workload regressions. Stream payload buffers therefore keep their existing
-purpose-built pools, and production collections still use the global allocator.
-The Python and public Rust APIs do not expose allocator selection. The remaining
-`allocator_ext` feature gate can be removed once the prototype is retired or its
-allocator-aware collections stabilize.
+[rust-lang/rust#156882](https://github.com/rust-lang/rust/pull/156882). The opt-in
+`scheduler-batch-cache` Cargo feature uses the stabilized `Allocator` and
+`Vec::with_capacity_in` APIs for scheduler batch storage. With it enabled,
+each embedded runtime caches one exact-layout `System` allocation
+between `block_on` calls: normally 2 KiB on 64-bit platforms, with a hard 16 KiB
+retention ceiling. The cache belongs to the runtime's owner thread and needs no
+mutex or reference-counted allocator handles. Simultaneous allocations remain
+disjoint, all task values are dropped before storage is recycled, and cached
+storage is freed when the runtime is destroyed.
+
+A full-batch drain retains the vector's capacity within each `block_on` call;
+it uses stabilized vector primitives because allocator-aware `Vec::drain` is
+still outside the stabilized subset. Unconsumed elements are dropped on early
+exit or unwind. The cache lives outside the shared scheduler state to preserve
+that hot structure's layout.
+
+This replaces the rejected shared, size-class recycler experiment. Ready queues,
+timers, task futures, transport queues, and stream payload pools keep their
+existing allocation strategies. There is no `allocator_ext` feature gate or
+runtime allocator-selection API. Default builds retain ordinary `Vec` allocation
+and draining: the cache improved native scheduler turns but regressed TCP
+workloads, so it is not enabled in production wheels. Kani's older compiler also
+uses ordinary `Vec` for
+scheduler proofs; strict-provenance Miri tests exercise the actual allocator.
+
+For an isolated measurement of scheduler entry/exit costs, build
+`tools/vibeio-check/examples/runtime_turns.rs` against both revisions with the
+same toolchain, lockfile, profile, and benchmark source, then run:
+
+```bash
+cargo build --manifest-path tools/vibeio-check/Cargo.toml --example runtime_turns --release --locked --features scheduler-batch-cache
+.venv/bin/python scripts/compare_runtime_turns.py \
+  --baseline /path/to/baseline/runtime_turns \
+  --candidate tools/vibeio-check/target/release/examples/runtime_turns \
+  --out target/runtime-turns-comparison
+```
+
+The runner records binary hashes and randomized paired process order before
+measurement. This benchmark isolates runtime turns; use the
+[hot-path workload gate](hotpath-lab.md) separately to evaluate application
+timing and peak RSS.
+See the [measured results and limitations](allocator-batch-results.md).
+
+To evaluate the cache with your own Python workload, build explicitly with
+`uv run --with maturin maturin develop --release --features scheduler-batch-cache`.
+Rebuild without that feature to restore the default path.
 
 Build the extension and install it into the current environment:
 

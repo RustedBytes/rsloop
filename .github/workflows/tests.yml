@@ -113,7 +113,7 @@ jobs:
       - name: Run allocator tests under Miri
         env:
           MIRIFLAGS: -Zmiri-strict-provenance
-        run: cargo miri test --manifest-path tools/vibeio-check/Cargo.toml allocator::native::tests
+        run: cargo miri test --manifest-path tools/vibeio-check/Cargo.toml --features scheduler-batch-cache batch_
 
   type-check:
     name: pyright

@@ -1,5 +1,4 @@
 #![warn(missing_docs)]
-#![cfg_attr(not(kani), feature(allocator_ext))]
 
 //! Native extension entry point and Rust interoperability API for `rsloop`.
 //!
