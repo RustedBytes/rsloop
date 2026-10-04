@@ -45,13 +45,27 @@ pub enum CallbackKind {
     Writer(RawFd),
 }
 
+// Store the tag separately from its payload so ReadyCallback's booleans can
+// share the tag's padding. Keeping CallbackKind inline costs another word on
+// 64-bit targets. The payload retains the full cross-platform RawFd range.
+#[derive(Clone, Copy)]
+enum CallbackSource {
+    Soon,
+    Threadsafe,
+    Timer,
+    Signal,
+    Reader,
+    Writer,
+}
+
 /// A Python callback, its positional arguments, and captured execution context.
 ///
 /// The value is safe to enqueue across rsloop's worker threads. Invocation must
 /// still happen while attached to Python, normally on the event-loop thread.
 pub struct ReadyCallback {
     id: CallbackId,
-    kind: CallbackKind,
+    source: CallbackSource,
+    source_value: RawFd,
     callback: Py<PyAny>,
     args: CallbackArgs,
     context: Py<PyAny>,
@@ -96,9 +110,18 @@ impl ReadyCallback {
         context: Py<PyAny>,
         context_needs_run: bool,
     ) -> Self {
+        let (source, source_value) = match kind {
+            CallbackKind::Soon => (CallbackSource::Soon, 0),
+            CallbackKind::Threadsafe => (CallbackSource::Threadsafe, 0),
+            CallbackKind::Timer => (CallbackSource::Timer, 0),
+            CallbackKind::Signal(signal) => (CallbackSource::Signal, RawFd::from(signal)),
+            CallbackKind::Reader(fd) => (CallbackSource::Reader, fd),
+            CallbackKind::Writer(fd) => (CallbackSource::Writer, fd),
+        };
         Self {
             id,
-            kind,
+            source,
+            source_value,
             callback,
             args,
             context,
@@ -116,7 +139,15 @@ impl ReadyCallback {
     #[inline]
     /// Returns the scheduling source used for diagnostics and re-arming I/O.
     pub fn kind(&self) -> CallbackKind {
-        self.kind
+        match self.source {
+            CallbackSource::Soon => CallbackKind::Soon,
+            CallbackSource::Threadsafe => CallbackKind::Threadsafe,
+            CallbackSource::Timer => CallbackKind::Timer,
+            // Only an i32 signal number can initialize this source variant.
+            CallbackSource::Signal => CallbackKind::Signal(self.source_value as i32),
+            CallbackSource::Reader => CallbackKind::Reader(self.source_value),
+            CallbackSource::Writer => CallbackKind::Writer(self.source_value),
+        }
     }
 
     #[inline]
@@ -175,7 +206,7 @@ impl ReadyCallback {
         match &self.args {
             CallbackArgs::None => call_callback_noargs(py, &self.callback),
             CallbackArgs::One(arg) => call_callback_onearg(py, &self.callback, arg),
-            CallbackArgs::Many(args) => self.callback.call1(py, args.clone_ref(py)),
+            CallbackArgs::Many(args) => self.callback.call1(py, args),
         }
     }
 
@@ -294,6 +325,46 @@ mod tests {
             context,
             needs_run,
         )
+    }
+
+    #[test]
+    fn callback_source_preserves_signal_and_descriptor_ranges() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            for kind in [
+                CallbackKind::Soon,
+                CallbackKind::Threadsafe,
+                CallbackKind::Timer,
+                CallbackKind::Signal(i32::MIN),
+                CallbackKind::Signal(i32::MAX),
+                CallbackKind::Reader(RawFd::MIN),
+                CallbackKind::Reader(RawFd::MAX),
+                CallbackKind::Writer(RawFd::MIN),
+                CallbackKind::Writer(RawFd::MAX),
+            ] {
+                let ready = ReadyCallback::from_args(
+                    1,
+                    kind,
+                    py.None(),
+                    CallbackArgs::None,
+                    py.None(),
+                    false,
+                );
+                match (kind, ready.kind()) {
+                    (CallbackKind::Soon, CallbackKind::Soon)
+                    | (CallbackKind::Threadsafe, CallbackKind::Threadsafe)
+                    | (CallbackKind::Timer, CallbackKind::Timer) => {}
+                    (CallbackKind::Signal(expected), CallbackKind::Signal(actual)) => {
+                        assert_eq!(actual, expected);
+                    }
+                    (CallbackKind::Reader(expected), CallbackKind::Reader(actual))
+                    | (CallbackKind::Writer(expected), CallbackKind::Writer(actual)) => {
+                        assert_eq!(actual, expected);
+                    }
+                    (expected, actual) => panic!("source changed: {expected:?} -> {actual:?}"),
+                }
+            }
+        });
     }
 
     #[test]

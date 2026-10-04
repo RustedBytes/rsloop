@@ -90,20 +90,20 @@ pub fn run_in_context(
     args: &Py<PyTuple>,
 ) -> PyResult<Py<PyAny>> {
     if !needs_run {
-        return callback.call1(py, args.clone_ref(py));
+        return callback.call1(py, args);
     }
 
     // A callback may re-enter the context that is already active on this
     // thread. `asyncio` still runs it, so only unrelated enter errors escape.
     if let Err(err) = enter_context(py, context) {
         return if is_nested_context_error(py, &err) {
-            callback.call1(py, args.clone_ref(py))
+            callback.call1(py, args)
         } else {
             Err(err)
         };
     }
 
-    let callback_result = callback.call1(py, args.clone_ref(py));
+    let callback_result = callback.call1(py, args);
     let exit_result = exit_context(py, context);
 
     match (callback_result, exit_result) {

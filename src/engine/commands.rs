@@ -28,11 +28,7 @@ pub enum ReadyItem {
     StreamTransportRead(Arc<StreamTransportCore>),
     StreamTransportWrite(Arc<StreamTransportCore>),
     #[cfg(unix)]
-    StartTcpReader {
-        fd: RawFd,
-        core: Arc<StreamTransportCore>,
-        stream: Arc<std::net::TcpStream>,
-    },
+    StartTcpReader(Box<TcpReaderStart>),
     ProcessTransport(Arc<ProcessTransportCore>),
     ServerAccepted {
         server: Arc<ServerCore>,
@@ -50,6 +46,15 @@ pub enum ReadyItem {
         wait_errno: i32,
     },
     Stop,
+}
+
+// Reader startup is infrequent compared with callback dispatch. Keep its
+// three-word payload out of line so it does not enlarge every ready-queue slot.
+#[cfg(unix)]
+pub struct TcpReaderStart {
+    pub fd: RawFd,
+    pub core: Arc<StreamTransportCore>,
+    pub stream: Arc<std::net::TcpStream>,
 }
 
 /// Control-plane messages consumed by the dedicated runtime dispatcher.

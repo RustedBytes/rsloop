@@ -17,6 +17,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::callbacks::{CallbackArgs, CallbackId, CallbackKind, ReadyCallback};
+#[cfg(unix)]
+use super::commands::TcpReaderStart;
 use super::commands::{
     LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopTransportCommand, ReadyItem,
 };
@@ -803,7 +805,8 @@ impl LoopCore {
                         core.flush_pending_direct_write();
                     }
                     #[cfg(unix)]
-                    ReadyItem::StartTcpReader { fd, core, stream } => {
+                    ReadyItem::StartTcpReader(start) => {
+                        let TcpReaderStart { fd, core, stream } = *start;
                         // The runtime is installed before the ready drain begins.
                         assert!(self.spawn_io_tracked(
                             fd,
@@ -1373,10 +1376,15 @@ impl LoopCore {
                 core,
                 reader: crate::transport::stream::ReaderTarget::Tcp(stream),
             }) if !core.uses_native_stream_reader() => self
-                .try_enqueue_local_ready(ReadyItem::StartTcpReader { fd, core, stream })
+                .try_enqueue_local_ready(ReadyItem::StartTcpReader(Box::new(TcpReaderStart {
+                    fd,
+                    core,
+                    stream,
+                })))
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
-                    ReadyItem::StartTcpReader { fd, core, stream } => {
+                    ReadyItem::StartTcpReader(start) => {
+                        let TcpReaderStart { fd, core, stream } = *start;
                         LoopCommand::Io(LoopIoCommand::StartSocketReader {
                             fd,
                             core,
@@ -1405,7 +1413,8 @@ impl LoopCore {
                         LoopCommand::Transport(LoopTransportCommand::StreamWrite(core))
                     }
                     #[cfg(unix)]
-                    ReadyItem::StartTcpReader { fd, core, stream } => {
+                    ReadyItem::StartTcpReader(start) => {
+                        let TcpReaderStart { fd, core, stream } = *start;
                         LoopCommand::Io(LoopIoCommand::StartSocketReader {
                             fd,
                             core,
