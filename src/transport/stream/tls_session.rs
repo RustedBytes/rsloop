@@ -74,10 +74,10 @@ impl TlsConnectionKind {
         }
     }
 
-    pub(super) fn writer_write_all(&mut self, data: &[u8]) -> io::Result<()> {
+    fn writer_write(&mut self, data: &[u8]) -> io::Result<usize> {
         match self {
-            Self::Client(conn) => conn.writer().write_all(data),
-            Self::Server(conn) => conn.writer().write_all(data),
+            Self::Client(conn) => conn.writer().write(data),
+            Self::Server(conn) => conn.writer().write(data),
         }
     }
 
@@ -98,6 +98,25 @@ pub(super) struct TlsIoState {
 pub(super) type SharedTlsIoState = Arc<Mutex<TlsIoState>>;
 
 impl TlsIoState {
+    pub(super) fn write_plaintext_all(&mut self, mut data: &[u8]) -> io::Result<()> {
+        while !data.is_empty() {
+            let written = self.connection.writer_write(data)?;
+            if written == 0 && !self.connection.wants_write() {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to buffer TLS plaintext",
+                ));
+            }
+            data = &data[written..];
+            if !data.is_empty() {
+                // rustls accepts only as much plaintext as its record buffer
+                // can hold. Flush those records before submitting the rest.
+                flush_tls_io_locked(self)?;
+            }
+        }
+        Ok(())
+    }
+
     #[inline]
     pub(super) fn fd(&self) -> fd_ops::RawFd {
         self.stream.fd()

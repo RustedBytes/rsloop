@@ -431,7 +431,6 @@ def run_sample(
     profile_pattern: Path | None = None,
 ) -> dict:
     env = clean_environment()
-    env["RSLOOP_USE_FAST_STREAMS"] = "1"
     if profile_pattern:
         env["LLVM_PROFILE_FILE"] = str(profile_pattern)
     command = [

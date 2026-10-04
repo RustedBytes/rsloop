@@ -1176,8 +1176,6 @@ def run_child_batch(
     env["PYTHONPATH"] = os.pathsep.join(
         filter(None, (str(Path(__file__).resolve().parent), env.get("PYTHONPATH")))
     )
-    if loop_name == "rsloop":
-        env["RSLOOP_USE_FAST_STREAMS"] = "1"
     cmd = child_command(args, loop_name, scenario, child_runs)
     if profile_output is not None:
         cmd = sampling_profiler_command(cmd, profile_output)

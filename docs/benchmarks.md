@@ -22,8 +22,9 @@ Times are milliseconds; lower is better.
 | 5,000 TCP roundtrips | 151.77 | 127.87 | 104.26 | **83.30** |
 
 The TCP workload uses 1,024-byte payloads and rsloop's native fast streams;
-the other loops use stdlib asyncio streams. Use `--no-rsloop-fast-streams`
-to compare all loops through the stdlib streams layer. Zuvloop led callbacks
+the other loops use stdlib asyncio streams. Current rsloop always uses native
+streams, and the former stream-mode benchmark switches have been removed.
+Zuvloop led callbacks
 and tasks in this run, while rsloop led TCP roundtrips. These are local
 microbenchmarks, not isolated-lab measurements or general application performance
 claims; do not compare them directly with the historical macOS results below.

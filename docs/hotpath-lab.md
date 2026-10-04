@@ -60,7 +60,7 @@ This harness does not apply model output or create commits automatically.
   emitted. SHA-256 inventories detect changed source/package/compiler outputs.
 - Every benchmark child imports the selected artifact first and checks the
   actual native extension path and hash. The development installation is not
-  used. `PYTHONHASHSEED=0`, fast streams enabled, and GC disabled during both
+  used. `PYTHONHASHSEED=0`, native streams, and GC disabled during both
   measured and warmup workloads are explicit harness choices.
 - PGO builds use an explicit native Cargo `--target` so build scripts and proc
   macros are not instrumented. Training sets `LLVM_PROFILE_FILE` only in workload

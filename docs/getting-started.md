@@ -132,15 +132,11 @@ Importing `rsloop` does a little setup work:
 
 - it boots the native extension
 - it patches `asyncio.set_event_loop(...)` for compatibility, especially on older Python versions
-- it can patch `asyncio.open_connection(...)` and `asyncio.start_server(...)` to use `rsloop`'s fast stream path
+- it patches `asyncio.open_connection(...)` and `asyncio.start_server(...)` to use native fast streams on rsloop, including TLS
 
-That fast stream behavior is controlled by `RSLOOP_USE_FAST_STREAMS`.
-
-Disable it like this:
-
-```bash
-export RSLOOP_USE_FAST_STREAMS=0
-```
+Native fast streams are automatic on rsloop, with no mode switch or stdlib
+fallback. Other event loops retain their standard stream helpers. See
+[Fast Streams](fast-streams.md) for the supported stream interface.
 
 ## Useful examples
 

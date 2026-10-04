@@ -25,10 +25,6 @@ FEED = "feed"
 EOF = "eof"
 EXC = "exc"
 
-FAST_STREAMS_ACTIVE = getattr(asyncio.open_connection, "__module__", "").startswith(
-    "rsloop"
-)
-
 # The native reader accepts a tuple of separators on every supported version,
 # but `asyncio.StreamReader` only learned the form in 3.13 — below that it
 # raises TypeError out of `bytearray.find`. These cases therefore only have a
@@ -457,10 +453,6 @@ class TestFastStreamReaderNetwork:
 
         assert self._round_trip(send) == (b"ONLY\n", b"")
 
-    @pytest.mark.skipif(
-        not (FAST_STREAMS_ACTIVE),
-        reason="requires the fast-stream patch (RSLOOP_USE_FAST_STREAMS)",
-    )
     def test_open_connection_really_uses_the_native_reader(self) -> None:
         # Without this the round-trip tests above would still pass against the
         # stdlib reader and quietly stop covering the native one.
