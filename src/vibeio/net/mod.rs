@@ -38,6 +38,7 @@
 //! See "Unix socket exchange and path cleanup" in
 //! `tools/vibeio-check/EXAMPLES.md` for an executable, Unix-gated example.
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn try_io_ready<T>(
     ready: &std::cell::RefCell<bool>,

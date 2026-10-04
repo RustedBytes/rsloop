@@ -10,12 +10,20 @@ pub struct AsyncEvent {
 }
 
 impl AsyncEvent {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AsyncEvent")
+    )]
     pub fn new() -> Self {
         Self {
             waiters: Mutex::new(Vec::with_capacity(4)),
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AsyncEvent")
+    )]
     pub fn listen(&self) -> oneshot::Receiver<()> {
         let (tx, rx) = oneshot::channel();
         self.waiters
@@ -25,6 +33,10 @@ impl AsyncEvent {
         rx
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AsyncEvent")
+    )]
     pub fn notify_all(&self) {
         let mut waiters = self.waiters.lock().expect("poisoned async event waiters");
         let drained = waiters.drain(..);

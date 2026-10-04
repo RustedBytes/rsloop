@@ -31,6 +31,7 @@ use super::{PendingReadEvent, StreamTransportCore};
 use crate::engine::{LoopCommand, LoopIoCommand};
 use crate::fd_ops;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_reader_worker(
     core: Arc<StreamTransportCore>,
     reader: ReaderTarget,
@@ -43,6 +44,7 @@ pub(super) fn spawn_reader_worker(
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_tls_reader_worker(
     core: Arc<StreamTransportCore>,
     tls_state: SharedTlsIoState,
@@ -56,6 +58,7 @@ pub(super) fn spawn_tls_reader_worker(
     core.register_worker(worker);
     Ok(())
 }
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn run_stream_reader(
     core: Arc<StreamTransportCore>,
     mut reader: ReaderTarget,
@@ -129,6 +132,7 @@ pub(super) fn run_stream_reader(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Retry non-blocking reads for a bounded window after a successful read.
 /// Returns `false` when the connection terminated (event already enqueued)
 /// and the reader loop must exit.
@@ -186,6 +190,7 @@ pub(super) fn spin_read_stream(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Starts the socket reader for a stream transport.
 ///
 /// Active Unix loops route generic-protocol TCP readers to their loop-thread
@@ -206,6 +211,7 @@ pub(super) fn spawn_socket_reader(
     }))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Stops a local reader immediately, or waits for coordination-thread cancellation.
 pub(super) fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) -> io::Result<()> {
     if core.loop_core.stop_io_task(fd) {
@@ -226,6 +232,7 @@ pub(super) fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) 
         .map_err(|err| io::Error::new(io::ErrorKind::TimedOut, err))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Requests reader cancellation without synchronously crossing to the runtime
 /// thread. Normal close/abort already mark the transport closing and shut down
 /// the socket, so waiting for the acknowledgement only adds teardown latency.
@@ -246,6 +253,7 @@ pub(super) fn stop_socket_reader_nowait(
         }))
         .map_err(io::Error::other)
 }
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(crate) fn run_socket_reader_blocking(
     core: Arc<StreamTransportCore>,
     reader: ReaderTarget,
@@ -254,6 +262,7 @@ pub(crate) fn run_socket_reader_blocking(
     run_stream_reader(core, reader, stop)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn run_tls_reader(
     core: Arc<StreamTransportCore>,
     tls_state: SharedTlsIoState,

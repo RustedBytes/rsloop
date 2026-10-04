@@ -41,6 +41,7 @@ WORKLOADS = (
     "timers_retained",
     "timers_discarded",
     "timers_cancelled",
+    "timers_mixed",
     "tcp_connect_churn",
 )
 DEFAULT_WORKLOADS = ",".join(WORKLOADS[:6])

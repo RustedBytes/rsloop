@@ -25,6 +25,10 @@ pub(super) enum TlsConnectionKind {
 }
 
 impl TlsConnectionKind {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsConnectionKind")
+    )]
     pub(super) fn is_handshaking(&self) -> bool {
         match self {
             Self::Client(conn) => conn.is_handshaking(),
@@ -32,6 +36,10 @@ impl TlsConnectionKind {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsConnectionKind")
+    )]
     pub(super) fn wants_read(&self) -> bool {
         match self {
             Self::Client(conn) => conn.wants_read(),
@@ -39,6 +47,10 @@ impl TlsConnectionKind {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsConnectionKind")
+    )]
     pub(super) fn wants_write(&self) -> bool {
         match self {
             Self::Client(conn) => conn.wants_write(),
@@ -46,6 +58,10 @@ impl TlsConnectionKind {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsConnectionKind")
+    )]
     pub(super) fn read_tls(&mut self, stream: &mut StreamKind) -> io::Result<usize> {
         match self {
             Self::Client(conn) => conn.read_tls(stream),
@@ -53,6 +69,10 @@ impl TlsConnectionKind {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsConnectionKind")
+    )]
     pub(super) fn write_tls(&mut self, stream: &mut StreamKind) -> io::Result<usize> {
         match self {
             Self::Client(conn) => conn.write_tls(stream),
@@ -60,6 +80,10 @@ impl TlsConnectionKind {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsConnectionKind")
+    )]
     pub(super) fn process_new_packets(&mut self) -> Result<(), rustls::Error> {
         match self {
             Self::Client(conn) => conn.process_new_packets().map(|_| ()),
@@ -67,6 +91,10 @@ impl TlsConnectionKind {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsConnectionKind")
+    )]
     pub(super) fn reader_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             Self::Client(conn) => conn.reader().read(buf),
@@ -74,6 +102,10 @@ impl TlsConnectionKind {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsConnectionKind")
+    )]
     fn writer_write(&mut self, data: &[u8]) -> io::Result<usize> {
         match self {
             Self::Client(conn) => conn.writer().write(data),
@@ -81,6 +113,10 @@ impl TlsConnectionKind {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsConnectionKind")
+    )]
     pub(super) fn send_close_notify(&mut self) {
         match self {
             Self::Client(conn) => conn.send_close_notify(),
@@ -98,6 +134,10 @@ pub(super) struct TlsIoState {
 pub(super) type SharedTlsIoState = Arc<Mutex<TlsIoState>>;
 
 impl TlsIoState {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsIoState")
+    )]
     pub(super) fn write_plaintext_all(&mut self, mut data: &[u8]) -> io::Result<()> {
         while !data.is_empty() {
             let written = self.connection.writer_write(data)?;
@@ -117,25 +157,45 @@ impl TlsIoState {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsIoState")
+    )]
     #[inline]
     pub(super) fn fd(&self) -> fd_ops::RawFd {
         self.stream.fd()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsIoState")
+    )]
     pub(super) fn pollable(&self) -> bool {
         self.stream.pollable()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsIoState")
+    )]
     #[inline]
     pub(super) fn shutdown_close(&self) -> io::Result<()> {
         self.stream.shutdown_close()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsIoState")
+    )]
     #[inline]
     pub(super) fn read_tls(&mut self) -> io::Result<usize> {
         self.connection.read_tls(&mut self.stream)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TlsIoState")
+    )]
     #[inline]
     pub(super) fn write_tls(&mut self) -> io::Result<usize> {
         self.connection.write_tls(&mut self.stream)
@@ -148,10 +208,12 @@ pub(super) enum TlsReadOutcome {
     ConnectionLost(String),
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn tls_server_closed(server: Option<&Weak<ServerCore>>) -> bool {
     server.is_some_and(|server| server.upgrade().is_none_or(|server| server.is_closed()))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn complete_tls_handshake(
     tls_state: &SharedTlsIoState,
     timeout: Duration,
@@ -178,6 +240,7 @@ pub(super) fn complete_tls_handshake(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn tls_handshake_step(tls_state: &SharedTlsIoState) -> io::Result<bool> {
     let mut state = tls_state.lock().expect("poisoned tls state");
     if !state.connection.is_handshaking() {
@@ -204,6 +267,7 @@ pub(super) fn tls_handshake_step(tls_state: &SharedTlsIoState) -> io::Result<boo
     Ok(false)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn continue_tls_handshake_read(
     tls_state: &SharedTlsIoState,
     fd: fd_ops::RawFd,
@@ -223,6 +287,7 @@ pub(super) fn continue_tls_handshake_read(
     state.connection.process_new_packets().map_err(tls_io_error)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn drain_tls_plaintext_locked(
     core: &Arc<StreamTransportCore>,
     state: &mut TlsIoState,
@@ -252,6 +317,7 @@ pub(super) fn drain_tls_plaintext_locked(
     Ok(saw_data)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn drain_buffered_tls_plaintext(
     core: &Arc<StreamTransportCore>,
     tls_state: &SharedTlsIoState,
@@ -265,6 +331,7 @@ pub(super) fn drain_buffered_tls_plaintext(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn read_tls_records(
     core: &Arc<StreamTransportCore>,
     tls_state: &SharedTlsIoState,
@@ -304,11 +371,13 @@ pub(super) fn read_tls_records(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn tls_socket_wait_target(tls_state: &SharedTlsIoState) -> (fd_ops::RawFd, bool) {
     let state = tls_state.lock().expect("poisoned tls state");
     (state.fd(), state.pollable())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn close_tls_writer(tls_state: &SharedTlsIoState) -> io::Result<()> {
     let mut state = tls_state.lock().expect("poisoned tls state");
     let shutdown_timeout = state.shutdown_timeout;
@@ -318,11 +387,13 @@ pub(super) fn close_tls_writer(tls_state: &SharedTlsIoState) -> io::Result<()> {
     result.and(close_result)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn abort_tls_writer(tls_state: &SharedTlsIoState) -> io::Result<()> {
     let state = tls_state.lock().expect("poisoned tls state");
     state.shutdown_close()
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn flush_tls_io_locked(state: &mut TlsIoState) -> io::Result<()> {
     while state.connection.wants_write() {
         match state.write_tls() {
@@ -343,6 +414,7 @@ pub(super) fn flush_tls_io_locked(state: &mut TlsIoState) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn flush_tls_close_io_locked(
     state: &mut TlsIoState,
     timeout: Duration,
@@ -369,6 +441,7 @@ pub(super) fn flush_tls_close_io_locked(
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn tls_io_error(err: rustls::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, err.to_string())
 }

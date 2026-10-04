@@ -23,6 +23,7 @@ pub(super) struct AddrInfoRequest {
     pub(super) flags: i32,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn warn_default_executor_timeout(py: Python<'_>, timeout: f64) -> PyResult<()> {
     let warnings = py.import("warnings")?;
     let builtins = py.import("builtins")?;
@@ -41,6 +42,7 @@ fn warn_default_executor_timeout(py: Python<'_>, timeout: f64) -> PyResult<()> {
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn run_in_executor<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -87,6 +89,7 @@ pub(super) fn run_in_executor<'py>(
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn getaddrinfo<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -115,6 +118,7 @@ pub(super) fn getaddrinfo<'py>(
         .map(|awaitable| awaitable.into_bound(py))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Construct the single unambiguous TCP/UDP result for an IP literal and an
 /// integer port. Leave resolver flags, services, scoped addresses, unspecified
 /// socket types and invalid combinations to the system resolver. Custom loop
@@ -186,6 +190,7 @@ fn numeric_addrinfo<'py>(
     Ok(Some(future.into_bound(py)))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn getnameinfo<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -206,6 +211,7 @@ pub(super) fn getnameinfo<'py>(
         .map(|awaitable| awaitable.into_bound(py))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn shutdown_default_executor<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -250,6 +256,7 @@ pub(super) fn shutdown_default_executor<'py>(
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Shuts the executor down on a helper thread so the wait can time out; on
 /// timeout it warns and falls back to a non-waiting `shutdown(False)`.
 async fn shutdown_executor_with_timeout(

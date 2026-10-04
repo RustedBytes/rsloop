@@ -18,7 +18,8 @@ import workload_matrix as matrix
 
 class TestBenchmarkLoop:
     @pytest.mark.parametrize(
-        "mode", ["timers_retained", "timers_discarded", "timers_cancelled"]
+        "mode",
+        ["timers_retained", "timers_discarded", "timers_cancelled", "timers_mixed"],
     )
     @pytest.mark.parametrize("loop_name", ["asyncio", "rsloop"])
     def test_timer_workloads_drain_partial_final_batches(self, mode, loop_name):

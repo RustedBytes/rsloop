@@ -27,6 +27,7 @@ use crate::vibeio::fd_inner::InnerRawHandle;
 use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::op::Op;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 fn start_nonblocking_connect(
     fd: std::os::fd::RawFd,
@@ -50,6 +51,7 @@ fn start_nonblocking_connect(
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn start_nonblocking_connect(
     socket: std::os::windows::io::RawSocket,
@@ -71,6 +73,7 @@ fn start_nonblocking_connect(
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn connectex_bind_error(err_code: i32) -> io::Result<()> {
     // bind documents WSAEINVAL as "already bound". WSAEADDRINUSE instead
@@ -83,6 +86,7 @@ fn connectex_bind_error(err_code: i32) -> io::Result<()> {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn ensure_connectex_bound(socket: SOCKET, address: &ConnectAddress) -> Result<(), io::Error> {
     let AddressStorage::Inet(addr) = &address.storage;
@@ -135,6 +139,7 @@ fn ensure_connectex_bound(socket: SOCKET, address: &ConnectAddress) -> Result<()
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn load_connect_ex(socket: SOCKET) -> Result<WinSock::LPFN_CONNECTEX, io::Error> {
     let mut bytes_returned: u32 = 0;
@@ -173,6 +178,7 @@ fn load_connect_ex(socket: SOCKET) -> Result<WinSock::LPFN_CONNECTEX, io::Error>
     Ok(connect_ex)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn set_connect_context(socket: SOCKET) -> Result<(), io::Error> {
     // SAFETY: this option requires no payload; null and zero provide none.
@@ -218,6 +224,10 @@ struct ConnectAddress {
 }
 
 impl ConnectAddress {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ConnectAddress")
+    )]
     fn raw(&self) -> (AddressPointer, AddressLength) {
         let ptr = match &self.storage {
             AddressStorage::Inet(addr) => std::ptr::from_ref(addr.as_ref()).cast(),
@@ -227,6 +237,10 @@ impl ConnectAddress {
         (ptr, self.len)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ConnectAddress")
+    )]
     fn validate_len(len: AddressLength, capacity: usize) -> io::Result<()> {
         let len = usize::try_from(len).map_err(|_| {
             io::Error::new(
@@ -257,6 +271,7 @@ pub struct ConnectOp<'a> {
 }
 
 impl<'a> ConnectOp<'a> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
     /// Own aligned address storage; callers cannot submit a dangling raw pointer.
     pub fn new(
         handle: &'a InnerRawHandle,
@@ -275,6 +290,7 @@ impl<'a> ConnectOp<'a> {
         ))
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
     #[cfg(unix)]
     pub fn new_unix(
         handle: &'a InnerRawHandle,
@@ -297,6 +313,7 @@ impl<'a> ConnectOp<'a> {
         ))
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
     fn with_address(handle: &'a InnerRawHandle, addr: ConnectAddress) -> Self {
         Self {
             handle,
@@ -310,6 +327,7 @@ impl<'a> ConnectOp<'a> {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
     #[cfg(any(target_os = "linux", windows, test))]
     fn address(&self) -> (AddressPointer, AddressLength) {
         self.addr.as_ref().expect("connect address missing").raw()
@@ -319,6 +337,10 @@ impl<'a> ConnectOp<'a> {
 impl Op for ConnectOp<'_> {
     type Output = ();
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ConnectOp as Op>")
+    )]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -508,6 +530,10 @@ impl Op for ConnectOp<'_> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ConnectOp as Op>")
+    )]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -560,6 +586,10 @@ impl Op for ConnectOp<'_> {
         Poll::Ready(Ok(()))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ConnectOp as Op>")
+    )]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -615,6 +645,10 @@ impl Op for ConnectOp<'_> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ConnectOp as Op>")
+    )]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -634,6 +668,10 @@ impl Op for ConnectOp<'_> {
 }
 
 impl Drop for ConnectOp<'_> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ConnectOp as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
             // Retain the original allocation, not a copy: the kernel may still

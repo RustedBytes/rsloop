@@ -83,6 +83,7 @@ pub(crate) fn initialize_python_for_tests() {
 // `PyOnceLock`, and `#[pyclass]` interior mutability uses PyO3's atomic borrow
 // flags, so importing under a free-threaded interpreter no longer needs to
 // re-enable the GIL.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[pymodule(gil_used = false)]
 fn _loop(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

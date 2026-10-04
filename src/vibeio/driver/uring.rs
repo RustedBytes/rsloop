@@ -27,6 +27,7 @@ const COMPLETION_KEY_KIND: u8 = 1;
 const ACCEPT_KEY_KIND: u8 = 2;
 const MEMORY_FALLBACK_ENTRIES: [u32; 2] = [256, 64];
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn build_with_memory_fallback<T>(
     entries: u32,
     mut build: impl FnMut(u32) -> io::Result<T>,
@@ -61,6 +62,10 @@ pub struct UringInterruptor {
 }
 
 impl Interruptor for UringInterruptor {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringInterruptor as Interruptor>")
+    )]
     #[inline]
     fn interrupt(&self) {
         if let Some(eventfd) = self.eventfd.upgrade() {
@@ -119,6 +124,10 @@ struct Completion {
 }
 
 impl Drop for Completion {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Completion as Drop>")
+    )]
     fn drop(&mut self) {
         if self.returns_fd
             && let Some(fd) = self.completed.take().filter(|fd| *fd >= 0)
@@ -145,6 +154,10 @@ struct CompletionBatch {
 }
 
 impl CompletionBatch {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "CompletionBatch")
+    )]
     fn dispatch(self) {
         // Arbitrary payload destructors and wakers must run outside ring/state
         // borrows; either can reenter the driver or submit another operation.
@@ -159,6 +172,10 @@ impl CompletionBatch {
 }
 
 impl DriverState {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverState")
+    )]
     fn ignore_completion(
         &mut self,
         token: usize,
@@ -194,6 +211,10 @@ pub struct UringDriver {
 }
 
 impl Drop for UringDriver {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Drop>")
+    )]
     fn drop(&mut self) {
         if self.quiesce().is_err() {
             // Ring close can defer cancellation. If the kernel cannot confirm
@@ -209,6 +230,10 @@ impl Drop for UringDriver {
 }
 
 impl UringDriver {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     /// Stop all submitted work before retained operation storage is released.
     fn quiesce(&mut self) -> io::Result<()> {
         let ring = self.ring.get_mut();
@@ -251,6 +276,10 @@ impl UringDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     fn drain_shutdown_cq(ring: &mut IoUring, state: &mut DriverState) {
         for cqe in ring.completion() {
             let key = cqe.user_data();
@@ -272,6 +301,10 @@ impl UringDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     pub(crate) fn new(entries: u32, builder: io_uring::Builder) -> Result<Self, io::Error> {
         // Ring teardown is deferred by the kernel. Rapid runtime churn can
@@ -312,6 +345,10 @@ impl UringDriver {
         Ok(driver)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) -> Option<Waker> {
         if !waiter_slot
@@ -324,11 +361,19 @@ impl UringDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn encode_completion_key(token: usize) -> u64 {
         ((token as u64) << KEY_KIND_BITS) | COMPLETION_KEY_KIND as u64
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn encode_poll_key(token: Token, generation: u32) -> u64 {
         ((u64::from(generation) & 0x3fff_ffff) << 34)
@@ -336,16 +381,28 @@ impl UringDriver {
             | POLL_KEY_KIND as u64
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn decode_token(key: u64) -> Token {
         Token(((key >> KEY_KIND_BITS) & u64::from(u32::MAX)) as usize)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn decode_poll_generation(key: u64) -> u32 {
         (key >> 34) as u32
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn encode_accept_key(token: Token, generation: u32) -> u64 {
         ((u64::from(generation) & 0x3fff_ffff) << 34)
@@ -353,11 +410,19 @@ impl UringDriver {
             | ACCEPT_KEY_KIND as u64
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn decode_key_kind(key: u64) -> u8 {
         (key & KEY_KIND_MASK) as u8
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn interest_to_poll_mask(interest: Interest) -> u32 {
         let mut mask = 0;
@@ -370,6 +435,10 @@ impl UringDriver {
         mask
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn submitter_call_result(result: Result<usize, io::Error>) -> Result<(), io::Error> {
         match result {
@@ -380,6 +449,10 @@ impl UringDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn push_entry(&self, entry: squeue::Entry) -> Result<(), io::Error> {
         let mut ring = self.ring.borrow_mut();
@@ -404,6 +477,10 @@ impl UringDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn push_poll_add(
         &self,
@@ -419,6 +496,10 @@ impl UringDriver {
         self.push_entry(entry)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn collect_completions(
         &self,
@@ -467,6 +548,10 @@ impl UringDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     /// Drain the completion queue, deferring user callbacks until borrows end.
     #[inline]
     fn drain_cq(ring: &mut IoUring, state: &mut DriverState) -> CompletionBatch {
@@ -582,6 +667,10 @@ impl UringDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UringDriver")
+    )]
     #[inline]
     fn submit_interrupt(&self) {
         use io_uring::{opcode, types};
@@ -798,6 +887,10 @@ mod memory_fallback_tests {
 impl Driver for UringDriver {
     type Interruptor = UringInterruptor;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn flush(&self) {
         match self.collect_completions(false, None) {
@@ -807,11 +900,19 @@ impl Driver for UringDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn should_flush(&self) -> bool {
         self.pending_submissions.load(Ordering::Acquire)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn wait(&self, timeout: Option<Duration>) {
         match self.collect_completions(true, timeout) {
@@ -821,6 +922,10 @@ impl Driver for UringDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn get_interruptor(&self) -> Self::Interruptor {
         UringInterruptor {
@@ -828,6 +933,10 @@ impl Driver for UringDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn register_handle(
         &self,
@@ -837,6 +946,10 @@ impl Driver for UringDriver {
         self.register_handle_with_mode(handle, interest, RegistrationMode::Completion)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn register_handle_with_mode(
         &self,
@@ -876,6 +989,10 @@ impl Driver for UringDriver {
         Ok(token)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn reregister_handle(
         &self,
@@ -899,6 +1016,10 @@ impl Driver for UringDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn deregister_handle(&self, handle: &InnerRawHandle) -> Result<(), io::Error> {
         {
@@ -928,11 +1049,19 @@ impl Driver for UringDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn supports_completion(&self) -> bool {
         true
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn submit_poll(
         &self,
@@ -996,6 +1125,10 @@ impl Driver for UringDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn submit_completion<O>(&self, op: &mut O, waker: Waker) -> super::CompletionIoResult
     where
@@ -1028,6 +1161,10 @@ impl Driver for UringDriver {
         CompletionIoResult::Retry(token)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn get_completion_result(&self, token: usize) -> Option<i32> {
         let mut state = self.state.borrow_mut();
@@ -1041,6 +1178,10 @@ impl Driver for UringDriver {
         completed
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     fn poll_multishot_accept(
         &self,
         handle: &InnerRawHandle,
@@ -1116,6 +1257,10 @@ impl Driver for UringDriver {
         Poll::Pending
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn set_completion_waker(&self, token: usize, waker: Waker) {
         let mut state = self.state.borrow_mut();
@@ -1128,6 +1273,10 @@ impl Driver for UringDriver {
         drop(old_waker);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UringDriver as Driver>")
+    )]
     #[inline]
     fn ignore_completion(&self, token: usize, data: Box<dyn std::any::Any>) {
         let retired = self.state.borrow_mut().ignore_completion(token, data);

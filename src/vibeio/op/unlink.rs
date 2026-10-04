@@ -15,6 +15,7 @@ pub struct UnlinkOp {
 }
 
 impl UnlinkOp {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UnlinkOp"))]
     #[inline]
     pub fn new(driver: Rc<AnyDriver>, path: CString, is_dir: bool) -> Self {
         Self {
@@ -29,6 +30,10 @@ impl UnlinkOp {
 impl Op for UnlinkOp {
     type Output = ();
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UnlinkOp as Op>")
+    )]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -70,6 +75,10 @@ impl Op for UnlinkOp {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UnlinkOp as Op>")
+    )]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -91,6 +100,10 @@ impl Op for UnlinkOp {
 }
 
 impl Drop for UnlinkOp {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UnlinkOp as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
             // Paths and result storage remain owned until the kernel acknowledges

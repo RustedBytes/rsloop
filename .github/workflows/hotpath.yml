@@ -1,0 +1,58 @@
+name: Hotpath profiling coverage
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        feature: [hotpath-profile, hotpath-alloc-profile]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-25
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - name: Install build and test dependencies
+        run: uv sync --locked --no-install-project
+      - name: Audit hooks and test the inventory parser
+        run: |
+          cargo test --locked --manifest-path tools/hotpath-coverage/Cargo.toml
+          cargo run --locked --manifest-path tools/hotpath-coverage/Cargo.toml
+      - name: Build the instrumented extension
+        run: uv run --no-sync maturin develop --release --features ${{ matrix.feature }}
+      - name: Generate TLS fixtures
+        run: uv run --no-sync python scripts/generate_test_tls_certs.py
+      - name: Test profile lifecycle and tooling
+        run: |
+          uv run --no-sync pytest -q tests/test_hotpath_profile.py
+          uv run --no-sync pytest -q -m tooling tests/tooling/test_profile_with_hotpath.py
+      - name: Collect every workload in fresh processes
+        run: >-
+          uv run --no-sync python scripts/profile_with_hotpath.py all
+          --output target/hotpath-ci
+          --callbacks 1000 --tasks 200 --task-batch-size 50
+          --tcp-roundtrips 30 --timers 200 --timer-batch-size 50
+          --connections 5 --probe-iterations 3 --concurrency 2
+          --requests-per-connection 3 --bulk-bytes 131072
+          --idle-connections 4 --idle-cycles 2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.feature }}-${{ github.run_attempt }}
+          path: target/hotpath-ci/
+          retention-days: 14

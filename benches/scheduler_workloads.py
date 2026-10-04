@@ -15,8 +15,14 @@ async def bench_timers(
     """Include scheduling, expiration/cancellation, and handle release."""
     if iterations <= 0 or batch_size <= 0:
         raise ValueError("iterations and batch_size must be positive")
-    if mode not in {"timers_retained", "timers_discarded", "timers_cancelled"}:
+    if mode not in {
+        "timers_retained",
+        "timers_discarded",
+        "timers_cancelled",
+        "timers_mixed",
+    }:
         raise ValueError(f"unknown timer mode: {mode}")
+    cancelled = mode in {"timers_cancelled", "timers_mixed"}
     loop = asyncio.get_running_loop()
     started = time.perf_counter()
     outstanding = iterations
@@ -32,12 +38,20 @@ async def bench_timers(
                 completion.set_result(None)
 
         handles = []
-        for _ in range(count):
+        for index in range(count):
             if mode == "timers_discarded":
                 loop.call_later(0, fire)
             else:
-                handles.append(loop.call_later(0, fire))
-        if mode == "timers_cancelled":
+                # Deterministic scattered future deadlines exercise the heap
+                # independently of the zero-delay FIFO. Cancel before expiry.
+                delay = (
+                    60 + ((index * 15319) % 2048) / 1024
+                    if mode == "timers_mixed"
+                    else 0
+                )
+                handles.append(loop.call_later(delay, fire))
+        if cancelled:
+            handle = None
             for handle in handles:
                 handle.cancel()
             del handle
@@ -45,7 +59,7 @@ async def bench_timers(
             # cancelled deadlines to be processed as well.
             loop.call_later(0, done.set_result, None)
         await done
-        assert remaining == (count if mode == "timers_cancelled" else 0)
+        assert remaining == (count if cancelled else 0)
         handles.clear()
         outstanding -= count
     return ChildResult(

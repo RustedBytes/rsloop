@@ -38,20 +38,26 @@ pub(super) const SERVER_POLL_READER_TINY_TRIGGER_MAX_BYTES: usize = 16;
 // loop-thread backlog. Buffers are allocated lazily; once all slots exist,
 // readers wait for recycling rather than allocating beyond this bound.
 pub(super) const READ_BUFFER_POOL_LIMIT: usize = 4;
+// Amortize tiny headers without reserving a full 16 KiB block per connection.
+pub(super) const MIN_WRITE_BUFFER_CAPACITY: usize = 256;
+// This unit defines the pool's slot budget, not its initial allocation size.
 pub(super) const WRITE_BUFFER_BLOCK_SIZE: usize = 16 * 1024;
 pub(super) const WRITE_BUFFER_POOL_LIMIT: usize =
     DEFAULT_WRITE_BUFFER_HIGH_WATER / WRITE_BUFFER_BLOCK_SIZE + 1;
 pub(super) const TLS_WORKER_STACK_SIZE: usize = 256 * 1024;
 const DEFAULT_MAX_PENDING_TLS_HANDSHAKES: usize = 256;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn positive_usize_or_default(value: Option<usize>, default: usize) -> usize {
     value.filter(|value| *value > 0).unwrap_or(default)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn reader_spin_micros(value: Option<u64>) -> u64 {
     value.unwrap_or(30).min(1_000)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn parse_positive_usize(value: Option<&str>, default: usize) -> usize {
     positive_usize_or_default(
         value.and_then(|value| value.trim().parse::<usize>().ok()),
@@ -59,12 +65,14 @@ fn parse_positive_usize(value: Option<&str>, default: usize) -> usize {
     )
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn parse_reader_spin_window(value: Option<&str>) -> Duration {
     Duration::from_micros(reader_spin_micros(
         value.and_then(|value| value.trim().parse::<u64>().ok()),
     ))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn max_pending_tls_handshakes() -> usize {
     static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *LIMIT.get_or_init(|| {
@@ -73,6 +81,7 @@ pub(super) fn max_pending_tls_handshakes() -> usize {
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn max_write_buffer_size() -> usize {
     static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *LIMIT.get_or_init(|| {
@@ -85,6 +94,7 @@ pub(super) fn max_write_buffer_size() -> usize {
 // reads for this long before falling back to poll(). Request/response peers
 // usually answer within microseconds, and skipping the poll() sleep/wake
 // halves per-roundtrip latency on actively chatting connections.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn reader_spin_window() -> Duration {
     static WINDOW: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
     *WINDOW.get_or_init(|| {

@@ -19,6 +19,7 @@ pub struct OpenOp {
 }
 
 impl OpenOp {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "OpenOp"))]
     #[inline]
     pub fn new(driver: Rc<AnyDriver>, path: CString, flags: i32, mode: libc::mode_t) -> Self {
         Self {
@@ -34,10 +35,18 @@ impl OpenOp {
 impl Op for OpenOp {
     type Output = OwnedFd;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<OpenOp as Op>")
+    )]
     fn completion_returns_fd(&self) -> bool {
         true
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<OpenOp as Op>")
+    )]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -83,6 +92,10 @@ impl Op for OpenOp {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<OpenOp as Op>")
+    )]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -104,6 +117,10 @@ impl Op for OpenOp {
 }
 
 impl Drop for OpenOp {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<OpenOp as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
             // Paths and result storage remain owned until the kernel acknowledges

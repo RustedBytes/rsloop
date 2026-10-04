@@ -49,6 +49,10 @@ pub struct UnixListener {
 }
 
 impl UnixListener {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UnixListener")
+    )]
     /// Creates a new `UnixListener` which will be bound to the specified path.
     ///
     /// Binding is synchronous; the returned listener supports async accepts.
@@ -80,6 +84,10 @@ impl UnixListener {
         Self::from_std(inner)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UnixListener")
+    )]
     /// Creates a new `UnixListener` from a standard library `UnixListener`.
     ///
     /// # Errors
@@ -92,6 +100,10 @@ impl UnixListener {
         Ok(Self { inner, handle })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UnixListener")
+    )]
     /// Returns the local address of this listener.
     ///
     /// # Errors
@@ -102,6 +114,10 @@ impl UnixListener {
         self.inner.local_addr()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UnixListener", future = true)
+    )]
     /// Accepts a new incoming connection from this listener.
     ///
     /// This is the async version of [`std::os::unix::net::UnixListener::accept`].
@@ -123,6 +139,10 @@ impl UnixListener {
 }
 
 impl AsRawFd for UnixListener {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UnixListener as AsRawFd>")
+    )]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.inner.as_raw_fd()
@@ -130,6 +150,10 @@ impl AsRawFd for UnixListener {
 }
 
 impl IntoRawFd for UnixListener {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UnixListener as IntoRawFd>")
+    )]
     #[inline]
     fn into_raw_fd(self) -> RawFd {
         let Self { handle, inner } = self;

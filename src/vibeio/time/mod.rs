@@ -17,6 +17,7 @@ mod interval;
 mod sleep;
 mod timeout;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Add a duration, saturating at the platform's last representable Instant.
 #[inline]
 pub(crate) fn deadline_after(
@@ -29,6 +30,7 @@ pub(crate) fn deadline_after(
     saturating_deadline(base, duration)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cold]
 fn saturating_deadline(
     base: std::time::Instant,
@@ -64,30 +66,35 @@ pub use sleep::{Sleep, ZeroBehavior};
 #[allow(unused_imports)]
 pub use timeout::{Timeout, TimeoutError, timeout};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder: returns a `Sleep` future.
 #[inline]
 pub fn sleep(duration: std::time::Duration) -> Sleep {
     Sleep::new(duration)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder allowing zero-behavior control for tiny durations.
 #[inline]
 pub fn sleep_with_zero_behavior(duration: std::time::Duration, behavior: ZeroBehavior) -> Sleep {
     Sleep::new_with_zero_behavior(duration, behavior)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder: returns an `Interval`.
 #[inline]
 pub fn interval(period: std::time::Duration) -> Interval {
     Interval::new(period)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder: returns a `Sleep` that completes at the provided absolute `Instant`.
 #[inline]
 pub fn sleep_until(deadline: std::time::Instant) -> Sleep {
     Sleep::sleep_until(deadline)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Convenience async function that awaits `future` but returns an error if it
 /// does not complete before the absolute `deadline` Instant.
 /// The inner future is polled first; an immediately ready result wins even if
@@ -100,6 +107,7 @@ pub async fn timeout_at<T>(
     Timeout::new_at(future, deadline).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder: returns an `Interval` with the first tick scheduled to
 /// complete at `first_tick_instant` and subsequent ticks every `period`.
 #[inline]

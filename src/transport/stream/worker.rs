@@ -22,6 +22,10 @@ pub(super) struct WorkerThread {
 }
 
 impl WorkerThread {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WorkerThread")
+    )]
     pub(super) fn spawn(
         name: &'static str,
         task: impl FnOnce(Arc<AtomicBool>) + Send + 'static,
@@ -29,6 +33,10 @@ impl WorkerThread {
         Self::spawn_with_stack(name, None, task)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WorkerThread")
+    )]
     pub(super) fn spawn_with_stack(
         name: &'static str,
         stack_size: Option<usize>,
@@ -58,6 +66,10 @@ impl WorkerThread {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WorkerThread")
+    )]
     pub(super) fn spawn_interruptible(
         name: &'static str,
         wake: impl FnOnce() + Send + 'static,
@@ -68,10 +80,18 @@ impl WorkerThread {
         Ok(worker)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WorkerThread")
+    )]
     pub(super) fn abort(self) {
         self.abort_with_timeout(WORKER_JOIN_TIMEOUT);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WorkerThread")
+    )]
     fn abort_with_timeout(mut self, join_timeout: Duration) {
         self.stop.store(true, Ordering::Release);
         if let Some(wake) = self.wake.take() {

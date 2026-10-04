@@ -28,6 +28,10 @@ struct DeadlineHeap {
 }
 
 impl DeadlineHeap {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DeadlineHeap")
+    )]
     #[inline]
     fn new() -> Self {
         Self {
@@ -37,6 +41,10 @@ impl DeadlineHeap {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DeadlineHeap")
+    )]
     #[inline]
     fn less(&self, left: usize, right: usize) -> bool {
         let left = &self.entries[self.heap[left]];
@@ -44,6 +52,10 @@ impl DeadlineHeap {
         (left.deadline, left.generation) < (right.deadline, right.generation)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DeadlineHeap")
+    )]
     #[inline]
     fn swap_nodes(&mut self, left: usize, right: usize) {
         self.heap.swap(left, right);
@@ -51,6 +63,10 @@ impl DeadlineHeap {
         self.entries[self.heap[right]].heap_index = right;
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DeadlineHeap")
+    )]
     fn sift_up(&mut self, mut index: usize) {
         while index != 0 {
             let parent = (index - 1) / 4;
@@ -62,6 +78,10 @@ impl DeadlineHeap {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DeadlineHeap")
+    )]
     fn sift_down(&mut self, mut index: usize) {
         loop {
             let first_child = index * 4 + 1;
@@ -83,6 +103,10 @@ impl DeadlineHeap {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DeadlineHeap")
+    )]
     #[inline]
     fn insert(&mut self, deadline: Instant, waker: Waker) -> TimerHandle {
         self.next_generation = self.next_generation.wrapping_add(1);
@@ -105,11 +129,19 @@ impl DeadlineHeap {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DeadlineHeap")
+    )]
     #[inline]
     fn deadline(&self) -> Option<Instant> {
         self.heap.first().map(|index| self.entries[*index].deadline)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DeadlineHeap")
+    )]
     fn remove(&mut self, handle: TimerHandle) -> Option<Waker> {
         let entry = self.entries.get(handle.slab_index)?;
         if entry.generation != handle.generation {
@@ -135,6 +167,10 @@ impl DeadlineHeap {
         Some(entry.waker)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DeadlineHeap")
+    )]
     #[inline]
     fn pop_expired(&mut self, now: Instant, output: &mut Vec<Waker>) {
         while self.deadline().is_some_and(|deadline| deadline <= now) {
@@ -158,6 +194,7 @@ pub struct Timer {
 }
 
 impl Timer {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -168,6 +205,7 @@ impl Timer {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
     #[inline]
     fn now(&self) -> Instant {
         #[cfg(test)]
@@ -177,6 +215,7 @@ impl Timer {
         Instant::now()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
     #[inline]
     pub fn submit(&self, deadline: Instant, waker: Waker) -> Option<TimerHandle> {
         if deadline <= self.now() {
@@ -186,6 +225,7 @@ impl Timer {
         Some(self.deadlines.borrow_mut().insert(deadline, waker))
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
     #[inline]
     pub fn cancel(&self, handle: TimerHandle) {
         let waker = self.deadlines.borrow_mut().remove(handle);
@@ -193,6 +233,7 @@ impl Timer {
         drop(waker);
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
     /// Replace a live registration's waiter without changing its heap position.
     /// Returns false if the handle has expired, been cancelled, or been reused.
     pub(crate) fn update_waker(&self, handle: TimerHandle, waker: &Waker) -> bool {
@@ -228,6 +269,7 @@ impl Timer {
         updated
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
     /// Wakes every expired timer and returns the exact duration until the next
     /// deadline. Unlike the old millisecond wheel this never discards partial
     /// elapsed time, so frequent scheduler spins cannot freeze timer progress.
@@ -260,6 +302,10 @@ impl Timer {
 }
 
 impl Default for Timer {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Timer as Default>")
+    )]
     fn default() -> Self {
         Self::new()
     }

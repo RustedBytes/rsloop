@@ -34,6 +34,7 @@ pub struct Task {
 }
 
 impl Task {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Task"))]
     #[inline]
     pub fn waker_ref(self: &Rc<Self>) -> WakerRef<'_> {
         // Borrowing the proxy does not increment its reference count. Only
@@ -41,11 +42,13 @@ impl Task {
         waker_ref(&self.wake)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Task"))]
     #[inline]
     pub fn waker(self: &Rc<Self>) -> Waker {
         waker(self.wake.clone())
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Task"))]
     #[inline]
     pub fn mark_dequeued(&self) {
         self.wake.queued.store(false, Ordering::Relaxed);
@@ -53,6 +56,10 @@ impl Task {
 }
 
 impl ArcWake for TaskWake {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TaskWake as ArcWake>")
+    )]
     #[inline]
     fn wake_by_ref(wake: &Arc<Self>) {
         Self::enqueue_if_needed(wake);
@@ -60,6 +67,7 @@ impl ArcWake for TaskWake {
 }
 
 impl TaskWake {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TaskWake"))]
     fn enqueue_if_needed(wake: &Arc<Self>) {
         let Some(remote) = wake.remote_wake.upgrade() else {
             return;

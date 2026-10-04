@@ -276,6 +276,57 @@ READER_CASES = [
 
 
 class TestFastStreamReaderCompat:
+    @pytest.mark.parametrize("finish", ["exact", "overflow", "eof", "error"])
+    def test_fragmented_exact_read_preserves_result_and_error(self, finish):
+        async def main():
+            loop = asyncio.get_running_loop()
+            outcomes = []
+            for reader in (
+                PyFastStreamReader(64, loop),
+                asyncio.StreamReader(limit=64),
+            ):
+                # Exercise existing buffered data, then multiple direct feeds.
+                reader.feed_data(b"ab")
+                pending = asyncio.ensure_future(reader.readexactly(8))
+                await asyncio.sleep(0)
+                reader.feed_data(b"cd")
+                await asyncio.sleep(0)
+                reader.feed_data(b"ef")
+                await asyncio.sleep(0)
+                assert not pending.done()
+                if finish == "eof":
+                    reader.feed_eof()
+                elif finish == "error":
+                    reader.set_exception(ConnectionResetError("reset"))
+                else:
+                    reader.feed_data(b"ghTAIL" if finish == "overflow" else b"gh")
+                try:
+                    outcomes.append(("ok", await asyncio.wait_for(pending, 5)))
+                except asyncio.IncompleteReadError as exc:
+                    outcomes.append(("eof", exc.partial, exc.expected))
+                except ConnectionResetError as exc:
+                    outcomes.append(("error", str(exc)))
+                if finish == "overflow":
+                    assert await reader.readexactly(4) == b"TAIL"
+            assert outcomes[0] == outcomes[1]
+
+        rsloop.run(main())
+
+    def test_cancelled_exact_result_is_not_exposed_by_later_feeds(self):
+        async def main():
+            reader = PyFastStreamReader(64, asyncio.get_running_loop())
+            pending = asyncio.ensure_future(reader.readexactly(8))
+            await asyncio.sleep(0)
+            reader.feed_data(b"abcd")
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            reader.feed_data(b"efgh")
+            reader.feed_data(b"next")
+            assert await reader.readexactly(4) == b"next"
+
+        rsloop.run(main())
+
     def _run_case(self, limit, script, call):
         results = {}
 
@@ -382,6 +433,43 @@ class TestFastStreamReaderCompat:
 
 class TestFastStreamReaderNetwork:
     """The reported break: `readline()` over a real `asyncio.open_connection()`."""
+
+    def test_fragmented_large_exact_read_keeps_trailing_bytes(self):
+        payload = bytes(range(251)) * 8192
+
+        async def main():
+            async def send(reader, writer):
+                try:
+                    await reader.readexactly(1)
+                    for start in range(0, len(payload), 16381):
+                        writer.write(payload[start : start + 16381])
+                        await writer.drain()
+                    writer.write(b"TAIL")
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            server = await asyncio.start_server(send, "127.0.0.1", 0)
+            try:
+                reader, writer = await asyncio.open_connection(
+                    "127.0.0.1", server.sockets[0].getsockname()[1]
+                )
+                try:
+                    writer.write(b"!")
+                    assert (
+                        await asyncio.wait_for(reader.readexactly(len(payload)), 5)
+                        == payload
+                    )
+                    assert await reader.readexactly(4) == b"TAIL"
+                    assert await reader.read() == b""
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+            finally:
+                server.close()
+                await server.wait_closed()
+
+        rsloop.run(main())
 
     @staticmethod
     async def _echo_lines(reader, writer) -> None:

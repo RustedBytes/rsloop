@@ -12,6 +12,7 @@ use pyo3::prelude::*;
 use crate::engine::{LoopCommand, LoopCore};
 use crate::fd_ops;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Waits for a connecting TCP socket to become writable on the vibeio reactor,
 /// then hands the outcome back to the loop thread via `ConnectCompleted`. The
 /// descriptor is duplicated so the vibeio stream owns (and closes) only the

@@ -23,6 +23,7 @@ use crate::vibeio::op::Op;
 use crate::vibeio::op::io_util::completion_len;
 use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn socket_read(socket: SOCKET, buf: &mut impl IoBufMut) -> io::Result<usize> {
@@ -74,6 +75,7 @@ pub struct ReadOp<'a, B: IoBufMut> {
 }
 
 impl<'a, B: IoBufMut> ReadOp<'a, B> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B) -> Self {
         Self {
@@ -83,6 +85,7 @@ impl<'a, B: IoBufMut> ReadOp<'a, B> {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -96,6 +99,10 @@ impl<'a, B: IoBufMut> ReadOp<'a, B> {
 impl<B: IoBufMut> Op for ReadOp<'_, B> {
     type Output = usize;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadOp as Op>")
+    )]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -144,6 +151,10 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadOp as Op>")
+    )]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -192,6 +203,10 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
         Poll::Ready(Ok(read))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadOp as Op>")
+    )]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -262,6 +277,10 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadOp as Op>")
+    )]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -285,6 +304,10 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
 }
 
 impl<B: IoBufMut> Drop for ReadOp<'_, B> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadOp as Drop>")
+    )]
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {

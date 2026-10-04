@@ -7,6 +7,7 @@ use pyo3::types::PyTuple;
 
 static SET_RUNNING_LOOP_FN: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn set_running_loop_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     SET_RUNNING_LOOP_FN.get_or_try_init(py, || {
@@ -31,6 +32,7 @@ pub fn capture_context(py: Python<'_>, explicit: Option<Py<PyAny>>) -> PyResult<
     Ok((context, true))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn is_nested_context_error(py: Python<'_>, err: &PyErr) -> bool {
     err.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py)
@@ -68,11 +70,13 @@ pub fn exit_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn call_noargs(py: Python<'_>, callback: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     Ok(callback.bind(py).call0()?.unbind())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn call_onearg(
     py: Python<'_>,
@@ -82,6 +86,7 @@ fn call_onearg(
     Ok(callback.bind(py).call1((arg,))?.unbind())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn run_in_context(
     py: Python<'_>,
     context: &Py<PyAny>,
@@ -112,6 +117,7 @@ pub fn run_in_context(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn run_in_context_noargs(
     py: Python<'_>,
@@ -140,6 +146,7 @@ pub fn run_in_context_noargs(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn run_in_context_onearg(
     py: Python<'_>,
@@ -169,12 +176,14 @@ pub fn run_in_context_onearg(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn ensure_running_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<()> {
     set_running_loop_fn(py)?.call1(py, (loop_obj.clone_ref(py),))?;
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn clear_running_loop(py: Python<'_>) -> PyResult<()> {
     set_running_loop_fn(py)?.call1(py, (py.None(),))?;

@@ -35,6 +35,7 @@ use crate::vibeio::io::{
 use crate::vibeio::op::{ConnectOp, socket_addr_to_raw};
 use crate::vibeio::op::{ReadinessOp, RecvOp, RecvfromOp, SendOp, SendtoOp};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[cfg(unix)]
 #[inline]
 async fn connect_one(handle: &InnerRawHandle, address: SocketAddr) -> Result<(), io::Error> {
@@ -68,6 +69,7 @@ pub struct UdpSocket {
 }
 
 impl UdpSocket {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Creates a new `UdpSocket` which will be bound to the specified address.
     ///
     /// This is the async version of [`std::net::UdpSocket::bind`].
@@ -85,6 +87,7 @@ impl UdpSocket {
         Self::from_std(inner)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Creates a new `UdpSocket` from a standard library `UdpSocket`.
     ///
     /// # Errors
@@ -95,6 +98,7 @@ impl UdpSocket {
         Self::from_std_with_mode(inner, RegistrationMode::Completion)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Creates a new `UdpSocket` from a standard library `UdpSocket` with a specific registration mode.
     #[inline]
     pub(crate) fn from_std_with_mode(
@@ -118,6 +122,7 @@ impl UdpSocket {
         Ok(Self { inner, handle })
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Converts this socket into a poll-only variant.
     ///
     /// The returned `PollUdpSocket` will always use readiness-based I/O.
@@ -135,6 +140,7 @@ impl UdpSocket {
         })
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Converts this `UdpSocket` into the standard library `UdpSocket`.
     #[inline]
     pub fn into_std(self) -> StdUdpSocket {
@@ -143,6 +149,7 @@ impl UdpSocket {
         inner
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the local address of this socket.
     ///
     /// # Errors
@@ -153,6 +160,7 @@ impl UdpSocket {
         self.inner.local_addr()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the remote address of this socket.
     ///
     /// # Errors
@@ -163,6 +171,10 @@ impl UdpSocket {
         self.inner.peer_addr()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     /// Connects this UDP socket to a remote address.
     ///
     /// This is the async version of [`std::net::UdpSocket::connect`].
@@ -195,6 +207,10 @@ impl UdpSocket {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no addresses")))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     /// Receives a single datagram message.
     ///
     /// This is the async version of [`std::net::UdpSocket::recv`].
@@ -212,6 +228,10 @@ impl UdpSocket {
         (result, op.take_bufs())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     /// Receives a single datagram message, returning the sender's address.
     ///
     /// This is the async version of [`std::net::UdpSocket::recv_from`].
@@ -232,6 +252,10 @@ impl UdpSocket {
         (result, op.take_bufs())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     /// Sends data on a connected socket.
     ///
     /// This is the async version of [`std::net::UdpSocket::send`].
@@ -249,6 +273,10 @@ impl UdpSocket {
         (result, op.take_bufs())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     /// Sends data to the specified address.
     ///
     /// This is the async version of [`std::net::UdpSocket::send_to`].
@@ -290,6 +318,10 @@ impl UdpSocket {
         )
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     /// Receives data without removing it from the socket's receive queue.
     ///
     /// This is the async version of [`std::net::UdpSocket::peek`].
@@ -307,6 +339,10 @@ impl UdpSocket {
         (result, op.take_bufs())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     /// Receives data without removing it from the socket's receive queue,
     /// returning the sender's address.
     ///
@@ -328,6 +364,7 @@ impl UdpSocket {
         (result, op.take_bufs())
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns a new `UdpSocket` that shares the same underlying file descriptor.
     ///
     /// # Errors
@@ -338,6 +375,7 @@ impl UdpSocket {
         Self::from_std(self.inner.try_clone()?)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the broadcast flag.
     ///
     /// When set, the socket can send broadcast packets.
@@ -350,6 +388,7 @@ impl UdpSocket {
         self.inner.set_broadcast(broadcast)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the current value of the broadcast flag.
     ///
     /// # Errors
@@ -360,6 +399,7 @@ impl UdpSocket {
         self.inner.broadcast()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the time-to-live (TTL) value.
     ///
     /// This controls how many hops a packet can traverse before being discarded.
@@ -372,6 +412,7 @@ impl UdpSocket {
         self.inner.set_ttl(ttl)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the current TTL value.
     ///
     /// # Errors
@@ -382,6 +423,7 @@ impl UdpSocket {
         self.inner.ttl()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the multicast loop flag for IPv4.
     ///
     /// When set, multicast packets are looped back to the local socket.
@@ -394,6 +436,7 @@ impl UdpSocket {
         self.inner.set_multicast_loop_v4(multicast_loop_v4)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the current IPv4 multicast loop flag.
     ///
     /// # Errors
@@ -404,6 +447,7 @@ impl UdpSocket {
         self.inner.multicast_loop_v4()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the multicast TTL for IPv4.
     ///
     /// This controls how many hops multicast packets can traverse.
@@ -416,6 +460,7 @@ impl UdpSocket {
         self.inner.set_multicast_ttl_v4(multicast_ttl_v4)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the current IPv4 multicast TTL.
     ///
     /// # Errors
@@ -426,6 +471,7 @@ impl UdpSocket {
         self.inner.multicast_ttl_v4()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the multicast loop flag for IPv6.
     ///
     /// When set, multicast packets are looped back to the local socket.
@@ -438,6 +484,7 @@ impl UdpSocket {
         self.inner.set_multicast_loop_v6(multicast_loop_v6)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the current IPv6 multicast loop flag.
     ///
     /// # Errors
@@ -448,6 +495,7 @@ impl UdpSocket {
         self.inner.multicast_loop_v6()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Joins a multicast group for IPv4.
     ///
     /// # Errors
@@ -462,6 +510,7 @@ impl UdpSocket {
         self.inner.join_multicast_v4(multiaddr, interface)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Joins a multicast group for IPv6.
     ///
     /// # Errors
@@ -472,6 +521,7 @@ impl UdpSocket {
         self.inner.join_multicast_v6(multiaddr, interface)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Leaves a multicast group for IPv4.
     ///
     /// # Errors
@@ -486,6 +536,7 @@ impl UdpSocket {
         self.inner.leave_multicast_v4(multiaddr, interface)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Leaves a multicast group for IPv6.
     ///
     /// # Errors
@@ -500,6 +551,7 @@ impl UdpSocket {
         self.inner.leave_multicast_v6(multiaddr, interface)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Takes the pending error from the socket.
     ///
     /// # Errors
@@ -510,6 +562,7 @@ impl UdpSocket {
         self.inner.take_error()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the read timeout for the socket.
     ///
     /// # Errors
@@ -520,6 +573,7 @@ impl UdpSocket {
         self.inner.set_read_timeout(dur)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the write timeout for the socket.
     ///
     /// # Errors
@@ -530,6 +584,7 @@ impl UdpSocket {
         self.inner.set_write_timeout(dur)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the read timeout for the socket.
     ///
     /// # Errors
@@ -540,6 +595,7 @@ impl UdpSocket {
         self.inner.read_timeout()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the write timeout for the socket.
     ///
     /// # Errors
@@ -553,6 +609,10 @@ impl UdpSocket {
 
 #[cfg(unix)]
 impl AsRawFd for UdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UdpSocket as AsRawFd>")
+    )]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.inner.as_raw_fd()
@@ -561,6 +621,10 @@ impl AsRawFd for UdpSocket {
 
 #[cfg(unix)]
 impl IntoRawFd for UdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UdpSocket as IntoRawFd>")
+    )]
     #[inline]
     fn into_raw_fd(self) -> RawFd {
         self.into_std().into_raw_fd()
@@ -569,6 +633,10 @@ impl IntoRawFd for UdpSocket {
 
 #[cfg(windows)]
 impl AsRawSocket for UdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UdpSocket as AsRawSocket>")
+    )]
     #[inline]
     fn as_raw_socket(&self) -> RawSocket {
         self.inner.as_raw_socket()
@@ -577,6 +645,10 @@ impl AsRawSocket for UdpSocket {
 
 #[cfg(windows)]
 impl IntoRawSocket for UdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UdpSocket as IntoRawSocket>")
+    )]
     #[inline]
     fn into_raw_socket(self) -> RawSocket {
         self.into_std().into_raw_socket()
@@ -584,6 +656,10 @@ impl IntoRawSocket for UdpSocket {
 }
 
 impl<'a> AsInnerRawHandle<'a> for UdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UdpSocket as AsInnerRawHandle < 'a >>")
+    )]
     #[inline]
     fn as_inner_raw_handle(&'a self) -> &'a InnerRawHandle {
         &self.handle
@@ -610,6 +686,10 @@ pub struct PollUdpSocket {
 }
 
 impl PollUdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Creates a new `PollUdpSocket` bound to the specified address.
     ///
     /// # Errors
@@ -625,6 +705,10 @@ impl PollUdpSocket {
         Self::from_std(inner)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Creates a new `PollUdpSocket` from a standard library `UdpSocket`.
     ///
     /// # Errors
@@ -639,12 +723,20 @@ impl PollUdpSocket {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Converts this poll socket into an adaptive `UdpSocket`.
     #[inline]
     pub fn into_adaptive(self) -> UdpSocket {
         self.socket
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Converts this poll socket into a completion-based `UdpSocket`.
     ///
     /// # Errors
@@ -660,6 +752,10 @@ impl PollUdpSocket {
         Ok(socket)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket", future = true)
+    )]
     /// Connects this UDP socket to a remote address.
     ///
     /// # Errors
@@ -673,6 +769,10 @@ impl PollUdpSocket {
         self.socket.connect(address).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Returns the local address of this socket.
     ///
     /// # Errors
@@ -683,6 +783,10 @@ impl PollUdpSocket {
         self.socket.local_addr()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Returns the remote address of this socket.
     ///
     /// # Errors
@@ -693,6 +797,10 @@ impl PollUdpSocket {
         self.socket.peer_addr()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket", future = true)
+    )]
     /// Receives a single datagram message.
     ///
     /// This is the poll-based version of [`UdpSocket::recv`].
@@ -701,6 +809,10 @@ impl PollUdpSocket {
         self.socket.recv(buf).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket", future = true)
+    )]
     /// Receives a single datagram message, returning the sender's address.
     ///
     /// This is the poll-based version of [`UdpSocket::recv_from`].
@@ -712,6 +824,10 @@ impl PollUdpSocket {
         self.socket.recv_from(buf).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket", future = true)
+    )]
     /// Sends data on a connected socket.
     ///
     /// This is the poll-based version of [`UdpSocket::send`].
@@ -720,6 +836,10 @@ impl PollUdpSocket {
         self.socket.send(buf).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket", future = true)
+    )]
     /// Sends data to the specified address.
     ///
     /// This is the poll-based version of [`UdpSocket::send_to`].
@@ -732,6 +852,10 @@ impl PollUdpSocket {
         self.socket.send_to(buf, address).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket", future = true)
+    )]
     /// Receives data without removing it from the socket's receive queue.
     ///
     /// This is the poll-based version of [`UdpSocket::peek`].
@@ -740,6 +864,10 @@ impl PollUdpSocket {
         self.socket.peek(buf).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket", future = true)
+    )]
     /// Receives data without removing it from the socket's receive queue,
     /// returning the sender's address.
     ///
@@ -752,6 +880,10 @@ impl PollUdpSocket {
         self.socket.peek_from(buf).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Returns a new `PollUdpSocket` that shares the same underlying file descriptor.
     ///
     /// # Errors
@@ -766,6 +898,10 @@ impl PollUdpSocket {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Sets the broadcast flag.
     ///
     /// When set, the socket can send broadcast packets.
@@ -778,6 +914,10 @@ impl PollUdpSocket {
         self.socket.set_broadcast(broadcast)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Returns the current value of the broadcast flag.
     ///
     /// # Errors
@@ -788,6 +928,10 @@ impl PollUdpSocket {
         self.socket.broadcast()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Sets the time-to-live (TTL) value.
     ///
     /// This controls how many hops a packet can traverse before being discarded.
@@ -800,6 +944,10 @@ impl PollUdpSocket {
         self.socket.set_ttl(ttl)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Returns the current TTL value.
     ///
     /// # Errors
@@ -810,6 +958,10 @@ impl PollUdpSocket {
         self.socket.ttl()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Sets the multicast loop flag for IPv4.
     ///
     /// When set, multicast packets are looped back to the local socket.
@@ -822,6 +974,10 @@ impl PollUdpSocket {
         self.socket.set_multicast_loop_v4(multicast_loop_v4)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Returns the current IPv4 multicast loop flag.
     ///
     /// # Errors
@@ -832,6 +988,10 @@ impl PollUdpSocket {
         self.socket.multicast_loop_v4()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Sets the multicast TTL for IPv4.
     ///
     /// This controls how many hops multicast packets can traverse.
@@ -844,6 +1004,10 @@ impl PollUdpSocket {
         self.socket.set_multicast_ttl_v4(multicast_ttl_v4)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Returns the current IPv4 multicast TTL.
     ///
     /// # Errors
@@ -854,6 +1018,10 @@ impl PollUdpSocket {
         self.socket.multicast_ttl_v4()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Sets the multicast loop flag for IPv6.
     ///
     /// When set, multicast packets are looped back to the local socket.
@@ -866,6 +1034,10 @@ impl PollUdpSocket {
         self.socket.set_multicast_loop_v6(multicast_loop_v6)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Returns the current IPv6 multicast loop flag.
     ///
     /// # Errors
@@ -876,6 +1048,10 @@ impl PollUdpSocket {
         self.socket.multicast_loop_v6()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Joins a multicast group for IPv4.
     ///
     /// # Errors
@@ -890,6 +1066,10 @@ impl PollUdpSocket {
         self.socket.join_multicast_v4(multiaddr, interface)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Joins a multicast group for IPv6.
     ///
     /// # Errors
@@ -900,6 +1080,10 @@ impl PollUdpSocket {
         self.socket.join_multicast_v6(multiaddr, interface)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Leaves a multicast group for IPv4.
     ///
     /// # Errors
@@ -914,6 +1098,10 @@ impl PollUdpSocket {
         self.socket.leave_multicast_v4(multiaddr, interface)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Leaves a multicast group for IPv6.
     ///
     /// # Errors
@@ -928,6 +1116,10 @@ impl PollUdpSocket {
         self.socket.leave_multicast_v6(multiaddr, interface)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Takes the pending error from the socket.
     ///
     /// # Errors
@@ -938,6 +1130,10 @@ impl PollUdpSocket {
         self.socket.take_error()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Sets the read timeout for the socket.
     ///
     /// # Errors
@@ -948,6 +1144,10 @@ impl PollUdpSocket {
         self.socket.set_read_timeout(dur)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Sets the write timeout for the socket.
     ///
     /// # Errors
@@ -958,6 +1158,10 @@ impl PollUdpSocket {
         self.socket.set_write_timeout(dur)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Returns the read timeout for the socket.
     ///
     /// # Errors
@@ -968,6 +1172,10 @@ impl PollUdpSocket {
         self.socket.read_timeout()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Returns the write timeout for the socket.
     ///
     /// # Errors
@@ -978,6 +1186,10 @@ impl PollUdpSocket {
         self.socket.write_timeout()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Polls to receive a single datagram message from the socket.
     ///
     /// This is the poll-based counterpart to [`UdpSocket::recv`].
@@ -996,6 +1208,10 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Polls to receive a single datagram message, returning the sender's address.
     ///
     /// This is the poll-based counterpart to [`UdpSocket::recv_from`].
@@ -1014,6 +1230,10 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Polls to send data on a connected socket.
     ///
     /// This is the poll-based counterpart to [`UdpSocket::send`].
@@ -1032,6 +1252,10 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Polls to send data to the specified address.
     ///
     /// This is the poll-based counterpart to [`UdpSocket::send_to`].
@@ -1052,6 +1276,10 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Polls to peek at data from the socket without removing it.
     ///
     /// This is the poll-based counterpart to [`UdpSocket::peek`].
@@ -1070,6 +1298,10 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Polls to peek at data from the socket without removing it,
     /// returning the sender's address.
     ///
@@ -1090,6 +1322,10 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
     #[inline]
     pub fn try_io_readable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
@@ -1099,6 +1335,10 @@ impl PollUdpSocket {
         crate::vibeio::net::try_io_ready(&self.read_ready, "read not ready", io)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
     #[inline]
     pub fn try_io_writable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
@@ -1110,6 +1350,10 @@ impl PollUdpSocket {
 }
 
 impl AsyncReadPoll for PollUdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollUdpSocket as AsyncReadPoll>")
+    )]
     #[inline]
     fn poll_readable(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         if *self.read_ready.borrow() {
@@ -1125,6 +1369,10 @@ impl AsyncReadPoll for PollUdpSocket {
 }
 
 impl AsyncWritePoll for PollUdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollUdpSocket as AsyncWritePoll>")
+    )]
     #[inline]
     fn poll_writable(&self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         if *self.write_ready.borrow() {
@@ -1140,6 +1388,10 @@ impl AsyncWritePoll for PollUdpSocket {
 }
 
 impl<'a> AsInnerRawHandle<'a> for PollUdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollUdpSocket as AsInnerRawHandle < 'a >>")
+    )]
     #[inline]
     fn as_inner_raw_handle(&'a self) -> &'a InnerRawHandle {
         self.socket.as_inner_raw_handle()
@@ -1148,6 +1400,10 @@ impl<'a> AsInnerRawHandle<'a> for PollUdpSocket {
 
 #[cfg(unix)]
 impl AsRawFd for PollUdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollUdpSocket as AsRawFd>")
+    )]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.socket.inner.as_raw_fd()
@@ -1156,6 +1412,10 @@ impl AsRawFd for PollUdpSocket {
 
 #[cfg(unix)]
 impl IntoRawFd for PollUdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollUdpSocket as IntoRawFd>")
+    )]
     #[inline]
     fn into_raw_fd(self) -> RawFd {
         self.socket.into_std().into_raw_fd()
@@ -1164,6 +1424,10 @@ impl IntoRawFd for PollUdpSocket {
 
 #[cfg(windows)]
 impl AsRawSocket for PollUdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollUdpSocket as AsRawSocket>")
+    )]
     #[inline]
     fn as_raw_socket(&self) -> RawSocket {
         self.socket.inner.as_raw_socket()
@@ -1172,6 +1436,10 @@ impl AsRawSocket for PollUdpSocket {
 
 #[cfg(windows)]
 impl IntoRawSocket for PollUdpSocket {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollUdpSocket as IntoRawSocket>")
+    )]
     #[inline]
     fn into_raw_socket(self) -> RawSocket {
         self.socket.into_std().into_raw_socket()

@@ -6,12 +6,20 @@ pub struct DefaultBlockingThreadPool {
 }
 
 impl DefaultBlockingThreadPool {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DefaultBlockingThreadPool")
+    )]
     /// Creates a new `DefaultBlockingThreadPool` with the default maximum number of threads.
     #[inline]
     pub fn new() -> Self {
         Self::with_max_threads(512)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DefaultBlockingThreadPool")
+    )]
     /// Creates a new `DefaultBlockingThreadPool` with the specified maximum number of threads.
     ///
     /// # Panics
@@ -36,6 +44,10 @@ impl DefaultBlockingThreadPool {
 }
 
 impl BlockingThreadPool for DefaultBlockingThreadPool {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<DefaultBlockingThreadPool as BlockingThreadPool>")
+    )]
     #[inline]
     fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
         self.inner.execute(move || {
@@ -45,6 +57,10 @@ impl BlockingThreadPool for DefaultBlockingThreadPool {
 }
 
 impl Default for DefaultBlockingThreadPool {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<DefaultBlockingThreadPool as Default>")
+    )]
     fn default() -> Self {
         Self::new()
     }

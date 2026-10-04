@@ -419,6 +419,10 @@ struct AfdPollInfo {
 }
 
 impl AfdPollInfo {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AfdPollInfo")
+    )]
     #[inline]
     fn new(socket: SOCKET, events: u32) -> Self {
         Self {
@@ -439,6 +443,10 @@ pub struct IocpInterruptor {
 }
 
 impl Interruptor for IocpInterruptor {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpInterruptor as Interruptor>")
+    )]
     #[inline]
     fn interrupt(&self) {
         if let Some(port) = self.port.upgrade() {
@@ -505,6 +513,10 @@ struct DriverState {
 }
 
 impl DriverState {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverState")
+    )]
     fn retain_cancelled(
         &mut self,
         token: usize,
@@ -542,6 +554,10 @@ pub struct IocpDriver {
 }
 
 impl Drop for IocpDriver {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Drop>")
+    )]
     fn drop(&mut self) {
         if self.quiesce(Duration::from_secs(1)).is_err() {
             // CancelIoEx/NtCancelIoFileEx are requests, not acknowledgements.
@@ -558,6 +574,10 @@ impl Drop for IocpDriver {
 }
 
 impl IocpDriver {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     fn quiesce(&mut self, timeout: Duration) -> io::Result<()> {
         let mut wakers = Vec::new();
         let state = self.state.get_mut();
@@ -608,6 +628,10 @@ impl IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     pub(crate) fn new() -> Result<Self, io::Error> {
         // SAFETY: INVALID_HANDLE_VALUE plus a null existing port requests a new
@@ -633,6 +657,10 @@ impl IocpDriver {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) -> Option<Waker> {
         if !waiter_slot
@@ -645,16 +673,28 @@ impl IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn iocp_handle(&self) -> HANDLE {
         self.port.as_raw_handle() as HANDLE
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn status_is_success(status: NTSTATUS) -> bool {
         status >= 0
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn ntstatus_to_io_error(status: NTSTATUS) -> io::Error {
         // SAFETY: this conversion takes only an integer status, with no pointer
@@ -667,6 +707,10 @@ impl IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn raw_os_handle_to_windows_handle(handle: RawOsHandle) -> HANDLE {
         match handle {
@@ -675,6 +719,10 @@ impl IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn raw_os_handle_to_socket(handle: RawOsHandle) -> Result<SOCKET, io::Error> {
         match handle {
@@ -686,11 +734,19 @@ impl IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn duration_to_timeout_ms(timeout: Option<Duration>) -> u32 {
         super::iocp_timeout_ms(timeout)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn completion_result_from_entry(entry: &OVERLAPPED_ENTRY) -> i32 {
         if entry.Internal == 0 {
@@ -709,6 +765,10 @@ impl IocpDriver {
         super::encode_completion_error(win32_error).unwrap_or(-(ERROR_ARITHMETIC_OVERFLOW as i32))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn interest_to_afd_events(interest: Interest) -> u32 {
         let mut events = AFD_POLL_DISCONNECT | AFD_POLL_ABORT | AFD_POLL_LOCAL_CLOSE;
@@ -727,6 +787,10 @@ impl IocpDriver {
         events
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn get_base_socket(socket: SOCKET, ioctl: u32) -> Result<SOCKET, io::Error> {
         let mut base_socket: SOCKET = INVALID_SOCKET;
@@ -763,6 +827,10 @@ impl IocpDriver {
         Ok(base_socket)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn resolve_base_socket(socket: SOCKET) -> Result<SOCKET, io::Error> {
         super::resolve_base_socket_with(
@@ -772,6 +840,10 @@ impl IocpDriver {
         )
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn open_afd_handle() -> Result<OwnedHandle, io::Error> {
         let device_name = format!("\\Device\\Afd\\vibeio-{}", std::process::id());
@@ -829,6 +901,10 @@ impl IocpDriver {
         Ok(unsafe { OwnedHandle::from_raw_handle(afd_handle as RawHandle) })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn ensure_afd_handle(&self) -> Result<HANDLE, io::Error> {
         {
@@ -871,6 +947,10 @@ impl IocpDriver {
             .as_raw_handle() as HANDLE)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn arm_poll_operation(
         &self,
@@ -978,6 +1058,10 @@ impl IocpDriver {
         Err(Self::ntstatus_to_io_error(status))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn cancel_poll_operation(&self, poll_token: usize) {
         let afd_handle = {
@@ -1004,6 +1088,10 @@ impl IocpDriver {
         let _ = unsafe { NtCancelIoFileEx(afd_handle, io_status_ptr, &mut cancel_status) };
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn disassociate_iocp_handle(&self, handle: &InnerRawHandle) -> io::Result<()> {
         let windows_handle = Self::raw_os_handle_to_windows_handle(handle.handle);
@@ -1033,6 +1121,10 @@ impl IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn process_entries(&self, entries: &[OVERLAPPED_ENTRY]) {
         let mut wakers = Vec::new();
@@ -1101,6 +1193,10 @@ impl IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn process_batch(&self, timeout_ms: u32) -> Result<usize, io::Error> {
         // GetQueuedCompletionStatusEx initializes exactly the entries it
@@ -1158,6 +1254,10 @@ impl IocpDriver {
         Ok(entries_removed)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IocpDriver")
+    )]
     #[inline]
     fn process_ready_completions(&self) -> Result<(), io::Error> {
         for _ in 0..IOCP_DRAIN_BATCHES {
@@ -1172,6 +1272,10 @@ impl IocpDriver {
 impl Driver for IocpDriver {
     type Interruptor = IocpInterruptor;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn flush(&self) {
         match self.process_ready_completions() {
@@ -1181,6 +1285,10 @@ impl Driver for IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn wait(&self, timeout: Option<Duration>) {
         let timeout_ms = Self::duration_to_timeout_ms(timeout);
@@ -1196,6 +1304,10 @@ impl Driver for IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn register_handle(
         &self,
@@ -1205,6 +1317,10 @@ impl Driver for IocpDriver {
         self.register_handle_with_mode(handle, interest, RegistrationMode::Completion)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn register_handle_with_mode(
         &self,
@@ -1264,6 +1380,10 @@ impl Driver for IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn reregister_handle(
         &self,
@@ -1287,6 +1407,10 @@ impl Driver for IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn deregister_handle(&self, handle: &InnerRawHandle) -> Result<(), io::Error> {
         let is_completion = matches!(
@@ -1324,11 +1448,19 @@ impl Driver for IocpDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn supports_completion(&self) -> bool {
         true
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn submit_completion<O>(&self, op: &mut O, waker: Waker) -> CompletionIoResult
     where
@@ -1369,6 +1501,10 @@ impl Driver for IocpDriver {
         CompletionIoResult::Retry(completion_token)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn submit_poll(
         &self,
@@ -1420,6 +1556,10 @@ impl Driver for IocpDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn get_completion_result(&self, token: usize) -> Option<i32> {
         let mut state = self.state.borrow_mut();
@@ -1433,6 +1573,10 @@ impl Driver for IocpDriver {
         completed
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn set_completion_waker(&self, token: usize, waker: Waker) {
         let mut state = self.state.borrow_mut();
@@ -1445,6 +1589,10 @@ impl Driver for IocpDriver {
         drop(old_waker);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn get_interruptor(&self) -> Self::Interruptor {
         IocpInterruptor {
@@ -1452,12 +1600,20 @@ impl Driver for IocpDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn ignore_completion(&self, token: usize, data: Box<dyn std::any::Any>) {
         let (retired, _) = self.state.borrow_mut().retain_cancelled(token, data);
         drop(retired);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<IocpDriver as Driver>")
+    )]
     #[inline]
     fn cancel_completion(&self, token: usize, handle: RawOsHandle, data: Box<dyn std::any::Any>) {
         let (retired, overlapped) = self.state.borrow_mut().retain_cancelled(token, data);

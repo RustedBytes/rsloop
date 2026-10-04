@@ -6,6 +6,7 @@ use super::PyLoop;
 use super::spawn_env::{LoopSpawnEnv, transport_protocol_pair};
 use crate::transport::stream::{spawn_read_pipe_transport, spawn_write_pipe_transport};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn connect_read_pipe<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -25,6 +26,7 @@ pub(super) fn connect_read_pipe<'py>(
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn connect_write_pipe<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,

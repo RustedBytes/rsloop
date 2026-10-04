@@ -22,6 +22,7 @@ use crate::vibeio::op::io_util::iovec_to_system;
 use crate::vibeio::op::io_util::{iovec_count, poll_result_or_wait};
 use crate::vibeio::{driver::CompletionIoResult, io::IoVectoredBufMut};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn socket_read_vectored<B: IoVectoredBufMut>(socket: SOCKET, bufs: &mut B) -> io::Result<usize> {
@@ -79,6 +80,7 @@ pub struct ReadvOp<'a, B: IoVectoredBufMut> {
 }
 
 impl<'a, B: IoVectoredBufMut> ReadvOp<'a, B> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadvOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, bufs: B) -> Self {
         Self {
@@ -92,6 +94,7 @@ impl<'a, B: IoVectoredBufMut> ReadvOp<'a, B> {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadvOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -105,6 +108,10 @@ impl<'a, B: IoVectoredBufMut> ReadvOp<'a, B> {
 impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
     type Output = usize;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadvOp as Op>")
+    )]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -145,6 +152,10 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
         poll_result_or_wait(result, self.handle, cx, driver, Interest::READABLE)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadvOp as Op>")
+    )]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -222,6 +233,10 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
         Poll::Ready(Ok(result as usize))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadvOp as Op>")
+    )]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -325,6 +340,10 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadvOp as Op>")
+    )]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -359,6 +378,10 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
 }
 
 impl<B: IoVectoredBufMut> Drop for ReadvOp<'_, B> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadvOp as Drop>")
+    )]
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {

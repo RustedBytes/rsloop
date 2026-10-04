@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 
 use crate::fd_ops;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn file_from_fd(fd: fd_ops::RawFd) -> PyResult<File> {
     #[cfg(windows)]
     {
@@ -25,6 +26,7 @@ pub(super) fn file_from_fd(fd: fd_ops::RawFd) -> PyResult<File> {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn new_pipe() -> PyResult<(File, File)> {
     #[cfg(windows)]
     {
@@ -42,6 +44,7 @@ pub(super) fn new_pipe() -> PyResult<(File, File)> {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn file_from_owned_handle(handle: windows_sys::Win32::Foundation::HANDLE) -> File {
     use std::os::windows::io::FromRawHandle;
@@ -51,6 +54,7 @@ fn file_from_owned_handle(handle: windows_sys::Win32::Foundation::HANDLE) -> Fil
     unsafe { File::from_raw_handle(handle.cast()) }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 fn file_from_owned_fd(fd: i32) -> File {
     use std::os::fd::FromRawFd;
@@ -60,6 +64,7 @@ fn file_from_owned_fd(fd: i32) -> File {
     unsafe { File::from_raw_fd(fd) }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn create_pipe_handles() -> PyResult<(
     windows_sys::Win32::Foundation::HANDLE,
@@ -81,6 +86,7 @@ fn create_pipe_handles() -> PyResult<(
     Ok((read_end, write_end))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 fn create_pipe_fds() -> PyResult<[i32; 2]> {
     let mut fds = [0_i32; 2];

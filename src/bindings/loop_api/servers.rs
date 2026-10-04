@@ -37,6 +37,7 @@ pub(super) struct CreateUnixServerParams {
     pub(super) cleanup_socket: bool,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn create_server<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -93,6 +94,7 @@ pub(super) fn create_server<'py>(
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn create_unix_server<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,

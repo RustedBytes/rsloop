@@ -33,6 +33,10 @@ pub struct TransportSpawnContext {
 }
 
 impl TransportSpawnContext {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TransportSpawnContext")
+    )]
     pub fn new(
         py: Python<'_>,
         loop_core: Arc<LoopCore>,
@@ -65,6 +69,10 @@ pub struct ServerCreateParams {
 }
 
 impl ServerCreateParams {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCreateParams")
+    )]
     pub fn new(
         spawn_context: TransportSpawnContext,
         sockets: Vec<Py<PyAny>>,
@@ -91,12 +99,20 @@ impl ServerCreateParams {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCreateParams")
+    )]
     #[cfg(unix)]
     pub fn with_cleanup_path(mut self, cleanup_path: Option<PathBuf>) -> Self {
         self.cleanup_path = cleanup_path;
         self
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCreateParams")
+    )]
     pub fn with_tls(mut self, tls: Option<Arc<ServerTlsSettings>>) -> Self {
         self.tls = tls;
         self

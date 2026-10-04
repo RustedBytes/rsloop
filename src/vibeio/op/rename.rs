@@ -15,6 +15,7 @@ pub struct RenameOp {
 }
 
 impl RenameOp {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "RenameOp"))]
     #[inline]
     pub fn new(driver: Rc<AnyDriver>, old_path: CString, new_path: CString) -> Self {
         Self {
@@ -29,6 +30,10 @@ impl RenameOp {
 impl Op for RenameOp {
     type Output = ();
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<RenameOp as Op>")
+    )]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -70,6 +75,10 @@ impl Op for RenameOp {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<RenameOp as Op>")
+    )]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -97,6 +106,10 @@ impl Op for RenameOp {
 }
 
 impl Drop for RenameOp {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<RenameOp as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
             // Paths and result storage remain owned until the kernel acknowledges

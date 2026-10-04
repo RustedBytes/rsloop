@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 use super::PyLoop;
 use super::socket_connect::connect_socket_to_address;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn sock_recv<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -23,6 +24,7 @@ pub(super) fn sock_recv<'py>(
     )
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn sock_recv_into<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -37,6 +39,7 @@ pub(super) fn sock_recv_into<'py>(
     )
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn sock_sendall<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -64,6 +67,7 @@ pub(super) fn sock_sendall<'py>(
     )
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn sock_accept<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -72,6 +76,7 @@ pub(super) fn sock_accept<'py>(
     super::socket_operation::start(slf, py, sock, super::socket_operation::SocketAction::Accept)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn sock_connect<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -85,6 +90,7 @@ pub(super) fn sock_connect<'py>(
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Connects an INET/INET6 stream socket, returning a loop-native Future
 /// (not a coroutine — awaited directly, never `create_task`ed). On Unix the
 /// writability wait runs on the vibeio reactor and its completion is

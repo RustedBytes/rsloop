@@ -32,10 +32,18 @@ pub(super) enum SocketAction {
 }
 
 impl SocketAction {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "SocketAction")
+    )]
     fn writable(&self) -> bool {
         matches!(self, Self::SendAll { .. })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "SocketAction")
+    )]
     fn attempt(&mut self, py: Python<'_>, socket: &Py<PyAny>) -> PyResult<Option<Py<PyAny>>> {
         let result = match self {
             Self::Recv(count) => socket.call_method1(py, "recv", (*count,)),
@@ -104,6 +112,7 @@ impl SocketAction {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn retry_or_error(py: Python<'_>, error: PyErr) -> PyResult<Option<Py<PyAny>>> {
     if fd_ops::is_retryable_socket_error(py, &error)? {
         Ok(None)
@@ -124,6 +133,10 @@ struct CancelWait(Arc<WakeState>);
 
 #[pymethods]
 impl CancelWait {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "CancelWait")
+    )]
     fn __call__(&self, _future: &Bound<'_, PyAny>) {
         self.0.done.store(true, Ordering::Release);
         self.0.waker.wake();
@@ -142,11 +155,16 @@ struct SocketOperation {
 
 #[pymethods]
 impl SocketOperation {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "SocketOperation")
+    )]
     fn __call__(slf: Py<Self>, py: Python<'_>) -> PyResult<()> {
         poll_operation(py, slf)
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn start<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -209,6 +227,7 @@ pub(super) fn start<'py>(
     Ok(future.into_bound(py))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn poll_operation(py: Python<'_>, operation: Py<SocketOperation>) -> PyResult<()> {
     let mut op = operation.borrow_mut(py);
     if op.future.call_method0(py, "done")?.extract::<bool>(py)? {
@@ -242,6 +261,7 @@ fn poll_operation(py: Python<'_>, operation: Py<SocketOperation>) -> PyResult<()
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn duplicate_socket(py: Python<'_>, socket: &Py<PyAny>) -> PyResult<socket2::Socket> {
     let fd = fd_ops::fileobj_to_fd(py, socket.bind(py))?;
     #[cfg(unix)]
@@ -262,6 +282,7 @@ fn duplicate_socket(py: Python<'_>, socket: &Py<PyAny>) -> PyResult<socket2::Soc
     Ok(borrowed.try_clone()?)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn arm_wait(py: Python<'_>, operation: Py<SocketOperation>) -> PyResult<()> {
     let op = operation.borrow(py);
     let duplicate = match duplicate_socket(py, &op.socket) {
@@ -296,6 +317,7 @@ fn arm_wait(py: Python<'_>, operation: Py<SocketOperation>) -> PyResult<()> {
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 async fn wait_socket(
     core: Arc<LoopCore>,
     socket: socket2::Socket,

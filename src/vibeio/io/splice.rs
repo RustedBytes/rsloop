@@ -18,6 +18,7 @@ use mio::Interest;
 
 use crate::vibeio::{fd_inner::InnerRawHandle, io::AsInnerRawHandle, op::SpliceOp};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Transfer data from one file descriptor to another using `splice`.
 ///
 /// This function uses the kernel's `splice` system call to transfer data
@@ -49,6 +50,7 @@ pub async fn splice<'a, 'b>(
     result
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Transfer exactly `len` bytes from one file descriptor to another using `splice`.
 ///
 /// This function calls `splice()` repeatedly until `len` bytes have been transferred
@@ -71,6 +73,7 @@ pub async fn splice_exact<'a, 'b>(
     Ok(total)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Transfer data from a file to a socket using `sendfile` semantics.
 ///
 /// This function implements `sendfile`-like behavior using `splice` with an
@@ -99,6 +102,7 @@ pub async fn sendfile_exact<'a, 'b>(
     .await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 async fn retry_splice<F>(mut transfer: impl FnMut() -> F) -> std::io::Result<usize>
 where
     F: std::future::Future<Output = std::io::Result<usize>>,
@@ -111,6 +115,7 @@ where
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 async fn transfer_batches<F, D, Fill, Drain>(
     len: u64,
     mut fill: Fill,
@@ -153,6 +158,10 @@ struct WriteOwnedFd {
 }
 
 impl WriteOwnedFd {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WriteOwnedFd")
+    )]
     fn new(writer: OwnedFd) -> std::io::Result<Self> {
         let handle = InnerRawHandle::new(writer.as_raw_fd(), Interest::WRITABLE)?;
         crate::vibeio::fd_inner::set_nonblocking(writer.as_raw_fd(), !handle.uses_completion())?;
@@ -164,6 +173,10 @@ impl WriteOwnedFd {
 }
 
 impl<'a> AsInnerRawHandle<'a> for WriteOwnedFd {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<WriteOwnedFd as AsInnerRawHandle < 'a >>")
+    )]
     #[inline]
     fn as_inner_raw_handle(&'a self) -> &'a InnerRawHandle {
         &self.handle

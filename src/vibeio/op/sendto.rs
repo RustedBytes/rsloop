@@ -23,6 +23,7 @@ use crate::vibeio::io::IoBuf;
 use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
 use crate::vibeio::op::{Op, socket_addr_to_raw};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn socket_sendto<B: IoBuf>(socket: SOCKET, buf: &B, addr: SocketAddr) -> io::Result<usize> {
@@ -94,6 +95,7 @@ pub struct SendtoOp<'a, B: IoBuf> {
 }
 
 impl<'a, B: IoBuf> SendtoOp<'a, B> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "SendtoOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B, addr: SocketAddr) -> Self {
         Self {
@@ -108,6 +110,7 @@ impl<'a, B: IoBuf> SendtoOp<'a, B> {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "SendtoOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -121,6 +124,10 @@ impl<'a, B: IoBuf> SendtoOp<'a, B> {
 impl<B: IoBuf> Op for SendtoOp<'_, B> {
     type Output = usize;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SendtoOp as Op>")
+    )]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -164,6 +171,10 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
         poll_result_or_wait(result, self.handle, cx, driver, Interest::WRITABLE)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SendtoOp as Op>")
+    )]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -199,6 +210,10 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
         Poll::Ready(Ok(written))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SendtoOp as Op>")
+    )]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -265,6 +280,10 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SendtoOp as Op>")
+    )]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -317,6 +336,10 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
 }
 
 impl<B: IoBuf> Drop for SendtoOp<'_, B> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SendtoOp as Drop>")
+    )]
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {

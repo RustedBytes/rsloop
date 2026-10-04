@@ -21,6 +21,7 @@ pub struct StatxOp {
 }
 
 impl StatxOp {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "StatxOp"))]
     #[inline]
     pub fn new(
         driver: Rc<AnyDriver>,
@@ -44,6 +45,10 @@ impl StatxOp {
 impl Op for StatxOp {
     type Output = libc::statx;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<StatxOp as Op>")
+    )]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -90,6 +95,10 @@ impl Op for StatxOp {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<StatxOp as Op>")
+    )]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -123,6 +132,10 @@ impl Op for StatxOp {
 }
 
 impl Drop for StatxOp {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<StatxOp as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
             // Paths and result storage remain owned until the kernel acknowledges

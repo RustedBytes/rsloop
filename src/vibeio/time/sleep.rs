@@ -43,6 +43,7 @@ pub struct Sleep {
 }
 
 impl Sleep {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     /// Create a new Sleep instance for the provided `duration`.
     /// Deadlines beyond the platform's Instant range saturate at its upper limit.
     #[inline]
@@ -50,6 +51,7 @@ impl Sleep {
         Self::sleep_until(super::deadline_after(Instant::now(), duration))
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     /// Create a Sleep with custom behavior for zero-length waits.
     #[inline]
     pub fn new_with_zero_behavior(duration: Duration, zero_behavior: ZeroBehavior) -> Self {
@@ -59,6 +61,7 @@ impl Sleep {
         )
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     /// Create a Sleep that completes at the specified absolute `deadline`.
     ///
     /// Preserves the absolute deadline without converting through a duration.
@@ -67,6 +70,7 @@ impl Sleep {
         Self::sleep_until_with_zero_behavior(deadline, ZeroBehavior::Immediate)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     #[inline]
     pub(crate) fn sleep_until_with_zero_behavior(
         deadline: Instant,
@@ -82,6 +86,7 @@ impl Sleep {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     /// Reset the sleep to a new absolute `deadline` (`Instant`).
     ///
     /// If a timer was previously scheduled, cancel it. The timer will be
@@ -108,6 +113,10 @@ impl Sleep {
 impl Future for Sleep {
     type Output = ();
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Sleep as Future>")
+    )]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
@@ -202,6 +211,10 @@ impl Future for Sleep {
 }
 
 impl Drop for Sleep {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Sleep as Drop>")
+    )]
     fn drop(&mut self) {
         // If we still have an outstanding timer handle, cancel it so the timer
         // won't hold onto our waker.

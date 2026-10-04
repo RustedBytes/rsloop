@@ -40,6 +40,7 @@ use crate::vibeio::driver::{AnyDriver, AnyInterruptor};
 use crate::vibeio::process::{ZombieReaperMessage, start_zombie_reaper};
 use crate::vibeio::task::{RemoteWakeContext, Task, TaskWake};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(crate) fn enqueue_local_wake(wake: &Arc<TaskWake>, remote: &Arc<RemoteWakeContext>) -> bool {
     CURRENT_RUNTIME.with(|current| {
         let Ok(current) = current.try_borrow() else {
@@ -107,6 +108,10 @@ where
 {
     type Output = ();
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SpawnFuture as Future>")
+    )]
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -155,12 +160,20 @@ pub struct JoinHandle<T> {
 }
 
 impl<T> JoinHandle<T> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "JoinHandle")
+    )]
     /// Creates a new `JoinHandle` with the given state.
     #[inline]
     fn new(state: Rc<RefCell<JoinState<T>>>) -> Self {
         Self { state }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "JoinHandle")
+    )]
     /// Cancels the task associated with this handle.
     ///
     /// The task will be interrupted and not resumed.
@@ -189,6 +202,10 @@ impl<T> JoinHandle<T> {
 impl<T> Future for JoinHandle<T> {
     type Output = T;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<JoinHandle as Future>")
+    )]
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         {
@@ -229,6 +246,10 @@ struct BlockOnNotify {
 }
 
 impl BlockOnNotify {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "BlockOnNotify")
+    )]
     #[inline]
     fn new(
         interruptor: AnyInterruptor,
@@ -244,22 +265,38 @@ impl BlockOnNotify {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "BlockOnNotify")
+    )]
     #[inline]
     fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "BlockOnNotify")
+    )]
     #[inline]
     fn take_ready(&self) -> bool {
         self.ready.swap(false, Ordering::AcqRel)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "BlockOnNotify")
+    )]
     #[cfg(any(target_vendor = "apple", windows))]
     #[inline]
     fn force_ready(&self) {
         self.ready.store(true, Ordering::Release);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "BlockOnNotify")
+    )]
     #[inline]
     fn notify(&self) {
         self.ready.store(true, Ordering::Release);
@@ -272,6 +309,10 @@ impl BlockOnNotify {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "BlockOnNotify")
+    )]
     #[inline]
     fn waker(self: &Arc<Self>) -> Waker {
         Waker::from(Arc::clone(self))
@@ -279,11 +320,19 @@ impl BlockOnNotify {
 }
 
 impl Wake for BlockOnNotify {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<BlockOnNotify as Wake>")
+    )]
     #[inline]
     fn wake(self: Arc<Self>) {
         self.notify();
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<BlockOnNotify as Wake>")
+    )]
     #[inline]
     fn wake_by_ref(self: &Arc<Self>) {
         self.notify();
@@ -293,6 +342,10 @@ impl Wake for BlockOnNotify {
 struct CurrentRuntimeGuard;
 
 impl CurrentRuntimeGuard {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "CurrentRuntimeGuard")
+    )]
     /// Enter a runtime, making it available for spawning tasks.
     ///
     /// Panics if called while already inside a runtime.
@@ -312,6 +365,10 @@ impl CurrentRuntimeGuard {
 }
 
 impl Drop for CurrentRuntimeGuard {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<CurrentRuntimeGuard as Drop>")
+    )]
     /// Exit the runtime, clearing the current runtime reference.
     #[inline]
     fn drop(&mut self) {
@@ -322,6 +379,7 @@ impl Drop for CurrentRuntimeGuard {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Get the I/O driver for the current runtime.
 ///
 /// Returns `None` if called outside a runtime context.
@@ -334,6 +392,7 @@ pub(crate) fn current_driver() -> Option<Rc<AnyDriver>> {
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Get the timer for the current runtime.
 ///
 /// Returns `None` if called outside a runtime context or if timers are not enabled.
@@ -346,6 +405,7 @@ pub(crate) fn current_timer() -> Option<Rc<Timer>> {
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Get the zombie reaper channel for the current runtime.
 ///
 /// Returns `None` if called outside a runtime context or if process support is not enabled.
@@ -362,6 +422,7 @@ pub(crate) async fn current_zombie_reaper() -> Option<async_channel::Sender<Zomb
     Some(reaper.get_or_insert_with(start_zombie_reaper).clone())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Spawn a task on the current runtime.
 ///
 /// This function spawns the given future on the runtime and returns a `JoinHandle`
@@ -388,6 +449,7 @@ where
     runtime.spawn(future)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Spawn a blocking task on the thread pool.
 ///
 /// This function spawns the given closure on a blocking thread pool and returns
@@ -412,6 +474,7 @@ where
     runtime.spawn_blocking(f).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Check if file I/O should use this runtime's configured blocking pool.
 ///
 /// Returns `true` if runtime-specific fs offload is enabled and we're inside a runtime.
@@ -460,6 +523,10 @@ pub struct Runtime {
 }
 
 impl RuntimeInner {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeInner")
+    )]
     /// Spawn a task on this runtime.
     #[inline]
     pub(crate) fn spawn<T>(&self, future: impl Future<Output = T> + 'static) -> JoinHandle<T>
@@ -496,6 +563,10 @@ impl RuntimeInner {
         JoinHandle::new(state)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeInner", future = true)
+    )]
     /// Spawn a blocking task on this runtime's thread pool.
     #[inline]
     pub(crate) async fn spawn_blocking<T, F>(&self, f: F) -> Result<T, SpawnBlockingError>
@@ -507,12 +578,20 @@ impl RuntimeInner {
         crate::vibeio::blocking::spawn_blocking(pool.as_ref(), f).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeInner")
+    )]
     /// Enqueue a task for polling.
     #[inline]
     fn enqueue(&self, task: Rc<Task>) {
         self.queue.borrow_mut().push_back(task);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeInner")
+    )]
     /// Drain ready tasks into the given batch.
     #[inline]
     fn drain_ready(&self, batch: &mut Batch<'_, Rc<Task>>, mut budget: usize) {
@@ -544,6 +623,10 @@ impl RuntimeInner {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeInner")
+    )]
     #[inline]
     fn stop_waiting(&self) {
         self.remote_wake.waiting.store(false, Ordering::Release);
@@ -552,6 +635,10 @@ impl RuntimeInner {
             .store(false, Ordering::Release);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeInner")
+    )]
     #[inline]
     fn should_skip_wait(&self) -> bool {
         if self.next_task.borrow().is_some() || !self.remote_wake.queue.is_empty() {
@@ -561,6 +648,10 @@ impl RuntimeInner {
         !self.queue.borrow().is_empty()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeInner")
+    )]
     /// Take the next task to run, if any.
     #[inline]
     fn take_next_task(&self) -> Option<Rc<Task>> {
@@ -573,6 +664,7 @@ impl RuntimeInner {
 }
 
 impl Runtime {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Runtime"))]
     /// Create a new runtime with the given driver.
     ///
     /// By default, this enables the timer and file I/O offload.
@@ -587,6 +679,7 @@ impl Runtime {
         Self::with_options(driver, true, blocking_pool, true, false)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Runtime"))]
     /// Create a new runtime with the given driver and options.
     #[inline]
     pub(crate) fn with_options(
@@ -636,6 +729,7 @@ impl Runtime {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Runtime"))]
     /// Spawn a task on this runtime.
     ///
     /// Returns a `JoinHandle` that can be awaited to get the task's output.
@@ -650,6 +744,10 @@ impl Runtime {
             .spawn(future)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "Runtime", future = true)
+    )]
     /// Spawn a blocking task on this runtime's thread pool.
     #[inline]
     pub async fn spawn_blocking<T, F>(&self, f: F) -> Result<T, SpawnBlockingError>
@@ -686,6 +784,7 @@ impl Runtime {
         }));
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Runtime"))]
     /// Run the runtime and execute the given future to completion.
     ///
     /// This method blocks the current thread and drives the runtime until
@@ -822,6 +921,10 @@ impl Runtime {
 }
 
 impl Drop for Runtime {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Runtime as Drop>")
+    )]
     fn drop(&mut self) {
         // Drop all tasks with current runtime entered
         let inner = self.inner.take().expect("runtime has been dropped");

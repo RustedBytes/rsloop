@@ -48,6 +48,10 @@ pub struct File {
 }
 
 impl File {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     /// Opens a file for reading.
     ///
     /// This is the async version of [`std::fs::File::open`].
@@ -73,6 +77,10 @@ impl File {
         OpenOptions::new().read(true).open(path).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     /// Opens a file for writing, creating it if it does not exist.
     ///
     /// This is the async version of [`std::fs::File::create`].
@@ -103,6 +111,7 @@ impl File {
             .await
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Returns a new `OpenOptions` builder.
     ///
     /// This is a convenience method equivalent to `OpenOptions::new()`.
@@ -111,6 +120,7 @@ impl File {
         OpenOptions::new()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Creates a new `File` from a standard library file.
     ///
     /// This is a convenience method equivalent to `File::from_std_with_cursor(inner, 0)`.
@@ -119,6 +129,7 @@ impl File {
         Self::from_std_with_cursor(inner, 0)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Creates a new `File` from a standard library file with a specified cursor position.
     ///
     /// This is an internal method used to create a `File` with a custom cursor position.
@@ -150,6 +161,7 @@ impl File {
         Ok(Self { inner, io, cursor })
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Converts the `File` back into a standard library `std::fs::File`.
     #[inline]
     pub fn into_std(self) -> std::fs::File {
@@ -158,6 +170,7 @@ impl File {
         inner
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Returns the completion handle if this file is using io_uring completion.
     #[inline]
     fn completion_handle(&self) -> Option<&InnerRawHandle> {
@@ -167,6 +180,10 @@ impl File {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     /// Reads bytes from the file at a specific offset.
     ///
     /// This method reads into the provided buffer starting at the given offset.
@@ -208,6 +225,10 @@ impl File {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     /// Reads bytes from the file at a specific offset, filling the entire buffer.
     ///
     /// This method fills the provided buffer's writable capacity starting at the
@@ -241,6 +262,10 @@ impl File {
         .await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     /// Writes bytes to the file at a specific offset.
     ///
     /// This method writes from the provided buffer starting at the given offset.
@@ -285,6 +310,10 @@ impl File {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     /// Writes bytes to the file at a specific offset, writing the entire buffer.
     ///
     /// This method writes from the provided buffer starting at the given offset,
@@ -317,6 +346,10 @@ impl File {
         .await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     /// Synchronizes all data and metadata to disk.
     ///
     /// This is the async version of [`std::fs::File::sync_all`].
@@ -356,6 +389,10 @@ impl File {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     /// Synchronizes file data to disk without necessarily syncing metadata.
     ///
     /// This is the async version of [`std::fs::File::sync_data`].
@@ -395,6 +432,10 @@ impl File {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     /// Returns the metadata for this file.
     ///
     /// This is the async version of [`std::fs::File::metadata`].
@@ -547,6 +588,7 @@ mod exact_at_tests {
 }
 
 impl ExactAt {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ExactAt"))]
     fn remaining(&self, buf: &impl IoBuf) -> usize {
         match self {
             Self::Read => buf.buf_capacity(),
@@ -555,6 +597,7 @@ impl ExactAt {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 async fn exact_at<B, F, Fut>(
     buf: B,
     mut offset: u64,
@@ -612,6 +655,7 @@ where
     (Ok(()), buf.into_inner())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 fn read_at_blocking(file: &std::fs::File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
@@ -619,6 +663,7 @@ fn read_at_blocking(file: &std::fs::File, buf: &mut [u8], offset: u64) -> io::Re
     file.read_at(buf, offset)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn read_at_blocking(file: &std::fs::File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
@@ -626,6 +671,7 @@ fn read_at_blocking(file: &std::fs::File, buf: &mut [u8], offset: u64) -> io::Re
     file.seek_read(buf, offset)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 fn write_at_blocking(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Result<usize> {
@@ -633,6 +679,7 @@ fn write_at_blocking(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Resul
     file.write_at(buf, offset)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn write_at_blocking(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Result<usize> {
@@ -640,26 +687,31 @@ fn write_at_blocking(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Resul
     file.seek_write(buf, offset)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn sync_all_blocking(file: &std::fs::File) -> io::Result<()> {
     file.sync_all()
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn sync_data_blocking(file: &std::fs::File) -> io::Result<()> {
     file.sync_data()
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn metadata_blocking(file: &std::fs::File) -> io::Result<Metadata> {
     Ok(Metadata::from_std(file.metadata()?))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub(crate) fn blocking_pool_io_error() -> io::Error {
     io::Error::other("can't spawn blocking task for file I/O")
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[inline]
 async fn read_at_in_blocking_pool<B: IoBufMut>(
     file: &std::fs::File,
@@ -680,6 +732,7 @@ async fn read_at_in_blocking_pool<B: IoBufMut>(
     )
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[inline]
 async fn write_at_in_blocking_pool<B: IoBuf>(
     file: &std::fs::File,
@@ -700,6 +753,7 @@ async fn write_at_in_blocking_pool<B: IoBuf>(
     )
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[inline]
 async fn sync_all_in_blocking_pool(file: &std::fs::File) -> io::Result<()> {
     let file = file.try_clone()?;
@@ -708,6 +762,7 @@ async fn sync_all_in_blocking_pool(file: &std::fs::File) -> io::Result<()> {
         .map_err(|_| blocking_pool_io_error())?
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[inline]
 async fn sync_data_in_blocking_pool(file: &std::fs::File) -> io::Result<()> {
     let file = file.try_clone()?;
@@ -716,6 +771,7 @@ async fn sync_data_in_blocking_pool(file: &std::fs::File) -> io::Result<()> {
         .map_err(|_| blocking_pool_io_error())?
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[inline]
 async fn metadata_in_blocking_pool(file: &std::fs::File) -> io::Result<Metadata> {
     let file = file.try_clone()?;
@@ -725,6 +781,10 @@ async fn metadata_in_blocking_pool(file: &std::fs::File) -> io::Result<Metadata>
 }
 
 impl AsyncRead for File {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<File as AsyncRead>", future = true)
+    )]
     #[inline]
     async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<usize, io::Error>, B) {
         let (read, buf) = self.read_at(buf, self.cursor).await;
@@ -736,6 +796,10 @@ impl AsyncRead for File {
 }
 
 impl AsyncWrite for File {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<File as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, io::Error>, B) {
         let (written, buf) = self.write_at(buf, self.cursor).await;
@@ -745,6 +809,10 @@ impl AsyncWrite for File {
         (written, buf)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<File as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn flush(&mut self) -> Result<(), io::Error> {
         Ok(())
@@ -753,6 +821,10 @@ impl AsyncWrite for File {
 
 #[cfg(unix)]
 impl AsRawFd for File {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<File as AsRawFd>")
+    )]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.inner.as_raw_fd()
@@ -761,6 +833,10 @@ impl AsRawFd for File {
 
 #[cfg(unix)]
 impl IntoRawFd for File {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<File as IntoRawFd>")
+    )]
     #[inline]
     fn into_raw_fd(self) -> RawFd {
         self.into_std().into_raw_fd()
@@ -769,6 +845,10 @@ impl IntoRawFd for File {
 
 #[cfg(windows)]
 impl AsRawHandle for File {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<File as AsRawHandle>")
+    )]
     #[inline]
     fn as_raw_handle(&self) -> RawHandle {
         self.inner.as_raw_handle()
@@ -777,6 +857,10 @@ impl AsRawHandle for File {
 
 #[cfg(windows)]
 impl IntoRawHandle for File {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<File as IntoRawHandle>")
+    )]
     #[inline]
     fn into_raw_handle(self) -> RawHandle {
         self.into_std().into_raw_handle()

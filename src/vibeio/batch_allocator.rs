@@ -33,6 +33,10 @@ mod native {
     // deallocated blocks enter the cache; live blocks remain disjoint and are
     // never inspected. Cell operations cannot unwind or invoke user code.
     unsafe impl Allocator for BatchAllocator {
+        #[cfg_attr(
+            feature = "hotpath-profile",
+            hotpath::measure(impl_type = "<BatchAllocator as Allocator>")
+        )]
         #[inline]
         fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
             if let Some(block) = self.cached.get()
@@ -47,6 +51,10 @@ mod native {
             System.allocate(layout)
         }
 
+        #[cfg_attr(
+            feature = "hotpath-profile",
+            hotpath::measure(impl_type = "<BatchAllocator as Allocator>")
+        )]
         #[inline]
         unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
             if layout.size() != 0 && layout.size() <= MAX_RETAINED && self.cached.get().is_none() {
@@ -60,6 +68,10 @@ mod native {
     }
 
     impl Drop for BatchAllocator {
+        #[cfg_attr(
+            feature = "hotpath-profile",
+            hotpath::measure(impl_type = "<BatchAllocator as Drop>")
+        )]
         fn drop(&mut self) {
             if let Some(block) = self.cached.take() {
                 // SAFETY: the cached block was returned by its previous owner;
@@ -71,6 +83,7 @@ mod native {
 
     pub(crate) type Batch<'a, T> = Vec<T, &'a BatchAllocator>;
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
     #[inline]
     pub(crate) fn batch<T>(allocator: &BatchAllocator, capacity: usize) -> Batch<'_, T> {
         Vec::with_capacity_in(capacity, allocator)
@@ -293,6 +306,7 @@ mod draining {
         remaining: &'a mut [T],
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
     pub(crate) fn drain_batch<'a, T>(batch: &'a mut Batch<'_, T>) -> BatchDrain<'a, T> {
         let len = batch.len();
         // SAFETY: the old len elements are initialized. Setting len to zero transfers
@@ -309,6 +323,10 @@ mod draining {
     impl<T> Iterator for BatchDrain<'_, T> {
         type Item = T;
 
+        #[cfg_attr(
+            feature = "hotpath-profile",
+            hotpath::measure(impl_type = "<BatchDrain as Iterator>")
+        )]
         #[inline]
         fn next(&mut self) -> Option<T> {
             let (first, remaining) = std::mem::take(&mut self.remaining).split_first_mut()?;
@@ -318,6 +336,10 @@ mod draining {
             Some(unsafe { std::ptr::read(first) })
         }
 
+        #[cfg_attr(
+            feature = "hotpath-profile",
+            hotpath::measure(impl_type = "<BatchDrain as Iterator>")
+        )]
         fn size_hint(&self) -> (usize, Option<usize>) {
             (self.remaining.len(), Some(self.remaining.len()))
         }
@@ -326,6 +348,10 @@ mod draining {
     impl<T> ExactSizeIterator for BatchDrain<'_, T> {}
 
     impl<T> Drop for BatchDrain<'_, T> {
+        #[cfg_attr(
+            feature = "hotpath-profile",
+            hotpath::measure(impl_type = "<BatchDrain as Drop>")
+        )]
         fn drop(&mut self) {
             // SAFETY: only initialized, unyielded elements remain. Slice drop glue
             // also drops later elements if one destructor panics.
@@ -341,10 +367,12 @@ mod ordinary {
     #[derive(Default)]
     pub(crate) struct BatchAllocator {}
     pub(crate) type Batch<'a, T> = Vec<T>;
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
     #[inline]
     pub(crate) fn batch<T>(_: &BatchAllocator, capacity: usize) -> Batch<'_, T> {
         Vec::with_capacity(capacity)
     }
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
     #[inline]
     pub(crate) fn drain_batch<'a, T>(batch: &'a mut Batch<'_, T>) -> std::vec::Drain<'a, T> {
         batch.drain(..)

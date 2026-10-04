@@ -19,6 +19,7 @@ use crate::context::capture_context;
 use crate::engine::SignalHandlerTemplate;
 use crate::engine::{LoopCommand, LoopSignalCommand};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn add_signal_handler(
     slf: Py<PyLoop>,
     py: Python<'_>,
@@ -76,6 +77,7 @@ pub(super) fn add_signal_handler(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn remove_signal_handler(slf: Py<PyLoop>, py: Python<'_>, sig: i32) -> PyResult<bool> {
     let loop_ref = slf.borrow(py);
     let core = loop_ref.core.clone();
@@ -96,6 +98,7 @@ pub(super) fn remove_signal_handler(slf: Py<PyLoop>, py: Python<'_>, sig: i32) -
     Ok(removed)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Called by the signal watcher, not from a signal handler: re-enters the loop
 /// through `call_soon_threadsafe` so the user callback runs on the loop thread
 /// in the context captured at registration.

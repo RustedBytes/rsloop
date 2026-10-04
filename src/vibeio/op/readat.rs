@@ -30,6 +30,7 @@ pub struct ReadAtOp<'a, B: IoBufMut> {
 }
 
 impl<'a, B: IoBufMut> ReadAtOp<'a, B> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadAtOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B, offset: u64) -> Self {
         Self {
@@ -40,6 +41,7 @@ impl<'a, B: IoBufMut> ReadAtOp<'a, B> {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadAtOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -53,6 +55,10 @@ impl<'a, B: IoBufMut> ReadAtOp<'a, B> {
 impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
     type Output = usize;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadAtOp as Op>")
+    )]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -100,6 +106,10 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
         Poll::Ready(Ok(read))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadAtOp as Op>")
+    )]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -154,6 +164,10 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadAtOp as Op>")
+    )]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -185,6 +199,10 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
 }
 
 impl<B: IoBufMut> Drop for ReadAtOp<'_, B> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadAtOp as Drop>")
+    )]
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {

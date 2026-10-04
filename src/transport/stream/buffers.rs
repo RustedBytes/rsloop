@@ -11,7 +11,7 @@ use futures::future::poll_fn;
 use futures::task::AtomicWaker;
 
 use super::tuning::{
-    MAX_STREAM_READ_BUFFER_SIZE, READ_BUFFER_POOL_LIMIT, WRITE_BUFFER_BLOCK_SIZE,
+    MAX_STREAM_READ_BUFFER_SIZE, MIN_WRITE_BUFFER_CAPACITY, READ_BUFFER_POOL_LIMIT,
     WRITE_BUFFER_POOL_LIMIT,
 };
 
@@ -31,6 +31,10 @@ pub(super) struct OwnedReadBuffer {
 }
 
 impl OwnedReadBuffer {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "OwnedReadBuffer")
+    )]
     pub(super) fn with_capacity(capacity: usize) -> Self {
         Self {
             bytes: Vec::with_capacity(capacity),
@@ -38,6 +42,10 @@ impl OwnedReadBuffer {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "OwnedReadBuffer")
+    )]
     pub(super) fn from_pooled(bytes: Vec<u8>, pool: &Arc<ReadBufferPool>) -> Self {
         Self {
             bytes,
@@ -54,18 +62,30 @@ impl OwnedReadBuffer {
 impl Deref for OwnedReadBuffer {
     type Target = Vec<u8>;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<OwnedReadBuffer as Deref>")
+    )]
     fn deref(&self) -> &Self::Target {
         &self.bytes
     }
 }
 
 impl DerefMut for OwnedReadBuffer {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<OwnedReadBuffer as DerefMut>")
+    )]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.bytes
     }
 }
 
 impl Drop for OwnedReadBuffer {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<OwnedReadBuffer as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(pool) = self.pool.take() {
             pool.release(std::mem::take(&mut self.bytes));
@@ -80,6 +100,10 @@ pub(super) struct PendingReadBuffer<'a> {
 }
 
 impl<'a> PendingReadBuffer<'a> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PendingReadBuffer")
+    )]
     pub(super) fn from_pooled(
         bytes: Vec<u8>,
         pool: &'a ReadBufferPool,
@@ -92,16 +116,28 @@ impl<'a> PendingReadBuffer<'a> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PendingReadBuffer")
+    )]
     #[inline]
     pub(super) fn len(&self) -> usize {
         self.bytes.len()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PendingReadBuffer")
+    )]
     #[inline]
     pub(super) fn as_slice(&self) -> &[u8] {
         &self.bytes
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PendingReadBuffer")
+    )]
     pub(super) fn extend(&mut self, data: &[u8]) {
         // Most drains contain one read. Keep that allocation until delivery;
         // only acquire and copy into the coalescing buffer for a second chunk.
@@ -117,6 +153,10 @@ impl<'a> PendingReadBuffer<'a> {
 }
 
 impl Drop for PendingReadBuffer<'_> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PendingReadBuffer as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(pool) = self.pool.take() {
             pool.release(std::mem::take(&mut self.bytes));
@@ -142,6 +182,10 @@ impl OwnedWriteBuffer {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "OwnedWriteBuffer")
+    )]
     pub(super) fn from_pooled_slice(data: &[u8], pool: &Arc<WriteBufferPool>) -> Self {
         let (mut bytes, pooled) = pool.acquire(data.len());
         bytes.extend_from_slice(data);
@@ -152,6 +196,10 @@ impl OwnedWriteBuffer {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "OwnedWriteBuffer")
+    )]
     pub(super) fn with_pooled_capacity(capacity: usize, pool: &Arc<WriteBufferPool>) -> Self {
         let (bytes, pooled) = pool.acquire(capacity);
         Self {
@@ -161,10 +209,18 @@ impl OwnedWriteBuffer {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "OwnedWriteBuffer")
+    )]
     pub(super) fn extend_from_slice(&mut self, data: &[u8]) {
         self.bytes.extend_from_slice(data);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "OwnedWriteBuffer")
+    )]
     pub(super) fn try_append(&mut self, data: &[u8]) -> bool {
         if !can_append(self.offset, self.bytes.len(), data.len()) {
             return false;
@@ -183,27 +239,44 @@ impl OwnedWriteBuffer {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "OwnedWriteBuffer")
+    )]
     #[inline]
     pub(super) fn remaining(&self) -> &[u8] {
         &self.bytes[self.offset..]
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "OwnedWriteBuffer")
+    )]
     #[inline]
     pub(super) fn len(&self) -> usize {
         self.remaining().len()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "OwnedWriteBuffer")
+    )]
     #[inline]
     pub(super) fn advance(&mut self, written: usize) {
         self.offset += written;
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "OwnedWriteBuffer")
+    )]
     #[inline]
     pub(super) fn is_empty(&self) -> bool {
         self.offset == self.bytes.len()
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn can_append(offset: usize, current_len: usize, incoming_len: usize) -> bool {
     offset == 0
@@ -212,11 +285,13 @@ fn can_append(offset: usize, current_len: usize, incoming_len: usize) -> bool {
             <= super::tuning::DEFAULT_WRITE_BUFFER_HIGH_WATER.saturating_sub(current_len)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn retain_write_buffer(capacity: usize) -> bool {
     capacity <= super::tuning::DEFAULT_WRITE_BUFFER_HIGH_WATER
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn retain_read_buffer(capacity: usize) -> bool {
     capacity <= MAX_STREAM_READ_BUFFER_SIZE
@@ -236,6 +311,7 @@ enum PoolRelease {
     Discard,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn pool_acquire(
     available: usize,
     allocated: usize,
@@ -253,6 +329,7 @@ fn pool_acquire(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn pool_release(retain: bool, available: usize, limit: usize) -> PoolRelease {
     if retain && available < limit {
         PoolRelease::Store
@@ -262,6 +339,10 @@ fn pool_release(retain: bool, available: usize, limit: usize) -> PoolRelease {
 }
 
 impl Drop for OwnedWriteBuffer {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<OwnedWriteBuffer as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(pool) = self.pool.take() {
             pool.release(std::mem::take(&mut self.bytes));
@@ -284,6 +365,10 @@ struct WriteBufferPoolState {
 }
 
 impl WriteBufferPoolState {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WriteBufferPoolState")
+    )]
     fn new() -> Self {
         Self {
             buffers: Vec::with_capacity(WRITE_BUFFER_POOL_LIMIT),
@@ -291,6 +376,10 @@ impl WriteBufferPoolState {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WriteBufferPoolState")
+    )]
     fn acquire(&mut self, capacity: usize) -> (Vec<u8>, bool, usize, bool) {
         let (mut buffer, pooled, mut allocation_events, fallback) = match pool_acquire(
             self.buffers.len(),
@@ -307,7 +396,7 @@ impl WriteBufferPoolState {
             PoolAcquire::Allocate => {
                 self.allocated += 1;
                 (
-                    Vec::with_capacity(capacity.max(WRITE_BUFFER_BLOCK_SIZE)),
+                    Vec::with_capacity(capacity.max(MIN_WRITE_BUFFER_CAPACITY)),
                     true,
                     1,
                     false,
@@ -324,6 +413,10 @@ impl WriteBufferPoolState {
         (buffer, pooled, allocation_events, fallback)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WriteBufferPoolState")
+    )]
     fn release(&mut self, mut buffer: Vec<u8>) {
         match pool_release(
             retain_write_buffer(buffer.capacity()),
@@ -342,6 +435,10 @@ impl WriteBufferPoolState {
 }
 
 impl WriteBufferPool {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WriteBufferPool")
+    )]
     pub(super) fn new() -> Self {
         Self {
             state: Mutex::new(WriteBufferPoolState::new()),
@@ -352,6 +449,10 @@ impl WriteBufferPool {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WriteBufferPool")
+    )]
     fn acquire(&self, capacity: usize) -> (Vec<u8>, bool) {
         let mut state = self.state.lock().expect("poisoned write buffer pool");
         let (buffer, pooled, allocation_events, fallback) = state.acquire(capacity);
@@ -367,6 +468,10 @@ impl WriteBufferPool {
         (buffer, pooled)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "WriteBufferPool")
+    )]
     pub(super) fn release(&self, buffer: Vec<u8>) {
         let mut state = self.state.lock().expect("poisoned write buffer pool");
         state.release(buffer);
@@ -391,6 +496,10 @@ struct ReadBufferPoolState {
 }
 
 impl ReadBufferPoolState {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPoolState")
+    )]
     fn new() -> Self {
         Self {
             buffers: Vec::with_capacity(READ_BUFFER_POOL_LIMIT),
@@ -398,6 +507,10 @@ impl ReadBufferPoolState {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPoolState")
+    )]
     fn try_acquire(&mut self, capacity: usize) -> (Option<Vec<u8>>, usize) {
         let (mut buffer, mut allocation_events) = match pool_acquire(
             self.buffers.len(),
@@ -421,6 +534,10 @@ impl ReadBufferPoolState {
         (Some(buffer), allocation_events)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPoolState")
+    )]
     fn release(&mut self, mut buffer: Vec<u8>) {
         match pool_release(
             retain_read_buffer(buffer.capacity()),
@@ -439,6 +556,10 @@ impl ReadBufferPoolState {
 }
 
 impl ReadBufferPool {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPool")
+    )]
     pub(super) fn new() -> Self {
         Self {
             state: Mutex::new(ReadBufferPoolState::new()),
@@ -450,6 +571,10 @@ impl ReadBufferPool {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPool")
+    )]
     pub(super) fn try_acquire(&self, capacity: usize) -> Option<Vec<u8>> {
         let mut state = self.state.lock().expect("poisoned stream read buffer pool");
         let (buffer, allocation_events) = state.try_acquire(capacity);
@@ -462,11 +587,19 @@ impl ReadBufferPool {
         buffer
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPool")
+    )]
     fn has_available(&self) -> bool {
         let state = self.state.lock().expect("poisoned stream read buffer pool");
         !state.buffers.is_empty() || state.allocated < READ_BUFFER_POOL_LIMIT
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPool", future = true)
+    )]
     pub(super) async fn wait_async(&self) {
         poll_fn(|context| {
             if self.closed.load(Ordering::Acquire) || self.has_available() {
@@ -482,6 +615,10 @@ impl ReadBufferPool {
         .await;
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPool")
+    )]
     pub(super) fn wait_timeout(&self, timeout: Duration) {
         let state = self.state.lock().expect("poisoned stream read buffer pool");
         if state.buffers.is_empty() && state.allocated >= READ_BUFFER_POOL_LIMIT {
@@ -492,16 +629,28 @@ impl ReadBufferPool {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPool")
+    )]
     pub(super) fn notify_all(&self) {
         self.available.notify_all();
         self.async_available.wake();
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPool")
+    )]
     pub(super) fn close(&self) {
         self.closed.store(true, Ordering::Release);
         self.notify_all();
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadBufferPool")
+    )]
     pub(super) fn release(&self, buffer: Vec<u8>) {
         let mut state = self.state.lock().expect("poisoned stream read buffer pool");
         // Waiters can sleep only when all slots are checked out. Capture that
@@ -944,5 +1093,24 @@ mod tests {
         assert!(fallback.pool.is_none());
         assert_eq!(pool.fallbacks.load(Ordering::Relaxed), 1);
         drop(held);
+    }
+
+    #[test]
+    fn small_pooled_writes_grow_without_losing_bytes_and_reuse_capacity() {
+        let pool = Arc::new(WriteBufferPool::new());
+        let initial = vec![1; 1024];
+        let mut buffer = OwnedWriteBuffer::from_pooled_slice(&initial, &pool);
+        assert_eq!(buffer.bytes.capacity(), 1024);
+        let tail = vec![2; 32 * 1024];
+        buffer.extend_from_slice(&tail);
+        assert_eq!(&buffer.remaining()[..1024], &initial);
+        assert_eq!(&buffer.remaining()[1024..], &tail);
+        buffer.advance(1000);
+        assert_eq!(buffer.len(), 24 + tail.len());
+        let pointer = buffer.bytes.as_ptr();
+        drop(buffer);
+        let reused = OwnedWriteBuffer::from_pooled_slice(&initial, &pool);
+        assert_eq!(reused.bytes.as_ptr(), pointer);
+        assert_eq!(reused.remaining(), &initial);
     }
 }
