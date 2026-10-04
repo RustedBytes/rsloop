@@ -200,13 +200,9 @@ impl ReadyCallback {
 /// The handle owns its callback inline and the ready queue holds `Py<PyHandle>`
 /// clones, requiring one allocation per `call_soon`. The class is frozen so
 /// the event loop can read the callback without dynamic borrow checking.
-#[pyclass(
-    name = "Handle",
-    module = "rsloop._loop",
-    weakref,
-    frozen,
-    freelist = 8192
-)]
+/// A PyO3 freelist slowed large callback bursts: their handles remain live
+/// until the ready batch drains, so allocation usually finds the list empty.
+#[pyclass(name = "Handle", module = "rsloop._loop", weakref, frozen)]
 pub struct PyHandle {
     callback: ReadyCallback,
 }
