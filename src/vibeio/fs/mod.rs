@@ -1158,13 +1158,9 @@ mod tests {
     fn all_open_flag_combinations_match_standard_filesystem_behavior() {
         let root = unique_path("open_flag_matrix");
         std::fs::create_dir(&root).unwrap();
-        struct Cleanup(PathBuf);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let _cleanup = Cleanup(root.clone());
+        let _cleanup = std::mem::DropGuard::new(root.clone(), |path| {
+            let _ = std::fs::remove_dir_all(path);
+        });
         for (backend, driver) in [
             crate::vibeio::DriverKind::Mock,
             crate::vibeio::DriverKind::IoUring,
@@ -1229,13 +1225,9 @@ mod tests {
         use std::os::windows::ffi::OsStringExt;
         let root = unique_path("symlink_order");
         std::fs::create_dir(&root).unwrap();
-        struct Cleanup(PathBuf);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-        let _cleanup = Cleanup(root.clone());
+        let _cleanup = std::mem::DropGuard::new(root.clone(), |path| {
+            let _ = std::fs::remove_dir_all(path);
+        });
         // An unpaired surrogate cannot survive a lossy UTF-8 round trip.
         let source = root.join(std::ffi::OsString::from_wide(&[0x6f, 0xd800]));
         std::fs::write(&source, b"unchanged").unwrap();
@@ -1264,18 +1256,14 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn write_helper_preserves_binary_data_and_truncates_existing_files() {
-        struct Cleanup(PathBuf);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_file(&self.0);
-            }
-        }
         for driver in [
             crate::vibeio::DriverKind::Mock,
             crate::vibeio::DriverKind::IoUring,
         ] {
             let path = unique_path("write_helper");
-            let _cleanup = Cleanup(path.clone());
+            let _cleanup = std::mem::DropGuard::new(path.clone(), |path| {
+                let _ = std::fs::remove_file(path);
+            });
             let runtime = crate::vibeio::RuntimeBuilder::new()
                 .driver(driver)
                 .build()
