@@ -101,12 +101,17 @@ This harness does not apply model output or create commits automatically.
   workloads; holdout is the default comparison suite.
 
 Additional opt-in scheduler probes are available through `--workloads`:
-`timers_retained`, `timers_discarded`, `timers_cancelled`, and
+`timers_retained`, `timers_discarded`, `timers_cancelled`, `timers_mixed`, and
 `tcp_connect_churn`. Timer probes schedule zero-delay timers in batches and
 include dispatch or cancellation and handle release. Retained handles remain
 live until their batch drains; discarded handles can reuse a freelist while
 callbacks remain pending. Training uses 1,000,000 timers in batches of 10,000;
 holdout uses 1,200,000 in batches of 777.
+
+`timers_mixed` instead schedules deterministic, scattered deadlines 60–62 seconds
+ahead, cancels them, and waits for their queue entries to drain. It checks heap
+costs independently of the zero-delay timer path; none of these callbacks should
+execute. Include it when changing timer data structures.
 
 The connection probe uses explicit stdlib stream protocols, so native stream
 wrappers cannot bypass generic TCP-reader startup. It creates a connection,

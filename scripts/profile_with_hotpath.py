@@ -24,7 +24,7 @@ from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 BASIC = ("callbacks", "tasks", "task_options", "tcp_streams")
-TIMERS = ("timers_retained", "timers_discarded", "timers_cancelled")
+TIMERS = ("timers_retained", "timers_discarded", "timers_cancelled", "timers_mixed")
 MATRIX = (
     "http_keepalive",
     "tls_http",

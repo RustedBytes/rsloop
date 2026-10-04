@@ -23,7 +23,7 @@ use super::commands::{
     LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopTransportCommand, ReadyItem,
 };
 use super::dispatcher::run_runtime_thread;
-use super::timer_entry::TimerEntry;
+use super::timer_entry::{TimerEntry, TimerQueue};
 use crate::context::{capture_context, clear_running_loop, ensure_running_loop};
 use crate::errors::handle_callback_error;
 use crate::fd_ops::RawFd;
@@ -182,7 +182,7 @@ struct ActiveLoopTls {
     core: Cell<*const LoopCore>,
     ready_queue: Cell<*mut VecDeque<ReadyItem>>,
     drain_active: Cell<bool>,
-    timers: Cell<*mut BinaryHeap<TimerEntry>>,
+    timers: Cell<*mut TimerQueue>,
 }
 
 thread_local! {
@@ -201,11 +201,7 @@ thread_local! {
 /// The guard returns outstanding timers when a run ends, including unwinding.
 struct LocalTimers<'a> {
     core: &'a LoopCore,
-    #[allow(
-        clippy::box_collection,
-        reason = "TLS points to the heap object, whose address must survive moving this guard"
-    )]
-    heap: Box<BinaryHeap<TimerEntry>>,
+    heap: Box<TimerQueue>,
 }
 
 impl<'a> LocalTimers<'a> {
@@ -214,7 +210,7 @@ impl<'a> LocalTimers<'a> {
         hotpath::measure(impl_type = "LocalTimers")
     )]
     fn new(core: &'a LoopCore) -> Self {
-        let mut heap = Box::new(BinaryHeap::new());
+        let mut heap = Box::new(TimerQueue::new());
         ACTIVE_LOOP_TLS.with(|tls| tls.timers.set(&mut *heap));
         Self { core, heap }
     }
@@ -225,7 +221,7 @@ impl<'a> LocalTimers<'a> {
     )]
     fn collect(&mut self, ready: &mut VecDeque<ReadyItem>) {
         if self.core.pending_timers_dirty.swap(false, Ordering::AcqRel) {
-            self.heap.append(
+            self.heap.append_heap(
                 &mut self
                     .core
                     .pending_timers
@@ -266,11 +262,13 @@ impl Drop for LocalTimers<'_> {
     fn drop(&mut self) {
         ACTIVE_LOOP_TLS.with(|tls| tls.timers.set(std::ptr::null_mut()));
         if !self.heap.is_empty() {
-            self.core
-                .pending_timers
-                .lock()
-                .expect("poisoned pending timers")
-                .append(&mut self.heap);
+            self.heap.drain_into(
+                &mut self
+                    .core
+                    .pending_timers
+                    .lock()
+                    .expect("poisoned pending timers"),
+            );
             self.core
                 .pending_timers_dirty
                 .store(true, Ordering::Release);
@@ -626,7 +624,7 @@ impl LoopCore {
             if std::ptr::eq(tls.core.get(), Arc::as_ptr(self)) && !tls.timers.get().is_null() {
                 // SAFETY: LocalTimers owns this stable heap on the current
                 // thread. No heap borrow crosses callback execution.
-                unsafe { (*tls.timers.get()).push(entry) };
+                unsafe { (*tls.timers.get()).push(entry, delay.is_zero()) };
                 None
             } else {
                 Some(entry)

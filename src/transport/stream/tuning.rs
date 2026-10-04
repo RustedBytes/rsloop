@@ -38,6 +38,9 @@ pub(super) const SERVER_POLL_READER_TINY_TRIGGER_MAX_BYTES: usize = 16;
 // loop-thread backlog. Buffers are allocated lazily; once all slots exist,
 // readers wait for recycling rather than allocating beyond this bound.
 pub(super) const READ_BUFFER_POOL_LIMIT: usize = 4;
+// Amortize tiny headers without reserving a full 16 KiB block per connection.
+pub(super) const MIN_WRITE_BUFFER_CAPACITY: usize = 256;
+// This unit defines the pool's slot budget, not its initial allocation size.
 pub(super) const WRITE_BUFFER_BLOCK_SIZE: usize = 16 * 1024;
 pub(super) const WRITE_BUFFER_POOL_LIMIT: usize =
     DEFAULT_WRITE_BUFFER_HIGH_WATER / WRITE_BUFFER_BLOCK_SIZE + 1;

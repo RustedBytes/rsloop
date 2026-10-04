@@ -11,7 +11,7 @@ use futures::future::poll_fn;
 use futures::task::AtomicWaker;
 
 use super::tuning::{
-    MAX_STREAM_READ_BUFFER_SIZE, READ_BUFFER_POOL_LIMIT, WRITE_BUFFER_BLOCK_SIZE,
+    MAX_STREAM_READ_BUFFER_SIZE, MIN_WRITE_BUFFER_CAPACITY, READ_BUFFER_POOL_LIMIT,
     WRITE_BUFFER_POOL_LIMIT,
 };
 
@@ -396,7 +396,7 @@ impl WriteBufferPoolState {
             PoolAcquire::Allocate => {
                 self.allocated += 1;
                 (
-                    Vec::with_capacity(capacity.max(WRITE_BUFFER_BLOCK_SIZE)),
+                    Vec::with_capacity(capacity.max(MIN_WRITE_BUFFER_CAPACITY)),
                     true,
                     1,
                     false,
@@ -1093,5 +1093,24 @@ mod tests {
         assert!(fallback.pool.is_none());
         assert_eq!(pool.fallbacks.load(Ordering::Relaxed), 1);
         drop(held);
+    }
+
+    #[test]
+    fn small_pooled_writes_grow_without_losing_bytes_and_reuse_capacity() {
+        let pool = Arc::new(WriteBufferPool::new());
+        let initial = vec![1; 1024];
+        let mut buffer = OwnedWriteBuffer::from_pooled_slice(&initial, &pool);
+        assert_eq!(buffer.bytes.capacity(), 1024);
+        let tail = vec![2; 32 * 1024];
+        buffer.extend_from_slice(&tail);
+        assert_eq!(&buffer.remaining()[..1024], &initial);
+        assert_eq!(&buffer.remaining()[1024..], &tail);
+        buffer.advance(1000);
+        assert_eq!(buffer.len(), 24 + tail.len());
+        let pointer = buffer.bytes.as_ptr();
+        drop(buffer);
+        let reused = OwnedWriteBuffer::from_pooled_slice(&initial, &pool);
+        assert_eq!(reused.bytes.as_ptr(), pointer);
+        assert_eq!(reused.remaining(), &initial);
     }
 }
