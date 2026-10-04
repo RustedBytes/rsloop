@@ -286,10 +286,7 @@ impl StreamReaderFastPath {
 
     pub(super) fn eof_received(&self, py: Python<'_>) -> PyResult<bool> {
         match self {
-            Self::Native { reader, .. } => {
-                reader.borrow_mut(py).feed_eof_internal(py)?;
-                Ok(true)
-            }
+            Self::Native { protocol, .. } => protocol.borrow_mut(py).eof_received(py),
             Self::Generic { .. } => {
                 self.feed_eof(py)?;
                 Ok(true)

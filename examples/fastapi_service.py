@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
-import os
 import signal
 import sys
 import time
@@ -29,11 +28,6 @@ def normalize_event_loop(value: str) -> str:
     if value == "std-async":
         return "asyncio"
     return value
-
-
-def configure_rsloop_fast_streams(loop_name: str) -> None:
-    if normalize_event_loop(loop_name) == "rsloop":
-        os.environ["RSLOOP_USE_FAST_STREAMS"] = "1"
 
 
 def loop_factory_for(loop_name: str) -> EventLoopFactory:
@@ -103,11 +97,7 @@ def current_loop_payload() -> dict[str, str]:
     loop = asyncio.get_running_loop()
     stream_mode = "stdlib asyncio streams"
     if app.state.selected_event_loop == "rsloop":
-        stream_mode = (
-            "rsloop fast streams"
-            if os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
-            else "stdlib asyncio streams"
-        )
+        stream_mode = "rsloop fast streams"
     return {
         "selected": app.state.selected_event_loop,
         "module": type(loop).__module__,
@@ -267,7 +257,6 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    configure_rsloop_fast_streams(args.event_loop)
     app.state.selected_event_loop = normalize_event_loop(args.event_loop)
     previous_sigint_handler = signal.getsignal(signal.SIGINT)
 

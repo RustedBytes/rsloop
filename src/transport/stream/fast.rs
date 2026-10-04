@@ -1824,6 +1824,7 @@ pub struct PyFastStreamProtocol {
     paused: bool,
     drain_waiters: Vec<Py<PyAny>>,
     connection_lost: bool,
+    over_ssl: bool,
 }
 
 impl PyFastStreamProtocol {
@@ -1852,6 +1853,7 @@ impl PyFastStreamProtocol {
             paused: false,
             drain_waiters: Vec::new(),
             connection_lost: false,
+            over_ssl: false,
         })
     }
 
@@ -1942,8 +1944,13 @@ impl PyFastStreamProtocol {
         py: Python<'_>,
         transport: Py<PyAny>,
     ) -> PyResult<()> {
+        let over_ssl = !transport
+            .call_method1(py, "get_extra_info", ("sslcontext",))?
+            .bind(py)
+            .is_none();
         {
             let mut protocol = slf.borrow_mut(py);
+            protocol.over_ssl = over_ssl;
             protocol.transport = transport.clone_ref(py);
             protocol
                 .reader
@@ -2097,9 +2104,10 @@ impl PyFastStreamProtocol {
         self.reader.borrow_mut(py).feed_data_internal(py, data)
     }
 
-    fn eof_received(&mut self, py: Python<'_>) -> PyResult<bool> {
+    pub(super) fn eof_received(&mut self, py: Python<'_>) -> PyResult<bool> {
         self.reader.borrow_mut(py).feed_eof_internal(py)?;
-        Ok(true)
+        // TLS does not support keeping a write half open after peer EOF.
+        Ok(!self.over_ssl)
     }
 
     fn connection_lost(&mut self, py: Python<'_>, exc: Option<Py<PyAny>>) -> PyResult<()> {
@@ -2255,31 +2263,6 @@ fn running_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
         .unbind())
 }
 
-fn call_asyncio_streams_function(
-    py: Python<'_>,
-    name: &str,
-    args: &Bound<'_, PyTuple>,
-    kwargs: Option<&Bound<'_, PyDict>>,
-) -> PyResult<Py<PyAny>> {
-    let module = py.import("asyncio.streams")?;
-    Ok(module.getattr(name)?.call(args, kwargs)?.unbind())
-}
-
-fn kwargs_with_limit<'py>(
-    py: Python<'py>,
-    kwargs: Option<&Bound<'py, PyDict>>,
-    limit: usize,
-) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    if let Some(kwargs) = kwargs {
-        for (key, value) in kwargs.iter() {
-            dict.set_item(key, value)?;
-        }
-    }
-    dict.set_item("limit", limit)?;
-    Ok(dict)
-}
-
 fn copy_kwargs<'py>(
     py: Python<'py>,
     kwargs: Option<&Bound<'py, PyDict>>,
@@ -2295,21 +2278,14 @@ fn copy_kwargs<'py>(
     Ok(Some(copied))
 }
 
-fn native_stream_loop(
-    py: Python<'_>,
-    kwargs: Option<&Bound<'_, PyDict>>,
-) -> PyResult<Option<Py<PyAny>>> {
+fn native_stream_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let loop_obj = running_loop(py)?;
     if !loop_obj.bind(py).is_instance_of::<PyLoop>() {
-        return Ok(None);
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "native streams require an rsloop event loop",
+        ));
     }
-    if let Some(kwargs) = kwargs
-        && let Some(ssl) = kwargs.get_item("ssl")?
-        && !ssl.is_none()
-    {
-        return Ok(None);
-    }
-    Ok(Some(loop_obj))
+    Ok(loop_obj)
 }
 
 fn host_port_objects(
@@ -2370,10 +2346,10 @@ fn fast_open_connection_result(py: Python<'_>, created: Py<PyAny>) -> PyResult<P
 
 /// Returns an awaitable that opens a stream connection.
 ///
-/// With a running [`PyLoop`](crate::PyLoop) and no TLS argument, the awaitable
+/// With a running [`PyLoop`](crate::PyLoop), the awaitable
 /// resolves to a native [`PyFastStreamReader`] and [`PyFastStreamWriter`].
-/// Unsupported loop or TLS configurations delegate to
-/// `asyncio.open_connection`.
+/// Connections, including TLS, always use native readers and writers.
+/// A running rsloop event loop is required.
 ///
 /// Extra keyword arguments are forwarded to the loop connection factory.
 #[pyfunction(signature = (host=None, port=None, *, limit=DEFAULT_STREAM_LIMIT, **kwargs))]
@@ -2385,12 +2361,7 @@ pub fn open_connection(
     kwargs: Option<&Bound<'_, PyDict>>,
 ) -> PyResult<Py<PyAny>> {
     let (host_obj, port_obj) = host_port_objects(py, host, port);
-    let args = PyTuple::new(py, [host_obj.clone_ref(py), port_obj.clone_ref(py)])?;
-
-    let Some(loop_obj) = native_stream_loop(py, kwargs)? else {
-        let kwargs = kwargs_with_limit(py, kwargs, limit)?;
-        return call_asyncio_streams_function(py, "open_connection", &args, Some(&kwargs));
-    };
+    let loop_obj = native_stream_loop(py)?;
 
     let (locals, awaitable) =
         fast_open_connection_awaitable(py, &loop_obj, host_obj, port_obj, limit, kwargs)?;
@@ -2412,10 +2383,10 @@ pub fn open_connection(
 
 /// Returns an awaitable that starts a stream server.
 ///
-/// With a running [`PyLoop`](crate::PyLoop) and no TLS argument, accepted
+/// With a running [`PyLoop`](crate::PyLoop), accepted
 /// connections use native fast readers and writers before invoking
-/// `client_connected_cb`. Unsupported configurations delegate to
-/// `asyncio.start_server`.
+/// `client_connected_cb`, including over TLS. A running rsloop event loop is
+/// required.
 ///
 /// `limit` controls each reader's buffer limit; extra keyword arguments are
 /// forwarded to the loop server factory.
@@ -2436,19 +2407,7 @@ pub fn start_server(
         .as_ref()
         .map(|value| value.clone_ref(py))
         .unwrap_or_else(|| py.None());
-    let args = PyTuple::new(
-        py,
-        [
-            client_connected_cb.clone_ref(py),
-            host_obj.clone_ref(py),
-            port_obj.clone_ref(py),
-        ],
-    )?;
-
-    let Some(loop_obj) = native_stream_loop(py, kwargs)? else {
-        let kwargs = kwargs_with_limit(py, kwargs, limit)?;
-        return call_asyncio_streams_function(py, "start_server", &args, Some(&kwargs));
-    };
+    let loop_obj = native_stream_loop(py)?;
 
     let locals = task_locals_for_loop(py, &loop_obj)?;
     let factory = Py::new(

@@ -262,7 +262,7 @@ pub(super) fn write_tls_data_batch(
 ) -> bool {
     let mut buffered_len = 0;
     let mut state = tls_state.lock().expect("poisoned tls state");
-    if let Err(err) = state.connection.writer_write_all(data.remaining()) {
+    if let Err(err) = state.write_plaintext_all(data.remaining()) {
         drop(state);
         report_writer_io_error(core, err);
         return false;
@@ -271,7 +271,7 @@ pub(super) fn write_tls_data_batch(
     loop {
         match writer_rx.try_recv() {
             Ok(WriterCommand::Data(next)) => {
-                if let Err(err) = state.connection.writer_write_all(next.remaining()) {
+                if let Err(err) = state.write_plaintext_all(next.remaining()) {
                     drop(state);
                     report_writer_io_error(core, err);
                     return false;
@@ -294,9 +294,9 @@ pub(super) fn write_tls_data_batch(
         }
     }
 
-    // Feed all immediately available plaintext into rustls before flushing
-    // encrypted records. This turns common header/body write pairs into one
-    // socket-flush pass and one TLS-state lock acquisition.
+    // Flush the batch's remaining records. Writes flush earlier when rustls's
+    // buffer fills; small header/body pairs still share one socket-flush pass
+    // and one TLS-state lock acquisition.
     if let Err(err) = flush_tls_io_locked(&mut state) {
         drop(state);
         report_writer_io_error(core, err);

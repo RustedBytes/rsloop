@@ -10,7 +10,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import rsloop
@@ -81,6 +81,72 @@ def make_ssl_contexts(tmpdir: str):
 
 
 class TestTls:
+    @pytest.mark.parametrize("chunk_size", [1024, 147456])
+    def test_tls_streams_use_native_objects_without_stdlib_fallback(
+        self, monkeypatch, chunk_size
+    ):
+        from rsloop import _loop
+
+        native = cast(Any, _loop)
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("TLS streams fell back to stdlib")
+
+        monkeypatch.setattr(asyncio.streams, "open_connection", forbidden)
+        monkeypatch.setattr(asyncio.streams, "start_server", forbidden)
+
+        async def main():
+            accepted = []
+            payload = b"native TLS streams" * 8192
+
+            async def echo(reader, writer):
+                accepted.append((type(reader), type(writer)))
+                try:
+                    writer.write(await reader.readexactly(len(payload)))
+                    await writer.drain()
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                server_ctx, client_ctx = make_ssl_contexts(tmpdir)
+                server = await asyncio.create_task(
+                    asyncio.start_server(echo, "127.0.0.1", 0, ssl=server_ctx, limit=32)
+                )
+                try:
+                    reader, writer = await asyncio.create_task(
+                        asyncio.open_connection(
+                            "127.0.0.1",
+                            server.sockets[0].getsockname()[1],
+                            ssl=client_ctx,
+                            server_hostname="localhost",
+                            limit=32,
+                        )
+                    )
+                    try:
+                        assert type(reader) is native.PyFastStreamReader
+                        assert type(writer) is native.PyFastStreamWriter
+                        assert cast(Any, reader)._limit == 32
+                        assert writer.get_extra_info("sslcontext") is client_ctx
+                        assert not writer.can_write_eof()
+                        for offset in range(0, len(payload), chunk_size):
+                            writer.write(payload[offset : offset + chunk_size])
+                        await writer.drain()
+                        assert await reader.readexactly(len(payload)) == payload
+                        assert await reader.read() == b""
+                        await writer.wait_closed()
+                        assert accepted == [
+                            (native.PyFastStreamReader, native.PyFastStreamWriter)
+                        ]
+                    finally:
+                        writer.close()
+                        await writer.wait_closed()
+                finally:
+                    server.close()
+                    await server.wait_closed()
+
+        rsloop.run(asyncio.wait_for(main(), 10))
+
     def test_create_default_context_marks_default_verify_paths(self) -> None:
         context = ssl.create_default_context()
         assert context.__dict__.get("_rsloop_use_default_verify_paths")

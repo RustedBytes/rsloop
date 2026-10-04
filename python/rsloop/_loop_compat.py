@@ -11,9 +11,9 @@ import typing as __typing
 from ._loop import PyLoop as Loop
 from ._loop import __version__ as __version__
 from ._loop import build_info as build_info
-from ._loop import open_connection as __open_connection
+from ._loop import open_connection as __native_open_connection
 from ._loop import reset_transport_stats as reset_transport_stats
-from ._loop import start_server as __start_server
+from ._loop import start_server as __native_start_server
 from ._loop import transport_stats as transport_stats
 
 _T = __typing.TypeVar("_T")
@@ -66,14 +66,34 @@ __ORIG_RUN_UNTIL_COMPLETE: __typing.Any = Loop.run_until_complete
 __ORIG_SHUTDOWN_ASYNCGENS = Loop.shutdown_asyncgens
 __ORIG_CLOSE: __typing.Any = Loop.close
 __ORIG_CREATE_TASK = Loop.create_task
-__USE_FAST_STREAMS = __os.environ.get("RSLOOP_USE_FAST_STREAMS", "1") != "0"
 __ASYNCGEN_STATE: dict[Loop, dict[str, __typing.Any]] = {}
 __LOOP_CONFIG: dict[Loop, dict[str, __typing.Any]] = {}
 
-if __USE_FAST_STREAMS and __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
+
+async def __open_connection(host=None, port=None, *, limit=2**16, **kwargs):
+    # Select the implementation when awaited, so calls created before run()
+    # still use the implementation belonging to the running event loop.
+    if isinstance(__asyncio.get_running_loop(), Loop):
+        return await __native_open_connection(host, port, limit=limit, **kwargs)
+    return await __ORIG_OPEN_CONNECTION(host, port, limit=limit, **kwargs)
+
+
+async def __start_server(client_connected_cb, host=None, port=None, *, limit=2**16, **kwargs):
+    if isinstance(__asyncio.get_running_loop(), Loop):
+        return await __native_start_server(
+            client_connected_cb, host, port, limit=limit, **kwargs
+        )
+    return await __ORIG_START_SERVER(client_connected_cb, host, port, limit=limit, **kwargs)
+
+
+if __asyncio.open_connection is __ORIG_OPEN_CONNECTION:
     __asyncio.open_connection = __open_connection
-if __USE_FAST_STREAMS and __asyncio.start_server is __ORIG_START_SERVER:
+if __asyncio.streams.open_connection is __ORIG_OPEN_CONNECTION:
+    __asyncio.streams.open_connection = __open_connection
+if __asyncio.start_server is __ORIG_START_SERVER:
     __asyncio.start_server = __start_server
+if __asyncio.streams.start_server is __ORIG_START_SERVER:
+    __asyncio.streams.start_server = __start_server
 
 _asyncio = __asyncio
 _io = __io

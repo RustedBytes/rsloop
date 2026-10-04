@@ -109,10 +109,9 @@ These gaps are visible in the current implementation:
 
 - TLS uses a `rustls` backend with a narrower compatibility surface than
   CPython's OpenSSL-backed `ssl` module. In particular, encrypted private keys
-  are not supported yet, and the fast-stream monkeypatch still falls back to
-  standard-library helpers whenever `ssl` is enabled. TLS transport internals
-  also still use helper-thread paths instead of the runtime-thread `vibeio`
-  socket path.
+  are not supported yet. TLS uses native fast streams, but its transport
+  internals still use helper-thread paths instead of the runtime-thread
+  `vibeio` socket path.
 - Subprocess support still has one notable gap: `preexec_fn` remains unsupported
   because running arbitrary Python between `fork()` and `exec()` is unsafe in
   this runtime model.

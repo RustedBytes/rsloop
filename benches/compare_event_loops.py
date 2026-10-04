@@ -130,20 +130,6 @@ def parse_args() -> argparse.Namespace:
         default=1024,
         help="Payload size in bytes for the tcp_streams workload",
     )
-    stream_mode = parser.add_mutually_exclusive_group()
-    stream_mode.add_argument(
-        "--rsloop-fast-streams",
-        dest="rsloop_fast_streams",
-        action="store_true",
-        help="Use rsloop's native stream wrappers for tcp_streams (default).",
-    )
-    stream_mode.add_argument(
-        "--no-rsloop-fast-streams",
-        dest="rsloop_fast_streams",
-        action="store_false",
-        help="Use the stdlib asyncio streams layer for tcp_streams on rsloop.",
-    )
-    parser.set_defaults(rsloop_fast_streams=True)
     parser.add_argument(
         "--json-output",
         type=str,
@@ -544,8 +530,6 @@ def run_child(
     env["PYTHONPATH"] = os.pathsep.join(
         filter(None, (os.path.dirname(script_path), env.get("PYTHONPATH")))
     )
-    if loop_name == "rsloop":
-        env["RSLOOP_USE_FAST_STREAMS"] = "1" if args.rsloop_fast_streams else "0"
     proc = subprocess.run(
         cmd,
         check=False,
@@ -687,12 +671,7 @@ def parent_main(args: argparse.Namespace) -> int:
     for workload in selected_workloads:
         workload_runs: dict[str, list[ChildResult]] = {}
         if workload == "tcp_streams":
-            stream_mode = (
-                "rsloop native fast streams"
-                if args.rsloop_fast_streams
-                else "stdlib asyncio streams"
-            )
-            print(f"tcp_streams mode: {stream_mode}")
+            print("tcp_streams mode: rsloop native fast streams")
         for loop_name in available_loops:
             print(f"Running {workload} on {loop_name}...")
             if profile_rsloop_dir and loop_name == "rsloop":

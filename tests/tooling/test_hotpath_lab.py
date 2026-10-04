@@ -223,7 +223,7 @@ def test_profile_override_is_only_applied_to_runtime(tmp_path, monkeypatch):
     pattern = tmp_path / "%p-%m.profraw"
     lab.run_sample(tmp_path, {"workload": "tasks"}, 0, 30, pattern)
     assert calls[0]["env"]["LLVM_PROFILE_FILE"] == str(pattern)
-    assert calls[0]["env"]["RSLOOP_USE_FAST_STREAMS"] == "1"
+    assert "RSLOOP_USE_FAST_STREAMS" not in calls[0]["env"]
 
 
 def test_test_fixtures_do_not_modify_artifact_source(tmp_path, monkeypatch):
