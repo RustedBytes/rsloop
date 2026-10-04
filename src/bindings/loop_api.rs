@@ -49,8 +49,10 @@ use crate::engine::{CallbackKind, LoopCore, LoopCoreError};
 /// to `Duration`/`Instant` (issue #48).
 const MAX_TIMER_DELAY_SECS: f64 = 100.0 * 365.0 * 24.0 * 60.0 * 60.0;
 
-#[pyclass(subclass, module = "rsloop._loop", weakref)]
+#[pyclass(subclass, module = "rsloop._loop", weakref, frozen)]
 /// Python-visible event loop; scheduling and lifecycle state live in `LoopCore`.
+/// The Rust shell is immutable: `LoopCore` synchronizes its own state, so Python
+/// method calls need no additional PyO3 borrow bookkeeping on this wrapper.
 pub struct PyLoop {
     /// Shared scheduling, lifecycle, and runtime state for this loop.
     pub core: Arc<LoopCore>,

@@ -29,6 +29,15 @@ def test_orders_are_balanced_and_deterministic():
         lab.balanced_orders(7, random.Random(0))
 
 
+def test_task_options_is_opt_in_and_has_a_distinct_holdout_shape():
+    assert lab.select_workloads("task_options") == ["task_options"]
+    assert "task_options" not in lab.DEFAULT_WORKLOADS.split(",")
+    training = lab.workload_config("task_options", "training")
+    holdout = lab.workload_config("task_options", "holdout")
+    assert training["tasks"] != holdout["tasks"]
+    assert training["task_batch_size"] != holdout["task_batch_size"]
+
+
 def test_paired_estimate_uses_ratios_not_unpaired_medians():
     baseline = [1.0, 10.0, 100.0, 1000.0]
     candidate = [value * 0.9 for value in baseline]
@@ -48,23 +57,27 @@ def test_invalid_samples_are_rejected(baseline, candidate):
 
 
 @pytest.mark.parametrize(
-    "primary,guard,reliable,expected",
+    "primary,guard,rss,reliable,expected",
     [
-        ((-4, -2), (-1, 2), True, "performance_gate_passed"),
-        ((-4, 0.1), (-1, 2), True, "inconclusive"),
-        ((-4, -2), (-1, 4), True, "inconclusive"),
-        ((-4, -2), (4, 5), True, "reject_regression"),
-        ((-4, -2), (-1, 2), False, "insufficient_measurement"),
+        ((-4, -2), (-1, 2), (-2, 2), True, "balanced_gate_passed"),
+        ((-4, 0.1), (-1, 2), (-2, 2), True, "inconclusive"),
+        ((-4, -2), (-1, 4), (-2, 2), True, "inconclusive"),
+        ((-4, -2), (4, 5), (-2, 2), True, "reject_regression"),
+        ((-4, -2), (-1, 2), (4, 5), True, "reject_rss_regression"),
+        ((-4, -2), (-1, 2), (-2, 4), True, "inconclusive"),
+        ((-4, -2), (-1, 2), (-2, 2), False, "insufficient_measurement"),
     ],
 )
-def test_gate_requires_gain_and_bounded_regression(primary, guard, reliable, expected):
+def test_gate_requires_gain_and_bounded_regression(primary, guard, rss, reliable, expected):
     estimates = {"tcp": {"ci_pct": primary}, "tasks": {"ci_pct": guard}}
     assert (
         lab.performance_decision(
             estimates,
+            {"tcp": {"ci_pct": rss}, "tasks": {"ci_pct": rss}},
             primary="tcp",
             minimum_gain=1.0,
             regression_budget=3.0,
+            rss_regression_budget=3.0,
             reliable=reliable,
         )
         == expected
@@ -266,7 +279,11 @@ def test_compare_archives_harness_and_refuses_to_promote_short_experiment(
         "flags": [],
     }
     monkeypatch.setattr(lab, "load_artifact", lambda path: manifest)
-    monkeypatch.setattr(lab, "run_sample", lambda *args: {"result": {"seconds": 1.0}})
+    monkeypatch.setattr(
+        lab,
+        "run_sample",
+        lambda *args: {"result": {"seconds": 1.0, "peak_rss_bytes": 1_000_000}},
+    )
     args = SimpleNamespace(
         baseline=tmp_path / "baseline",
         candidate=tmp_path / "candidate",
@@ -280,6 +297,7 @@ def test_compare_archives_harness_and_refuses_to_promote_short_experiment(
         min_seconds=0.25,
         minimum_gain=1.0,
         regression_budget=3.0,
+        rss_regression_budget=3.0,
         timeout=10.0,
     )
     lab.compare(args)

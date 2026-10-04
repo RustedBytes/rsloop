@@ -35,6 +35,7 @@ windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_Fil
 # Compile the actual embedded sources without PyO3/TLS native build dependencies.
 [features]
 default = []
+scheduler-batch-cache = []
 blocking-default = ["dep:rusty_pool"]
 fs = ["dep:async-std"]
 pipe = []

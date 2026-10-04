@@ -64,9 +64,9 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.98.1"
+          toolchain: "nightly-2026-09-25"
 
       - name: Install LLVM tools for PGO
         if: github.event_name == 'workflow_dispatch' && inputs.pgo
@@ -114,9 +114,9 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.98.1"
+          toolchain: "nightly-2026-09-25"
 
       - name: Cache Cargo registry and target
         uses: Swatinem/rust-cache@v2

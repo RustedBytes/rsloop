@@ -71,7 +71,7 @@ pub(crate) fn try_fast_create_future(
     let Ok(pyloop) = loop_obj.bind(py).cast_exact::<PyLoop>() else {
         return Ok(None);
     };
-    if !pyloop.borrow().core.on_runtime_thread() {
+    if !pyloop.get().core.on_runtime_thread() {
         return Ok(None);
     }
     create_asyncio_future_for_running_loop(py).map(Some)
@@ -85,7 +85,7 @@ pub(crate) fn try_fast_create_task(
     let Ok(pyloop) = loop_obj.bind(py).cast_exact::<PyLoop>() else {
         return Ok(None);
     };
-    let core = &pyloop.borrow().core;
+    let core = &pyloop.get().core;
     if !core.on_runtime_thread() || core.has_task_factory() {
         return Ok(None);
     }
@@ -103,14 +103,21 @@ fn create_asyncio_task_for_loop(
     {
         let name = name.as_ref();
         let context = context.as_ref();
-        let mut args = Vec::with_capacity(4);
-        args.push(coro.as_ptr());
-        args.push(loop_obj.as_ptr());
+        // Vectorcall borrows at most four pointers for this synchronous call;
+        // constructor keyword options do not need a heap allocation.
+        let mut args = [
+            coro.as_ptr(),
+            loop_obj.as_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ];
+        let mut next = 2;
         if let Some(name) = name {
-            args.push(name.as_ptr());
+            args[next] = name.as_ptr();
+            next += 1;
         }
         if let Some(context) = context {
-            args.push(context.as_ptr());
+            args[next] = context.as_ptr();
         }
 
         let cls = asyncio_task_cls(py)?.as_ptr();
@@ -172,7 +179,7 @@ fn trim_task_source_traceback(py: Python<'_>, task: &Py<PyAny>) -> PyResult<()> 
 }
 
 pub(super) fn create_future(slf: Py<PyLoop>, py: Python<'_>) -> PyResult<Py<PyAny>> {
-    if slf.borrow(py).core.on_runtime_thread() {
+    if slf.get().core.on_runtime_thread() {
         return create_asyncio_future_for_running_loop(py);
     }
 
@@ -208,14 +215,13 @@ pub(super) fn create_task(
             .as_ref()
             .is_none_or(|kwargs| kwargs.bind(py).is_empty());
     if bare {
-        let loop_ref = slf.borrow(py);
+        let loop_ref = slf.get();
         if !loop_ref.core.has_task_factory() && loop_ref.core.on_runtime_thread() {
-            drop(loop_ref);
             return create_asyncio_task_for_running_loop(py, slf.bind(py).as_any(), coro);
         }
     }
 
-    let core = Arc::clone(&slf.borrow(py).core);
+    let core = Arc::clone(&slf.get().core);
     let task_kwarg_support = asyncio_task_kwarg_support(py)?;
     let extra_kwargs = kwargs
         .as_ref()
@@ -251,6 +257,25 @@ pub(super) fn create_task(
         return Err(PyTypeError::new_err(format!(
             "create_task() got an unexpected keyword argument {unexpected}"
         )));
+    }
+
+    // Ordinary Task options fit the cached vectorcall keyword layouts. Avoid
+    // constructing a kwargs dict and then copying it in the generic path.
+    // An explicit loop is correct both inside and outside a running loop and
+    // also avoids a Python _get_running_loop call here. Custom factories and
+    // eager_start retain their existing compatibility path below.
+    if task_factory.is_none() && eager_start.is_none() {
+        let created = create_asyncio_task_for_loop(
+            py,
+            &loop_obj,
+            coro,
+            name.filter(|_| task_kwarg_support.name),
+            context.filter(|_| task_kwarg_support.context),
+        )?;
+        if core.get_debug() {
+            trim_task_source_traceback(py, &created)?;
+        }
+        return Ok(created);
     }
 
     let task_kwargs = if has_kwargs || task_factory.is_some() {

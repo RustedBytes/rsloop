@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextvars
 import ctypes
 import gc
 import importlib
@@ -365,6 +366,37 @@ async def bench_tasks(loop_name: str, iterations: int, batch_size: int) -> Child
     return ChildResult(
         loop_name,
         "tasks",
+        time.perf_counter() - start,
+        iterations,
+        baseline_rss_bytes=0,
+        peak_rss_bytes=0,
+        peak_rss_delta_bytes=0,
+    )
+
+
+async def bench_task_options(
+    loop_name: str, iterations: int, batch_size: int
+) -> ChildResult:
+    """Exercise named, explicit-context Task construction (Python 3.11+)."""
+
+    async def tiny_task() -> None:
+        await asyncio.sleep(0)
+
+    loop = asyncio.get_running_loop()
+    context = contextvars.copy_context()
+    start = time.perf_counter()
+    remaining = iterations
+    while remaining > 0:
+        current_batch = min(batch_size, remaining)
+        tasks = [
+            loop.create_task(tiny_task(), name="benchmark-task", context=context)
+            for _ in range(current_batch)
+        ]
+        await asyncio.gather(*tasks)
+        remaining -= current_batch
+    return ChildResult(
+        loop_name,
+        "task_options",
         time.perf_counter() - start,
         iterations,
         baseline_rss_bytes=0,

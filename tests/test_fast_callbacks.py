@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import gc
+import sys
 import threading
 import weakref
 from typing import Any, cast
@@ -11,6 +13,85 @@ import rsloop
 
 
 class TestFastCallback:
+    def test_loop_shell_preserves_subclass_state_and_reentrant_calls(self):
+        class SubLoop(rsloop.Loop):
+            pass
+
+        loop = SubLoop()
+        reference = weakref.ref(loop)
+        loop.events = []
+
+        def callback(active_loop):
+            active_loop.events.append(active_loop.get_debug())
+            active_loop.set_debug(True)
+            active_loop.call_soon(active_loop.events.append, active_loop.get_debug())
+            active_loop.call_soon(active_loop.stop)
+
+        try:
+            loop.call_soon(callback, loop)
+            loop.run_forever()
+            assert loop.events == [False, True]
+            assert reference() is loop
+        finally:
+            loop.close()
+        del loop
+        gc.collect()
+        assert reference() is None
+
+    @pytest.mark.parametrize("running", [False, True])
+    @pytest.mark.parametrize("named", [False, True])
+    @pytest.mark.parametrize("debug", [False, True])
+    @pytest.mark.parametrize(
+        "explicit_context",
+        [
+            False,
+            pytest.param(
+                True,
+                marks=pytest.mark.skipif(
+                    sys.version_info < (3, 11),
+                    reason="asyncio.Task context requires Python 3.11+",
+                ),
+            ),
+        ],
+    )
+    def test_task_constructor_option_layouts(
+        self, running, named, debug, explicit_context
+    ):
+        variable = contextvars.ContextVar("task_option_probe", default="ambient")
+        context = contextvars.Context()
+        context.run(variable.set, "explicit")
+        loop = rsloop.new_event_loop()
+        loop.set_debug(debug)
+
+        async def probe():
+            return variable.get(), asyncio.get_running_loop()
+
+        def create():
+            options = {}
+            if named:
+                options["name"] = "named-task"
+            if explicit_context:
+                options["context"] = context
+            task = loop.create_task(probe(), **options)
+            assert task.get_loop() is loop
+            if named:
+                assert task.get_name() == "named-task"
+            if debug:
+                assert task._source_traceback
+            return task
+
+        async def while_running():
+            return await create()
+
+        try:
+            value, owning_loop = loop.run_until_complete(
+                while_running() if running else create()
+            )
+            assert value == ("explicit" if explicit_context else "ambient")
+            assert owning_loop is loop
+        finally:
+            loop.close()
+
     def test_arguments_keywords_and_context_capture(self):
         loop = rsloop.new_event_loop()
         events = []

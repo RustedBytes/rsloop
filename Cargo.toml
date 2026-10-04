@@ -60,6 +60,8 @@ windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_Fil
 
 [features]
 default = []
+# Opt-in: faster scheduler turns, but measured TCP workloads can regress.
+scheduler-batch-cache = []
 blocking-default = ["dep:rusty_pool"]
 # Embedded-runtime modules are opt-in; production wheels retain the default
 # networking/timer build unless a feature is explicitly requested.

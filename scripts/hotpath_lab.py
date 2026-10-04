@@ -37,6 +37,7 @@ WORKLOADS = (
     "bulk_transfer",
     "tls_http",
     "websocket_messages",
+    "task_options",
 )
 DEFAULT_WORKLOADS = ",".join(WORKLOADS[:6])
 
@@ -250,6 +251,9 @@ def build(args) -> None:
     outputs.mkdir()
     for suffix in ("ll", "s", "pdb"):
         matches = list((release / "deps").glob(f"rsloop*.{suffix}"))
+        # Nightly places extra emit artifacts for the generated crate source
+        # beside that source in OUT_DIR instead of release/deps.
+        matches.extend((release / "build" / "rsloop").glob(f"*/out/rsloop*.{suffix}"))
         if suffix != "pdb" and len(matches) != 1:
             raise ValueError(
                 f"Expected exactly one .{suffix} compiler output, found {matches}"
@@ -339,7 +343,7 @@ def child(args) -> None:
     ):
         argv.extend(["--" + key.replace("_", "-"), str(config[key])])
     matrix_args = None
-    if name not in WORKLOADS[:3]:
+    if name not in (*WORKLOADS[:3], "task_options"):
         sys.argv = argv
         matrix_args = matrix.parse_args()
         matrix.validate_args(matrix_args)
@@ -354,6 +358,11 @@ def child(args) -> None:
                 result = asdict(small.run_with_loop("rsloop", coro))
             elif name == "tasks":
                 coro = small.bench_tasks(
+                    "rsloop", config["tasks"], config["task_batch_size"]
+                )
+                result = asdict(small.run_with_loop("rsloop", coro))
+            elif name == "task_options":
+                coro = small.bench_task_options(
                     "rsloop", config["tasks"], config["task_batch_size"]
                 )
                 result = asdict(small.run_with_loop("rsloop", coro))
@@ -473,20 +482,30 @@ def paired_estimate(
 
 def performance_decision(
     estimates: dict,
+    rss_estimates: dict,
     *,
     primary: str,
     minimum_gain: float,
     regression_budget: float,
+    rss_regression_budget: float,
     reliable: bool,
 ) -> str:
     if not reliable:
         return "insufficient_measurement"
     if any(value["ci_pct"][0] > regression_budget for value in estimates.values()):
         return "reject_regression"
+    if any(
+        value["ci_pct"][0] > rss_regression_budget
+        for value in rss_estimates.values()
+    ):
+        return "reject_rss_regression"
     if estimates[primary]["ci_pct"][1] < -minimum_gain and all(
         value["ci_pct"][1] <= regression_budget for value in estimates.values()
+    ) and all(
+        value["ci_pct"][1] <= rss_regression_budget
+        for value in rss_estimates.values()
     ):
-        return "performance_gate_passed"
+        return "balanced_gate_passed"
     return "inconclusive"
 
 
@@ -528,7 +547,7 @@ def compare(args) -> None:
         "candidate": str(candidate),
         "artifact_manifests": manifests,
         "primary": args.primary,
-        "metric": "seconds",
+        "metrics": ["seconds", "peak_rss_bytes"],
         "suite": args.suite,
         "seed": args.seed,
         "blocks": args.blocks,
@@ -536,6 +555,7 @@ def compare(args) -> None:
         "min_seconds": args.min_seconds,
         "minimum_gain_pct": args.minimum_gain,
         "regression_budget_pct": args.regression_budget,
+        "rss_regression_budget_pct": args.rss_regression_budget,
         "orders": orders,
         "configurations": {name: workload_config(name, args.suite) for name in names},
         "runner_sha256": sha256(Path(__file__)),
@@ -592,6 +612,7 @@ def compare(args) -> None:
         raise ValueError("Harness changed during timing; results cannot be promoted")
     # Bonferroni-adjust intervals across the predeclared family of workload metrics.
     estimates = {}
+    rss_estimates = {}
     reliable = args.blocks >= 12
     for index, name in enumerate(names):
         values = {
@@ -602,29 +623,51 @@ def compare(args) -> None:
         estimates[name] = paired_estimate(
             baseline=values["baseline"],
             candidate=values["candidate"],
-            alpha=0.05 / len(names),
+            alpha=0.05 / (2 * len(names)),
             seed=args.seed + index,
         )
         estimates[name]["min_observed_seconds"] = min(
             values["baseline"] + values["candidate"]
         )
+        rss_values = {
+            label: [
+                p["samples"][label]["result"]["peak_rss_bytes"]
+                for p in pairs[name]
+            ]
+            for label in ("baseline", "candidate")
+        }
+        rss_estimates[name] = paired_estimate(
+            baseline=rss_values["baseline"],
+            candidate=rss_values["candidate"],
+            alpha=0.05 / (2 * len(names)),
+            seed=args.seed + len(names) + index,
+        )
+        rss_estimates[name]["baseline_median_bytes"] = rss_estimates[name].pop(
+            "baseline_median_seconds"
+        )
+        rss_estimates[name]["candidate_median_bytes"] = rss_estimates[name].pop(
+            "candidate_median_seconds"
+        )
     decision = performance_decision(
         estimates,
+        rss_estimates,
         primary=args.primary,
         minimum_gain=args.minimum_gain,
         regression_budget=args.regression_budget,
+        rss_regression_budget=args.rss_regression_budget,
         reliable=reliable,
     )
     report = {
         "schema": SCHEMA,
         "decision": decision,
         "estimates": estimates,
+        "rss_estimates": rss_estimates,
         "correctness": "NOT certified by timing; run the test subcommand on both artifacts",
         "notes": [
             "Negative changes are faster; positive changes are slower.",
             "Percentile bootstrap resamples paired fresh processes, not request latencies.",
             "Intervals are approximate; host load, serial correlation, and repeated candidate searches can still bias inference.",
-            "Per-process p95/p99, CPU time, and RSS are diagnostic only, not promotion metrics.",
+            "Peak RSS is a promotion metric; p95/p99 latency and CPU time remain diagnostic.",
         ],
     }
     write_json(out / "report.json", report)
@@ -919,6 +962,7 @@ def main() -> None:
     p.add_argument("--min-seconds", type=float, default=0.25)
     p.add_argument("--minimum-gain", type=float, default=1.0)
     p.add_argument("--regression-budget", type=float, default=3.0)
+    p.add_argument("--rss-regression-budget", type=float, default=3.0)
     p.add_argument("--timeout", type=float, default=180.0)
     p.add_argument("--out", type=Path, required=True)
     p.set_defaults(func=compare)
