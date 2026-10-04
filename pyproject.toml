@@ -53,8 +53,11 @@ integration = [
   "aiosqlite>=0.20.0",
   "anyio>=4.14.2",
   "beanie>=2.0.0",
-  "daphne>=4.2.3",
-  "django>=5.2.17",
+  # Patched Autobahn requires Python 3.11+, so Daphne is unavailable on 3.10.
+  "autobahn>=26.7.1; python_version >= '3.11'",
+  "daphne>=4.2.3; python_version >= '3.11'",
+  "django>=5.2.17,<6; python_version < '3.12'",
+  "django>=6.1.1; python_version >= '3.12'",
   "edgy>=0.30.0",
   "falcon>=4.1.0",
   "fastapi>=0.124.4",
