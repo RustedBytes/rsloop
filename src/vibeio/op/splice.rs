@@ -23,6 +23,7 @@ pub struct SpliceOp<'a> {
 
 // AsRawFd does not promise the validity required by BorrowedFd::borrow_raw.
 // Ask the kernel to validate and duplicate the descriptor instead.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn duplicate_fd(fd: RawFd) -> io::Result<OwnedFd> {
     loop {
         // SAFETY: F_DUPFD_CLOEXEC takes an integer minimum descriptor number.
@@ -46,6 +47,7 @@ struct SourceRegistration {
 }
 
 impl<'a> SpliceOp<'a> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "SpliceOp"))]
     #[inline]
     pub fn new(fd_in: RawFd, fd_out: &'a InnerRawHandle, len: usize) -> Self {
         Self {
@@ -61,6 +63,7 @@ impl<'a> SpliceOp<'a> {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "SpliceOp"))]
     fn source_ready(&self) -> io::Result<bool> {
         let mut descriptor = libc::pollfd {
             fd: self.fd_in,
@@ -83,6 +86,7 @@ impl<'a> SpliceOp<'a> {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "SpliceOp"))]
     fn source_handle(&mut self) -> io::Result<&InnerRawHandle> {
         if self.source_registration.is_none() {
             let fd = duplicate_fd(self.fd_in)?;
@@ -101,6 +105,10 @@ impl<'a> SpliceOp<'a> {
 impl Op for SpliceOp<'_> {
     type Output = usize;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SpliceOp as Op>")
+    )]
     #[inline]
     fn poll_poll(
         &mut self,
@@ -147,6 +155,10 @@ impl Op for SpliceOp<'_> {
         poll_result_or_wait(result, self.fd_out, cx, driver, Interest::WRITABLE)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SpliceOp as Op>")
+    )]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -182,6 +194,10 @@ impl Op for SpliceOp<'_> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SpliceOp as Op>")
+    )]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -212,6 +228,10 @@ impl Op for SpliceOp<'_> {
 }
 
 impl Drop for SpliceOp<'_> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SpliceOp as Drop>")
+    )]
     #[inline]
     fn drop(&mut self) {
         if let Some(completion_token) = self.completion_token {

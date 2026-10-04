@@ -97,6 +97,7 @@ pub trait Op {
     /// I/O operation return type
     type Output;
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
     /// Whether a successful Linux completion transfers ownership of a new fd.
     /// The driver must close an unclaimed result after cancellation.
     #[cfg(target_os = "linux")]
@@ -104,6 +105,7 @@ pub trait Op {
         false
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
     /// Polls the operation for readiness (poll-based I/O).
     #[inline]
     fn poll_poll(
@@ -117,6 +119,7 @@ pub trait Op {
         )))
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
     /// Polls the operation for readiness (completion-based I/O).
     #[inline]
     fn poll_completion(
@@ -130,6 +133,7 @@ pub trait Op {
         )))
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
     /// Polls the operation for readiness (automatically determined I/O).
     #[cfg(any(feature = "fs", feature = "process"))]
     #[allow(dead_code)]
@@ -142,6 +146,7 @@ pub trait Op {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
     /// Builds an io_uring submission entry for this operation. Returns the
     /// constructed SQE.
     #[cfg(target_os = "linux")]
@@ -156,6 +161,7 @@ pub trait Op {
         ))
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
     /// Submits a Windows overlapped I/O operation for this operation.
     #[cfg(windows)]
     #[inline]

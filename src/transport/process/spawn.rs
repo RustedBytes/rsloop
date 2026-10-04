@@ -43,11 +43,16 @@ pub(super) struct ProcessPipes {
     stderr: Option<BoxedProcessReader>,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn open_pipe_mask(has_stdin: bool, has_stdout: bool, has_stderr: bool) -> u8 {
     u8::from(has_stdin) | (u8::from(has_stdout) << 1) | (u8::from(has_stderr) << 2)
 }
 
 impl ProcessPipes {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessPipes")
+    )]
     pub(super) fn take_from(
         child: &mut Child,
         stdout_override: Option<BoxedProcessReader>,
@@ -70,6 +75,10 @@ impl ProcessPipes {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessPipes")
+    )]
     pub(super) fn open_pipes(&self) -> HashSet<i32> {
         let mask = open_pipe_mask(
             self.stdin.is_some(),
@@ -86,6 +95,7 @@ impl ProcessPipes {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn new_process_pipe_transport(py: Python<'_>, fd: i32) -> PyResult<Py<PyAny>> {
     Ok(Py::new(
         py,
@@ -99,6 +109,7 @@ pub(super) fn new_process_pipe_transport(py: Python<'_>, fd: i32) -> PyResult<Py
     .into_any())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn process_text_extra_entries(
     py: Python<'_>,
     text_config: Option<&ProcessTextConfig>,
@@ -121,6 +132,7 @@ pub(super) fn process_text_extra_entries(
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_stdin_pipe_transport(
     py: Python<'_>,
     core: &Arc<ProcessTransportCore>,
@@ -156,6 +168,7 @@ pub(super) fn spawn_stdin_pipe_transport(
     Ok(transport.into_any())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn register_initial_pipe_transports(
     py: Python<'_>,
     core: &Arc<ProcessTransportCore>,
@@ -179,6 +192,7 @@ pub(super) fn register_initial_pipe_transports(
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_process_reader_thread(
     name: &str,
     core: Arc<ProcessTransportCore>,
@@ -192,6 +206,7 @@ pub(super) fn spawn_process_reader_thread(
         .map_err(|err| PyRuntimeError::new_err(format!("failed to spawn {name}: {err}")))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_process_waiter_thread(
     core: Arc<ProcessTransportCore>,
     child: Child,
@@ -204,6 +219,7 @@ pub(super) fn spawn_process_waiter_thread(
         .map_err(|err| PyRuntimeError::new_err(format!("failed to spawn process waiter: {err}")))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_process_workers(
     core: Arc<ProcessTransportCore>,
     stdout: Option<BoxedProcessReader>,
@@ -220,6 +236,7 @@ pub(super) fn spawn_process_workers(
     spawn_process_waiter_thread(core, child, control_rx)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn spawn_process_transport(
     py: Python<'_>,
     params: ProcessTransportParams,
@@ -273,6 +290,7 @@ pub fn spawn_process_transport(
     Ok(transport)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 pub(super) fn make_python_pipe_file_from_handle(
     py: Python<'_>,
@@ -295,6 +313,7 @@ pub(super) fn make_python_pipe_file_from_handle(
     Ok(os.getattr("fdopen")?.call1((fd, mode, 0))?.unbind())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn make_python_pipe_file(
     py: Python<'_>,

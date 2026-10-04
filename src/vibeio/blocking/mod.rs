@@ -16,6 +16,10 @@ pub use default::*;
 pub struct SpawnBlockingError;
 
 impl fmt::Display for SpawnBlockingError {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<SpawnBlockingError as fmt :: Display>")
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "failed to spawn blocking task")
     }
@@ -23,6 +27,7 @@ impl fmt::Display for SpawnBlockingError {
 
 impl std::error::Error for SpawnBlockingError {}
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Offload a borrowed operation while retaining ownership through worker unwind.
 /// Cancellation drops the caller's share; a queued/running worker retains its
 /// share until it stops using the buffer. Partial mutations are not rolled back.
@@ -124,6 +129,7 @@ pub trait BlockingThreadPool: 'static {
     fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>);
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Spawns a blocking task onto a blocking thread pool.
 ///
 /// This function is a convenience wrapper around a blocking thread pool.

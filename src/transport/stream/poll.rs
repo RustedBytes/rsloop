@@ -11,11 +11,13 @@ use std::time::Duration;
 use super::tuning::BLOCKING_POLL_INTERVAL_MS;
 use crate::fd_ops;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn clamp_poll_timeout_ms(remaining_ms: u128) -> i32 {
     let timeout = remaining_ms.clamp(1, u128::from(i32::MAX.unsigned_abs()));
     i32::try_from(timeout).expect("poll timeout is clamped to i32::MAX")
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn wait_socket_ready(
     fd: fd_ops::RawFd,
     pollable: bool,
@@ -40,6 +42,7 @@ pub(super) fn wait_socket_ready(
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn wait_socket_ready_once(
     fd: fd_ops::RawFd,
     pollable: bool,
@@ -54,10 +57,12 @@ pub(super) fn wait_socket_ready_once(
     Ok(true)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn poll_read_ready(fd: fd_ops::RawFd) -> io::Result<bool> {
     fd_ops::poll_fd(fd, true, false, BLOCKING_POLL_INTERVAL_MS).map(|(ready, _)| ready)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn wait_socket_ready_until(
     fd: fd_ops::RawFd,
     pollable: bool,

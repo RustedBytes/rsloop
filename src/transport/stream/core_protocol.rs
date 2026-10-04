@@ -20,6 +20,7 @@ use super::tuning::{PENDING_READ_HIGH_WATER, PENDING_READ_LOW_WATER};
 use super::{PendingReadEvent, PyStreamTransport, StreamTransportCore};
 use crate::context::{run_in_context_noargs, run_in_context_onearg};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Copy raw bytes into a writable C-contiguous export, regardless of its
 /// element format. The export is released before calling buffer_updated, which
 /// is allowed to resize or replace the protocol's buffer.
@@ -29,6 +30,7 @@ fn copy_to_protocol_buffer(buffer: &Bound<'_, PyAny>, source: &[u8]) -> PyResult
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn copy_to_protocol_buffer_locked(buffer: &Bound<'_, PyAny>, source: &[u8]) -> PyResult<usize> {
     let py = buffer.py();
     // Exporters can make Py_buffer self-referential; keep its address stable.
@@ -124,6 +126,10 @@ mod buffer_tests {
 }
 
 impl StreamTransportCore {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn apply_pending_read_backpressure(&self) {
         if self.pending_read_bytes.load(Ordering::Acquire) < PENDING_READ_HIGH_WATER {
             return;
@@ -137,6 +143,10 @@ impl StreamTransportCore {
         self.reading.store(false, Ordering::Release);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn record_pending_read_drained(&self, len: usize) {
         let remaining = self
             .pending_read_bytes
@@ -160,6 +170,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     #[inline]
     pub(super) fn call_protocol_method0(
         &self,
@@ -171,6 +185,10 @@ impl StreamTransportCore {
         run_in_context_noargs(py, context, context_needs_run, callback)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     #[inline]
     pub(super) fn call_protocol_method1(
         &self,
@@ -183,6 +201,10 @@ impl StreamTransportCore {
         run_in_context_onearg(py, context, context_needs_run, callback, arg.bind(py))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn flush_pending_data_with_py(
         &self,
         py: Python<'_>,
@@ -202,6 +224,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn report_error_with_py(
         &self,
         py: Python<'_>,
@@ -215,10 +241,18 @@ impl StreamTransportCore {
             .call_exception_handler(py, Some(&self.loop_obj), context.unbind().into_any())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn report_error(&self, err: PyErr, message: &str) {
         let _ = Python::try_attach(|py| self.report_error_with_py(py, err, message));
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub fn connection_made(&self, transport: Py<PyStreamTransport>) -> PyResult<()> {
         self.call_in_loop_context(|py| {
             let (callback, fast_path, context, context_needs_run) = {
@@ -250,14 +284,26 @@ impl StreamTransportCore {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub fn data_received(&self, data: &[u8]) -> PyResult<()> {
         self.call_in_loop_context(|py| self.data_received_with_py(py, data))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub fn eof_received(&self) -> PyResult<bool> {
         self.call_in_loop_context(|py| self.eof_received_with_py(py))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub fn connection_lost(self: &Arc<Self>, exc: Option<PyErr>) -> PyResult<()> {
         // Always serialize loss with pending read data, even when the caller
         // is already on the loop thread. A direct callback here can overtake
@@ -269,12 +315,20 @@ impl StreamTransportCore {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn report_connection_lost_result(&self, result: PyResult<()>) {
         if let Err(err) = result {
             self.report_error(err, "stream connection_lost callback failed");
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn data_received_with_py(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
         let fast_path = {
             let state = self.state.lock().expect("poisoned transport state");
@@ -292,6 +346,10 @@ impl StreamTransportCore {
         self.data_received_slow_path(py, data)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn data_received_slow_path(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
         let (data_received, get_buffer, buffer_updated, context, context_needs_run) = {
             let state = self.state.lock().expect("poisoned transport state");
@@ -354,6 +412,10 @@ impl StreamTransportCore {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn eof_received_with_py(&self, py: Python<'_>) -> PyResult<bool> {
         let (callback, fast_path, context, context_needs_run) = {
             let state = self.state.lock().expect("poisoned transport state");
@@ -382,6 +444,10 @@ impl StreamTransportCore {
         result.bind(py).is_truthy()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn connection_lost_with_py(
         &self,
         py: Python<'_>,

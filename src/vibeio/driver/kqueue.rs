@@ -24,6 +24,10 @@ pub struct KqueueInterruptor {
 }
 
 impl Interruptor for KqueueInterruptor {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<KqueueInterruptor as Interruptor>")
+    )]
     #[inline]
     fn interrupt(&self) {
         if let Some(waker) = self.waker.upgrade() {
@@ -38,6 +42,10 @@ struct DriverWaker {
 }
 
 impl DriverWaker {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverWaker")
+    )]
     fn new() -> io::Result<Self> {
         let (sender, receiver) = UnixDatagram::pair()?;
         sender.set_nonblocking(true)?;
@@ -45,11 +53,19 @@ impl DriverWaker {
         Ok(Self { sender, receiver })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverWaker")
+    )]
     #[inline]
     fn wake(&self) -> io::Result<()> {
         super::send_wake_notification(|| self.sender.send(&[1]))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverWaker")
+    )]
     fn acknowledge(&self) {
         let mut buffer = [0_u8; 256];
         loop {
@@ -79,6 +95,10 @@ struct DriverState {
 }
 
 impl Registration {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "Registration")
+    )]
     fn record_readiness(&mut self, filter: i16) -> Option<Waker> {
         let (waiter, ready) = if filter == libc::EVFILT_READ && self.registered_read {
             (&mut self.read_waiter, &mut self.read_ready)
@@ -106,6 +126,10 @@ pub struct KqueueDriver {
 }
 
 impl KqueueDriver {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     pub(crate) fn new() -> io::Result<Self> {
         // SAFETY: kqueue takes no pointers and returns a newly owned descriptor.
         let kqueue = unsafe { libc::kqueue() };
@@ -134,6 +158,10 @@ impl KqueueDriver {
         Ok(driver)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     #[inline]
     fn change(fd: RawFd, filter: i16, flags: u16, key: usize) -> libc::kevent {
         libc::kevent {
@@ -146,20 +174,36 @@ impl KqueueDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     #[inline]
     fn encode_key(token: Token, generation: u32) -> usize {
         ((generation as usize) << 32) | (token.0 & u32::MAX as usize)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     #[inline]
     fn decode_key(key: usize) -> (Token, u32) {
         (Token(key & u32::MAX as usize), (key >> 32) as u32)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     fn apply_change(&self, change: libc::kevent) -> io::Result<()> {
         self.apply_changes(std::slice::from_ref(&change))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     fn apply_changes(&self, changes: &[libc::kevent]) -> io::Result<()> {
         // SAFETY: changes is live input storage for this synchronous call.
         // Internal callers supply at most two entries; there is no output array.
@@ -180,10 +224,18 @@ impl KqueueDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     fn delete_filter(&self, fd: RawFd, filter: i16) -> io::Result<()> {
         Self::delete_filter_with(|| self.apply_change(Self::change(fd, filter, libc::EV_DELETE, 0)))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     fn delete_filter_with(mut delete: impl FnMut() -> io::Result<()>) -> io::Result<()> {
         loop {
             match delete() {
@@ -203,6 +255,10 @@ impl KqueueDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     fn install_registration_with(
         &self,
         changes: &[libc::kevent],
@@ -231,6 +287,10 @@ impl KqueueDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     fn wait_events(&self, timeout: Option<Duration>) -> io::Result<()> {
         let timeout = timeout.map(|duration| duration.min(MAX_WAIT));
         let timespec = timeout.map(|duration| libc::timespec {
@@ -297,6 +357,10 @@ impl KqueueDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     #[inline]
     fn filter(interest: Interest) -> i16 {
         if interest.is_readable() {
@@ -306,6 +370,10 @@ impl KqueueDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     fn deregister_with(
         &self,
         handle: &InnerRawHandle,
@@ -364,6 +432,10 @@ impl KqueueDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "KqueueDriver")
+    )]
     fn reregister_with(
         &self,
         handle: &InnerRawHandle,
@@ -435,11 +507,19 @@ impl KqueueDriver {
 impl Driver for KqueueDriver {
     type Interruptor = KqueueInterruptor;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<KqueueDriver as Driver>")
+    )]
     #[inline]
     fn should_flush(&self) -> bool {
         false
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<KqueueDriver as Driver>")
+    )]
     #[inline]
     fn wait(&self, timeout: Option<Duration>) {
         if let Err(err) = self.wait_events(timeout) {
@@ -447,6 +527,10 @@ impl Driver for KqueueDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<KqueueDriver as Driver>")
+    )]
     fn register_handle(&self, handle: &InnerRawHandle, interest: Interest) -> io::Result<Token> {
         let (token, generation) = {
             let mut state = self.state.borrow_mut();
@@ -496,6 +580,10 @@ impl Driver for KqueueDriver {
         Ok(token)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<KqueueDriver as Driver>")
+    )]
     fn reregister_handle(&self, handle: &InnerRawHandle, interest: Interest) -> io::Result<()> {
         self.reregister_with(handle, interest, |fd, filter, add, key| {
             if add {
@@ -511,10 +599,18 @@ impl Driver for KqueueDriver {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<KqueueDriver as Driver>")
+    )]
     fn deregister_handle(&self, handle: &InnerRawHandle) -> io::Result<()> {
         self.deregister_with(handle, |fd, filter| self.delete_filter(fd, filter))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<KqueueDriver as Driver>")
+    )]
     fn submit_poll(
         &self,
         handle: &InnerRawHandle,
@@ -560,6 +656,10 @@ impl Driver for KqueueDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<KqueueDriver as Driver>")
+    )]
     #[inline]
     fn get_interruptor(&self) -> Self::Interruptor {
         KqueueInterruptor {

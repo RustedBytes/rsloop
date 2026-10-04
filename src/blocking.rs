@@ -4,6 +4,7 @@ use std::thread;
 
 use futures::channel::oneshot;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Runs one blocking closure on a named worker and returns its result asynchronously.
 pub async fn run<T, F>(name: impl Into<String>, task: F) -> Result<T, String>
 where

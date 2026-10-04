@@ -25,6 +25,7 @@ mod completion_error_tests {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Normalize EOF reported either during submission or by a completed read.
 pub(super) fn read_error_result(error: io::Error) -> io::Result<i32> {
     // Overlapped ReadFile can report EOF immediately or through its completion.
@@ -36,6 +37,7 @@ pub(super) fn read_error_result(error: io::Error) -> io::Result<i32> {
     Err(error)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(all(target_os = "linux", feature = "fs"))]
 pub(super) fn positional_offset(offset: u64) -> io::Result<u64> {
     // Linux file offsets are signed. In particular, io_uring treats all-one
@@ -49,6 +51,7 @@ pub(super) fn positional_offset(offset: u64) -> io::Result<u64> {
     Ok(offset)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn iovec_count<T: TryFrom<usize>>(count: usize) -> io::Result<T> {
     T::try_from(count).map_err(|_| {
         io::Error::new(
@@ -58,6 +61,7 @@ pub(super) fn iovec_count<T: TryFrom<usize>>(count: usize) -> io::Result<T> {
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn iovec_to_system(bufs: &[crate::vibeio::io::IoVec]) -> Box<[libc::iovec]> {
     bufs.iter()
@@ -68,6 +72,7 @@ pub(super) fn iovec_to_system(bufs: &[crate::vibeio::io::IoVec]) -> Box<[libc::i
         .collect()
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(target_os = "linux", windows, test))]
 #[inline]
 pub(super) fn completion_len(capacity: usize) -> io::Result<u32> {
@@ -81,6 +86,7 @@ pub(super) fn completion_len(capacity: usize) -> io::Result<u32> {
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 pub(super) fn completion_vectored_len(mut lengths: impl Iterator<Item = usize>) -> io::Result<u32> {
     let total = lengths
@@ -89,6 +95,7 @@ pub(super) fn completion_vectored_len(mut lengths: impl Iterator<Item = usize>) 
     completion_len(total)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn set_cloexec(fd: std::os::fd::RawFd) -> Result<(), io::Error> {
     // SAFETY: F_GETFD has no pointer arguments and only queries descriptor flags.
@@ -543,6 +550,10 @@ mod storage_tests {
 }
 
 impl<B> CompletionBuffer<B> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "CompletionBuffer")
+    )]
     #[inline]
     pub(crate) fn new(buf: B, stable: bool) -> Self {
         if stable {
@@ -552,6 +563,10 @@ impl<B> CompletionBuffer<B> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "CompletionBuffer")
+    )]
     #[inline]
     pub(crate) fn as_ref(&self) -> &B {
         match self {
@@ -560,6 +575,10 @@ impl<B> CompletionBuffer<B> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "CompletionBuffer")
+    )]
     #[inline]
     pub(crate) fn as_mut(&mut self) -> &mut B {
         match self {
@@ -568,6 +587,10 @@ impl<B> CompletionBuffer<B> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "CompletionBuffer")
+    )]
     #[inline]
     pub(crate) fn into_inner(self) -> B {
         match self {
@@ -576,6 +599,10 @@ impl<B> CompletionBuffer<B> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "CompletionBuffer")
+    )]
     #[inline]
     pub(crate) fn into_stable_box(self) -> Box<B> {
         match self {
@@ -585,6 +612,7 @@ impl<B> CompletionBuffer<B> {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub(crate) fn poll_result_or_wait(
     result: io::Result<usize>,

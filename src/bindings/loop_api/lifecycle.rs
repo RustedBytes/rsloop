@@ -8,6 +8,7 @@ use super::PyLoop;
 use super::asyncgens::AsyncgenHooksGuard;
 use crate::engine::LoopCoreError;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn close(loop_ref: &PyLoop, py: Python<'_>) -> PyResult<()> {
     let executor = {
         let mut state = loop_ref.core.state.lock().expect("poisoned loop state");
@@ -31,6 +32,7 @@ pub(super) fn close(loop_ref: &PyLoop, py: Python<'_>) -> PyResult<()> {
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn run_forever(slf: Py<PyLoop>, py: Python<'_>) -> PyResult<()> {
     let loop_obj = PyLoop::as_py_any(py, &slf);
     let core = slf.borrow(py).core.clone();
@@ -38,6 +40,7 @@ pub(super) fn run_forever(slf: Py<PyLoop>, py: Python<'_>) -> PyResult<()> {
     core.run_forever(py, loop_obj)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn run_until_complete(
     slf: Py<PyLoop>,
     py: Python<'_>,
@@ -88,6 +91,7 @@ pub(super) fn run_until_complete(
     Ok(wrapped.call_method0("result")?.unbind())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// `add_done_callback` target installed by `run_until_complete`: stop the loop
 /// once the awaited future finishes, but let `SystemExit` and
 /// `KeyboardInterrupt` propagate out of `run_forever` instead.

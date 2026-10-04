@@ -19,6 +19,10 @@ Quick Rust check:
 cargo check
 ```
 
+For function timing, async poll data, allocation profiles, and a workload
+coverage inventory, see [Hotpath Profiling](hotpath-rs-profile.md). Profiling
+hooks are opt-in and absent from normal builds.
+
 The nightly pin supplies the allocator API merged in
 [rust-lang/rust#156882](https://github.com/rust-lang/rust/pull/156882). The opt-in
 `scheduler-batch-cache` Cargo feature uses the stabilized `Allocator` and

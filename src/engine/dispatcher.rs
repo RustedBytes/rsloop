@@ -61,6 +61,7 @@ enum WatchTask {
 }
 
 impl WatchTask {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WatchTask"))]
     fn spawn_thread(name: String, task: impl FnOnce(Arc<AtomicBool>) + Send + 'static) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = Arc::clone(&stop);
@@ -71,6 +72,7 @@ impl WatchTask {
         Self::Thread { stop, join }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WatchTask"))]
     fn abort(self) {
         match self {
             Self::Thread { stop, join } => {
@@ -81,6 +83,7 @@ impl WatchTask {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WatchTask"))]
     fn cancel(self) {
         match self {
             Self::Thread { stop, .. } => {
@@ -91,16 +94,19 @@ impl WatchTask {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn abort_watch_task(task: WatchTask) {
     task.abort();
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn cancel_watch_task(task: WatchTask) {
     task.cancel();
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>) {
     let runtime = crate::vibeio::RuntimeBuilder::new()
         .rsloop_profile()
@@ -128,6 +134,10 @@ pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>
 impl Future for RuntimeDispatcher {
     type Output = ();
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<RuntimeDispatcher as Future>")
+    )]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         // Register before inspecting the command channel so a concurrent send
         // either wakes this poll or remains visible when the channel is
@@ -157,6 +167,10 @@ impl Future for RuntimeDispatcher {
 }
 
 impl RuntimeDispatcher {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeDispatcher")
+    )]
     #[inline]
     fn has_ready(&self) -> bool {
         !self.ready_batch.is_empty()
@@ -180,6 +194,10 @@ impl RuntimeDispatcher {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeDispatcher")
+    )]
     fn handle_command(&mut self, command: LoopCommand) -> bool {
         match command {
             LoopCommand::ScheduleReady(callback) => {
@@ -475,6 +493,10 @@ impl RuntimeDispatcher {
         self.core.signal_ready();
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeDispatcher")
+    )]
     fn finish_run(&mut self) {
         let Some(active_run) = self.active_run.take() else {
             return;
@@ -491,6 +513,10 @@ impl RuntimeDispatcher {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeDispatcher")
+    )]
     fn cleanup_watchers(&mut self) {
         #[cfg(unix)]
         for (_, watcher) in self.signal_tasks.drain() {

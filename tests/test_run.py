@@ -99,8 +99,12 @@ class TestRun:
             "runtime_profile",
             "minimum_os",
             "tls_backend",
+            "hotpath_profile",
+            "hotpath_alloc_profile",
         }
         assert info["version"] == rsloop.__version__
+        assert isinstance(info["hotpath_profile"], bool)
+        assert isinstance(info["hotpath_alloc_profile"], bool)
         assert info["profile"] in {"debug", "release"}
         assert info["target_os"]
         assert info["target_arch"]

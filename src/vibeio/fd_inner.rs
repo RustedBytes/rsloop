@@ -32,6 +32,7 @@ pub struct InnerRawHandle {
 // only after registration succeeds, and relinquishes it before re-registering.
 const UNREGISTERED: Token = Token(usize::MAX);
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Set the descriptor's blocking mode without changing unrelated status flags.
 #[cfg(all(
     unix,
@@ -44,6 +45,7 @@ const UNREGISTERED: Token = Token(usize::MAX);
     )
 ))]
 pub(crate) fn set_nonblocking(fd: RawOsHandle, nonblocking: bool) -> io::Result<()> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
     fn fcntl(fd: RawOsHandle, command: libc::c_int, value: libc::c_int) -> io::Result<libc::c_int> {
         loop {
             // SAFETY: F_GETFL and F_SETFL take integer arguments, not pointers.
@@ -85,12 +87,20 @@ impl InnerRawHandle {
             driver,
         }
     }
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     /// Share ownership with operations using this registration's driver.
     #[cfg(all(target_os = "linux", any(feature = "fs", feature = "splice")))]
     pub(crate) fn driver_owner(&self) -> Rc<AnyDriver> {
         self.driver.clone()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     /// Retain operation storage on the registration's owner until completion.
     #[inline]
     pub(crate) fn cancel_completion(&self, token: usize, data: Box<dyn std::any::Any>) {
@@ -100,6 +110,10 @@ impl InnerRawHandle {
         self.driver.ignore_completion(token, data);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[inline]
     pub(crate) fn new(handle: RawOsHandle, interest: Interest) -> Result<Self, io::Error> {
         let default_mode = if current_driver()
@@ -114,6 +128,10 @@ impl InnerRawHandle {
         Self::new_with_mode(handle, interest, default_mode)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[inline]
     pub(crate) fn new_with_mode(
         handle: RawOsHandle,
@@ -129,6 +147,10 @@ impl InnerRawHandle {
         Self::new_with_driver_and_mode(&driver, handle, interest, mode)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[inline]
     pub(crate) fn new_with_driver_and_mode(
         driver: &Rc<AnyDriver>,
@@ -154,34 +176,58 @@ impl InnerRawHandle {
         Ok(inner)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[cfg(unix)]
     #[inline]
     pub(crate) fn token(&self) -> Token {
         self.token
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[allow(dead_code)]
     #[inline]
     pub(crate) fn reregister(&self, interest: Interest) -> Result<(), io::Error> {
         self.driver.reregister_handle(self, interest)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[inline]
     pub(crate) fn supports_completion(&self) -> bool {
         self.driver.supports_completion()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[inline]
     pub(crate) fn uses_completion(&self) -> bool {
         self.supports_completion() && matches!(self.mode, RegistrationMode::Completion)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[allow(dead_code)]
     #[inline]
     pub(crate) fn mode(&self) -> RegistrationMode {
         self.mode
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     /// Replace the registration. If deregistration fails, return its error
     /// without attempting a replacement. If acquiring the new registration fails, the
     /// handle is unregistered: callers must drop it or retry before doing I/O.
@@ -213,6 +259,10 @@ impl InnerRawHandle {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[inline]
     pub(crate) fn poll_op<O, R>(
         &self,
@@ -229,6 +279,10 @@ impl InnerRawHandle {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[inline]
     pub(crate) fn poll_op_poll<O, R>(
         &self,
@@ -249,6 +303,10 @@ impl InnerRawHandle {
 }
 
 impl Drop for InnerRawHandle {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<InnerRawHandle as Drop>")
+    )]
     #[inline]
     fn drop(&mut self) {
         if self.token != UNREGISTERED {

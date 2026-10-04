@@ -14,18 +14,22 @@ use super::PyServer;
 
 #[pymethods]
 impl PyServer {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyServer"))]
     fn close(&self) {
         self.core.close();
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyServer"))]
     fn is_serving(&self) -> bool {
         self.core.is_serving()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyServer"))]
     fn get_loop(&self, py: Python<'_>) -> Py<PyAny> {
         self.core.loop_obj.clone_ref(py)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyServer"))]
     fn start_serving<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let locals = self.core.locals(py)?;
         let core = Arc::clone(&self.core);
@@ -35,6 +39,7 @@ impl PyServer {
         })
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyServer"))]
     fn wait_closed<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let locals = self.core.locals(py)?;
         let core = Arc::clone(&self.core);
@@ -60,6 +65,7 @@ impl PyServer {
         })
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyServer"))]
     fn serve_forever<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let locals = self.core.locals(py)?;
         let core = Arc::clone(&self.core);
@@ -78,6 +84,7 @@ impl PyServer {
         })
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyServer"))]
     #[getter]
     fn sockets(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let tuple = PyTuple::new(
@@ -91,6 +98,7 @@ impl PyServer {
         Ok(tuple.unbind().into_any())
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyServer"))]
     fn __repr__(&self) -> String {
         format!(
             "<Server serving={} closed={}>",

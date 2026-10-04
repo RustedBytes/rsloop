@@ -45,6 +45,7 @@ pub struct PreparedTlsTransport {
     stream: StreamKind,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Retires plaintext I/O before a TLS handshake is allowed to touch the socket.
 pub fn prepare_start_tls_transport(
     py: Python<'_>,
@@ -59,6 +60,7 @@ pub fn prepare_start_tls_transport(
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn start_tls_transport(
     py: Python<'_>,
     prepared: PreparedTlsTransport,
@@ -76,6 +78,7 @@ pub fn start_tls_transport(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_tls_client_transport(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -101,6 +104,7 @@ pub(super) fn spawn_tls_client_transport(
     )
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_tls_server_transport(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -135,6 +139,7 @@ pub(super) struct TlsTransportConfig {
     pub(super) call_connection_made: bool,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn tls_stream_extra(
     py: Python<'_>,
     stream: &StreamKind,
@@ -153,6 +158,7 @@ pub(super) fn tls_stream_extra(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn tls_io_state(
     stream: StreamKind,
     connection: TlsConnectionKind,
@@ -165,6 +171,7 @@ pub(super) fn tls_io_state(
     }))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_tls_transport(
     py: Python<'_>,
     mut spawn_context: TransportSpawnContext,

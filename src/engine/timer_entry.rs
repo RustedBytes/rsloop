@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn compare_timer_parts<T: Ord>(
     left_when: &T,
     left_seq: u64,
@@ -24,6 +25,10 @@ pub(super) struct TimerEntry {
 }
 
 impl PartialEq for TimerEntry {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TimerEntry as PartialEq>")
+    )]
     fn eq(&self, other: &Self) -> bool {
         self.when == other.when && self.seq == other.seq
     }
@@ -32,12 +37,20 @@ impl PartialEq for TimerEntry {
 impl Eq for TimerEntry {}
 
 impl PartialOrd for TimerEntry {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TimerEntry as PartialOrd>")
+    )]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for TimerEntry {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TimerEntry as Ord>")
+    )]
     fn cmp(&self, other: &Self) -> Ordering {
         compare_timer_parts(&self.when, self.seq, &other.when, other.seq)
     }

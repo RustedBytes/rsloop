@@ -22,10 +22,12 @@ enum ProcessExitDecision {
     First { should_finish: bool },
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn process_connection_lost_eligible(exited: bool, open_pipes_empty: bool) -> bool {
     exited && open_pipes_empty
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn record_process_exit(
     exited: &mut bool,
     returncode: &mut Option<i32>,
@@ -43,6 +45,10 @@ fn record_process_exit(
 }
 
 impl ProcessTransportCore {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn connection_made(&self, transport: Py<PyProcessTransport>) -> PyResult<()> {
         self.call_in_loop_context(|py| {
             self.call_protocol_method1(py, "connection_made", transport.into_any())?;
@@ -50,6 +56,10 @@ impl ProcessTransportCore {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn pipe_data_received_with_py(
         &self,
         py: Python<'_>,
@@ -80,6 +90,10 @@ impl ProcessTransportCore {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn pipe_data_received(self: &Arc<Self>, fd: i32, data: &[u8]) -> PyResult<()> {
         if !self.loop_core.on_runtime_thread() {
             self.enqueue_pending_event(PendingProcessEvent::PipeDataReceived {
@@ -92,6 +106,10 @@ impl ProcessTransportCore {
         self.call_in_loop_context(|py| self.pipe_data_received_with_py(py, fd, data))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn pipe_connection_lost_value_with_py(
         &self,
         py: Python<'_>,
@@ -108,6 +126,10 @@ impl ProcessTransportCore {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn pipe_connection_lost_message(
         self: &Arc<Self>,
         fd: i32,
@@ -153,6 +175,10 @@ impl ProcessTransportCore {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn pipe_connection_lost(
         self: &Arc<Self>,
         fd: i32,
@@ -162,12 +188,20 @@ impl ProcessTransportCore {
         self.pipe_connection_lost_message(fd, exc)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn process_exited_with_py(&self, py: Python<'_>, returncode: i32) -> PyResult<()> {
         let _ = returncode;
         self.call_protocol_method0(py, "process_exited")?;
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn process_exited(self: &Arc<Self>, returncode: i32) -> PyResult<()> {
         let should_finish = {
             let mut state = self.state.lock().expect("poisoned process state");
@@ -205,6 +239,10 @@ impl ProcessTransportCore {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn connection_lost_with_py(
         &self,
         py: Python<'_>,
@@ -217,6 +255,10 @@ impl ProcessTransportCore {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn connection_lost_message(self: &Arc<Self>, exc: Option<String>) -> PyResult<()> {
         {
             let mut state = self.state.lock().expect("poisoned process state");
@@ -237,6 +279,10 @@ impl ProcessTransportCore {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn connection_lost(self: &Arc<Self>, exc: Option<PyErr>) -> PyResult<()> {
         let exc = exc.map(|err| Python::attach(|py| err.value(py).to_string()));
         self.connection_lost_message(exc)

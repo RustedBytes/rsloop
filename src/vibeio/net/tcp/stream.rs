@@ -44,6 +44,7 @@ use crate::vibeio::{
     io::{AsyncRead, AsyncWrite},
 };
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 fn new_socket(
     address: SocketAddr,
@@ -57,6 +58,7 @@ fn new_socket(
     Ok((socket.into(), raw_addr, raw_addr_len))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn new_socket(
     address: SocketAddr,
@@ -109,6 +111,10 @@ pub struct PollTcpStream {
 }
 
 impl TcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpStream", future = true)
+    )]
     /// Connects to the specified address.
     ///
     /// This is the async version of [`std::net::TcpStream::connect`].
@@ -134,6 +140,10 @@ impl TcpStream {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no addresses")))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpStream", future = true)
+    )]
     #[inline]
     async fn connect_one(address: SocketAddr) -> Result<Self, io::Error> {
         let (inner, raw_addr, raw_addr_len) = new_socket(address)?;
@@ -146,6 +156,7 @@ impl TcpStream {
         Ok(stream)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
     /// Returns the local address of this connection.
     ///
     /// # Errors
@@ -156,6 +167,7 @@ impl TcpStream {
         self.inner.local_addr()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
     /// Returns the remote address of this connection.
     ///
     /// # Errors
@@ -166,6 +178,7 @@ impl TcpStream {
         self.inner.peer_addr()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
     /// Returns the current state of the TCP_NODELAY option for this socket.
     ///
     /// # Errors
@@ -176,6 +189,7 @@ impl TcpStream {
         self.inner.nodelay()
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
     /// Sets the value of the TCP_NODELAY option for this socket.
     ///
     /// When set, this disables the Nagle algorithm, which means that small
@@ -189,6 +203,7 @@ impl TcpStream {
         self.inner.set_nodelay(nodelay)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
     /// Shuts down the connection.
     #[inline]
     pub fn shutdown(&self, how: Shutdown) -> Result<(), io::Error> {
@@ -199,6 +214,10 @@ impl TcpStream {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpStream", future = true)
+    )]
     /// Peeks at data from the socket without removing it from the buffer.
     ///
     /// # Errors
@@ -212,6 +231,7 @@ impl TcpStream {
         (result, op.take_bufs())
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
     /// Creates a new `TcpStream` from a standard library `TcpStream`.
     ///
     /// # Errors
@@ -222,6 +242,7 @@ impl TcpStream {
         Self::from_std_with_mode(inner, RegistrationMode::Completion)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
     /// Creates a new `TcpStream` from a standard library `TcpStream` with a specific registration mode.
     #[inline]
     pub(crate) fn from_std_with_mode(
@@ -231,6 +252,7 @@ impl TcpStream {
         Self::from_shared_with_mode(Arc::new(inner), mode)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
     /// Creates a stream registration that shares ownership of a standard TCP
     /// stream with another I/O path.
     #[inline]
@@ -241,6 +263,7 @@ impl TcpStream {
         Self::from_shared_with_mode(inner, mode)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
     #[inline]
     fn from_shared_with_mode(
         inner: Arc<std::net::TcpStream>,
@@ -262,6 +285,7 @@ impl TcpStream {
         Ok(Self { inner, handle })
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
     /// Converts this stream into a poll-only variant.
     ///
     /// The returned `PollTcpStream` will always use readiness-based I/O.
@@ -281,6 +305,10 @@ impl TcpStream {
 }
 
 impl PollTcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream", future = true)
+    )]
     /// Connects to the specified address using poll-based I/O.
     #[inline]
     pub async fn connect(address: impl ToSocketAddrs) -> Result<Self, io::Error> {
@@ -296,6 +324,10 @@ impl PollTcpStream {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no addresses")))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream", future = true)
+    )]
     #[inline]
     async fn connect_one(address: SocketAddr) -> Result<Self, io::Error> {
         let (inner, raw_addr, raw_addr_len) = new_socket(address)?;
@@ -308,6 +340,10 @@ impl PollTcpStream {
         Ok(stream)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Creates a new `PollTcpStream` from a standard library `TcpStream`.
     #[inline]
     pub fn from_std(inner: std::net::TcpStream) -> Result<Self, io::Error> {
@@ -318,6 +354,10 @@ impl PollTcpStream {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Creates a poll stream that shares ownership of a standard TCP stream.
     #[inline]
     pub fn from_shared(inner: Arc<std::net::TcpStream>) -> Result<Self, io::Error> {
@@ -328,12 +368,20 @@ impl PollTcpStream {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Converts this poll stream into an adaptive `TcpStream`.
     #[inline]
     pub fn into_adaptive(self) -> TcpStream {
         self.stream
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Converts this poll stream into a completion-based `TcpStream`.
     #[inline]
     pub fn into_completion(self) -> Result<TcpStream, io::Error> {
@@ -345,36 +393,60 @@ impl PollTcpStream {
         Ok(stream)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Returns the local address of this connection.
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.stream.local_addr()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Returns the remote address of this connection.
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.stream.peer_addr()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Returns the current state of the TCP_NODELAY option for this socket.
     #[inline]
     pub fn nodelay(&self) -> Result<bool, io::Error> {
         self.stream.nodelay()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Sets the value of the TCP_NODELAY option for this socket.
     #[inline]
     pub fn set_nodelay(&self, nodelay: bool) -> Result<(), io::Error> {
         self.stream.set_nodelay(nodelay)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Shuts down the connection.
     #[inline]
     pub fn shutdown(&self, how: Shutdown) -> Result<(), io::Error> {
         self.stream.shutdown(how)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream", future = true)
+    )]
     /// Peeks at data from the socket without removing it from the buffer.
     ///
     /// This method uses readiness-based I/O and is compatible with `tokio::io`.
@@ -392,6 +464,10 @@ impl PollTcpStream {
         .await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
     #[inline]
     pub fn try_io_readable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
@@ -401,6 +477,10 @@ impl PollTcpStream {
         crate::vibeio::net::try_io_ready(&self.read_ready, "read not ready", io)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollTcpStream")
+    )]
     /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
     #[inline]
     pub fn try_io_writable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
@@ -413,6 +493,10 @@ impl PollTcpStream {
 
 #[cfg(unix)]
 impl AsRawFd for TcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpStream as AsRawFd>")
+    )]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.inner.as_raw_fd()
@@ -421,6 +505,10 @@ impl AsRawFd for TcpStream {
 
 #[cfg(unix)]
 impl AsRawFd for PollTcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as AsRawFd>")
+    )]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.stream.inner.as_raw_fd()
@@ -429,6 +517,10 @@ impl AsRawFd for PollTcpStream {
 
 #[cfg(unix)]
 impl IntoRawFd for TcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpStream as IntoRawFd>")
+    )]
     #[inline]
     fn into_raw_fd(self) -> RawFd {
         let Self { handle, inner } = self;
@@ -445,6 +537,10 @@ impl IntoRawFd for TcpStream {
 
 #[cfg(unix)]
 impl IntoRawFd for PollTcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as IntoRawFd>")
+    )]
     #[inline]
     fn into_raw_fd(self) -> RawFd {
         self.stream.into_raw_fd()
@@ -453,6 +549,10 @@ impl IntoRawFd for PollTcpStream {
 
 #[cfg(windows)]
 impl AsRawSocket for TcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpStream as AsRawSocket>")
+    )]
     #[inline]
     fn as_raw_socket(&self) -> RawSocket {
         self.inner.as_raw_socket()
@@ -461,6 +561,10 @@ impl AsRawSocket for TcpStream {
 
 #[cfg(windows)]
 impl IntoRawSocket for TcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpStream as IntoRawSocket>")
+    )]
     #[inline]
     fn into_raw_socket(self) -> RawSocket {
         let Self { handle, inner } = self;
@@ -477,6 +581,10 @@ impl IntoRawSocket for TcpStream {
 
 #[cfg(windows)]
 impl AsRawSocket for PollTcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as AsRawSocket>")
+    )]
     #[inline]
     fn as_raw_socket(&self) -> RawSocket {
         self.stream.as_raw_socket()
@@ -485,6 +593,10 @@ impl AsRawSocket for PollTcpStream {
 
 #[cfg(windows)]
 impl IntoRawSocket for PollTcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as IntoRawSocket>")
+    )]
     #[inline]
     fn into_raw_socket(self) -> RawSocket {
         self.stream.into_raw_socket()
@@ -492,6 +604,10 @@ impl IntoRawSocket for PollTcpStream {
 }
 
 impl<'a> AsInnerRawHandle<'a> for TcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpStream as AsInnerRawHandle < 'a >>")
+    )]
     #[inline]
     fn as_inner_raw_handle(&'a self) -> &'a InnerRawHandle {
         &self.handle
@@ -499,6 +615,10 @@ impl<'a> AsInnerRawHandle<'a> for TcpStream {
 }
 
 impl<'a> AsInnerRawHandle<'a> for PollTcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as AsInnerRawHandle < 'a >>")
+    )]
     #[inline]
     fn as_inner_raw_handle(&'a self) -> &'a InnerRawHandle {
         self.stream.as_inner_raw_handle()
@@ -506,6 +626,10 @@ impl<'a> AsInnerRawHandle<'a> for PollTcpStream {
 }
 
 impl AsyncRead for TcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpStream as AsyncRead>", future = true)
+    )]
     #[inline]
     async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<usize, io::Error>, B) {
         let handle = &self.handle;
@@ -514,6 +638,10 @@ impl AsyncRead for TcpStream {
         (result, op.take_bufs())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpStream as AsyncRead>", future = true)
+    )]
     #[inline]
     async fn read_vectored<B: IoVectoredBufMut>(
         &mut self,
@@ -530,6 +658,10 @@ impl AsyncRead for TcpStream {
 }
 
 impl TokioAsyncRead for PollTcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as TokioAsyncRead>")
+    )]
     #[inline]
     fn poll_read(
         self: Pin<&mut Self>,
@@ -564,6 +696,10 @@ impl TokioAsyncRead for PollTcpStream {
 }
 
 impl AsyncWrite for TcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpStream as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, io::Error>, B) {
         let handle = &self.handle;
@@ -572,11 +708,19 @@ impl AsyncWrite for TcpStream {
         (result, op.take_bufs())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpStream as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn flush(&mut self) -> Result<(), io::Error> {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpStream as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn write_vectored<B: IoVectoredBuf>(&mut self, bufs: B) -> (Result<usize, io::Error>, B) {
         if bufs.is_empty() {
@@ -590,6 +734,10 @@ impl AsyncWrite for TcpStream {
 }
 
 impl TokioAsyncWrite for PollTcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as TokioAsyncWrite>")
+    )]
     #[inline]
     fn poll_write(
         self: Pin<&mut Self>,
@@ -605,6 +753,10 @@ impl TokioAsyncWrite for PollTcpStream {
         this.stream.handle.poll_op_poll(cx, &mut op)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as TokioAsyncWrite>")
+    )]
     #[inline]
     fn poll_write_vectored(
         self: Pin<&mut Self>,
@@ -623,16 +775,28 @@ impl TokioAsyncWrite for PollTcpStream {
         this.stream.handle.poll_op_poll(cx, &mut op)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as TokioAsyncWrite>")
+    )]
     #[inline]
     fn is_write_vectored(&self) -> bool {
         true
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as TokioAsyncWrite>")
+    )]
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as TokioAsyncWrite>")
+    )]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         Poll::Ready(self.get_mut().shutdown(Shutdown::Write))
@@ -640,6 +804,10 @@ impl TokioAsyncWrite for PollTcpStream {
 }
 
 impl AsyncReadPoll for PollTcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as AsyncReadPoll>")
+    )]
     #[inline]
     fn poll_readable(&self, cx: &mut std::task::Context) -> std::task::Poll<io::Result<()>> {
         if *self.read_ready.borrow() {
@@ -655,6 +823,10 @@ impl AsyncReadPoll for PollTcpStream {
 }
 
 impl AsyncWritePoll for PollTcpStream {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollTcpStream as AsyncWritePoll>")
+    )]
     #[inline]
     fn poll_writable(&self, cx: &mut std::task::Context) -> std::task::Poll<io::Result<()>> {
         if *self.write_ready.borrow() {

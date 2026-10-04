@@ -15,6 +15,10 @@ use super::sleep::Sleep;
 pub struct TimeoutError;
 
 impl fmt::Display for TimeoutError {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TimeoutError as fmt :: Display>")
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "operation timed out")
     }
@@ -40,12 +44,14 @@ pin_project_lite::pin_project! {
 }
 
 impl<F> Timeout<F> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timeout"))]
     /// Create a new `Timeout` future.
     #[inline]
     pub fn new(future: F, duration: Duration) -> Self {
         Self::new_at(future, super::deadline_after(Instant::now(), duration))
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timeout"))]
     /// Create a timeout with an absolute deadline, without rebasing it on now.
     #[inline]
     pub fn new_at(future: F, deadline: Instant) -> Self {
@@ -63,6 +69,10 @@ where
 {
     type Output = Result<F::Output, TimeoutError>;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Timeout as Future>")
+    )]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
 
@@ -100,6 +110,7 @@ where
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Convenience async function that awaits `future` but returns an error if it
 /// does not complete within `duration`.
 ///

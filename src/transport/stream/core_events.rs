@@ -52,6 +52,7 @@ enum ReadEventKind {
     Resume,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn read_event_kind(event: &PendingReadEvent) -> ReadEventKind {
     match event {
         PendingReadEvent::Data(_) => ReadEventKind::Data,
@@ -62,6 +63,7 @@ fn read_event_kind(event: &PendingReadEvent) -> ReadEventKind {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn transition_read_event_state(state: u8, event: ReadEventKind) -> Option<u8> {
     match event {
         ReadEventKind::Data if state == READ_EVENT_OPEN => Some(READ_EVENT_OPEN),
@@ -72,10 +74,12 @@ fn transition_read_event_state(state: u8, event: ReadEventKind) -> Option<u8> {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn can_coalesce_read_data(current: usize, incoming: usize, limit: usize) -> bool {
     incoming <= limit.saturating_sub(current)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn read_drain_budget_reached(
     drained_events: usize,
     drained_bytes: usize,
@@ -86,12 +90,20 @@ fn read_drain_budget_reached(
 }
 
 impl StreamTransportCore {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     #[cfg(windows)]
     #[inline]
     pub(super) fn poll_reader_requested(&self) -> bool {
         self.poll_reader_requested.load(Ordering::Acquire)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     #[cfg(windows)]
     pub(super) fn request_poll_reader(&self) {
         if self.poll_reader_requested.swap(true, Ordering::AcqRel) {
@@ -111,6 +123,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     #[cfg(windows)]
     pub(super) fn mark_poll_reader_ready(self: &Arc<Self>, rebound: bool) {
         if rebound && transport_stats_enabled() {
@@ -125,6 +141,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     #[cfg(windows)]
     pub(super) fn wait_for_poll_reader(&self) -> io::Result<()> {
         if self.poll_reader_ready.load(Ordering::Acquire) {
@@ -150,6 +170,10 @@ impl StreamTransportCore {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn close_extra_socket_with_py(&self, py: Python<'_>) {
         let socket = self
             .state
@@ -163,6 +187,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     #[inline]
     pub(super) fn register_worker(&self, worker: WorkerThread) {
         self.workers
@@ -171,6 +199,10 @@ impl StreamTransportCore {
             .push(worker);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn abort_workers(&self) {
         let workers = self
             .workers
@@ -183,6 +215,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn ensure_writer_worker(self: &Arc<Self>) {
         let lazy = self
             .lazy_writer
@@ -202,6 +238,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     /// Whether a socket can still close directly without bypassing a writer
     /// worker. Once the lazy target has been taken, all close/EOF commands
     /// must follow queued data through that worker; `writer_registered` is a
@@ -213,6 +253,10 @@ impl StreamTransportCore {
             .is_some()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     #[inline]
     pub(super) fn server_ref(&self) -> Option<Weak<ServerCore>> {
         self.state
@@ -223,6 +267,10 @@ impl StreamTransportCore {
             .cloned()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn call_in_loop_context<T>(
         &self,
         f: impl for<'py> FnOnce(Python<'py>) -> PyResult<T>,
@@ -235,6 +283,10 @@ impl StreamTransportCore {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn enqueue_pending_read_event(self: &Arc<Self>, event: PendingReadEvent) {
         // A start_tls handoff retires this core before reusing the socket. A
         // cancelled plaintext reader may still complete once; never deliver
@@ -519,6 +571,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn reschedule_pending_read_events(
         self: &Arc<Self>,
         drained: &mut VecDeque<PendingReadEvent>,

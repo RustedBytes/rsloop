@@ -21,6 +21,7 @@ use super::{AsyncRead, AsyncWrite};
 use crate::vibeio::io::IoBufMut;
 use crate::vibeio::io::{IoBuf, IoBufWithCursor};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Copy data from a reader to a writer.
 ///
 /// This function reads from `reader` and writes to `writer` until EOF is reached.
@@ -114,6 +115,7 @@ pub struct WriteHalf<T> {
     inner: Arc<AsyncMutex<T>>,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Split an object implementing both `AsyncRead` and `AsyncWrite` into two
 /// independently usable halves.
 ///
@@ -144,6 +146,7 @@ impl<T> ReadHalf<T>
 where
     T: AsyncRead + AsyncWrite + 'static,
 {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadHalf"))]
     /// Consume the half and return the shared inner `Arc<AsyncMutex<T>>`.
     pub fn into_inner(self) -> Arc<AsyncMutex<T>> {
         self.inner
@@ -154,6 +157,7 @@ impl<T> WriteHalf<T>
 where
     T: AsyncRead + AsyncWrite + 'static,
 {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WriteHalf"))]
     /// Consume the half and return the shared inner `Arc<AsyncMutex<T>>`.
     pub fn into_inner(self) -> Arc<AsyncMutex<T>> {
         self.inner
@@ -164,6 +168,10 @@ impl<T> AsyncRead for ReadHalf<T>
 where
     T: AsyncRead + AsyncWrite + 'static,
 {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadHalf as AsyncRead>", future = true)
+    )]
     async fn read<B: crate::vibeio::io::IoBufMut>(
         &mut self,
         buf: B,
@@ -173,6 +181,10 @@ where
         (*guard).read(buf).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<ReadHalf as AsyncRead>", future = true)
+    )]
     async fn read_vectored<B: crate::vibeio::io::IoVectoredBufMut>(
         &mut self,
         bufs: B,
@@ -185,6 +197,10 @@ impl<T> AsyncWrite for WriteHalf<T>
 where
     T: AsyncRead + AsyncWrite + 'static,
 {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<WriteHalf as AsyncWrite>", future = true)
+    )]
     async fn write<B: crate::vibeio::io::IoBuf>(
         &mut self,
         buf: B,
@@ -193,6 +209,10 @@ where
         (*guard).write(buf).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<WriteHalf as AsyncWrite>", future = true)
+    )]
     async fn write_vectored<B: crate::vibeio::io::IoVectoredBuf>(
         &mut self,
         bufs: B,
@@ -200,6 +220,10 @@ where
         self.inner.lock().await.write_vectored(bufs).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<WriteHalf as AsyncWrite>", future = true)
+    )]
     async fn flush(&mut self) -> Result<(), io::Error> {
         let mut guard = self.inner.lock().await;
         (*guard).flush().await
@@ -207,6 +231,10 @@ where
 }
 
 impl<R: AsyncRead + ?Sized> AsyncRead for Box<R> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Box as AsyncRead>", future = true)
+    )]
     #[inline]
     async fn read_vectored<B: crate::vibeio::io::IoVectoredBufMut>(
         &mut self,
@@ -214,6 +242,10 @@ impl<R: AsyncRead + ?Sized> AsyncRead for Box<R> {
     ) -> (io::Result<usize>, B) {
         (**self).read_vectored(bufs).await
     }
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Box as AsyncRead>", future = true)
+    )]
     #[inline]
     async fn read<B: crate::vibeio::io::IoBufMut>(
         &mut self,
@@ -224,6 +256,10 @@ impl<R: AsyncRead + ?Sized> AsyncRead for Box<R> {
 }
 
 impl<R: AsyncRead + ?Sized> AsyncRead for &mut R {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<& mut R as AsyncRead>", future = true)
+    )]
     #[inline]
     async fn read_vectored<B: crate::vibeio::io::IoVectoredBufMut>(
         &mut self,
@@ -231,6 +267,10 @@ impl<R: AsyncRead + ?Sized> AsyncRead for &mut R {
     ) -> (io::Result<usize>, B) {
         (**self).read_vectored(bufs).await
     }
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<& mut R as AsyncRead>", future = true)
+    )]
     #[inline]
     async fn read<B: crate::vibeio::io::IoBufMut>(
         &mut self,
@@ -241,6 +281,10 @@ impl<R: AsyncRead + ?Sized> AsyncRead for &mut R {
 }
 
 impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Box as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn write_vectored<B: crate::vibeio::io::IoVectoredBuf>(
         &mut self,
@@ -248,6 +292,10 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
     ) -> (io::Result<usize>, B) {
         (**self).write_vectored(bufs).await
     }
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Box as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn write<B: crate::vibeio::io::IoBuf>(
         &mut self,
@@ -256,6 +304,10 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
         (**self).write(buf).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Box as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn flush(&mut self) -> Result<(), std::io::Error> {
         (**self).flush().await
@@ -263,6 +315,10 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
 }
 
 impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<& mut W as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn write_vectored<B: crate::vibeio::io::IoVectoredBuf>(
         &mut self,
@@ -270,6 +326,10 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
     ) -> (io::Result<usize>, B) {
         (**self).write_vectored(bufs).await
     }
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<& mut W as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn write<B: crate::vibeio::io::IoBuf>(
         &mut self,
@@ -278,12 +338,17 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
         (**self).write(buf).await
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<& mut W as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn flush(&mut self) -> Result<(), std::io::Error> {
         (**self).flush().await
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Copy bytes concurrently in both directions, shutting down each destination's
 /// write half when its source reaches EOF.
 ///

@@ -24,6 +24,7 @@ use mio::Interest;
 use crate::vibeio::op::AcceptOp;
 use crate::vibeio::{fd_inner::InnerRawHandle, net::TcpStream};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn bind_one(address: SocketAddr) -> Result<StdTcpListener, io::Error> {
     let socket = socket2::Socket::new(
         socket2::Domain::for_address(address),
@@ -70,6 +71,10 @@ pub struct TcpListener {
 }
 
 impl TcpListener {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpListener")
+    )]
     /// Creates a new `TcpListener` which will be bound to the specified address.
     ///
     /// This is the async version of [`std::net::TcpListener::bind`].
@@ -96,6 +101,10 @@ impl TcpListener {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no addresses")))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpListener")
+    )]
     /// Creates a new `TcpListener` from a standard library `TcpListener`.
     ///
     /// # Errors
@@ -114,6 +123,10 @@ impl TcpListener {
         Ok(Self { inner, handle })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpListener")
+    )]
     /// Creates a new `TcpListener` from a standard library `TcpListener` in poll mode.
     ///
     /// This could be useful when using cloned `TcpListener` on Windows.
@@ -133,6 +146,10 @@ impl TcpListener {
         Ok(Self { inner, handle })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpListener")
+    )]
     /// Returns the local address of this listener.
     ///
     /// # Errors
@@ -143,6 +160,10 @@ impl TcpListener {
         self.inner.local_addr()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpListener", future = true)
+    )]
     /// Accepts a new incoming connection from this listener.
     ///
     /// This is the async version of [`std::net::TcpListener::accept`].
@@ -163,6 +184,10 @@ impl TcpListener {
 
 #[cfg(unix)]
 impl AsRawFd for TcpListener {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpListener as AsRawFd>")
+    )]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.inner.as_raw_fd()
@@ -171,6 +196,10 @@ impl AsRawFd for TcpListener {
 
 #[cfg(unix)]
 impl IntoRawFd for TcpListener {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpListener as IntoRawFd>")
+    )]
     #[inline]
     fn into_raw_fd(self) -> RawFd {
         let Self { handle, inner } = self;
@@ -181,6 +210,10 @@ impl IntoRawFd for TcpListener {
 
 #[cfg(windows)]
 impl AsRawSocket for TcpListener {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpListener as AsRawSocket>")
+    )]
     #[inline]
     fn as_raw_socket(&self) -> RawSocket {
         self.inner.as_raw_socket()
@@ -189,6 +222,10 @@ impl AsRawSocket for TcpListener {
 
 #[cfg(windows)]
 impl IntoRawSocket for TcpListener {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<TcpListener as IntoRawSocket>")
+    )]
     #[inline]
     fn into_raw_socket(self) -> RawSocket {
         let Self { handle, inner } = self;

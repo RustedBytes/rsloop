@@ -42,6 +42,7 @@ enum ProcessTextMode {
     Conflict,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn process_text_mode(
     universal_newlines: bool,
     text: Option<bool>,
@@ -64,6 +65,7 @@ enum NormalizedUmask {
     Invalid,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn normalize_process_umask(mask: i64) -> NormalizedUmask {
     if mask == -1 {
         NormalizedUmask::Unchanged
@@ -95,6 +97,10 @@ struct ProcessSpawnConfig {
 }
 
 impl Default for UnixPreExecConfig {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<UnixPreExecConfig as Default>")
+    )]
     fn default() -> Self {
         Self {
             restore_signals: true,
@@ -120,6 +126,7 @@ pub(super) struct SubprocessParams {
     pub(super) api_name: &'static str,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Shared tail of both subprocess methods: build the protocol, spawn the child,
 /// and wrap it in a transport. Only the `Command` construction differs, so it
 /// arrives as a closure that runs under the GIL on the spawning thread.
@@ -180,6 +187,7 @@ where
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// `/bin/sh -c <cmd>` on Unix, `%COMSPEC% /c "<cmd>"` on Windows.
 pub(super) fn shell_command(py: Python<'_>, cmd: &Py<PyAny>) -> PyResult<Command> {
     let shell_cmd = cmd.bind(py).extract::<String>()?;
@@ -199,6 +207,7 @@ pub(super) fn shell_command(py: Python<'_>, cmd: &Py<PyAny>) -> PyResult<Command
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn exec_command(
     py: Python<'_>,
     program: &Py<PyAny>,
@@ -211,6 +220,7 @@ pub(super) fn exec_command(
     Ok(command)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn resolve_numeric_id(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -232,6 +242,7 @@ fn resolve_numeric_id(
     )))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn resolve_extra_groups(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Vec<u32>> {
     let mut groups = Vec::new();
     for item in value.try_iter()? {
@@ -248,6 +259,7 @@ fn resolve_extra_groups(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Ve
     Ok(groups)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn parse_process_text_config(
     py: Python<'_>,
     universal_newlines: bool,
@@ -289,6 +301,7 @@ pub(super) fn parse_process_text_config(
     }))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_process_basic_kw(
     py: Python<'_>,
     command: &mut Command,
@@ -303,6 +316,7 @@ fn apply_process_basic_kw(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// `Popen` keywords that are platform-specific or already implied by the way
 /// rsloop spawns. Wrappers around `loop.subprocess_exec()` — `AnyIO` is the one
 /// that caught this — forward every one of them unconditionally at its
@@ -351,6 +365,7 @@ fn apply_platform_process_kw(
     Ok(true)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn windows_only_process_kw_error(key: &str) -> PyErr {
     PyNotImplementedError::new_err(format!(
@@ -358,12 +373,14 @@ fn windows_only_process_kw_error(key: &str) -> PyErr {
     ))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(not(windows))]
 fn windows_only_process_kw_error(key: &str) -> PyErr {
     // Same wording as subprocess.Popen so callers recognise it.
     PyValueError::new_err(format!("{key} is only supported on Windows platforms"))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn apply_process_creation_flags(command: &mut Command, flags: i64) -> PyResult<()> {
     let flags = u32::try_from(flags).map_err(|_| {
@@ -375,11 +392,13 @@ fn apply_process_creation_flags(command: &mut Command, flags: i64) -> PyResult<(
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(not(windows))]
 fn apply_process_creation_flags(_command: &mut Command, _flags: i64) -> PyResult<()> {
     Err(windows_only_process_kw_error("creationflags"))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn process_fspath(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> {
     py.import("os")?
         .getattr("fspath")?
@@ -387,6 +406,7 @@ fn process_fspath(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<String> 
         .extract::<String>()
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_process_cwd(
     py: Python<'_>,
     command: &mut Command,
@@ -398,6 +418,7 @@ fn apply_process_cwd(
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_process_env(command: &mut Command, value: &Bound<'_, PyAny>) -> PyResult<()> {
     if !value.is_none() {
         for (env_key, env_value) in value.cast::<PyDict>()?.iter() {
@@ -407,6 +428,7 @@ fn apply_process_env(command: &mut Command, value: &Bound<'_, PyAny>) -> PyResul
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_process_executable(
     py: Python<'_>,
     command: &mut Command,
@@ -434,6 +456,7 @@ struct UnixProcessKw<'a, 'py> {
     value: &'a Bound<'py, PyAny>,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_unix_process_kw(
     py: Python<'_>,
     unix: &mut UnixPreExecConfig,
@@ -456,6 +479,7 @@ fn apply_unix_process_kw(
     apply_unix_misc_process_kw(&mut kw)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn is_known_unix_process_kw(key: &str) -> bool {
     matches!(
         key,
@@ -463,6 +487,7 @@ fn is_known_unix_process_kw(key: &str) -> bool {
     )
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_unix_fd_process_kw(kw: &mut UnixProcessKw<'_, '_>) -> PyResult<bool> {
     match kw.key {
         "process_group" => kw.unix.process_group = Some(kw.value.extract::<i32>()?),
@@ -478,6 +503,7 @@ fn apply_unix_fd_process_kw(kw: &mut UnixProcessKw<'_, '_>) -> PyResult<bool> {
     Ok(true)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_unix_identity_process_kw(
     py: Python<'_>,
     kw: &mut UnixProcessKw<'_, '_>,
@@ -501,6 +527,7 @@ fn apply_unix_identity_process_kw(
     Ok(true)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_unix_misc_process_kw(kw: &mut UnixProcessKw<'_, '_>) -> PyResult<bool> {
     match kw.key {
         "umask" => {
@@ -523,6 +550,7 @@ fn apply_unix_misc_process_kw(kw: &mut UnixProcessKw<'_, '_>) -> PyResult<bool> 
     Ok(true)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_unix_bool_process_kw(kw: &mut UnixProcessKw<'_, '_>) -> PyResult<bool> {
     match kw.key {
         "restore_signals" => kw.unix.restore_signals = kw.value.is_truthy()?,
@@ -532,6 +560,7 @@ fn apply_unix_bool_process_kw(kw: &mut UnixProcessKw<'_, '_>) -> PyResult<bool> 
     Ok(true)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_common_process_kwargs(
     py: Python<'_>,
     command: &mut Command,

@@ -22,6 +22,10 @@ pub(super) struct AsyncgenHooksGuard {
 impl AsyncgenHooksGuard {
     // Install loop-specific async-generator hooks temporarily; `Drop` restores
     // the process-wide hooks even when `run_forever` exits with an error.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AsyncgenHooksGuard")
+    )]
     pub(super) fn install(
         py: Python<'_>,
         loop_obj: &Py<PyAny>,
@@ -61,6 +65,10 @@ impl AsyncgenHooksGuard {
 }
 
 impl Drop for AsyncgenHooksGuard {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<AsyncgenHooksGuard as Drop>")
+    )]
     fn drop(&mut self) {
         Python::attach(|py| {
             let sys = match py.import("sys") {
@@ -75,6 +83,7 @@ impl Drop for AsyncgenHooksGuard {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn new_asyncgens_set(py: Python<'_>) -> PyResult<Py<PySet>> {
     // A strong set retains every completed async context manager until loop
     // shutdown and prevents abandoned generators from reaching their finalizer.
@@ -83,6 +92,7 @@ fn new_asyncgens_set(py: Python<'_>) -> PyResult<Py<PySet>> {
     Ok(PySet::empty(py)?.unbind())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn active_asyncgens_set(py: Python<'_>, core: &Arc<LoopCore>) -> PyResult<Py<PySet>> {
     let mut state = core.state.lock().expect("poisoned loop state");
     if let Some(active) = state.active_asyncgens.as_ref() {
@@ -93,6 +103,7 @@ fn active_asyncgens_set(py: Python<'_>, core: &Arc<LoopCore>) -> PyResult<Py<PyS
     Ok(active)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn shutdown_asyncgens<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -154,6 +165,7 @@ pub(super) fn shutdown_asyncgens<'py>(
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[pyfunction]
 /// Registers an asynchronous generator with its owning loop on first iteration.
 ///
@@ -198,6 +210,7 @@ pub fn asyncgen_firstiter_hook(
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[pyfunction]
 /// Unregisters and schedules finalization of an asynchronous generator.
 ///

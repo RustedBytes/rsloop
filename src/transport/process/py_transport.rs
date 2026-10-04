@@ -12,23 +12,43 @@ use super::{ProcessCommand, PyProcessTransport};
 
 #[pymethods]
 impl PyProcessTransport {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyProcessTransport")
+    )]
     fn get_pid(&self) -> u32 {
         self.core.state.lock().expect("poisoned process state").pid
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyProcessTransport")
+    )]
     #[inline]
     fn get_returncode(&self) -> Option<i32> {
         self.core.get_returncode()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyProcessTransport")
+    )]
     fn is_closing(&self) -> bool {
         self.core.is_closing()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyProcessTransport")
+    )]
     fn get_pipe_transport(&self, py: Python<'_>, fd: i32) -> Option<Py<PyAny>> {
         self.core.pipe_transport(py, fd)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyProcessTransport")
+    )]
     fn send_signal(&self, sig: i32) -> PyResult<()> {
         if self.core.get_returncode().is_some() {
             return Err(PyProcessLookupError::new_err("process is not running"));
@@ -39,6 +59,10 @@ impl PyProcessTransport {
             .map_err(|_| PyProcessLookupError::new_err("process is not running"))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyProcessTransport")
+    )]
     fn terminate(&self) -> PyResult<()> {
         if self.core.get_returncode().is_some() {
             return Err(PyProcessLookupError::new_err("process is not running"));
@@ -49,6 +73,10 @@ impl PyProcessTransport {
             .map_err(|_| PyProcessLookupError::new_err("process is not running"))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyProcessTransport")
+    )]
     fn kill(&self) -> PyResult<()> {
         if self.core.get_returncode().is_some() {
             return Err(PyProcessLookupError::new_err("process is not running"));
@@ -59,6 +87,10 @@ impl PyProcessTransport {
             .map_err(|_| PyProcessLookupError::new_err("process is not running"))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyProcessTransport")
+    )]
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         {
             let mut state = self.core.state.lock().expect("poisoned process state");
@@ -71,6 +103,10 @@ impl PyProcessTransport {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyProcessTransport")
+    )]
     fn __repr__(&self) -> String {
         format!(
             "<ProcessTransport pid={} returncode={:?} closing={}>",
@@ -80,6 +116,10 @@ impl PyProcessTransport {
         )
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyProcessTransport")
+    )]
     fn _wait<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let locals = crate::transport::stream::task_locals_for_loop(py, &self.core.loop_obj)?;
         let core = self.core.clone();

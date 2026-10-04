@@ -13,6 +13,7 @@ pub struct FsyncOp<'a> {
 }
 
 impl<'a> FsyncOp<'a> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "FsyncOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, data_only: bool) -> Self {
         Self {
@@ -26,6 +27,10 @@ impl<'a> FsyncOp<'a> {
 impl Op for FsyncOp<'_> {
     type Output = ();
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<FsyncOp as Op>")
+    )]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -61,6 +66,10 @@ impl Op for FsyncOp<'_> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<FsyncOp as Op>")
+    )]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -79,6 +88,10 @@ impl Op for FsyncOp<'_> {
 }
 
 impl Drop for FsyncOp<'_> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<FsyncOp as Drop>")
+    )]
     #[inline]
     fn drop(&mut self) {
         if let Some(completion_token) = self.completion_token {

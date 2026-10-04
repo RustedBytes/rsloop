@@ -37,6 +37,7 @@ use super::{
 use crate::context::{ensure_running_loop, run_in_context};
 use crate::engine::{LoopCommand, LoopIoCommand};
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn reserve_tls_slot(current: usize, limit: usize, closed: bool) -> Option<usize> {
     (!closed && current < limit).then_some(current + 1)
 }
@@ -46,6 +47,7 @@ fn release_tls_slot(current: usize) -> Option<usize> {
     current.checked_sub(1)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn close_server_flags(closed: &mut bool, serving: &mut bool) -> bool {
     if *closed {
         return false;
@@ -56,6 +58,10 @@ fn close_server_flags(closed: &mut bool, serving: &mut bool) -> bool {
 }
 
 impl ServerCore {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     pub(super) fn close_python_sockets(&self) {
         let _ = Python::try_attach(|py| -> PyResult<()> {
             for socket in &self.sockets {
@@ -65,6 +71,10 @@ impl ServerCore {
         });
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     pub(crate) fn report_error(&self, err: PyErr, message: &str) {
         let _ = Python::try_attach(|py| -> PyResult<()> {
             let context = PyDict::new(py);
@@ -78,6 +88,10 @@ impl ServerCore {
         });
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     pub(super) fn create_protocol_with_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         ensure_running_loop(py, &self.loop_obj)?;
         let callback = self.protocol_factory.bind(py).clone().unbind();
@@ -85,32 +99,56 @@ impl ServerCore {
         run_in_context(py, &self.context, self.context_needs_run, &callback, &args)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     #[inline]
     pub(super) fn locals(&self, py: Python<'_>) -> PyResult<TaskLocals> {
         task_locals_for_loop(py, &self.loop_obj)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     #[inline]
     pub(super) fn is_closed(&self) -> bool {
         self.state.lock().expect("poisoned server state").closed
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     pub(super) fn is_serving(&self) -> bool {
         let state = self.state.lock().expect("poisoned server state");
         state.serving && !state.closed
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     #[inline]
     pub(super) fn connection_opened(&self) {
         self.active_connections.fetch_add(1, Ordering::SeqCst);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     #[inline]
     pub(super) fn connection_lost(&self) {
         self.active_connections.fetch_sub(1, Ordering::SeqCst);
         self.closed_notify.notify_all();
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     pub(super) fn reserve_tls_handshake(self: &Arc<Self>) -> Option<PendingTlsHandshake> {
         if self.is_closed() {
             return None;
@@ -133,6 +171,10 @@ impl ServerCore {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     pub(super) fn close(&self) {
         {
             let mut state = self.state.lock().expect("poisoned server state");
@@ -197,6 +239,10 @@ impl ServerCore {
         self.closed_notify.notify_all();
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ServerCore")
+    )]
     pub fn spawn_accept_tasks(self: &Arc<Self>) {
         let listeners = {
             let mut state = self.state.lock().expect("poisoned server state");

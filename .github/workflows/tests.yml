@@ -64,6 +64,9 @@ jobs:
   vibeio-native:
     uses: ./.github/workflows/vibeio-native.yml
 
+  hotpath-profile:
+    uses: ./.github/workflows/hotpath.yml
+
   clippy:
     name: clippy (risk-focused)
     runs-on: ubuntu-latest

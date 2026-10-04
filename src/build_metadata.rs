@@ -12,6 +12,7 @@ const REACTOR: &str = "kqueue";
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 const REACTOR: &str = "mio";
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Return stable diagnostics that help identify the installed native build.
 #[pyfunction]
 pub(crate) fn build_info(py: Python<'_>) -> PyResult<Py<PyDict>> {
@@ -43,5 +44,10 @@ pub(crate) fn build_info(py: Python<'_>) -> PyResult<Py<PyDict>> {
         },
     )?;
     info.set_item("tls_backend", "rustls")?;
+    info.set_item("hotpath_profile", cfg!(feature = "hotpath-profile"))?;
+    info.set_item(
+        "hotpath_alloc_profile",
+        cfg!(feature = "hotpath-alloc-profile"),
+    )?;
     Ok(info.unbind())
 }

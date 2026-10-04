@@ -64,18 +64,21 @@ pub(super) struct TaskKwargSupport {
     pub(super) eager_start: bool,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn asyncio_task_cls(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     PYTHON_API_CACHES
         .asyncio_task_cls
         .get_or_try_init(py, || Ok(py.import("asyncio")?.getattr("Task")?.unbind()))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn asyncio_future_cls(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     PYTHON_API_CACHES
         .asyncio_future_cls
         .get_or_try_init(py, || Ok(py.import("asyncio")?.getattr("Future")?.unbind()))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn asyncio_get_running_loop_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     PYTHON_API_CACHES
         .asyncio_get_running_loop_fn
@@ -87,12 +90,14 @@ pub(super) fn asyncio_get_running_loop_fn(py: Python<'_>) -> PyResult<&Py<PyAny>
         })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn asyncio_task_kwarg_support(py: Python<'_>) -> PyResult<&'static TaskKwargSupport> {
     PYTHON_API_CACHES
         .asyncio_task_kwarg_support
         .get_or_try_init(py, || detect_asyncio_task_kwarg_support(py))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn detect_asyncio_task_kwarg_support(py: Python<'_>) -> PyResult<TaskKwargSupport> {
     let inspect = py.import("inspect")?;
     let Some(signature) = asyncio_task_signature(py, &inspect)? else {
@@ -119,6 +124,7 @@ fn detect_asyncio_task_kwarg_support(py: Python<'_>) -> PyResult<TaskKwargSuppor
     Ok(support)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn asyncio_task_signature<'py>(
     py: Python<'py>,
     inspect: &Bound<'py, PyModule>,
@@ -132,6 +138,7 @@ fn asyncio_task_signature<'py>(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn has_keyword_only_parameter(
     parameters: &Bound<'_, PyAny>,
     keyword_only: &Bound<'_, PyAny>,
@@ -143,6 +150,7 @@ fn has_keyword_only_parameter(
     parameter.getattr("kind")?.eq(keyword_only)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn mark_task_kwarg_supported(support: &mut TaskKwargSupport, kwarg_name: &str) {
     match kwarg_name {
         "name" => support.name = true,
@@ -152,11 +160,13 @@ fn mark_task_kwarg_supported(support: &mut TaskKwargSupport, kwarg_name: &str) {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub(super) fn call_callable_noargs(py: Python<'_>, callable: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     ffi_helpers::call_noargs(py, callable)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub(super) fn call_callable_onearg(
     py: Python<'_>,
@@ -166,6 +176,7 @@ pub(super) fn call_callable_onearg(
     ffi_helpers::call_onearg(py, callable, arg)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 fn keyword_tuple<const N: usize>(
     slot: &'static PyOnceLock<Py<PyTuple>>,
@@ -175,6 +186,7 @@ fn keyword_tuple<const N: usize>(
     slot.get_or_try_init(py, || Ok(PyTuple::new(py, names)?.unbind()))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 pub(super) fn asyncio_future_loop_kwnames(py: Python<'_>) -> PyResult<&Py<PyTuple>> {
     keyword_tuple(
@@ -184,6 +196,7 @@ pub(super) fn asyncio_future_loop_kwnames(py: Python<'_>) -> PyResult<&Py<PyTupl
     )
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 pub(super) fn asyncio_task_kwnames_for_options(
     py: Python<'_>,

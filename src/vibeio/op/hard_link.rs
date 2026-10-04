@@ -15,6 +15,10 @@ pub struct HardLinkOp {
 }
 
 impl HardLinkOp {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "HardLinkOp")
+    )]
     #[inline]
     pub fn new(driver: Rc<AnyDriver>, old_path: CString, new_path: CString) -> Self {
         Self {
@@ -29,6 +33,10 @@ impl HardLinkOp {
 impl Op for HardLinkOp {
     type Output = ();
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<HardLinkOp as Op>")
+    )]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -70,6 +78,10 @@ impl Op for HardLinkOp {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<HardLinkOp as Op>")
+    )]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -97,6 +109,10 @@ impl Op for HardLinkOp {
 }
 
 impl Drop for HardLinkOp {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<HardLinkOp as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
             // Paths and result storage remain owned until the kernel acknowledges

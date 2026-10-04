@@ -21,6 +21,7 @@ use pyo3::prelude::*;
 use super::{PyServer, ServerCore, ServerCreateParams, ServerListener, ServerState};
 use crate::async_event::AsyncEvent;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn create_server(py: Python<'_>, params: ServerCreateParams) -> PyResult<Py<PyServer>> {
     let ServerCreateParams {
         loop_core,
@@ -63,14 +64,17 @@ pub fn create_server(py: Python<'_>, params: ServerCreateParams) -> PyResult<Py<
     )
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn tcp_server_listener(listener: StdTcpListener) -> ServerListener {
     ServerListener::Tcp(listener)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 pub fn unix_server_listener(listener: StdUnixListener) -> ServerListener {
     ServerListener::Unix(listener)
 }
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 pub fn remove_unix_socket_if_present(path: impl AsRef<std::path::Path>) -> io::Result<()> {
     match fs::remove_file(path) {

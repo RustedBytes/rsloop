@@ -5,10 +5,12 @@ use pyo3::prelude::*;
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 use pyo3::ffi;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn call_noargs(py: Python<'_>, callable: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     Ok(callable.bind(py).call0()?.unbind())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn call_onearg(
     py: Python<'_>,
     callable: &Py<PyAny>,
@@ -17,6 +19,7 @@ pub(super) fn call_onearg(
     Ok(callable.bind(py).call1((arg,))?.unbind())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 pub(super) fn vectorcall(
     py: Python<'_>,

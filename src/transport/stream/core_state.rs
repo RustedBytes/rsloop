@@ -20,6 +20,7 @@ use super::tuning::DEFAULT_WRITE_BUFFER_HIGH_WATER;
 use super::{StreamTransportCore, make_stream_extra};
 use crate::fd_ops;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Resolve asyncio's optional write-buffer limits without overflowing when a
 /// caller supplies a very large low-water mark.
 fn normalize_write_buffer_limits(
@@ -36,6 +37,10 @@ fn normalize_write_buffer_limits(
 }
 
 impl StreamTransportCore {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(crate) fn uses_native_stream_reader(&self) -> bool {
         matches!(
             self.state
@@ -48,6 +53,10 @@ impl StreamTransportCore {
         )
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn set_protocol(&self, py: Python<'_>, protocol: Py<PyAny>) -> PyResult<()> {
         let callbacks = build_protocol_callbacks(py, &protocol)?;
         let mut state = self.state.lock().expect("poisoned transport state");
@@ -56,6 +65,10 @@ impl StreamTransportCore {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn get_protocol(&self, py: Python<'_>) -> Py<PyAny> {
         self.state
             .lock()
@@ -64,6 +77,10 @@ impl StreamTransportCore {
             .clone_ref(py)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn get_extra(&self, py: Python<'_>, name: &str) -> Option<Py<PyAny>> {
         let (cached, lazy_socket_family, transport_closed) = {
             let state = self.state.lock().expect("poisoned transport state");
@@ -101,6 +118,10 @@ impl StreamTransportCore {
         state.extra.get(name).map(|value| value.clone_ref(py))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     #[inline]
     pub(super) fn set_closing(&self) {
         self.state.lock().expect("poisoned transport state").closing = true;
@@ -109,6 +130,10 @@ impl StreamTransportCore {
         self.read_buffer_pool.close();
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn runtime_socket_fd(&self) -> Option<fd_ops::RawFd> {
         let state = self.state.lock().expect("poisoned transport state");
         if state.runtime_socket_io {
@@ -118,6 +143,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn detach_underlying_stream(&self, py: Python<'_>) {
         self.detached.store(true, Ordering::Release);
         self.close_extra_socket_with_py(py);
@@ -132,17 +161,29 @@ impl StreamTransportCore {
         self.read_buffer_pool.close();
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn release_direct_writer(&self) {
         if let Some(writer) = &self.direct_writer {
             writer.lock().expect("poisoned direct tasked writer").take();
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn is_closing_or_lost(&self) -> bool {
         let state = self.state.lock().expect("poisoned transport state");
         state.closing || state.lost_called
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn mark_write_eof(&self) {
         self.state
             .lock()
@@ -150,10 +191,18 @@ impl StreamTransportCore {
             .write_eof_requested = true;
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn is_closing(&self) -> bool {
         self.state.lock().expect("poisoned transport state").closing
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn can_write_eof(&self) -> bool {
         self.state
             .lock()
@@ -161,6 +210,10 @@ impl StreamTransportCore {
             .can_write_eof
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn pause_reading(&self) {
         let mut state = self.state.lock().expect("poisoned transport state");
         state.read_paused = true;
@@ -168,6 +221,10 @@ impl StreamTransportCore {
         self.reading.store(false, Ordering::Release);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn resume_reading(&self) {
         let mut state = self.state.lock().expect("poisoned transport state");
         state.read_paused = false;
@@ -181,10 +238,18 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn is_reading(&self) -> bool {
         self.reading.load(Ordering::Acquire)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn wait_until_readable(&self) {
         let mut state = self.state.lock().expect("poisoned transport state");
         while (state.read_paused || state.read_backpressured) && !state.closing {
@@ -198,6 +263,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore", future = true)
+    )]
     pub(super) async fn wait_until_async_readable(&self) {
         loop {
             if self.is_closing() || self.is_reading() {
@@ -211,6 +280,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn acquire_read_buffer_blocking(
         &self,
         capacity: usize,
@@ -228,6 +301,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore", future = true)
+    )]
     pub(super) async fn acquire_read_buffer_async(&self, capacity: usize) -> Option<Vec<u8>> {
         loop {
             if self.is_closing() {
@@ -240,6 +317,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn is_writable(&self) -> bool {
         self.state
             .lock()
@@ -247,6 +328,10 @@ impl StreamTransportCore {
             .writable
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn get_write_buffer_size(&self) -> usize {
         self.state
             .lock()
@@ -255,11 +340,19 @@ impl StreamTransportCore {
             .size
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn get_write_buffer_limits(&self) -> (usize, usize) {
         let state = self.state.lock().expect("poisoned transport state");
         (state.write_buffer.low_water, state.write_buffer.high_water)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn set_write_buffer_limits(
         self: &Arc<Self>,
         high: Option<usize>,

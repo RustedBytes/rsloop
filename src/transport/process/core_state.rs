@@ -9,6 +9,10 @@ use pyo3::prelude::*;
 use super::ProcessTransportCore;
 
 impl ProcessTransportCore {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     #[inline]
     pub(super) fn get_returncode(&self) -> Option<i32> {
         self.state
@@ -17,11 +21,19 @@ impl ProcessTransportCore {
             .returncode
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     #[inline]
     pub(super) fn is_closing(&self) -> bool {
         self.state.lock().expect("poisoned process state").closing
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn pipe_transport(&self, py: Python<'_>, fd: i32) -> Option<Py<PyAny>> {
         self.state
             .lock()
@@ -31,6 +43,10 @@ impl ProcessTransportCore {
             .map(|transport| transport.clone_ref(py))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn has_open_pipe(&self, fd: i32) -> bool {
         self.state
             .lock()
@@ -39,6 +55,10 @@ impl ProcessTransportCore {
             .contains(&fd)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn register_pipe_transports(&self, transports: Vec<(i32, Py<PyAny>)>) {
         if transports.is_empty() {
             return;

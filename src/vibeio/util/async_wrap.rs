@@ -75,6 +75,7 @@ pub struct AsyncWrap<T> {
 }
 
 impl<T> AsyncWrap<T> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AsyncWrap"))]
     fn poll_pending_write(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         if let Some(kind) = self.write_error {
             return Poll::Ready(Err(std::io::Error::new(
@@ -94,6 +95,7 @@ impl<T> AsyncWrap<T> {
         Poll::Ready(result)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AsyncWrap"))]
     fn poll_pending_flush(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         let Some(future) = self.flush_fut.as_mut() else {
             return Poll::Ready(Ok(()));
@@ -104,6 +106,7 @@ impl<T> AsyncWrap<T> {
         Poll::Ready(result)
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AsyncWrap"))]
     /// Create a new `AsyncWrap` wrapping the given inner value.
     #[inline]
     pub fn new(inner: T) -> Self {
@@ -122,6 +125,10 @@ impl<T> AsyncRead for AsyncWrap<T>
 where
     T: crate::vibeio::io::AsyncRead + 'static,
 {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<AsyncWrap as AsyncRead>")
+    )]
     #[inline]
     fn poll_read(
         self: Pin<&mut Self>,
@@ -190,6 +197,10 @@ impl<T> AsyncWrite for AsyncWrap<T>
 where
     T: crate::vibeio::io::AsyncWrite + 'static,
 {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<AsyncWrap as AsyncWrite>")
+    )]
     #[inline]
     fn poll_write(
         self: Pin<&mut Self>,
@@ -244,6 +255,10 @@ where
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<AsyncWrap as AsyncWrite>")
+    )]
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         let this = self.get_mut();
@@ -264,6 +279,10 @@ where
         this.poll_pending_flush(cx)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<AsyncWrap as AsyncWrite>")
+    )]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         self.poll_flush(cx)

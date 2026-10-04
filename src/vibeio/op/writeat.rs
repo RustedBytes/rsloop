@@ -19,6 +19,7 @@ use crate::vibeio::io::IoBuf;
 use crate::vibeio::op::Op;
 use crate::vibeio::op::io_util::CompletionBuffer;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 pub(crate) fn validate_windows_write_offset(offset: u64) -> io::Result<()> {
     // WriteFile interprets both offset words set to all-one bits as append.
@@ -43,6 +44,7 @@ pub struct WriteAtOp<'a, B: IoBuf> {
 }
 
 impl<'a, B: IoBuf> WriteAtOp<'a, B> {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WriteAtOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B, offset: u64) -> Self {
         Self {
@@ -53,6 +55,7 @@ impl<'a, B: IoBuf> WriteAtOp<'a, B> {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WriteAtOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -66,6 +69,10 @@ impl<'a, B: IoBuf> WriteAtOp<'a, B> {
 impl<B: IoBuf> Op for WriteAtOp<'_, B> {
     type Output = usize;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<WriteAtOp as Op>")
+    )]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -101,6 +108,10 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
         Poll::Ready(Ok(written))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<WriteAtOp as Op>")
+    )]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -152,6 +163,10 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<WriteAtOp as Op>")
+    )]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -179,6 +194,10 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
 }
 
 impl<B: IoBuf> Drop for WriteAtOp<'_, B> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<WriteAtOp as Drop>")
+    )]
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {

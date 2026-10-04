@@ -43,6 +43,7 @@ pub struct CtrlC {
 }
 
 impl CtrlC {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "CtrlC"))]
     /// Create a new Ctrl-C listener.
     #[cfg(windows)]
     pub fn new() -> io::Result<Self> {
@@ -56,6 +57,7 @@ impl CtrlC {
         })
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "CtrlC"))]
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let mut replacement = None;
         loop {
@@ -91,6 +93,10 @@ impl CtrlC {
 }
 
 impl Drop for CtrlC {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<CtrlC as Drop>")
+    )]
     fn drop(&mut self) {
         // Synchronously retire this slot under the dispatcher lock. Deferring
         // removal could retain a cancelled task's waker indefinitely. User
@@ -104,11 +110,16 @@ impl Drop for CtrlC {
 impl Future for CtrlC {
     type Output = io::Result<()>;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<CtrlC as Future>")
+    )]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().poll_recv(cx)
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Cross-platform Ctrl-C support.
 ///
 /// Returns a future that resolves when Ctrl-C is received.
@@ -118,6 +129,7 @@ pub fn ctrl_c() -> io::Result<CtrlC> {
     CtrlC::new()
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn dispatch_ctrl_c(state: &CtrlCState) {
     let wakers = {
         let mut wakers = state.wakers.lock().unwrap();
@@ -132,6 +144,7 @@ fn dispatch_ctrl_c(state: &CtrlCState) {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn ctrl_c_state() -> io::Result<&'static Arc<CtrlCState>> {
     initialize_ctrl_c_state(&CTRL_C_STATE, &CTRL_C_HANDLER_INSTALLED, || {
@@ -146,6 +159,7 @@ fn ctrl_c_state() -> io::Result<&'static Arc<CtrlCState>> {
     })
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn initialize_ctrl_c_state<'a>(
     state_cell: &'a OnceCell<Arc<CtrlCState>>,
     installed: &OnceCell<()>,

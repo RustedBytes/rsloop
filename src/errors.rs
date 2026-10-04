@@ -6,6 +6,7 @@ use pyo3::types::PyDict;
 
 use crate::engine::LoopCore;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn handle_callback_error(
     py: Python<'_>,
     loop_core: &LoopCore,

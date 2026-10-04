@@ -33,6 +33,7 @@ enum MetadataInner {
 }
 
 impl Metadata {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Creates a new `Metadata` from a standard library `std::fs::Metadata`.
     #[inline]
     pub(crate) fn from_std(md: std::fs::Metadata) -> Self {
@@ -41,6 +42,7 @@ impl Metadata {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Creates a new `Metadata` from a `libc::statx` structure.
     #[cfg(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3)))]
     #[inline]
@@ -50,6 +52,7 @@ impl Metadata {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Returns the size of the file in bytes.
     #[allow(clippy::len_without_is_empty)]
     #[inline]
@@ -61,6 +64,7 @@ impl Metadata {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Returns the file permissions.
     #[inline]
     pub fn permissions(&self) -> std::fs::Permissions {
@@ -74,6 +78,7 @@ impl Metadata {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Returns the file type.
     #[inline]
     pub fn file_type(&self) -> FileType {
@@ -84,6 +89,7 @@ impl Metadata {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Returns `true` if this metadata is for a directory.
     #[inline]
     pub fn is_dir(&self) -> bool {
@@ -94,6 +100,7 @@ impl Metadata {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Returns `true` if this metadata is for a regular file.
     #[inline]
     pub fn is_file(&self) -> bool {
@@ -104,6 +111,7 @@ impl Metadata {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Returns `true` if this metadata is for a symbolic link.
     #[inline]
     pub fn is_symlink(&self) -> bool {
@@ -114,6 +122,7 @@ impl Metadata {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Returns the time the file was last accessed.
     ///
     /// # Errors
@@ -129,6 +138,7 @@ impl Metadata {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Returns the time the file was created.
     ///
     /// # Errors
@@ -144,6 +154,7 @@ impl Metadata {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
     /// Returns the time the file was last modified.
     ///
     /// # Errors
@@ -160,6 +171,7 @@ impl Metadata {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Converts a `libc::statx_timestamp` to a `SystemTime`.
 #[cfg(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3)))]
 #[inline]
@@ -224,6 +236,7 @@ pub struct FileType {
 }
 
 impl FileType {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "FileType"))]
     /// Test whether this file type represents a directory.
     ///
     /// # Examples
@@ -234,6 +247,7 @@ impl FileType {
         self.is_dir
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "FileType"))]
     /// Test whether this file type represents a regular file.
     ///
     /// # Examples
@@ -244,6 +258,7 @@ impl FileType {
         self.is_file
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "FileType"))]
     /// Test whether this file type represents a symbolic link.
     ///
     /// # Examples

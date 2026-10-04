@@ -33,6 +33,7 @@ use crate::vibeio::{
     io::{AsyncRead, AsyncWrite},
 };
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn pipe_inner() -> std::io::Result<(OwnedFd, OwnedFd)> {
     let (reader, writer) = std::io::pipe()?;
     Ok((reader.into(), writer.into()))
@@ -220,6 +221,7 @@ mod setup_tests {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Create a new async-aware pipe.
 ///
 /// Returns a tuple of `(reader, writer)` pipe endpoints.
@@ -245,6 +247,7 @@ pub struct PollPipe {
 }
 
 impl Pipe {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Pipe"))]
     /// Create a `Pipe` from a standard library `OwnedFd` with the given registration mode.
     #[inline]
     pub(crate) fn from_std_with_mode(
@@ -261,6 +264,7 @@ impl Pipe {
         Ok(Self { inner, handle })
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Pipe"))]
     /// Convert this `Pipe` to a `PollPipe` for readiness-based operations.
     #[inline]
     pub fn into_poll(self) -> Result<PollPipe, io::Error> {
@@ -272,12 +276,14 @@ impl Pipe {
 }
 
 impl PollPipe {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PollPipe"))]
     /// Convert this `PollPipe` back to an adaptive `Pipe`.
     #[inline]
     pub fn into_adaptive(self) -> Pipe {
         self.stream
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PollPipe"))]
     /// Convert this `PollPipe` to a completion-based `Pipe`.
     #[inline]
     pub fn into_completion(self) -> Result<Pipe, io::Error> {
@@ -289,6 +295,10 @@ impl PollPipe {
 }
 
 impl AsRawFd for Pipe {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Pipe as AsRawFd>")
+    )]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.inner.as_raw_fd()
@@ -296,6 +306,10 @@ impl AsRawFd for Pipe {
 }
 
 impl AsRawFd for PollPipe {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollPipe as AsRawFd>")
+    )]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.stream.inner.as_raw_fd()
@@ -303,6 +317,10 @@ impl AsRawFd for PollPipe {
 }
 
 impl IntoRawFd for Pipe {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Pipe as IntoRawFd>")
+    )]
     #[inline]
     fn into_raw_fd(self) -> RawFd {
         let Self { handle, inner } = self;
@@ -312,6 +330,10 @@ impl IntoRawFd for Pipe {
 }
 
 impl IntoRawFd for PollPipe {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollPipe as IntoRawFd>")
+    )]
     #[inline]
     fn into_raw_fd(self) -> RawFd {
         self.stream.into_raw_fd()
@@ -319,6 +341,10 @@ impl IntoRawFd for PollPipe {
 }
 
 impl<'a> AsInnerRawHandle<'a> for Pipe {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Pipe as AsInnerRawHandle < 'a >>")
+    )]
     #[inline]
     fn as_inner_raw_handle(&'a self) -> &'a InnerRawHandle {
         &self.handle
@@ -326,6 +352,10 @@ impl<'a> AsInnerRawHandle<'a> for Pipe {
 }
 
 impl<'a> AsInnerRawHandle<'a> for PollPipe {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollPipe as AsInnerRawHandle < 'a >>")
+    )]
     #[inline]
     fn as_inner_raw_handle(&'a self) -> &'a InnerRawHandle {
         self.stream.as_inner_raw_handle()
@@ -333,6 +363,10 @@ impl<'a> AsInnerRawHandle<'a> for PollPipe {
 }
 
 impl AsyncRead for Pipe {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Pipe as AsyncRead>", future = true)
+    )]
     #[inline]
     async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<usize, io::Error>, B) {
         let handle = &self.handle;
@@ -341,6 +375,10 @@ impl AsyncRead for Pipe {
         (result, op.take_bufs())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Pipe as AsyncRead>", future = true)
+    )]
     #[inline]
     async fn read_vectored<B: IoVectoredBufMut>(
         &mut self,
@@ -357,6 +395,10 @@ impl AsyncRead for Pipe {
 }
 
 impl TokioAsyncRead for PollPipe {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollPipe as TokioAsyncRead>")
+    )]
     #[inline]
     fn poll_read(
         self: Pin<&mut Self>,
@@ -391,6 +433,10 @@ impl TokioAsyncRead for PollPipe {
 }
 
 impl AsyncWrite for Pipe {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Pipe as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, io::Error>, B) {
         let handle = &self.handle;
@@ -399,11 +445,19 @@ impl AsyncWrite for Pipe {
         (result, op.take_bufs())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Pipe as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn flush(&mut self) -> Result<(), io::Error> {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<Pipe as AsyncWrite>", future = true)
+    )]
     #[inline]
     async fn write_vectored<B: IoVectoredBuf>(&mut self, bufs: B) -> (Result<usize, io::Error>, B) {
         if bufs.is_empty() {
@@ -417,6 +471,10 @@ impl AsyncWrite for Pipe {
 }
 
 impl TokioAsyncWrite for PollPipe {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollPipe as TokioAsyncWrite>")
+    )]
     #[inline]
     fn poll_write(
         self: Pin<&mut Self>,
@@ -432,6 +490,10 @@ impl TokioAsyncWrite for PollPipe {
         this.stream.handle.poll_op_poll(cx, &mut op)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollPipe as TokioAsyncWrite>")
+    )]
     #[inline]
     fn poll_write_vectored(
         self: Pin<&mut Self>,
@@ -450,16 +512,28 @@ impl TokioAsyncWrite for PollPipe {
         this.stream.handle.poll_op_poll(cx, &mut op)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollPipe as TokioAsyncWrite>")
+    )]
     #[inline]
     fn is_write_vectored(&self) -> bool {
         true
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollPipe as TokioAsyncWrite>")
+    )]
     #[inline]
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<PollPipe as TokioAsyncWrite>")
+    )]
     #[inline]
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))

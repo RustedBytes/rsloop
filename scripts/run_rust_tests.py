@@ -51,6 +51,14 @@ def main() -> int:
     python_home, libdir, python_abi = python_link_config(interpreter)
 
     env = os.environ.copy()
+    if args.all_features or any(
+        name in (args.features or "").split(",")
+        for name in ("hotpath-profile", "hotpath-alloc-profile")
+    ):
+        # hotpath wraps nested async bodies in additional futures. In debug
+        # builds, moving owned I/O arrays through those wrappers can exceed
+        # libtest's 2 MiB stack before polling. Keep normal builds unchanged.
+        env.setdefault("RUST_MIN_STACK", str(32 * 1024 * 1024))
     env["PYO3_PYTHON"] = str(interpreter)
     env["PYTHONHOME"] = python_home
     if os.name == "nt":

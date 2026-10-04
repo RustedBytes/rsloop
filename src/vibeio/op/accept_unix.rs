@@ -19,6 +19,10 @@ pub struct AcceptUnixOp<'a> {
 }
 
 impl<'a> AcceptUnixOp<'a> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AcceptUnixOp")
+    )]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle) -> Self {
         Self {
@@ -29,12 +33,20 @@ impl<'a> AcceptUnixOp<'a> {
 }
 
 impl Op for AcceptUnixOp<'_> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<AcceptUnixOp as Op>")
+    )]
     #[cfg(target_os = "linux")]
     fn completion_returns_fd(&self) -> bool {
         true
     }
     type Output = OwnedFd;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<AcceptUnixOp as Op>")
+    )]
     #[inline]
     fn poll_poll(
         &mut self,
@@ -88,6 +100,10 @@ impl Op for AcceptUnixOp<'_> {
         Poll::Ready(Ok(owned))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<AcceptUnixOp as Op>")
+    )]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -132,6 +148,10 @@ impl Op for AcceptUnixOp<'_> {
         Poll::Ready(Ok(owned))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<AcceptUnixOp as Op>")
+    )]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -153,6 +173,10 @@ impl Op for AcceptUnixOp<'_> {
 }
 
 impl Drop for AcceptUnixOp<'_> {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<AcceptUnixOp as Drop>")
+    )]
     #[inline]
     fn drop(&mut self) {
         if let Some(completion_token) = self.completion_token {

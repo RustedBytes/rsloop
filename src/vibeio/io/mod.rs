@@ -69,6 +69,10 @@ pub trait AsyncRead {
     /// of this read. A zero count indicates EOF unless capacity was zero.
     async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<usize, io::Error>, B);
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AsyncRead", future = true)
+    )]
     /// Read data into vectored buffers.
     #[inline]
     async fn read_vectored<V: IoVectoredBufMut>(
@@ -94,6 +98,10 @@ pub trait AsyncWrite {
     /// The returned count must not exceed the supplied initialized length.
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, io::Error>, B);
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AsyncWrite", future = true)
+    )]
     /// Write data from vectored buffers.
     #[inline]
     async fn write_vectored<V: IoVectoredBuf>(&mut self, bufs: V) -> (Result<usize, io::Error>, V) {
@@ -106,6 +114,10 @@ pub trait AsyncWrite {
         )
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AsyncWrite", future = true)
+    )]
     /// Flush the writer.
     #[inline]
     async fn flush(&mut self) -> Result<(), io::Error> {
@@ -120,6 +132,10 @@ pub trait AsInnerRawHandle<'a> {
 }
 
 impl<'a> AsInnerRawHandle<'a> for InnerRawHandle {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<InnerRawHandle as AsInnerRawHandle < 'a >>")
+    )]
     #[inline]
     fn as_inner_raw_handle(&'a self) -> &'a InnerRawHandle {
         self
@@ -131,6 +147,10 @@ pub trait AsyncReadPoll {
     /// Polls to check if the reader is readable.
     fn poll_readable(&self, cx: &mut std::task::Context) -> std::task::Poll<io::Result<()>>;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AsyncReadPoll", future = true)
+    )]
     /// Returns a future that resolves when the reader becomes readable.
     #[inline]
     async fn readable(&self) -> Result<(), io::Error> {
@@ -143,6 +163,10 @@ pub trait AsyncWritePoll {
     /// Polls to check if the writer is writable.
     fn poll_writable(&self, cx: &mut std::task::Context) -> std::task::Poll<io::Result<()>>;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "AsyncWritePoll", future = true)
+    )]
     /// Returns a future that resolves when the writer becomes writable.
     #[inline]
     async fn writable(&self) -> Result<(), io::Error> {

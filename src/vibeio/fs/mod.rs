@@ -47,6 +47,7 @@ use crate::vibeio::op::SymlinkOp;
 #[cfg(target_os = "linux")]
 use crate::vibeio::op::UnlinkOp;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Run a filesystem operation away from the async executor thread.
 ///
 /// A caller-selected runtime pool takes precedence. The shared async-std pool
@@ -66,6 +67,7 @@ where
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Creates a symbolic link to a directory on Windows.
 ///
 /// Creates the link at `path`, pointing to `target`, using the standard library.
@@ -87,6 +89,7 @@ pub fn windows_symlink_dir(path: String, target: String) -> std::io::Result<()> 
     std::os::windows::fs::symlink_dir(target, path)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Creates a symbolic link to a file on Windows.
 ///
 /// Creates the link at `path`, pointing to `target`, using the standard library.
@@ -108,6 +111,7 @@ pub fn windows_symlink_file(path: String, target: String) -> std::io::Result<()>
     std::os::windows::fs::symlink_file(target, path)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Returns the canonical form of a path with all components normalized.
 ///
 /// This is the async version of [`std::fs::canonicalize`].
@@ -128,6 +132,7 @@ pub async fn canonicalize<P: AsRef<std::path::Path>>(path: P) -> std::io::Result
     run_blocking_fs(move || path.canonicalize()).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Reads the entire contents of a file into a vector of bytes.
 ///
 /// This is the async version of [`std::fs::read`].
@@ -162,6 +167,7 @@ pub async fn read(path: impl AsRef<std::path::Path>) -> std::io::Result<Vec<u8>>
     Ok(bytes)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Reads the entire contents of a file into a string.
 ///
 /// This is the async version of [`std::fs::read_to_string`].
@@ -182,6 +188,7 @@ pub async fn read_to_string(path: impl AsRef<std::path::Path>) -> std::io::Resul
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.utf8_error()))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Writes a byte slice to a file, creating it if necessary.
 ///
 /// This is the async version of [`std::fs::write`].
@@ -214,6 +221,7 @@ pub async fn write(
     file.flush().await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a hard link at the destination path pointing to the source.
 ///
 /// This is the async version of [`std::fs::hard_link`].
@@ -264,6 +272,7 @@ pub async fn hard_link(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a hard link at the destination path pointing to the source.
 ///
 /// This is the async version of [`std::fs::hard_link`].
@@ -290,6 +299,7 @@ pub async fn hard_link(
     run_blocking_fs(move || std::fs::hard_link(src, dst)).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a symbolic link to a directory.
 ///
 /// This is the async version of [std::os::unix::fs::symlink](https://doc.rust-lang.org/std/os/unix/fs/fn.symlink.html) (on Unix) or
@@ -319,6 +329,7 @@ pub async fn symlink_dir(
     run_blocking_fs(move || std::os::windows::fs::symlink_dir(src, dst)).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a symbolic link to a directory.
 ///
 /// This is the async version of [`std::os::unix::fs::symlink`].
@@ -369,6 +380,7 @@ pub async fn symlink_dir(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a symbolic link to a directory.
 ///
 /// This is the async version of [`std::os::unix::fs::symlink`].
@@ -395,6 +407,7 @@ pub async fn symlink_dir(
     run_blocking_fs(move || std::os::unix::fs::symlink(src, dst)).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a symbolic link to a file.
 ///
 /// This is the async version of [std::os::unix::fs::symlink](https://doc.rust-lang.org/std/os/unix/fs/fn.symlink.html) (on Unix) or
@@ -424,6 +437,7 @@ pub async fn symlink_file(
     run_blocking_fs(move || std::os::windows::fs::symlink_file(src, dst)).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a symbolic link to a file.
 ///
 /// This is the async version of [`std::os::unix::fs::symlink`].
@@ -474,6 +488,7 @@ pub async fn symlink_file(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a symbolic link to a file.
 ///
 /// This is the async version of [`std::os::unix::fs::symlink`].
@@ -500,6 +515,7 @@ pub async fn symlink_file(
     run_blocking_fs(move || std::os::unix::fs::symlink(src, dst)).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a symbolic link.
 ///
 /// This is a convenience function that calls [`symlink_file`]. Use this when you
@@ -521,6 +537,7 @@ pub async fn symlink(
     symlink_file(src, dst).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Renames a file or directory to a new location.
 ///
 /// This is the async version of [`std::fs::rename`].
@@ -570,6 +587,7 @@ pub async fn rename(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Renames a file or directory to a new location.
 ///
 /// This is the async version of [`std::fs::rename`].
@@ -596,6 +614,7 @@ pub async fn rename(
     run_blocking_fs(move || std::fs::rename(from, to)).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Removes an empty directory.
 ///
 /// This is the async version of [`std::fs::remove_dir`].
@@ -634,6 +653,7 @@ pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Removes an empty directory.
 ///
 /// This is the async version of [`std::fs::remove_dir`].
@@ -656,6 +676,7 @@ pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
     run_blocking_fs(move || std::fs::remove_dir(path)).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Removes a file.
 ///
 /// This is the async version of [`std::fs::remove_file`].
@@ -692,6 +713,7 @@ pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<(
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Removes a file.
 ///
 /// This is the async version of [`std::fs::remove_file`].
@@ -712,6 +734,7 @@ pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<(
     run_blocking_fs(move || std::fs::remove_file(path)).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a directory.
 ///
 /// This is the async version of [`std::fs::create_dir`].
@@ -751,6 +774,7 @@ pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a directory.
 ///
 /// This is the async version of [`std::fs::create_dir`].
@@ -773,6 +797,7 @@ pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
     run_blocking_fs(move || std::fs::create_dir(path)).await
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a new, empty directory and all its parent components if they don't exist.
 ///
 /// This is the async version of [`std::fs::create_dir_all`].
@@ -838,6 +863,7 @@ pub async fn create_dir_all(path: impl AsRef<std::path::Path>) -> std::io::Resul
     Ok(())
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Returns metadata about a file or directory.
 ///
 /// This is the async version of [`std::fs::metadata`].
@@ -884,6 +910,7 @@ pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Meta
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Returns metadata about a file or directory.
 ///
 /// This is the async version of [`std::fs::metadata`].
@@ -906,6 +933,7 @@ pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Meta
     ))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Returns metadata about a file or directory without following symlinks.
 ///
 /// This is the async version of [`std::fs::symlink_metadata`].
@@ -952,6 +980,7 @@ pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Res
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Returns metadata about a file or directory without following symlinks.
 ///
 /// This is the async version of [`std::fs::symlink_metadata`].

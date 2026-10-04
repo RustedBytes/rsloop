@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use super::sleep::Sleep;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn duration_remainder(duration: Duration, divisor: Duration) -> Duration {
     let remainder = duration.as_nanos() % divisor.as_nanos();
@@ -39,6 +40,7 @@ pub struct Interval {
 }
 
 impl Interval {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Interval"))]
     #[inline]
     pub fn new(period: Duration) -> Self {
         Self {
@@ -48,12 +50,14 @@ impl Interval {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Interval"))]
     /// Configure how missed ticks are handled.
     #[inline]
     pub fn set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
         self.missed_tick_behavior = behavior;
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Interval"))]
     /// Reset the interval schedule so the next tick is computed relative to
     /// the time when `tick()` is next called (useful when you want to restart
     /// the cadence).
@@ -62,6 +66,10 @@ impl Interval {
         self.next_deadline = None;
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "Interval", future = true)
+    )]
     /// Await the next tick. Returns the number of ticks that should be processed:
     /// - For `MissedTickBehavior::Skip` this will be `1`.
     /// - For `MissedTickBehavior::CatchUp` this may be `> 1` if several periods were missed.
@@ -72,6 +80,10 @@ impl Interval {
 
     // Keep the scheduling clock explicit so catch-up boundaries can be tested
     // without scheduler latency changing the expected number of missed ticks.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "Interval", future = true)
+    )]
     async fn tick_at(&mut self, now: Instant) -> u64 {
         // Determine base next (the previous next_deadline or now+period)
         let base_next = self

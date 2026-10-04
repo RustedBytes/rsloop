@@ -15,6 +15,7 @@ pub struct MkDirOp {
 }
 
 impl MkDirOp {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "MkDirOp"))]
     #[inline]
     pub fn new(driver: Rc<AnyDriver>, path: CString, mode: libc::mode_t) -> Self {
         Self {
@@ -29,6 +30,10 @@ impl MkDirOp {
 impl Op for MkDirOp {
     type Output = ();
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MkDirOp as Op>")
+    )]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -70,6 +75,10 @@ impl Op for MkDirOp {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MkDirOp as Op>")
+    )]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -90,6 +99,10 @@ impl Op for MkDirOp {
 }
 
 impl Drop for MkDirOp {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MkDirOp as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
             // Paths and result storage remain owned until the kernel acknowledges

@@ -31,6 +31,7 @@ use super::{
 };
 use crate::fd_ops;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn spawn_read_pipe_transport(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -55,6 +56,7 @@ pub fn spawn_read_pipe_transport(
     Ok(transport)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn spawn_write_pipe_transport(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -81,15 +83,24 @@ pub(super) enum PipeTransportMode {
 }
 
 impl PipeTransportMode {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PipeTransportMode")
+    )]
     pub(super) fn reading(&self) -> bool {
         matches!(self, Self::Read)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PipeTransportMode")
+    )]
     pub(super) fn writable(&self) -> bool {
         matches!(self, Self::Write)
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn pipe_transport_core(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -125,6 +136,7 @@ pub(super) fn pipe_transport_core(
     Ok((core, transport, writer_rx))
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn pipe_extra(
     py: Python<'_>,
     pipe_obj: &Py<PyAny>,
@@ -139,6 +151,7 @@ pub(super) fn pipe_extra(
     extra
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(not(windows))]
 pub(super) fn pipe_file_from_obj(py: Python<'_>, pipe_obj: &Py<PyAny>) -> PyResult<fs::File> {
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;
@@ -146,6 +159,7 @@ pub(super) fn pipe_file_from_obj(py: Python<'_>, pipe_obj: &Py<PyAny>) -> PyResu
     from_owned_raw_fd(dup)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 pub(super) fn pipe_file_from_obj(py: Python<'_>, pipe_obj: &Py<PyAny>) -> PyResult<fs::File> {
     let fd = fd_ops::fileobj_to_fd(py, pipe_obj.bind(py))?;

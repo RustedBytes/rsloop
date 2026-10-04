@@ -26,6 +26,7 @@ use crate::vibeio::{driver::Driver, fd_inner::InnerRawHandle};
 const MAX_POLL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const WAKE_TOKEN: Token = Token(usize::MAX);
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn bounded_poll_timeout(timeout: Option<Duration>) -> Option<Duration> {
     timeout.map(|timeout| timeout.min(MAX_POLL_TIMEOUT))
@@ -36,6 +37,10 @@ pub struct MioInterruptor {
 }
 
 impl Interruptor for MioInterruptor {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MioInterruptor as Interruptor>")
+    )]
     #[inline]
     fn interrupt(&self) {
         if let Some(waker) = self.waker.upgrade() {
@@ -49,15 +54,27 @@ struct DriverWaker(MioWaker);
 
 #[cfg(not(target_vendor = "apple"))]
 impl DriverWaker {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverWaker")
+    )]
     fn new(registry: &Registry) -> io::Result<Self> {
         MioWaker::new(registry, WAKE_TOKEN).map(Self)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverWaker")
+    )]
     #[inline]
     fn wake(&self) -> io::Result<()> {
         self.0.wake()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverWaker")
+    )]
     #[inline]
     fn acknowledge(&self) {}
 }
@@ -73,6 +90,10 @@ struct DriverWaker {
 
 #[cfg(target_vendor = "apple")]
 impl DriverWaker {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverWaker")
+    )]
     fn new(registry: &Registry) -> io::Result<Self> {
         let (sender, receiver) = UnixDatagram::pair()?;
         sender.set_nonblocking(true)?;
@@ -86,11 +107,19 @@ impl DriverWaker {
         Ok(Self { sender, receiver })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverWaker")
+    )]
     #[inline]
     fn wake(&self) -> io::Result<()> {
         super::send_wake_notification(|| self.sender.send(&[1]))
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DriverWaker")
+    )]
     fn acknowledge(&self) {
         let mut buffer = [0_u8; 256];
         loop {
@@ -124,6 +153,7 @@ pub struct MioDriver {
 }
 
 impl MioDriver {
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "MioDriver"))]
     #[inline]
     pub(crate) fn new() -> Result<Self, io::Error> {
         let poll = Poll::new()?;
@@ -142,6 +172,7 @@ impl MioDriver {
         })
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "MioDriver"))]
     #[inline]
     fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) -> Option<Waker> {
         if !waiter_slot
@@ -154,6 +185,7 @@ impl MioDriver {
         }
     }
 
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "MioDriver"))]
     #[inline]
     pub(crate) fn wait_timeout(&self, timeout: Option<Duration>) {
         let mut poll = self.poll.borrow_mut();
@@ -196,11 +228,19 @@ impl MioDriver {
 impl Driver for MioDriver {
     type Interruptor = MioInterruptor;
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MioDriver as Driver>")
+    )]
     #[inline]
     fn flush(&self) {
         self.wait_timeout(Some(Duration::ZERO));
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MioDriver as Driver>")
+    )]
     #[inline]
     fn should_flush(&self) -> bool {
         // Registration and re-registration are applied synchronously. Polling
@@ -209,11 +249,19 @@ impl Driver for MioDriver {
         false
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MioDriver as Driver>")
+    )]
     #[inline]
     fn wait(&self, timeout: Option<Duration>) {
         self.wait_timeout(timeout);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MioDriver as Driver>")
+    )]
     #[inline]
     fn get_interruptor(&self) -> Self::Interruptor {
         MioInterruptor {
@@ -221,6 +269,10 @@ impl Driver for MioDriver {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MioDriver as Driver>")
+    )]
     #[inline]
     fn register_handle(
         &self,
@@ -249,6 +301,10 @@ impl Driver for MioDriver {
         Ok(token)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MioDriver as Driver>")
+    )]
     #[inline]
     fn reregister_handle(
         &self,
@@ -273,6 +329,10 @@ impl Driver for MioDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MioDriver as Driver>")
+    )]
     #[inline]
     fn deregister_handle(&self, handle: &InnerRawHandle) -> Result<(), io::Error> {
         let fd = {
@@ -301,6 +361,10 @@ impl Driver for MioDriver {
         Ok(())
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "<MioDriver as Driver>")
+    )]
     #[inline]
     fn submit_poll(
         &self,

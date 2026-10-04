@@ -16,6 +16,7 @@ use crate::context::capture_context;
 use crate::engine::{CallbackKind, FdWatch, LoopCommand, LoopIoCommand, ReadyCallback};
 use crate::fd_ops;
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn add_reader(
     loop_ref: &PyLoop,
     py: Python<'_>,
@@ -62,6 +63,7 @@ pub(super) fn add_reader(
         .map_err(PyLoop::map_loop_error)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn remove_reader(
     loop_ref: &PyLoop,
     py: Python<'_>,
@@ -104,6 +106,7 @@ pub(super) fn remove_reader(
     Ok(removed)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn add_writer(
     loop_ref: &PyLoop,
     py: Python<'_>,
@@ -147,6 +150,7 @@ pub(super) fn add_writer(
         .map_err(PyLoop::map_loop_error)
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn remove_writer(
     loop_ref: &PyLoop,
     py: Python<'_>,

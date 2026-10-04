@@ -30,6 +30,7 @@ enum ProcessEventKind {
     Lost,
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn process_event_kind(event: &PendingProcessEvent) -> ProcessEventKind {
     match event {
         PendingProcessEvent::PipeDataReceived { .. } => ProcessEventKind::PipeData,
@@ -39,10 +40,15 @@ fn process_event_kind(event: &PendingProcessEvent) -> ProcessEventKind {
     }
 }
 
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn process_event_stops_drain(kind: ProcessEventKind) -> bool {
     kind == ProcessEventKind::Lost
 }
 impl ProcessTransportCore {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn enqueue_pending_event(self: &Arc<Self>, event: PendingProcessEvent) {
         self.pending_events
             .lock()
@@ -61,6 +67,10 @@ impl ProcessTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(crate) fn drain_pending_events_with_py(self: &Arc<Self>, py: Python<'_>) -> PyResult<()> {
         let mut drained = VecDeque::new();
         loop {
@@ -120,6 +130,10 @@ impl ProcessTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn call_protocol_with_tuple(
         &self,
         py: Python<'_>,
@@ -139,6 +153,10 @@ impl ProcessTransportCore {
         run_in_context(py, &context, context_needs_run, &callback, &tuple)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn call_in_loop_context<T>(
         &self,
         f: impl for<'py> FnOnce(Python<'py>) -> PyResult<T>,
@@ -149,6 +167,10 @@ impl ProcessTransportCore {
         })
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn call_protocol_method0(
         &self,
         py: Python<'_>,
@@ -158,6 +180,10 @@ impl ProcessTransportCore {
         self.call_protocol_with_tuple(py, method, &args)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn call_protocol_method1(
         &self,
         py: Python<'_>,
@@ -168,6 +194,10 @@ impl ProcessTransportCore {
         self.call_protocol_with_tuple(py, method, &args)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn call_protocol_method2(
         &self,
         py: Python<'_>,
@@ -179,6 +209,10 @@ impl ProcessTransportCore {
         self.call_protocol_with_tuple(py, method, &args)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ProcessTransportCore")
+    )]
     pub(super) fn report_error(&self, err: PyErr, message: &str) {
         let _ = Python::attach(|py| -> PyResult<()> {
             let context = PyDict::new(py);
