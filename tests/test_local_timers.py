@@ -1,11 +1,36 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+import weakref
 
 import rsloop
 
 
 class TestLocalTimer:
+    def test_timer_handle_survives_cross_thread_cancel_and_freelist_reuse(self):
+        loop = rsloop.new_event_loop()
+        try:
+            before = loop.time()
+            handle = loop.call_later(3600, lambda: None)
+            assert before + 3600 <= handle.when() <= loop.time() + 3600
+            thread = threading.Thread(target=handle.cancel)
+            thread.start()
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+            assert handle.cancelled()
+            handle.cancel()
+            assert "cancelled=true" in repr(handle)
+            reference = weakref.ref(handle)
+            del handle
+            assert reference() is None
+            replacement = loop.call_later(3600, lambda: None)
+            assert not replacement.cancelled()
+            assert reference() is None
+            replacement.cancel()
+        finally:
+            loop.close()
+
     def test_timer_scheduled_by_stopping_callback_survives_next_run(self):
         loop = rsloop.new_event_loop()
         events = []

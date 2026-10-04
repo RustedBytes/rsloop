@@ -12,10 +12,32 @@ pytestmark = pytest.mark.tooling
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "benches"))
 import compare_event_loops as comparison
+import scheduler_workloads as scheduler
 import workload_matrix as matrix
 
 
 class TestBenchmarkLoop:
+    @pytest.mark.parametrize(
+        "mode", ["timers_retained", "timers_discarded", "timers_cancelled"]
+    )
+    @pytest.mark.parametrize("loop_name", ["asyncio", "rsloop"])
+    def test_timer_workloads_drain_partial_final_batches(self, mode, loop_name):
+        result = comparison.run_with_loop(
+            loop_name,
+            asyncio.wait_for(scheduler.bench_timers(loop_name, 7, 3, mode), 5),
+        )
+        assert result.operations == 7
+        assert result.workload == mode
+
+    @pytest.mark.parametrize("loop_name", ["asyncio", "rsloop"])
+    def test_connection_churn_echoes_data_and_closes_connections(self, loop_name):
+        result = comparison.run_with_loop(
+            loop_name,
+            asyncio.wait_for(scheduler.bench_tcp_connect_churn(loop_name, 3, 1024), 10),
+        )
+        assert result.operations == 3
+        assert result.workload == "tcp_connect_churn"
+
     @pytest.mark.skipif(sys.version_info < (3, 11), reason="Task context needs 3.11+")
     def test_task_options_workload_exercises_every_task(self, monkeypatch):
         options = []

@@ -280,6 +280,7 @@ impl PyHandle {
     name = "TimerHandle",
     module = "rsloop._loop",
     weakref,
+    frozen,
     freelist = 1024
 )]
 pub struct PyTimerHandle {

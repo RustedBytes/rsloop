@@ -100,6 +100,21 @@ This harness does not apply model output or create commits automatically.
   untrained scenario families. Default profile training uses the six core
   workloads; holdout is the default comparison suite.
 
+Additional opt-in scheduler probes are available through `--workloads`:
+`timers_retained`, `timers_discarded`, `timers_cancelled`, and
+`tcp_connect_churn`. Timer probes schedule zero-delay timers in batches and
+include dispatch or cancellation and handle release. Retained handles remain
+live until their batch drains; discarded handles can reuse a freelist while
+callbacks remain pending. Training uses 1,000,000 timers in batches of 10,000;
+holdout uses 1,200,000 in batches of 777.
+
+The connection probe uses explicit stdlib stream protocols, so native stream
+wrappers cannot bypass generic TCP-reader startup. It creates a connection,
+echoes one payload, and closes it before the next connection. Training uses
+3,000 connections with 1 KiB payloads; holdout uses 4,000 with 8 KiB payloads.
+These probes are excluded from the default six-workload suite. Their source in
+`benches/scheduler_workloads.py` is hashed and archived with comparison results.
+
 ## Interpreting results honestly
 
 Run an A/A comparison (`--baseline` and `--candidate` pointing to the same

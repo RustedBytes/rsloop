@@ -569,8 +569,10 @@ impl LoopCore {
             context_needs_run,
         ));
 
-        let when = self.time() + delay.as_secs_f64();
         let deadline = Instant::now() + delay;
+        // Derive the public timestamp from the actual heap deadline. This also
+        // avoids reading the monotonic clock twice for every timer.
+        let when = deadline.duration_since(self.start).as_secs_f64();
         let entry = TimerEntry {
             callback: Arc::clone(&ready),
             when: deadline,
@@ -1602,6 +1604,30 @@ mod wake_tests {
     use futures::task::{ArcWake, noop_waker, waker};
 
     use super::*;
+
+    #[test]
+    fn timer_timestamp_matches_the_heap_deadline() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            let core = LoopCore::new();
+            let (ready, when) = core
+                .schedule_timer(
+                    py,
+                    Duration::from_secs(3600),
+                    py.None(),
+                    PyTuple::empty(py).unbind(),
+                    None,
+                )
+                .expect("schedule timer");
+            {
+                let timers = core.pending_timers.lock().expect("pending timers");
+                let entry = timers.peek().expect("scheduled timer");
+                assert_eq!(entry.seq, ready.id());
+                assert_eq!(when, entry.when.duration_since(core.start).as_secs_f64());
+            }
+            core.close().expect("close loop");
+        });
+    }
 
     struct WakeCounter(AtomicUsize);
 
