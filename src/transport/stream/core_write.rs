@@ -145,6 +145,10 @@ impl StreamTransportCore {
             .close_on_write_eof
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn try_direct_tasked_write(&self, data: &[u8]) -> io::Result<usize> {
         if transport_stats_enabled() {
             TRANSPORT_DIRECT_WRITE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
@@ -280,6 +284,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(crate) fn flush_pending_direct_write(self: &Arc<Self>) {
         #[cfg(windows)]
         if self.poll_reader_requested() && !self.poll_reader_ready.load(Ordering::Acquire) {
@@ -354,6 +362,10 @@ impl StreamTransportCore {
         self.record_write_buffer_drained(discarded);
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn try_write_bytes(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
         #[cfg(windows)]
         if self.direct_writer.is_some()

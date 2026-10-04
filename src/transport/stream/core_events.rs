@@ -304,6 +304,10 @@ impl StreamTransportCore {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(crate) fn drain_pending_read_events_with_py(
         self: &Arc<Self>,
         py: Python<'_>,

@@ -18,6 +18,7 @@ fn set_running_loop_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
 }
 
 /// Captures the caller's context unless an explicit context was supplied.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn capture_context(py: Python<'_>, explicit: Option<Py<PyAny>>) -> PyResult<(Py<PyAny>, bool)> {
     let context = if let Some(context) = explicit {
         context
@@ -42,6 +43,7 @@ pub fn is_nested_context_error(py: Python<'_>, err: &PyErr) -> bool {
 }
 
 #[inline]
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn enter_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
     // SAFETY: `context` is a live Python context object and the GIL is held. CPython returns
     // `0` on success and sets an exception on failure.
@@ -54,6 +56,7 @@ pub fn enter_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
 }
 
 #[inline]
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn exit_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
     // SAFETY: `context` is the same kind of live Python context object expected by CPython and
     // the GIL is held. A nonzero result means an exception is available via `PyErr::fetch`.
@@ -87,20 +90,20 @@ pub fn run_in_context(
     args: &Py<PyTuple>,
 ) -> PyResult<Py<PyAny>> {
     if !needs_run {
-        return callback.call1(py, args.clone_ref(py));
+        return callback.call1(py, args);
     }
 
     // A callback may re-enter the context that is already active on this
     // thread. `asyncio` still runs it, so only unrelated enter errors escape.
     if let Err(err) = enter_context(py, context) {
         return if is_nested_context_error(py, &err) {
-            callback.call1(py, args.clone_ref(py))
+            callback.call1(py, args)
         } else {
             Err(err)
         };
     }
 
-    let callback_result = callback.call1(py, args.clone_ref(py));
+    let callback_result = callback.call1(py, args);
     let exit_result = exit_context(py, context);
 
     match (callback_result, exit_result) {

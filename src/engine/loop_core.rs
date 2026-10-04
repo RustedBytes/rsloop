@@ -17,6 +17,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::callbacks::{CallbackArgs, CallbackId, CallbackKind, ReadyCallback};
+#[cfg(unix)]
+use super::commands::TcpReaderStart;
 use super::commands::{
     LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopTransportCommand, ReadyItem,
 };
@@ -420,6 +422,7 @@ impl LoopCore {
     }
 
     #[inline]
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     fn schedule_ready_handle(
         &self,
         handle: Py<super::callbacks::PyHandle>,
@@ -490,6 +493,7 @@ impl LoopCore {
     /// Captures context, creates a Python handle, and schedules a callback.
     ///
     /// The callback is eligible for the next ready-queue drain.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn schedule_callback(
         self: &Arc<Self>,
         py: Python<'_>,
@@ -518,6 +522,7 @@ impl LoopCore {
     }
 
     /// FASTCALL entry point: no temporary argument tuple for zero/one args.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub(crate) fn schedule_callback_args(
         self: &Arc<Self>,
         py: Python<'_>,
@@ -564,8 +569,10 @@ impl LoopCore {
             context_needs_run,
         ));
 
-        let when = self.time() + delay.as_secs_f64();
         let deadline = Instant::now() + delay;
+        // Derive the public timestamp from the actual heap deadline. This also
+        // avoids reading the monotonic clock twice for every timer.
+        let when = deadline.duration_since(self.start).as_secs_f64();
         let entry = TimerEntry {
             callback: Arc::clone(&ready),
             when: deadline,
@@ -800,7 +807,8 @@ impl LoopCore {
                         core.flush_pending_direct_write();
                     }
                     #[cfg(unix)]
-                    ReadyItem::StartTcpReader { fd, core, stream } => {
+                    ReadyItem::StartTcpReader(start) => {
+                        let TcpReaderStart { fd, core, stream } = *start;
                         // The runtime is installed before the ready drain begins.
                         assert!(self.spawn_io_tracked(
                             fd,
@@ -1127,6 +1135,7 @@ impl LoopCore {
     ///
     /// Returns a secondary error only when reporting the original callback
     /// failure through the exception handler also fails.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn execute_ready(
         &self,
         py: Python<'_>,
@@ -1369,10 +1378,15 @@ impl LoopCore {
                 core,
                 reader: crate::transport::stream::ReaderTarget::Tcp(stream),
             }) if !core.uses_native_stream_reader() => self
-                .try_enqueue_local_ready(ReadyItem::StartTcpReader { fd, core, stream })
+                .try_enqueue_local_ready(ReadyItem::StartTcpReader(Box::new(TcpReaderStart {
+                    fd,
+                    core,
+                    stream,
+                })))
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
-                    ReadyItem::StartTcpReader { fd, core, stream } => {
+                    ReadyItem::StartTcpReader(start) => {
+                        let TcpReaderStart { fd, core, stream } = *start;
                         LoopCommand::Io(LoopIoCommand::StartSocketReader {
                             fd,
                             core,
@@ -1401,7 +1415,8 @@ impl LoopCore {
                         LoopCommand::Transport(LoopTransportCommand::StreamWrite(core))
                     }
                     #[cfg(unix)]
-                    ReadyItem::StartTcpReader { fd, core, stream } => {
+                    ReadyItem::StartTcpReader(start) => {
+                        let TcpReaderStart { fd, core, stream } = *start;
                         LoopCommand::Io(LoopIoCommand::StartSocketReader {
                             fd,
                             core,
@@ -1589,6 +1604,30 @@ mod wake_tests {
     use futures::task::{ArcWake, noop_waker, waker};
 
     use super::*;
+
+    #[test]
+    fn timer_timestamp_matches_the_heap_deadline() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            let core = LoopCore::new();
+            let (ready, when) = core
+                .schedule_timer(
+                    py,
+                    Duration::from_secs(3600),
+                    py.None(),
+                    PyTuple::empty(py).unbind(),
+                    None,
+                )
+                .expect("schedule timer");
+            {
+                let timers = core.pending_timers.lock().expect("pending timers");
+                let entry = timers.peek().expect("scheduled timer");
+                assert_eq!(entry.seq, ready.id());
+                assert_eq!(when, entry.when.duration_since(core.start).as_secs_f64());
+            }
+            core.close().expect("close loop");
+        });
+    }
 
     struct WakeCounter(AtomicUsize);
 

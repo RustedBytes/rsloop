@@ -38,6 +38,10 @@ WORKLOADS = (
     "tls_http",
     "websocket_messages",
     "task_options",
+    "timers_retained",
+    "timers_discarded",
+    "timers_cancelled",
+    "tcp_connect_churn",
 )
 DEFAULT_WORKLOADS = ",".join(WORKLOADS[:6])
 
@@ -289,6 +293,9 @@ def workload_config(name: str, suite: str) -> dict:
         "callbacks": 3_000_000 if holdout else 2_000_000,
         "tasks": 350_000 if holdout else 300_000,
         "task_batch_size": 777 if holdout else 10_000,
+        "timers": 1_200_000 if holdout else 1_000_000,
+        "timer_batch_size": 777 if holdout else 10_000,
+        "connections": 4000 if holdout else 3000,
         "tcp_roundtrips": 25_000 if holdout else 20_000,
         "payload_size": 8192 if holdout else 1024,
         "concurrency": 7 if holdout else 16,
@@ -326,6 +333,7 @@ def child(args) -> None:
     identity = import_artifact(args.artifact.resolve())
     sys.path.insert(0, str(ROOT / "benches"))
     import compare_event_loops as small
+    import scheduler_workloads as scheduler
     import workload_matrix as matrix
 
     config = json.loads(args.config)
@@ -343,7 +351,11 @@ def child(args) -> None:
     ):
         argv.extend(["--" + key.replace("_", "-"), str(config[key])])
     matrix_args = None
-    if name not in (*WORKLOADS[:3], "task_options"):
+    if name not in (
+        *WORKLOADS[:3],
+        "task_options",
+        "tcp_connect_churn",
+    ) and not name.startswith("timers_"):
         sys.argv = argv
         matrix_args = matrix.parse_args()
         matrix.validate_args(matrix_args)
@@ -364,6 +376,16 @@ def child(args) -> None:
             elif name == "task_options":
                 coro = small.bench_task_options(
                     "rsloop", config["tasks"], config["task_batch_size"]
+                )
+                result = asdict(small.run_with_loop("rsloop", coro))
+            elif name.startswith("timers_"):
+                coro = scheduler.bench_timers(
+                    "rsloop", config["timers"], config["timer_batch_size"], name
+                )
+                result = asdict(small.run_with_loop("rsloop", coro))
+            elif name == "tcp_connect_churn":
+                coro = scheduler.bench_tcp_connect_churn(
+                    "rsloop", config["connections"], config["payload_size"]
                 )
                 result = asdict(small.run_with_loop("rsloop", coro))
             elif name == "tcp_streams":
@@ -561,7 +583,11 @@ def compare(args) -> None:
         "runner_sha256": sha256(Path(__file__)),
         "benchmark_sha256": {
             name: sha256(ROOT / "benches" / name)
-            for name in ("compare_event_loops.py", "workload_matrix.py")
+            for name in (
+                "compare_event_loops.py",
+                "workload_matrix.py",
+                "scheduler_workloads.py",
+            )
         },
         "cpu_count": os.cpu_count(),
         "processor": platform.processor(),

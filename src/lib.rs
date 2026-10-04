@@ -22,6 +22,8 @@ mod engine;
 mod errors;
 mod module_init;
 mod platform;
+#[cfg(feature = "hotpath-profile")]
+mod profile;
 mod python_names;
 pub mod rust_async;
 mod transport;
