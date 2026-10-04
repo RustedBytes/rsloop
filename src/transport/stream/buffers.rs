@@ -949,6 +949,35 @@ mod tests {
     }
 
     #[test]
+    fn read_pool_grows_small_slots_and_reuses_larger_buffers_without_shrinking() {
+        let pool = ReadBufferPool::new();
+        let held = (0..READ_BUFFER_POOL_LIMIT)
+            .map(|_| pool.try_acquire(4096).expect("small pool slot"))
+            .collect::<Vec<_>>();
+        assert!(held.iter().all(|buffer| buffer.capacity() == 4096));
+        assert!(pool.try_acquire(8192).is_none());
+        for buffer in held {
+            pool.release(buffer);
+        }
+
+        let mut grown = pool
+            .try_acquire(MAX_STREAM_READ_BUFFER_SIZE)
+            .expect("grown slot");
+        grown.extend_from_slice(b"previous read");
+        let pointer = grown.as_ptr();
+        let capacity = grown.capacity();
+        pool.release(grown);
+        let allocations = pool.allocations.load(Ordering::Relaxed);
+        let reused = pool.try_acquire(4096).expect("reused large slot");
+        assert!(reused.is_empty());
+        assert_eq!(reused.as_ptr(), pointer);
+        assert_eq!(reused.capacity(), capacity);
+        assert_eq!(pool.allocations.load(Ordering::Relaxed), allocations);
+        pool.release(reused);
+        assert_eq!(pool.state.lock().unwrap().allocated, READ_BUFFER_POOL_LIMIT);
+    }
+
+    #[test]
     fn read_buffer_pool_stops_allocating_at_the_slot_limit() {
         let pool = ReadBufferPool::new();
         let held = (0..READ_BUFFER_POOL_LIMIT)

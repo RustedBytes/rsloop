@@ -460,6 +460,98 @@ Timing profiles for retained, cancelled, and mixed-deadline timers, and
 allocation profiles for connection churn, TCP streams, and mixed timers all
 completed successfully. The normal release binary was restored afterward.
 
+## 4 KiB TCP read-buffer experiment (rejected)
+
+A fresh investigation of `bb4b344` on October 4, 2026 completed all 24 workloads
+in both timing and allocation modes. Both suites observed 807 instrumented
+names, with no unmapped names or truncated reports. The installed normal
+release extension was not replaced. These profiles are under
+`target/hotpath-rs/performance-bb4b344/`; use `timing-unrestricted/` for the
+successful timing suite, since the earlier `timing/` attempt was blocked by
+sandbox socket restrictions.
+
+Three fresh focused timing processes per path gave these median inclusive
+durations: callback scheduling 38.50 ms for 200,000 callbacks; zero-delay timer
+collection 5.03 ms and mixed-deadline collection 16.93 ms for 50,000 timers;
+exact-read copying 37.22 ms for 128 MiB received; and direct TCP writes 48.19 ms
+for 5,000 roundtrips. These are instrumented spans, not production self time
+or achievable speedups.
+
+The candidate reduced only non-Windows asynchronous TCP readers' initial and
+minimum buffer capacity from 16 KiB to 4 KiB. Full reads doubled the requested
+capacity up to 64 KiB; reads below quarter utilization halved it down to 4 KiB.
+Larger pooled allocations were reused without forced shrinking. Windows,
+Unix-domain and TLS readers, write thresholds, and the four-slot pool limit
+were unchanged. **The production change was reverted after both independent
+comparisons rejected it.**
+
+### Allocation traffic versus peak memory
+
+All 24 allocation workloads also passed on the candidate. In 500 connection
+cycles with 1 KiB payloads, read-pool allocation traffic fell from 31.25 MiB
+to 7.81 MiB, a 75% reduction. This did not establish a peak-memory improvement.
+
+A separate 8 KiB probe exposed the tradeoff: read-pool acquisitions increased
+from 2,000 to 3,000. Their allocation traffic fell from about 31.2 MiB to
+19.5 MiB, but the candidate also made 500 `PendingReadBuffer::extend` calls,
+allocating about 5.9 MiB for coalescing; the baseline made none. The generic
+protocol path caches the joined buffer after delivery, while the read pool
+retains recycled chunks. This supports fragmentation and retained buffers as
+an explanation for the RSS result, without attributing every RSS byte to a
+particular allocation. Rust allocation traffic is neither retained heap size
+nor process peak RSS.
+
+### Predeclared release comparisons
+
+Two independent runs used 24 balanced, randomized baseline/candidate pairs per
+workload, with seeds 41031 and 41032. Each sample ran in a fresh process with
+one full warmup, GC disabled, and an uninstrumented release extension. All
+1,152 processes completed; measured workloads lasted at least 0.330 seconds
+in the first run and 0.338 seconds in confirmation. No builds, tests, or
+profilers ran concurrently; CPU affinity was unrestricted.
+
+The suite covered callbacks, tasks, four timer distributions, TCP roundtrips,
+connection churn, HTTP, TLS HTTP, mixed streams, and bulk transfer. Parameters
+were 1.5 million callbacks, 250,000 tasks, 1.2 million timers, batches of 777,
+25,000 TCP roundtrips, 2,500 connection cycles with 8 KiB payloads, eight
+concurrent connections with 4,000 requests each, and 128 MiB per bulk connection.
+
+The primary metric was connection-churn peak RSS: its interval had to show
+more than 3% improvement, and every workload's timing and RSS upper bound had
+to stay within the 3% regression budget in both runs. Intervals use 20,000
+paired log-ratio bootstrap resamples and a 99.79% confidence target, adjusting
+across 12 timing and 12 RSS metrics. Changes below are geometric means of paired
+ratios, with negative values indicating improvement.
+
+| Run | Connection-churn time change (interval) | Connection-churn peak RSS change (interval) | Decision |
+| --- | ---: | ---: | --- |
+| First 24 pairs | +0.77% [-6.99%, +7.96%] | +7.76% [+4.74%, +10.22%] | Reject RSS regression |
+| Independent 24-pair confirmation | +2.09% [-1.34%, +7.51%] | +7.84% [+4.75%, +10.47%] | Reject RSS regression |
+
+Many timing intervals also cross the regression budget, so these runs do not
+establish timing equivalence. Smaller read buffers should not be adopted from
+the 1 KiB allocation result alone. Any subsequent design must address the
+additional fragmentation and retained buffers under larger payloads.
+
+The local ignored artifacts are under `target/read-buffer-optimization/`:
+`baseline/` and `candidate/` preserve exact release binaries, source snapshots,
+hashes, and `source.patch`; `experiment.json` records the acceptance rule;
+`paired-24/` and `confirmation-24/` retain the plans, archived harnesses, raw
+samples, and complete summaries. Allocation reports are in `allocations/` and
+`allocations-8k/`. Baseline and candidate release extension hashes are
+`ecd50051b535fcadcef3ebdee3225480b71762188363b487bd13744d5fb86e18` and
+`f6c8c28b257286ad2a6e5c3b25ee3352e3d8cfd4cd37d933c6a38e14f1afefb2`.
+
+Candidate validation passed 413 Rust tests with all features, 233 Python tests
+(three skipped), Clippy with warnings denied, and the capacity-sizing Kani
+proof. Both release artifacts passed the Python suite. The pool-reuse,
+fragmented-transfer, and paused-close regression coverage remains after
+reverting the sizing change; the candidate-specific sizing test and proof
+changes are preserved with the rejected source snapshot.
+After the reversion, 412 Rust tests with all features and 233 Python tests
+(three skipped) passed. The rebuilt normal release extension's SHA-256 matches
+the baseline exactly.
+
 ## Historical selective experiment
 
 The figures below predate the broad instrumentation and current collector.

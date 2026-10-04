@@ -434,15 +434,55 @@ class TestFastStreamReaderCompat:
 class TestFastStreamReaderNetwork:
     """The reported break: `readline()` over a real `asyncio.open_connection()`."""
 
-    def test_fragmented_large_exact_read_keeps_trailing_bytes(self):
+    def test_close_while_tcp_reading_is_paused(self):
+        async def main():
+            loop = asyncio.get_running_loop()
+            peer_connected = loop.create_future()
+            client_closed = loop.create_future()
+
+            class Peer(asyncio.Protocol):
+                def connection_made(self, transport):
+                    transport.write(b"x" * 65536)
+                    peer_connected.set_result(transport)
+
+            class Client(asyncio.Protocol):
+                def connection_made(self, transport):
+                    transport.pause_reading()
+
+                def connection_lost(self, exc):
+                    if not client_closed.done():
+                        client_closed.set_result(exc)
+
+            server = await loop.create_server(Peer, "127.0.0.1", 0)
+            client = peer = None
+            try:
+                client, _ = await loop.create_connection(
+                    Client, *server.sockets[0].getsockname()[:2]
+                )
+                peer = await asyncio.wait_for(peer_connected, 5)
+                await asyncio.sleep(0)
+                client.close()
+                assert await asyncio.wait_for(client_closed, 5) is None
+            finally:
+                if client is not None:
+                    client.close()
+                if peer is not None:
+                    peer.close()
+                server.close()
+                await server.wait_closed()
+
+        rsloop.run(main())
+
+    @pytest.mark.parametrize("chunk_size", [4093, 16381, 65536])
+    def test_fragmented_large_exact_read_keeps_trailing_bytes(self, chunk_size):
         payload = bytes(range(251)) * 8192
 
         async def main():
             async def send(reader, writer):
                 try:
                     await reader.readexactly(1)
-                    for start in range(0, len(payload), 16381):
-                        writer.write(payload[start : start + 16381])
+                    for start in range(0, len(payload), chunk_size):
+                        writer.write(payload[start : start + chunk_size])
                         await writer.drain()
                     writer.write(b"TAIL")
                 finally:
