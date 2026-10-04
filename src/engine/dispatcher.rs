@@ -162,6 +162,10 @@ impl RuntimeDispatcher {
         !self.ready_batch.is_empty()
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeDispatcher")
+    )]
     fn drain_commands(&mut self) -> bool {
         loop {
             match self.command_rx.try_recv() {
@@ -447,6 +451,10 @@ impl RuntimeDispatcher {
         false
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "RuntimeDispatcher")
+    )]
     fn dispatch_ready_batch(&mut self) {
         let Some(active_run) = self.active_run.as_ref() else {
             return;

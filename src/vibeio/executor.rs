@@ -667,6 +667,7 @@ impl Runtime {
         dead_code,
         reason = "Used by the Python embedding, not the standalone public-API harness"
     )]
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Runtime"))]
     pub(crate) fn poll_once(&self) {
         let inner = self.inner.as_ref().expect("runtime has been dropped");
         inner.driver.wait(Some(std::time::Duration::ZERO));

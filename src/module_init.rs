@@ -56,6 +56,11 @@ fn add_diagnostic_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(build_info, m)?)?;
     m.add_function(wrap_pyfunction!(transport_stats, m)?)?;
     m.add_function(wrap_pyfunction!(reset_transport_stats, m)?)?;
+    #[cfg(feature = "hotpath-profile")]
+    {
+        m.add_function(wrap_pyfunction!(crate::profile::hotpath_start, m)?)?;
+        m.add_function(wrap_pyfunction!(crate::profile::hotpath_stop, m)?)?;
+    }
     Ok(())
 }
 

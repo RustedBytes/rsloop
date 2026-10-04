@@ -14,11 +14,13 @@ use crate::fd_ops::RawFd;
 pub type CallbackId = u64;
 
 #[inline]
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn call_callback_noargs(py: Python<'_>, callback: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     Ok(callback.bind(py).call0()?.unbind())
 }
 
 #[inline]
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn call_callback_onearg(
     py: Python<'_>,
     callback: &Py<PyAny>,
@@ -139,6 +141,10 @@ impl ReadyCallback {
     ///
     /// A nested-context error falls back to direct invocation because that means
     /// the desired context is already active on this thread.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadyCallback")
+    )]
     pub fn invoke(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         if !self.context_needs_run {
             return self.invoke_direct(py);
@@ -161,6 +167,10 @@ impl ReadyCallback {
         }
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadyCallback")
+    )]
     fn invoke_direct(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match &self.args {
             CallbackArgs::None => call_callback_noargs(py, &self.callback),

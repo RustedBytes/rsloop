@@ -17,6 +17,10 @@ use super::io_targets::{TaskedDirectWriter, shutdown_tcp_stream};
 use super::{PyStreamTransport, WriterCommand, stop_socket_reader_nowait};
 
 impl PyStreamTransport {
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyStreamTransport")
+    )]
     pub(crate) fn write_data(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
         if self.core.is_closing() {
             return Ok(());

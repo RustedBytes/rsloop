@@ -420,6 +420,7 @@ impl LoopCore {
     }
 
     #[inline]
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     fn schedule_ready_handle(
         &self,
         handle: Py<super::callbacks::PyHandle>,
@@ -490,6 +491,7 @@ impl LoopCore {
     /// Captures context, creates a Python handle, and schedules a callback.
     ///
     /// The callback is eligible for the next ready-queue drain.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn schedule_callback(
         self: &Arc<Self>,
         py: Python<'_>,
@@ -518,6 +520,7 @@ impl LoopCore {
     }
 
     /// FASTCALL entry point: no temporary argument tuple for zero/one args.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub(crate) fn schedule_callback_args(
         self: &Arc<Self>,
         py: Python<'_>,
@@ -1127,6 +1130,7 @@ impl LoopCore {
     ///
     /// Returns a secondary error only when reporting the original callback
     /// failure through the exception handler also fails.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn execute_ready(
         &self,
         py: Python<'_>,

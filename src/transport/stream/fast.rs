@@ -1467,6 +1467,10 @@ impl PyFastStreamReader {
         self.maybe_resume_transport(py)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyFastStreamReader")
+    )]
     pub(crate) fn feed_data_internal(&mut self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
         if self.eof {
             return Err(PyValueError::new_err("feed_data after feed_eof"));
@@ -1476,6 +1480,10 @@ impl PyFastStreamReader {
         self.maybe_pause_transport(py)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyFastStreamReader")
+    )]
     pub(super) fn feed_owned_data_internal(
         &mut self,
         py: Python<'_>,
@@ -1529,6 +1537,10 @@ impl PyFastStreamReader {
         self.start_waiter(py, "read", ReadWaitKind::Any(n), None)
     }
 
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PyFastStreamReader")
+    )]
     fn build_readexactly_future(&mut self, py: Python<'_>, n: usize) -> PyResult<Py<PyAny>> {
         if let Some(exc) = self.exception.as_ref() {
             return self.ready_exception_future(py, exc.clone_ref(py));

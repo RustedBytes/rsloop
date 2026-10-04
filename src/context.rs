@@ -18,6 +18,7 @@ fn set_running_loop_fn(py: Python<'_>) -> PyResult<&Py<PyAny>> {
 }
 
 /// Captures the caller's context unless an explicit context was supplied.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn capture_context(py: Python<'_>, explicit: Option<Py<PyAny>>) -> PyResult<(Py<PyAny>, bool)> {
     let context = if let Some(context) = explicit {
         context
@@ -42,6 +43,7 @@ pub fn is_nested_context_error(py: Python<'_>, err: &PyErr) -> bool {
 }
 
 #[inline]
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn enter_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
     // SAFETY: `context` is a live Python context object and the GIL is held. CPython returns
     // `0` on success and sets an exception on failure.
@@ -54,6 +56,7 @@ pub fn enter_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
 }
 
 #[inline]
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn exit_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
     // SAFETY: `context` is the same kind of live Python context object expected by CPython and
     // the GIL is held. A nonzero result means an exception is available via `PyErr::fetch`.

@@ -25,6 +25,7 @@ crossbeam-queue = "0.3"
 errno = { version = "0.3", optional = true }
 futures = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = "0.3"
+hotpath = { version = "0.28.3", optional = true }
 libc = "0.2"
 memchr = "2"
 mio = "1"
@@ -59,6 +60,7 @@ windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_Fil
 
 [features]
 default = []
+hotpath-profile = ["dep:hotpath", "hotpath/hotpath"]
 # Opt-in: faster scheduler turns, but measured TCP workloads can regress.
 scheduler-batch-cache = []
 blocking-default = ["dep:rusty_pool"]
