@@ -5,7 +5,6 @@ edition = "2024"
 description = "An event loop for asyncio written in Rust"
 documentation = "https://github.com/RustedBytes/rsloop#readme"
 readme = "README.md"
-homepage = "https://github.com/RustedBytes/rsloop"
 repository = "https://github.com/RustedBytes/rsloop"
 license = "Apache-2.0"
 
@@ -32,7 +31,7 @@ mio = "1"
 once_cell = { version = "1", optional = true }
 oneshot = { version = "0.2", features = ["async", "std"] }
 pin-project-lite = "0.2"
-pyo3 = { version = "0.29.2" }
+pyo3 = { version = "0.29.3" }
 pyo3-async-runtimes = { version = "0.29", features = ["async-std-runtime"] }
 rustls = "0.23"
 rustls-native-certs = "0.8"
@@ -47,7 +46,7 @@ tokio = { version = "1", default-features = false, features = ["io-util"] }
 proptest = { version = "1", default-features = false, features = ["std"] }
 
 [build-dependencies]
-pyo3-build-config = "0.29.2"
+pyo3-build-config = "0.29.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.7"
