@@ -1076,9 +1076,10 @@ mod tests {
                 break;
             }
         }
-        Ok(String::from_utf8_lossy(&output)
-            .trim_end_matches(&['\r', '\n'][..])
-            .to_string())
+        let mut line = String::from_utf8_lossy_owned(output);
+        let trimmed_len = line.trim_end_matches(['\r', '\n']).len();
+        line.truncate(trimmed_len);
+        Ok(line)
     }
 
     #[test]
