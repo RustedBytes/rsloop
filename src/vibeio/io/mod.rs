@@ -2,7 +2,8 @@
 //!
 //! This module provides the core async I/O abstractions used by vibeio:
 //! - `AsyncRead` and `AsyncWrite`: async traits for reading and writing.
-//! - `AsyncReadPoll` and `AsyncWritePoll`: poll-based async read/write readiness interfaces.
+//! - `AsyncReadPoll` and `AsyncWritePoll`: poll-based async read/write
+//!   readiness interfaces.
 //! - `IoBuf` and `IoBufMut`: buffer traits for async I/O operations.
 //! - `pipe()`: create async-aware pipe endpoints.
 //! - `splice()` and `sendfile_exact()`: zero-copy I/O operations (Linux only).
@@ -12,9 +13,9 @@
 //! # Examples
 //!
 //! See the executable examples in `tools/vibeio-check/EXAMPLES.md` for buffer
-//! ownership, pipes, and copying through EOF. Prefer [`copy`] for a transfer loop:
-//! it writes only bytes actually read and handles partial writes before reusing
-//! the buffer.
+//! ownership, pipes, and copying through EOF. Prefer [`copy`] for a transfer
+//! loop: it writes only bytes actually read and handles partial writes before
+//! reusing the buffer.
 //!
 //! # Implementation notes
 //! - The `AsyncRead` and `AsyncWrite` traits are similar to tokio's but return
@@ -35,7 +36,7 @@ mod splice;
 mod stdio;
 mod util;
 
-use crate::vibeio::fd_inner::InnerRawHandle;
+use std::io::{self, ErrorKind};
 
 pub use self::buf::*;
 #[cfg(all(unix, feature = "pipe"))]
@@ -53,20 +54,21 @@ pub use self::stdio::*;
 // Public runtime API; not every embedding uses this re-export.
 #[allow(unused_imports)]
 pub use self::util::*;
-
-use std::io::{self, ErrorKind};
+use crate::vibeio::fd_inner::InnerRawHandle;
 
 /// Async trait for reading data.
 ///
 /// This trait is similar to `tokio::io::AsyncRead` but returns a tuple
 /// `(Result<usize, Error>, Buffer)` to support buffer reuse.
 pub trait AsyncRead {
-    /// Read data into the buffer, returning the number of bytes read and the buffer.
+    /// Read data into the buffer, returning the number of bytes read and the
+    /// buffer.
     ///
     /// Reads may use the full writable capacity, including spare capacity in an
-    /// empty vector. On success, the first returned-count bytes must be initialized.
-    /// The buffer may contain additional initialized bytes; those are not part
-    /// of this read. A zero count indicates EOF unless capacity was zero.
+    /// empty vector. On success, the first returned-count bytes must be
+    /// initialized. The buffer may contain additional initialized bytes;
+    /// those are not part of this read. A zero count indicates EOF unless
+    /// capacity was zero.
     async fn read<B: IoBufMut>(&mut self, buf: B) -> (Result<usize, io::Error>, B);
 
     #[cfg_attr(
@@ -94,8 +96,9 @@ pub trait AsyncRead {
 /// This trait is similar to `tokio::io::AsyncWrite` but returns a tuple
 /// `(Result<usize, Error>, Buffer)` to support buffer reuse.
 pub trait AsyncWrite {
-    /// Write data from the buffer, returning the number of bytes written and the buffer.
-    /// The returned count must not exceed the supplied initialized length.
+    /// Write data from the buffer, returning the number of bytes written and
+    /// the buffer. The returned count must not exceed the supplied
+    /// initialized length.
     async fn write<B: IoBuf>(&mut self, buf: B) -> (Result<usize, io::Error>, B);
 
     #[cfg_attr(

@@ -1,19 +1,25 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::cell::RefCell;
-use std::io::{self, ErrorKind};
-use std::mem::MaybeUninit;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::net::UnixDatagram;
-use std::sync::Arc;
-use std::task::Waker;
-use std::time::Duration;
+use std::{
+    cell::RefCell,
+    io::{self, ErrorKind},
+    mem::MaybeUninit,
+    os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+        unix::net::UnixDatagram,
+    },
+    sync::Arc,
+    task::Waker,
+    time::Duration,
+};
 
 use mio::{Interest, Token};
 use slab::Slab;
 
-use crate::vibeio::driver::{Driver, Interruptor};
-use crate::vibeio::fd_inner::InnerRawHandle;
+use crate::vibeio::{
+    driver::{Driver, Interruptor},
+    fd_inner::InnerRawHandle,
+};
 
 const EVENT_CAPACITY: usize = 1024;
 const WAKE_KEY: usize = usize::MAX;
@@ -725,11 +731,15 @@ mod tests {
         }
     }
 
-    use std::io::Write;
-    use std::os::fd::AsRawFd;
-    use std::rc::Rc;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        io::Write,
+        os::fd::AsRawFd,
+        rc::Rc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use super::*;
     use crate::vibeio::driver::{AnyDriver, RegistrationMode};

@@ -13,8 +13,6 @@
 //! GIL. TLS servers additionally take a handshake slot first, so a handshake
 //! flood is shed here rather than deeper in.
 
-use std::io;
-use std::net::{TcpListener as StdTcpListener, TcpStream as StdTcpStream};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
 #[cfg(unix)]
@@ -23,33 +21,36 @@ use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixS
 use std::os::windows::io::IntoRawSocket;
 #[cfg(windows)]
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    io,
+    net::{TcpListener as StdTcpListener, TcpStream as StdTcpStream},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
-use crate::vibeio::net::TcpListener as VibeTcpListener;
-#[cfg(unix)]
-use crate::vibeio::net::UnixListener as VibeUnixListener;
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
-use super::io_targets::StreamKind;
 #[cfg(windows)]
 use super::platform::from_owned_raw_socket;
-use super::platform::tcp_listener_raw_fd;
-use super::poll::poll_read_ready;
-use super::socket_transport::spawn_tcp_transport;
 #[cfg(unix)]
 use super::socket_transport::spawn_unix_transport;
-use super::tls_transport::spawn_tls_server_transport;
-use super::tuning::max_pending_tls_handshakes;
 use super::{
     AcceptedStream, PyStreamTransport, ServerAcceptTaskGuard, ServerCore, ServerListener,
-    TransportSpawnContext,
+    TransportSpawnContext, io_targets::StreamKind, platform::tcp_listener_raw_fd,
+    poll::poll_read_ready, socket_transport::spawn_tcp_transport,
+    tls_transport::spawn_tls_server_transport, tuning::max_pending_tls_handshakes,
 };
-use crate::engine::{LoopCommand, LoopTransportCommand};
 #[cfg(unix)]
 use crate::fd_ops;
-use crate::transport::tls::ServerTlsSettings;
+#[cfg(unix)]
+use crate::vibeio::net::UnixListener as VibeUnixListener;
+use crate::{
+    engine::{LoopCommand, LoopTransportCommand},
+    transport::tls::ServerTlsSettings,
+    vibeio::net::TcpListener as VibeTcpListener,
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn configure_accepted_tcp_stream(

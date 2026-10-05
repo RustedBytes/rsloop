@@ -5,12 +5,13 @@
 //! itself is not run from the signal context: [`signal_bridge`] is what the
 //! watcher calls, and it only hands the callback to `call_soon_threadsafe`.
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
-
 #[cfg(unix)]
 use pyo3::exceptions::PyValueError;
+use pyo3::{
+    exceptions::PyRuntimeError,
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 
 use super::PyLoop;
 #[cfg(unix)]

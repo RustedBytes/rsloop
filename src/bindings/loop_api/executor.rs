@@ -4,12 +4,13 @@
 //! subclass overrides remain authoritative. Exact loops can resolve numeric
 //! addresses without a worker when no custom default executor is configured.
 
-use std::net::IpAddr;
-use std::time::Duration;
+use std::{net::IpAddr, time::Duration};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
+use pyo3::{
+    exceptions::PyRuntimeError,
+    prelude::*,
+    types::{PyBytes, PyDict, PyInt, PyList, PyString, PyTuple},
+};
 
 use super::PyLoop;
 

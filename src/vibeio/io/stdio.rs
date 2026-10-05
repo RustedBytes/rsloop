@@ -11,14 +11,16 @@
 //! # Examples
 //!
 //! See the compile-checked "Standard input echo" example in
-//! `tools/vibeio-check/EXAMPLES.md`. Use [`super::copy`] to respect read counts,
-//! handle partial writes, and flush stdout at EOF. Writing the entire returned
-//! read buffer can emit stale bytes beyond the count from that read.
+//! `tools/vibeio-check/EXAMPLES.md`. Use [`super::copy`] to respect read
+//! counts, handle partial writes, and flush stdout at EOF. Writing the entire
+//! returned read buffer can emit stale bytes beyond the count from that read.
 
 use std::io::{self, Read, Write};
 
-use crate::vibeio::executor::current_driver;
-use crate::vibeio::io::{AsyncRead, AsyncWrite, IoBuf, IoBufMut, iobuf_to_slice, read_into_buf};
+use crate::vibeio::{
+    executor::current_driver,
+    io::{AsyncRead, AsyncWrite, IoBuf, IoBufMut, iobuf_to_slice, read_into_buf},
+};
 
 /// Async-aware stdin reader.
 #[derive(Debug, Default, Clone, Copy)]

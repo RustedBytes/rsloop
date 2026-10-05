@@ -1,12 +1,12 @@
-use std::io;
-use std::task::{Context, Poll};
+use std::{
+    io,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::fd_inner::InnerRawHandle;
-
 pub(super) use crate::vibeio::driver::completion_error;
+use crate::vibeio::{driver::AnyDriver, fd_inner::InnerRawHandle};
 
 #[cfg(test)]
 mod completion_error_tests {
@@ -181,11 +181,15 @@ mod storage_tests {
     #[cfg(all(windows, feature = "fs"))]
     #[test]
     fn windows_overlapped_file_reads_return_zero_at_eof() {
-        use crate::vibeio::fd_inner::RawOsHandle;
-        use crate::vibeio::op::{ReadAtOp, ReadOp, ReadvOp};
         use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+
         use windows_sys::Win32::Storage::FileSystem::{
             FILE_FLAG_DELETE_ON_CLOSE, FILE_FLAG_OVERLAPPED,
+        };
+
+        use crate::vibeio::{
+            fd_inner::RawOsHandle,
+            op::{ReadAtOp, ReadOp, ReadvOp},
         };
 
         let path = std::env::temp_dir().join(format!(
@@ -301,11 +305,12 @@ mod storage_tests {
     #[cfg(windows)]
     #[test]
     fn pending_windows_receives_outlive_submission_metadata() {
-        use crate::vibeio::fd_inner::RawOsHandle;
-        use crate::vibeio::op::{Op, ReadOp, ReadvOp, RecvOp};
-        use std::io::Write;
-        use std::os::windows::io::AsRawSocket;
-        use std::sync::mpsc;
+        use std::{io::Write, os::windows::io::AsRawSocket, sync::mpsc};
+
+        use crate::vibeio::{
+            fd_inner::RawOsHandle,
+            op::{Op, ReadOp, ReadvOp, RecvOp},
+        };
 
         async fn receive<O: Op<Output = usize>>(
             handle: &InnerRawHandle,
@@ -393,10 +398,12 @@ mod storage_tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn completion_entries_transfer_expected_bytes() {
+        use std::{
+            os::{fd::AsRawFd, unix::net::UnixDatagram},
+            rc::Rc,
+        };
+
         use crate::vibeio::op::{Op, ReadOp, ReadvOp, RecvOp, SendOp, WriteOp, WritevOp};
-        use std::os::fd::AsRawFd;
-        use std::os::unix::net::UnixDatagram;
-        use std::rc::Rc;
 
         fn complete(entry: io_uring::squeue::Entry) -> usize {
             // Keep the ring local so it is closed before the caller's operation
@@ -636,9 +643,10 @@ pub(crate) fn poll_result_or_wait(
 
 #[cfg(test)]
 pub(crate) mod cancellation_tests {
+    use std::{rc::Rc, sync::Arc};
+
     use super::*;
     use crate::vibeio::io::{IoBuf, IoBufMut, IoVec, IoVectoredBuf, IoVectoredBufMut};
-    use std::{rc::Rc, sync::Arc};
 
     pub(crate) struct TrackedBuffer {
         bytes: Box<[u8]>,

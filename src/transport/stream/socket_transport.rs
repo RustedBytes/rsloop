@@ -11,34 +11,41 @@
 //! descriptor the direct/lazy writer owns, so the reader and writer halves can
 //! be closed independently.
 
-use std::collections::HashMap;
-use std::io;
-use std::net::{TcpListener as StdTcpListener, TcpStream as StdTcpStream};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
-use std::sync::Arc;
-use std::sync::Weak;
-
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-
-use super::builder::{
-    StreamTransportStateConfig, detached_socket_handle, fail_transport_worker_start,
-    new_py_stream_transport, new_stream_transport_core, stream_transport_state_parts, tcp_family,
+use std::{
+    collections::HashMap,
+    io,
+    net::{TcpListener as StdTcpListener, TcpStream as StdTcpStream},
+    sync::{Arc, Weak},
 };
-use super::io_targets::LazyWriterTarget;
-use super::io_targets::{LazyWriterConfig, ReaderTarget, StreamKind, TaskedDirectWriter};
+
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
+
 #[cfg(unix)]
 use super::platform::{from_owned_raw_fd, unix_raw_fd};
-use super::platform::{socket_from_owned_raw, tcp_stream_raw_fd};
-use super::protocol::build_protocol_callbacks;
-use super::tls_transport::{spawn_tls_client_transport, spawn_tls_server_transport};
-use super::write_queue::channel as writer_channel;
-use super::{PyStreamTransport, ServerCore, TransportSpawnContext, spawn_socket_reader};
-use crate::fd_ops;
-use crate::transport::tls::{ClientTlsSettings, ServerTlsSettings};
+use super::{
+    PyStreamTransport, ServerCore, TransportSpawnContext,
+    builder::{
+        StreamTransportStateConfig, detached_socket_handle, fail_transport_worker_start,
+        new_py_stream_transport, new_stream_transport_core, stream_transport_state_parts,
+        tcp_family,
+    },
+    io_targets::{
+        LazyWriterConfig, LazyWriterTarget, ReaderTarget, StreamKind, TaskedDirectWriter,
+    },
+    platform::{socket_from_owned_raw, tcp_stream_raw_fd},
+    protocol::build_protocol_callbacks,
+    spawn_socket_reader,
+    tls_transport::{spawn_tls_client_transport, spawn_tls_server_transport},
+    write_queue::channel as writer_channel,
+};
+use crate::{
+    fd_ops,
+    transport::tls::{ClientTlsSettings, ServerTlsSettings},
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn transport_from_socket(

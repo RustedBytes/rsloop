@@ -5,25 +5,28 @@
 //!
 //! # Implementation details
 //!
-//! - Unix domain sockets use native async syscalls via the async driver when available.
+//! - Unix domain sockets use native async syscalls via the async driver when
+//!   available.
 //! - When io_uring completion is available, operations complete directly.
-//! - Poll mode uses nonblocking socket calls and driver readiness notifications.
-//! - Register sockets and drive async I/O inside a runtime. Registration without
-//!   one returns an error; direct address/option queries need no current runtime.
+//! - Poll mode uses nonblocking socket calls and driver readiness
+//!   notifications.
+//! - Register sockets and drive async I/O inside a runtime. Registration
+//!   without one returns an error; direct address/option queries need no
+//!   current runtime.
 
-use std::future::poll_fn;
-use std::io;
-use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
-use std::os::unix::net::{
-    SocketAddr, UnixListener as StdUnixListener, UnixStream as StdUnixStream,
+use std::{
+    future::poll_fn,
+    io,
+    os::{
+        fd::{AsRawFd, IntoRawFd, RawFd},
+        unix::net::{SocketAddr, UnixListener as StdUnixListener, UnixStream as StdUnixStream},
+    },
+    path::Path,
 };
-use std::path::Path;
 
 use mio::Interest;
 
-use crate::vibeio::fd_inner::InnerRawHandle;
-use crate::vibeio::net::UnixStream;
-use crate::vibeio::op::AcceptUnixOp;
+use crate::vibeio::{fd_inner::InnerRawHandle, net::UnixStream, op::AcceptUnixOp};
 
 /// An async Unix domain socket listener.
 ///
@@ -31,11 +34,14 @@ use crate::vibeio::op::AcceptUnixOp;
 ///
 /// # Implementation details
 ///
-/// - Unix domain sockets use native async syscalls via the async driver when available.
+/// - Unix domain sockets use native async syscalls via the async driver when
+///   available.
 /// - When io_uring completion is available, operations complete directly.
-/// - Poll mode uses nonblocking socket calls and driver readiness notifications.
+/// - Poll mode uses nonblocking socket calls and driver readiness
+///   notifications.
 /// - Registration needs an entered runtime and returns an error without one.
-///   Drive async I/O inside a runtime; direct socket queries need no current runtime.
+///   Drive async I/O inside a runtime; direct socket queries need no current
+///   runtime.
 ///
 /// # Examples
 ///
@@ -57,9 +63,10 @@ impl UnixListener {
     ///
     /// Binding is synchronous; the returned listener supports async accepts.
     /// A missing runtime is rejected before binding creates a socket pathname.
-    /// As with the standard listener, dropping it does not unlink that pathname.
-    /// A later setup or driver-registration failure can also leave it in place;
-    /// callers remain responsible for cleanup of paths they own.
+    /// As with the standard listener, dropping it does not unlink that
+    /// pathname. A later setup or driver-registration failure can also
+    /// leave it in place; callers remain responsible for cleanup of paths
+    /// they own.
     ///
     /// # Errors
     ///
@@ -92,7 +99,8 @@ impl UnixListener {
     ///
     /// # Errors
     ///
-    /// This function will return an error if registration with the async driver fails.
+    /// This function will return an error if registration with the async driver
+    /// fails.
     #[inline]
     pub fn from_std(inner: StdUnixListener) -> Result<Self, io::Error> {
         let handle = InnerRawHandle::new(inner.as_raw_fd(), Interest::READABLE)?;
@@ -108,7 +116,8 @@ impl UnixListener {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not bound.
+    /// This function will return an error if the underlying socket is not
+    /// bound.
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()
@@ -120,7 +129,8 @@ impl UnixListener {
     )]
     /// Accepts a new incoming connection from this listener.
     ///
-    /// This is the async version of [`std::os::unix::net::UnixListener::accept`].
+    /// This is the async version of
+    /// [`std::os::unix::net::UnixListener::accept`].
     ///
     /// # Errors
     ///

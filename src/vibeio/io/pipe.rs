@@ -12,25 +12,25 @@
 //! `tools/vibeio-check/EXAMPLES.md`. Reads return the owned buffer alongside
 //! their result; inspect that returned buffer, not an original array copy.
 
-use std::future::poll_fn;
-use std::io::{self, IoSlice};
-use std::os::fd::OwnedFd;
-use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{
+    future::poll_fn,
+    io::{self, IoSlice},
+    os::fd::{AsRawFd, IntoRawFd, OwnedFd, RawFd},
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite, ReadBuf};
 
-use crate::vibeio::io::{
-    AsInnerRawHandle, IoBuf, IoBufMut, IoBufTemporaryPoll, IoVectoredBuf, IoVectoredBufMut,
-    IoVectoredBufTemporaryPoll,
-};
-use crate::vibeio::op::{ReadOp, ReadvOp, WriteOp, WritevOp};
 use crate::vibeio::{
     driver::RegistrationMode,
     fd_inner::{InnerRawHandle, set_nonblocking},
-    io::{AsyncRead, AsyncWrite},
+    io::{
+        AsInnerRawHandle, AsyncRead, AsyncWrite, IoBuf, IoBufMut, IoBufTemporaryPoll,
+        IoVectoredBuf, IoVectoredBufMut, IoVectoredBufTemporaryPoll,
+    },
+    op::{ReadOp, ReadvOp, WriteOp, WritevOp},
 };
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
@@ -110,8 +110,10 @@ mod setup_tests {
 
     #[test]
     fn raw_pipe_conversion_releases_registration_and_transfers_live_endpoints() {
-        use std::io::{Read, Write};
-        use std::os::fd::FromRawFd;
+        use std::{
+            io::{Read, Write},
+            os::fd::FromRawFd,
+        };
         let mut driver = AnyDriver::new_mock();
         let AnyDriver::Mock(mock) = &mut driver else {
             unreachable!()
@@ -248,7 +250,8 @@ pub struct PollPipe {
 
 impl Pipe {
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Pipe"))]
-    /// Create a `Pipe` from a standard library `OwnedFd` with the given registration mode.
+    /// Create a `Pipe` from a standard library `OwnedFd` with the given
+    /// registration mode.
     #[inline]
     pub(crate) fn from_std_with_mode(
         inner: OwnedFd,

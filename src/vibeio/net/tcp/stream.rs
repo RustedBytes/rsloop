@@ -2,46 +2,49 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 //!
 //! This module provides:
-//! - [`TcpStream`]: An async TCP stream that can use either completion-based or poll-based I/O.
-//! - [`PollTcpStream`]: A poll-only variant that always uses readiness-based operations.
+//! - [`TcpStream`]: An async TCP stream that can use either completion-based or
+//!   poll-based I/O.
+//! - [`PollTcpStream`]: A poll-only variant that always uses readiness-based
+//!   operations.
 //!
 //! # Implementation details
 //!
-//! - On Linux with io_uring support, TCP operations use native async syscalls via the async driver.
+//! - On Linux with io_uring support, TCP operations use native async syscalls
+//!   via the async driver.
 //! - When io_uring completion is available, operations complete directly.
-//! - Poll mode uses nonblocking socket calls and driver readiness notifications.
-//! - Register sockets and drive async I/O inside a runtime. Registration without
-//!   one returns an error; direct address/option queries need no current runtime.
+//! - Poll mode uses nonblocking socket calls and driver readiness
+//!   notifications.
+//! - Register sockets and drive async I/O inside a runtime. Registration
+//!   without one returns an error; direct address/option queries need no
+//!   current runtime.
 
-use std::cell::RefCell;
-use std::future::poll_fn;
-use std::io::{self, IoSlice};
-use std::net::{Shutdown, SocketAddr, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, IntoRawSocket, RawSocket};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::{
+    cell::RefCell,
+    future::poll_fn,
+    io::{self, IoSlice},
+    net::{Shutdown, SocketAddr, ToSocketAddrs},
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite, ReadBuf};
-
 #[cfg(windows)]
 use windows_sys::Win32::Networking::WinSock::SOCKADDR_STORAGE;
 
-use crate::vibeio::io::{
-    AsInnerRawHandle, AsyncReadPoll, AsyncWritePoll, IoBuf, IoBufMut, IoBufTemporaryPoll,
-    IoVectoredBuf, IoVectoredBufMut, IoVectoredBufTemporaryPoll,
-};
-use crate::vibeio::op::{
-    ConnectOp, ReadOp, ReadinessOp, ReadvOp, RecvOp, WriteOp, WritevOp, socket_addr_to_raw,
-};
 use crate::vibeio::{
     driver::RegistrationMode,
     fd_inner::InnerRawHandle,
-    io::{AsyncRead, AsyncWrite},
+    io::{
+        AsInnerRawHandle, AsyncRead, AsyncReadPoll, AsyncWrite, AsyncWritePoll, IoBuf, IoBufMut,
+        IoBufTemporaryPoll, IoVectoredBuf, IoVectoredBufMut, IoVectoredBufTemporaryPoll,
+    },
+    op::{ConnectOp, ReadOp, ReadinessOp, ReadvOp, RecvOp, WriteOp, WritevOp, socket_addr_to_raw},
 };
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
@@ -78,11 +81,14 @@ fn new_socket(
 ///
 /// # Implementation details
 ///
-/// - On Linux with io_uring support, TCP operations use native async syscalls via the async driver.
+/// - On Linux with io_uring support, TCP operations use native async syscalls
+///   via the async driver.
 /// - When io_uring completion is available, operations complete directly.
-/// - Poll mode uses nonblocking socket calls and driver readiness notifications.
+/// - Poll mode uses nonblocking socket calls and driver readiness
+///   notifications.
 /// - Registration needs an entered runtime and returns an error without one.
-///   Drive async I/O inside a runtime; direct socket queries need no current runtime.
+///   Drive async I/O inside a runtime; direct socket queries need no current
+///   runtime.
 ///
 /// # Examples
 ///
@@ -161,7 +167,8 @@ impl TcpStream {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not connected.
+    /// This function will return an error if the underlying socket is not
+    /// connected.
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()
@@ -172,7 +179,8 @@ impl TcpStream {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not connected.
+    /// This function will return an error if the underlying socket is not
+    /// connected.
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.peer_addr()
@@ -183,7 +191,8 @@ impl TcpStream {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not connected.
+    /// This function will return an error if the underlying socket is not
+    /// connected.
     #[inline]
     pub fn nodelay(&self) -> Result<bool, io::Error> {
         self.inner.nodelay()
@@ -197,7 +206,8 @@ impl TcpStream {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not connected.
+    /// This function will return an error if the underlying socket is not
+    /// connected.
     #[inline]
     pub fn set_nodelay(&self, nodelay: bool) -> Result<(), io::Error> {
         self.inner.set_nodelay(nodelay)
@@ -222,7 +232,8 @@ impl TcpStream {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not connected.
+    /// This function will return an error if the underlying socket is not
+    /// connected.
     #[inline]
     pub async fn peek<B: IoBufMut>(&self, buf: B) -> (Result<usize, io::Error>, B) {
         let handle = &self.handle;
@@ -236,14 +247,16 @@ impl TcpStream {
     ///
     /// # Errors
     ///
-    /// This function will return an error if registration with the async driver fails.
+    /// This function will return an error if registration with the async driver
+    /// fails.
     #[inline]
     pub fn from_std(inner: std::net::TcpStream) -> Result<Self, io::Error> {
         Self::from_std_with_mode(inner, RegistrationMode::Completion)
     }
 
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TcpStream"))]
-    /// Creates a new `TcpStream` from a standard library `TcpStream` with a specific registration mode.
+    /// Creates a new `TcpStream` from a standard library `TcpStream` with a
+    /// specific registration mode.
     #[inline]
     pub(crate) fn from_std_with_mode(
         inner: std::net::TcpStream,
@@ -468,7 +481,8 @@ impl PollTcpStream {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollTcpStream")
     )]
-    /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
+    /// Tries to perform an I/O operation on the socket, returning an error if
+    /// it is not ready.
     #[inline]
     pub fn try_io_readable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -481,7 +495,8 @@ impl PollTcpStream {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollTcpStream")
     )]
-    /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
+    /// Tries to perform an I/O operation on the socket, returning an error if
+    /// it is not ready.
     #[inline]
     pub fn try_io_writable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -847,9 +862,9 @@ mod socket_creation_tests {
 
     #[test]
     fn cancelled_poll_peek_releases_buffer_without_consuming_data() {
+        use std::{future::Future, io::Write};
+
         use crate::vibeio::{Runtime, driver::AnyDriver};
-        use std::future::Future;
-        use std::io::Write;
         #[cfg(unix)]
         let driver = AnyDriver::new_mio().unwrap();
         #[cfg(windows)]

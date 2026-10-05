@@ -3,8 +3,10 @@
 use std::sync::Mutex;
 
 use hotpath::{Format, HotpathGuard, HotpathGuardBuilder};
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
+use pyo3::{
+    exceptions::{PyRuntimeError, PyValueError},
+    prelude::*,
+};
 
 // hotpath has process-global registries. A fresh process per session keeps
 // function, future, and thread statistics from leaking between workloads.

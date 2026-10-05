@@ -10,7 +10,8 @@ impl DefaultBlockingThreadPool {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "DefaultBlockingThreadPool")
     )]
-    /// Creates a new `DefaultBlockingThreadPool` with the default maximum number of threads.
+    /// Creates a new `DefaultBlockingThreadPool` with the default maximum
+    /// number of threads.
     #[inline]
     pub fn new() -> Self {
         Self::with_max_threads(512)
@@ -20,7 +21,8 @@ impl DefaultBlockingThreadPool {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "DefaultBlockingThreadPool")
     )]
-    /// Creates a new `DefaultBlockingThreadPool` with the specified maximum number of threads.
+    /// Creates a new `DefaultBlockingThreadPool` with the specified maximum
+    /// number of threads.
     ///
     /// # Panics
     ///

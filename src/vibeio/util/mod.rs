@@ -1,20 +1,24 @@
 //! Utility types and functions for `vibeio`.
 //!
 //! This module provides supporting infrastructure for the library:
-//! - `AsyncWrap`: a wrapper that adapts `AsyncRead`/`AsyncWrite` implementations
-//!   to the `tokio::io` traits, enabling interoperability with tokio-based code.
-//! - `supports_completion`: check if the current driver supports completion-based I/O.
-//! - `supports_io_uring`: check if the system supports io_uring with required operations.
+//! - `AsyncWrap`: a wrapper that adapts `AsyncRead`/`AsyncWrite`
+//!   implementations to the `tokio::io` traits, enabling interoperability with
+//!   tokio-based code.
+//! - `supports_completion`: check if the current driver supports
+//!   completion-based I/O.
+//! - `supports_io_uring`: check if the system supports io_uring with required
+//!   operations.
 
 mod async_wrap;
 
 // Public runtime API; not every embedding uses this re-export.
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
+
 #[allow(unused_imports)]
 pub use async_wrap::*;
 
 use crate::vibeio::current_driver;
-#[cfg(target_os = "linux")]
-use std::sync::OnceLock;
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Check if the current driver supports completion-based I/O operations.
@@ -31,7 +35,8 @@ pub fn supports_completion() -> bool {
 ///
 /// This function performs a runtime probe to verify that io_uring is available
 /// and supports the operations needed by the library (accept, connect, poll,
-/// timeout, read, write, etc.). On non-Linux platforms, this always returns `false`.
+/// timeout, read, write, etc.). On non-Linux platforms, this always returns
+/// `false`.
 ///
 /// The result is cached for the lifetime of the program.
 #[inline]

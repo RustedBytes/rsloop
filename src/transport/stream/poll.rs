@@ -4,9 +4,7 @@
 //! noticed promptly. Descriptors that cannot be polled (Windows files) fall
 //! back to a short sleep, which keeps the same call shape for every target.
 
-use std::io;
-use std::thread;
-use std::time::Duration;
+use std::{io, thread, time::Duration};
 
 use super::tuning::BLOCKING_POLL_INTERVAL_MS;
 use crate::fd_ops;

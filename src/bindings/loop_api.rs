@@ -2,13 +2,16 @@
 //!
 //! [`PyLoop`] is a thin Python-facing shell: all scheduling and lifecycle state
 //! lives in [`LoopCore`], and each group of loop methods lives in its own
-//! submodule. [`methods`] holds the one `#[pymethods]` block that names them all.
+//! submodule. [`methods`] holds the one `#[pymethods]` block that names them
+//! all.
 
 use std::sync::Arc;
 
-use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError};
-use pyo3::prelude::*;
-use pyo3::types::PyTuple;
+use pyo3::{
+    exceptions::{PyNotImplementedError, PyRuntimeError},
+    prelude::*,
+    types::PyTuple,
+};
 use pyo3_async_runtimes::TaskLocals;
 
 mod asyncgens;
@@ -36,10 +39,9 @@ mod tls_params;
 mod watchers;
 
 pub use asyncgens::{asyncgen_finalizer_hook, asyncgen_firstiter_hook};
+pub(crate) use fast_callbacks::install_fast_callbacks;
 pub use lifecycle::future_done_stop;
 pub use signals::signal_bridge;
-
-pub(crate) use fast_callbacks::install_fast_callbacks;
 pub(crate) use tasks::{try_fast_create_future, try_fast_create_task};
 
 use crate::engine::{CallbackKind, LoopCore, LoopCoreError};
@@ -50,9 +52,10 @@ use crate::engine::{CallbackKind, LoopCore, LoopCoreError};
 const MAX_TIMER_DELAY_SECS: f64 = 100.0 * 365.0 * 24.0 * 60.0 * 60.0;
 
 #[pyclass(subclass, module = "rsloop._loop", weakref, frozen)]
-/// Python-visible event loop; scheduling and lifecycle state live in `LoopCore`.
-/// The Rust shell is immutable: `LoopCore` synchronizes its own state, so Python
-/// method calls need no additional PyO3 borrow bookkeeping on this wrapper.
+/// Python-visible event loop; scheduling and lifecycle state live in
+/// `LoopCore`. The Rust shell is immutable: `LoopCore` synchronizes its own
+/// state, so Python method calls need no additional PyO3 borrow bookkeeping on
+/// this wrapper.
 pub struct PyLoop {
     /// Shared scheduling, lifecycle, and runtime state for this loop.
     pub core: Arc<LoopCore>,

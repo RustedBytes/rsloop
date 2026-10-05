@@ -3,7 +3,6 @@
 use std::future::Future;
 
 use pyo3::prelude::*;
-
 pub use pyo3_async_runtimes::{TaskLocals, into_future_with_locals};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]

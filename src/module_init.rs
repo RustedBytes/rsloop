@@ -2,16 +2,20 @@
 
 use pyo3::prelude::*;
 
-use crate::bindings::{
-    PyLoop, asyncgen_finalizer_hook, asyncgen_firstiter_hook, future_done_stop, new_event_loop,
-    signal_bridge,
-};
-use crate::build_metadata::build_info;
-use crate::engine::{PyHandle, PyTimerHandle};
-use crate::transport::process::{PyProcessPipeTransport, PyProcessTransport};
-use crate::transport::stream::{
-    PyFastStreamReader, PyFastStreamWriter, PyServer, PyStreamTransport, open_connection,
-    reset_transport_stats, start_server, transport_stats,
+use crate::{
+    bindings::{
+        PyLoop, asyncgen_finalizer_hook, asyncgen_firstiter_hook, future_done_stop, new_event_loop,
+        signal_bridge,
+    },
+    build_metadata::build_info,
+    engine::{PyHandle, PyTimerHandle},
+    transport::{
+        process::{PyProcessPipeTransport, PyProcessTransport},
+        stream::{
+            PyFastStreamReader, PyFastStreamWriter, PyServer, PyStreamTransport, open_connection,
+            reset_transport_stats, start_server, transport_stats,
+        },
+    },
 };
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]

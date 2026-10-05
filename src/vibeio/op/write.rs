@@ -1,7 +1,9 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io;
-use std::task::{Context, Poll};
+use std::{
+    io,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 #[cfg(windows)]
@@ -12,15 +14,18 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
-use crate::vibeio::op::Op;
 #[cfg(target_os = "linux")]
 use crate::vibeio::op::io_util::completion_len;
-use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    fd_inner::InnerRawHandle,
+    op::{
+        Op,
+        io_util::{CompletionBuffer, poll_result_or_wait},
+    },
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]

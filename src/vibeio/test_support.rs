@@ -1,9 +1,8 @@
 //! Synchronization and complete-transfer helpers for native tests.
 
-use std::io;
-use std::time::Duration;
 #[cfg(unix)]
 use std::time::Instant;
+use std::{io, time::Duration};
 
 pub(crate) const WATCHDOG: Duration = Duration::from_secs(30);
 

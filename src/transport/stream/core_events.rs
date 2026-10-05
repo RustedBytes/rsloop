@@ -11,37 +11,40 @@
 //! handshake that lets a writer cancel the in-flight receive and wait for the
 //! reader to rebind before it takes the socket.
 
-use std::collections::VecDeque;
-use std::io;
-use std::ops::DerefMut;
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Weak};
 #[cfg(windows)]
 use std::time::Duration;
+use std::{
+    collections::VecDeque,
+    io,
+    ops::DerefMut,
+    sync::{Arc, Weak, atomic::Ordering},
+};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 #[cfg(windows)]
 use windows_sys::Win32::{Foundation::HANDLE, System::IO::CancelIoEx};
 
-use super::buffers::PendingReadBuffer;
-use super::io_targets::LazyWriterConfig;
 #[cfg(windows)]
 use super::stats::TRANSPORT_POLL_REBINDS;
-use super::stats::{
-    TRANSPORT_PYTHON_READ_DRAINS, TRANSPORT_READ_BYTES, TRANSPORT_READ_EVENTS,
-    TRANSPORT_READ_WAKEUPS, transport_stats_enabled,
-};
-use super::tuning::{
-    MAX_PENDING_READ_COALESCE_BYTES, MAX_READ_BYTES_PER_DRAIN, MAX_READ_EVENTS_PER_DRAIN,
-};
-use super::worker::WorkerThread;
 use super::{
     PendingReadEvent, READ_EVENT_EOF, READ_EVENT_LOST, READ_EVENT_OPEN, ServerCore,
-    StreamTransportCore, WriterCommand, spawn_writer_worker,
+    StreamTransportCore, WriterCommand,
+    buffers::PendingReadBuffer,
+    io_targets::LazyWriterConfig,
+    spawn_writer_worker,
+    stats::{
+        TRANSPORT_PYTHON_READ_DRAINS, TRANSPORT_READ_BYTES, TRANSPORT_READ_EVENTS,
+        TRANSPORT_READ_WAKEUPS, transport_stats_enabled,
+    },
+    tuning::{
+        MAX_PENDING_READ_COALESCE_BYTES, MAX_READ_BYTES_PER_DRAIN, MAX_READ_EVENTS_PER_DRAIN,
+    },
+    worker::WorkerThread,
 };
-use crate::context::ensure_running_loop;
-use crate::engine::{LoopCommand, LoopTransportCommand};
+use crate::{
+    context::ensure_running_loop,
+    engine::{LoopCommand, LoopTransportCommand},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReadEventKind {
@@ -118,7 +121,8 @@ impl StreamTransportCore {
             // rebinding the same socket to readiness mode. Cancel before the
             // direct write so the shared socket becomes nonblocking before a
             // full send buffer can park the event-loop thread.
-            // SAFETY: `fd` is the live transport handle; a null OVERLAPPED requests all pending IO.
+            // SAFETY: `fd` is the live transport handle; a null OVERLAPPED requests all
+            // pending IO.
             let _ = unsafe { CancelIoEx(fd as HANDLE, std::ptr::null()) };
         }
     }
@@ -760,12 +764,12 @@ mod tests {
     use pyo3::Python;
 
     use super::PendingReadEvent;
-    use crate::transport::stream::test_support::{
-        build_test_core, install_exception_handler, shutdown_test_core,
-    };
-    use crate::transport::stream::tuning::{
-        MAX_READ_BYTES_PER_DRAIN, MAX_READ_EVENTS_PER_DRAIN, PENDING_READ_HIGH_WATER,
-        PENDING_READ_LOW_WATER,
+    use crate::transport::stream::{
+        test_support::{build_test_core, install_exception_handler, shutdown_test_core},
+        tuning::{
+            MAX_READ_BYTES_PER_DRAIN, MAX_READ_EVENTS_PER_DRAIN, PENDING_READ_HIGH_WATER,
+            PENDING_READ_LOW_WATER,
+        },
     };
 
     #[test]

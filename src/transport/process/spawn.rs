@@ -13,29 +13,34 @@
 //! the worker threads start, so no event can reach the protocol before it has
 //! been given the transport.
 
-use std::collections::{HashMap, HashSet, VecDeque};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
-use std::process::{Child, ChildStdin};
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    process::{Child, ChildStdin},
+    sync::{
+        Arc, Mutex,
+        atomic::AtomicBool,
+        mpsc::{self, Receiver},
+    },
+    thread,
+};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
-use super::params::{BoxedProcessReader, ProcessTextConfig, ProcessTransportParams};
-use super::worker::{run_process_reader, run_process_waiter};
 use super::{
     ProcessCommand, ProcessPipeTransportCore, ProcessState, ProcessTransportCore,
     PyProcessPipeTransport, PyProcessStdinProtocol, PyProcessTransport,
+    params::{BoxedProcessReader, ProcessTextConfig, ProcessTransportParams},
+    worker::{run_process_reader, run_process_waiter},
 };
-use crate::async_event::AsyncEvent;
-use crate::fd_ops;
-use crate::transport::stream::{TransportSpawnContext, spawn_write_pipe_transport};
+use crate::{
+    async_event::AsyncEvent,
+    fd_ops,
+    transport::stream::{TransportSpawnContext, spawn_write_pipe_transport},
+};
 
 pub(super) struct ProcessPipes {
     stdin: Option<ChildStdin>,
@@ -349,8 +354,10 @@ mod verification {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
-    use std::process::{Command, Stdio};
+    use std::{
+        io::Cursor,
+        process::{Command, Stdio},
+    };
 
     use super::*;
 

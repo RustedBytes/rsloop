@@ -1,9 +1,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io;
-use std::net::SocketAddr;
-use std::task::{Context, Poll};
+use std::{
+    io,
+    net::SocketAddr,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 #[cfg(windows)]
@@ -14,14 +16,18 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
-use crate::vibeio::io::IoBuf;
-use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
-use crate::vibeio::op::{Op, socket_addr_to_raw};
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    fd_inner::InnerRawHandle,
+    io::IoBuf,
+    op::{
+        Op,
+        io_util::{CompletionBuffer, poll_result_or_wait},
+        socket_addr_to_raw,
+    },
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
@@ -404,8 +410,7 @@ mod cancellation_tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn completion_send_delivers_datagram_without_ancillary_data() {
-        use std::os::fd::AsRawFd;
-        use std::rc::Rc;
+        use std::{os::fd::AsRawFd, rc::Rc};
         let receiver = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
         receiver
             .set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))

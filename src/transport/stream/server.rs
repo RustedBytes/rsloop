@@ -10,11 +10,15 @@
 use std::fs;
 #[cfg(unix)]
 use std::io;
-use std::net::TcpListener as StdTcpListener;
 #[cfg(unix)]
 use std::os::unix::net::UnixListener as StdUnixListener;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Arc, Mutex};
+use std::{
+    net::TcpListener as StdTcpListener,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize},
+    },
+};
 
 use pyo3::prelude::*;
 

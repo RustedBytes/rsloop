@@ -1,7 +1,9 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io;
-use std::task::{Context, Poll};
+use std::{
+    io,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 #[cfg(windows)]
@@ -10,16 +12,19 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
-use crate::vibeio::io::IoBufMut;
-use crate::vibeio::op::Op;
 #[cfg(target_os = "linux")]
 use crate::vibeio::op::io_util::completion_len;
-use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    fd_inner::InnerRawHandle,
+    io::IoBufMut,
+    op::{
+        Op,
+        io_util::{CompletionBuffer, poll_result_or_wait},
+    },
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
@@ -321,10 +326,12 @@ mod cancellation_tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn stream_completions_replace_initialized_length_and_clear_it_at_eof() {
-        use std::io::Write;
-        use std::os::fd::AsRawFd;
-        use std::rc::Rc;
-        use std::time::{Duration, Instant};
+        use std::{
+            io::Write,
+            os::fd::AsRawFd,
+            rc::Rc,
+            time::{Duration, Instant},
+        };
         let driver = match AnyDriver::new_uring_custom(io_uring::IoUring::builder()) {
             Ok(driver) => Rc::new(driver),
             Err(error)

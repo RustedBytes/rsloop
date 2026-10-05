@@ -18,17 +18,19 @@
 //! those stay private: the module tree is the encapsulation boundary, not the
 //! individual file.
 
-use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::{
+    collections::{HashMap, VecDeque},
+    path::PathBuf,
+    sync::{
+        Arc, Condvar, Mutex, Weak,
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+    },
+};
 
 use pyo3::prelude::*;
 
 use super::tls::ServerTlsSettings;
-use crate::async_event::AsyncEvent;
-use crate::engine::LoopCore;
-use crate::fd_ops;
+use crate::{async_event::AsyncEvent, engine::LoopCore, fd_ops};
 
 mod accept;
 mod buffers;
@@ -240,8 +242,8 @@ pub struct ServerCore {
 ///
 /// The guard is created before a task is queued so `wait_closed()` cannot race
 /// ahead of a pending `StartServerAccept` command. Cancellation drops the task
-/// future synchronously on its owning runtime, which drops this guard only after
-/// the duplicated listener has been released.
+/// future synchronously on its owning runtime, which drops this guard only
+/// after the duplicated listener has been released.
 pub struct ServerAcceptTaskGuard {
     server: Arc<ServerCore>,
 }
@@ -316,19 +318,22 @@ pub struct PyStreamTransport {
 
 #[cfg(test)]
 pub(super) mod test_support {
-    use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
-    use pyo3::exceptions::PyRuntimeError;
-    use pyo3::prelude::*;
-    use pyo3::types::{PyBytes, PyDict};
-
-    use super::builder::{
-        StreamTransportStateConfig, new_stream_transport_core, stream_transport_state_parts,
+    use pyo3::{
+        exceptions::PyRuntimeError,
+        prelude::*,
+        types::{PyBytes, PyDict},
     };
-    use super::protocol::build_protocol_callbacks;
-    use super::write_queue::{WriterReceiver, channel as writer_channel};
-    use super::{StreamTransportCore, TransportSpawnContext};
+
+    use super::{
+        StreamTransportCore, TransportSpawnContext,
+        builder::{
+            StreamTransportStateConfig, new_stream_transport_core, stream_transport_state_parts,
+        },
+        protocol::build_protocol_callbacks,
+        write_queue::{WriterReceiver, channel as writer_channel},
+    };
     use crate::engine::LoopCore;
 
     #[pyclass]

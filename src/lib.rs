@@ -36,8 +36,6 @@ mod verification;
 )]
 pub(crate) mod vibeio;
 
-pub(crate) use platform::fd as fd_ops;
-
 // Compatibility re-exports for the crate's existing Rust API. Internal module
 // registration imports from the owning modules directly, so these can be
 // deprecated or versioned independently in a future breaking release.
@@ -49,22 +47,25 @@ pub use engine::{
     LoopCommand, LoopCore, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
     LoopTransportCommand, PyHandle, PyTimerHandle, ReadyCallback,
 };
-pub use transport::process::{PyProcessPipeTransport, PyProcessTransport};
-pub use transport::stream::{
-    PyFastStreamReader, PyFastStreamWriter, open_connection, start_server,
-};
-pub use transport::stream::{PyServer, PyStreamTransport};
-
+pub(crate) use platform::fd as fd_ops;
 use pyo3::prelude::*;
+pub use transport::{
+    process::{PyProcessPipeTransport, PyProcessTransport},
+    stream::{
+        PyFastStreamReader, PyFastStreamWriter, PyServer, PyStreamTransport, open_connection,
+        start_server,
+    },
+};
 
 #[cfg(test)]
 pub(crate) fn initialize_python_for_tests() {
     static INITIALIZE: std::sync::Once = std::sync::Once::new();
     INITIALIZE.call_once(|| {
         Python::initialize();
-        // The free-threaded interpreter permits Rust tests to attach in parallel. Complete the
-        // imports shared by callback and transport fixtures before releasing the `Once`, otherwise
-        // concurrent first imports can observe a partially initialized `asyncio` package.
+        // The free-threaded interpreter permits Rust tests to attach in parallel.
+        // Complete the imports shared by callback and transport fixtures before
+        // releasing the `Once`, otherwise concurrent first imports can observe
+        // a partially initialized `asyncio` package.
         Python::attach(|py| {
             py.import("asyncio").expect("preload asyncio for tests");
             py.import("contextvars")

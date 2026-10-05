@@ -3,16 +3,16 @@
 //! This module provides utility functions for async I/O operations:
 //! - `copy()`: copy data from a reader to a writer.
 //! - `split()`: split an I/O object into independent read/write halves.
-//! - `copy_bidirectional()`: copy data in both directions between two I/O objects.
+//! - `copy_bidirectional()`: copy data in both directions between two I/O
+//!   objects.
 //!
 //! # Examples
 //!
 //! See the executable "Copy through EOF" example in
-//! `tools/vibeio-check/EXAMPLES.md`. [`copy`] handles partial writes, propagates
-//! errors, and flushes the destination after the source reaches EOF.
+//! `tools/vibeio-check/EXAMPLES.md`. [`copy`] handles partial writes,
+//! propagates errors, and flushes the destination after the source reaches EOF.
 
-use std::io;
-use std::sync::Arc;
+use std::{io, sync::Arc};
 
 use futures_util::lock::Mutex as AsyncMutex;
 
@@ -24,8 +24,8 @@ use crate::vibeio::io::{IoBuf, IoBufWithCursor};
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Copy data from a reader to a writer.
 ///
-/// This function reads from `reader` and writes to `writer` until EOF is reached.
-/// Returns the number of bytes copied.
+/// This function reads from `reader` and writes to `writer` until EOF is
+/// reached. Returns the number of bytes copied.
 /// Interrupted reads, writes and the final flush are retried; other errors
 /// terminate the copy. Already-written bytes are not rolled back on error.
 pub async fn copy<R, W>(reader: &mut R, writer: &mut W) -> Result<u64, io::Error>
@@ -119,16 +119,17 @@ pub struct WriteHalf<T> {
 /// Split an object implementing both `AsyncRead` and `AsyncWrite` into two
 /// independently usable halves.
 ///
-/// The halves share ownership of the original object via an `Arc<AsyncMutex<T>>`
-/// so they may be used concurrently in async contexts.
+/// The halves share ownership of the original object via an
+/// `Arc<AsyncMutex<T>>` so they may be used concurrently in async contexts.
 ///
 /// Note: this is a simple, owned split helper — it clones an `Arc` around
 /// a mutex protecting the whole I/O object. It does not provide lock-free
 /// simultaneous read/write on the underlying object; callers still need to
 /// tolerate possible contention on the mutex.
-/// A pending read prevents writes through the other half. Do not use this helper
-/// for full-duplex protocols that need a write to unblock a pending read; use
-/// poll-based streams with `tokio::io::split` or `copy_bidirectional` instead.
+/// A pending read prevents writes through the other half. Do not use this
+/// helper for full-duplex protocols that need a write to unblock a pending
+/// read; use poll-based streams with `tokio::io::split` or `copy_bidirectional`
+/// instead.
 pub fn split<T>(io: T) -> (ReadHalf<T>, WriteHalf<T>)
 where
     T: AsyncRead + AsyncWrite + 'static,
@@ -356,11 +357,13 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
 /// Copy bytes concurrently in both directions, shutting down each destination's
 /// write half when its source reaches EOF.
 ///
-/// Uses poll-based I/O so a pending read never holds a whole-object mutex across
-/// an await. PollTcpStream and PollUnixStream implement these Tokio-compatible
-/// traits. Buffer-owning AsyncRead/AsyncWrite alone cannot guarantee full duplex.
+/// Uses poll-based I/O so a pending read never holds a whole-object mutex
+/// across an await. PollTcpStream and PollUnixStream implement these
+/// Tokio-compatible traits. Buffer-owning AsyncRead/AsyncWrite alone cannot
+/// guarantee full duplex.
 ///
-/// Returns (a_to_b, b_to_a). An error in either direction ends the copy promptly.
+/// Returns (a_to_b, b_to_a). An error in either direction ends the copy
+/// promptly.
 pub async fn copy_bidirectional<A, B>(mut a: A, mut b: B) -> Result<(u64, u64), io::Error>
 where
     A: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -519,8 +522,11 @@ mod copy_tests {
 #[cfg(test)]
 mod forwarding_tests {
     use super::*;
-    use crate::vibeio::io::{IoVectoredBuf, IoVectoredBufMut};
-    use crate::vibeio::{driver::AnyDriver, executor::Runtime};
+    use crate::vibeio::{
+        driver::AnyDriver,
+        executor::Runtime,
+        io::{IoVectoredBuf, IoVectoredBufMut},
+    };
 
     struct VectoredOnly;
     impl AsyncRead for VectoredOnly {
@@ -583,8 +589,9 @@ mod forwarding_tests {
 
 #[cfg(test)]
 mod duplex_tests {
-    use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    use super::*;
 
     #[test]
     fn bidirectional_copy_supports_request_response_and_half_close() {

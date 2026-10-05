@@ -1,23 +1,27 @@
 //! Optimized asyncio stream reader, protocol, and writer bindings.
 
-use pyo3::exceptions::{PyStopIteration, PyValueError};
-use pyo3::ffi;
-use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
-use pyo3::types::{PyByteArray, PyBytes, PyDict, PyTuple};
+use pyo3::{
+    exceptions::{PyStopIteration, PyValueError},
+    ffi,
+    prelude::*,
+    sync::PyOnceLock,
+    types::{PyByteArray, PyBytes, PyDict, PyTuple},
+};
 use pyo3_async_runtimes::TaskLocals;
 
-use super::buffers::{OwnedReadBuffer, ReadBufferPool};
-use super::{PyStreamTransport, task_locals_for_loop};
-use crate::bindings::PyLoop;
-use crate::python_names;
+use super::{
+    PyStreamTransport,
+    buffers::{OwnedReadBuffer, ReadBufferPool},
+    task_locals_for_loop,
+};
+use crate::{bindings::PyLoop, python_names};
 
 const DEFAULT_STREAM_LIMIT: usize = 65_536;
 
 /// Single-use awaitable for reads that are already satisfied from the native
 /// buffer. Returning a completed asyncio Future here allocates Future state and
-/// calls `set_result` for every WebSocket header and payload slice even though no
-/// scheduling is required.
+/// calls `set_result` for every WebSocket header and payload slice even though
+/// no scheduling is required.
 #[pyclass(module = "rsloop._loop")]
 struct PyImmediateRead {
     value: Option<Py<PyAny>>,
@@ -444,8 +448,9 @@ impl Separators {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "Separators")
     )]
-    /// Order shortest-first, matching `sorted(separator, key=len)`. The sort has
-    /// to stay stable so equal-length separators keep their given order.
+    /// Order shortest-first, matching `sorted(separator, key=len)`. The sort
+    /// has to stay stable so equal-length separators keep their given
+    /// order.
     fn sort_by_length(&mut self) {
         if let Self::Heap(list) = self {
             list.sort_by_key(Vec::len);
@@ -985,7 +990,8 @@ mod until_scan_tests {
         assert!(UntilReadState::new(separators(&[b"\n", b""]), false).is_err());
     }
 
-    /// Independent oracle: literal window search, no memchr, no offset skipping.
+    /// Independent oracle: literal window search, no memchr, no offset
+    /// skipping.
     fn literal_find(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
         if needle.is_empty() || needle.len() > haystack.len() {
             return None;

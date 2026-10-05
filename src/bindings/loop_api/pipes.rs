@@ -2,8 +2,10 @@
 
 use pyo3::prelude::*;
 
-use super::PyLoop;
-use super::spawn_env::{LoopSpawnEnv, transport_protocol_pair};
+use super::{
+    PyLoop,
+    spawn_env::{LoopSpawnEnv, transport_protocol_pair},
+};
 use crate::transport::stream::{spawn_read_pipe_transport, spawn_write_pipe_transport};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]

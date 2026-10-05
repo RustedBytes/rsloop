@@ -6,20 +6,24 @@ pub use stream::*;
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::io::{self as std_io};
-    use std::net::Shutdown;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        fs,
+        io::{self as std_io},
+        net::Shutdown,
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    use crate::vibeio::net::PollUnixStream;
-    use crate::vibeio::test_support::{read_exact, write_all};
-    use crate::vibeio::{driver::AnyDriver, executor::spawn};
-
     use super::{UnixListener, UnixStream};
+    use crate::vibeio::{
+        driver::AnyDriver,
+        executor::spawn,
+        net::PollUnixStream,
+        test_support::{read_exact, write_all},
+    };
 
     fn unique_socket_path(name: &str) -> PathBuf {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);

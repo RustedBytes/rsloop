@@ -11,25 +11,34 @@
 //! so `start_tls` can take exclusive ownership of the socket. Close and abort
 //! use the `_nowait` form to keep teardown off the critical path.
 
-use std::io::{self, Read as _};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::{
+    io::{self, Read as _},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    time::Duration,
+};
 
-use super::io_targets::ReaderTarget;
-use super::poll::wait_socket_ready;
-use super::tls_session::{
-    SharedTlsIoState, TlsReadOutcome, drain_buffered_tls_plaintext, read_tls_records,
-    tls_socket_wait_target,
+use super::{
+    PendingReadEvent, StreamTransportCore,
+    io_targets::ReaderTarget,
+    poll::wait_socket_ready,
+    tls_session::{
+        SharedTlsIoState, TlsReadOutcome, drain_buffered_tls_plaintext, read_tls_records,
+        tls_socket_wait_target,
+    },
+    tuning::{
+        BLOCKING_POLL_INTERVAL_MS, STREAM_READ_BUFFER_SIZE, TLS_WORKER_STACK_SIZE,
+        reader_spin_window,
+    },
+    worker::WorkerThread,
 };
-use super::tuning::{
-    BLOCKING_POLL_INTERVAL_MS, STREAM_READ_BUFFER_SIZE, TLS_WORKER_STACK_SIZE, reader_spin_window,
+use crate::{
+    engine::{LoopCommand, LoopIoCommand},
+    fd_ops,
 };
-use super::worker::WorkerThread;
-use super::{PendingReadEvent, StreamTransportCore};
-use crate::engine::{LoopCommand, LoopIoCommand};
-use crate::fd_ops;
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_reader_worker(
@@ -194,10 +203,10 @@ pub(super) fn spin_read_stream(
 /// Starts the socket reader for a stream transport.
 ///
 /// Active Unix loops route generic-protocol TCP readers to their loop-thread
-/// runtime. Native fast streams, Unix-domain sockets, and Windows readers retain
-/// the coordination-thread path. Both stop
-/// helpers check loop-thread task ownership before sending a dispatcher command,
-/// so `start_tls` drops a local reader before reclaiming its socket.
+/// runtime. Native fast streams, Unix-domain sockets, and Windows readers
+/// retain the coordination-thread path. Both stop
+/// helpers check loop-thread task ownership before sending a dispatcher
+/// command, so `start_tls` drops a local reader before reclaiming its socket.
 pub(super) fn spawn_socket_reader(
     fd: fd_ops::RawFd,
     core: Arc<StreamTransportCore>,
@@ -212,7 +221,8 @@ pub(super) fn spawn_socket_reader(
 }
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
-/// Stops a local reader immediately, or waits for coordination-thread cancellation.
+/// Stops a local reader immediately, or waits for coordination-thread
+/// cancellation.
 pub(super) fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) -> io::Result<()> {
     if core.loop_core.stop_io_task(fd) {
         return Ok(());

@@ -12,14 +12,18 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::collections::HashMap;
-use std::future::Future;
-use std::io;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use std::{
+    collections::HashMap,
+    future::Future,
+    io,
+    os::fd::{AsRawFd, OwnedFd, RawFd},
+    pin::Pin,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicI32, AtomicUsize, Ordering},
+    },
+    task::{Context, Poll, Waker},
+};
 
 use futures_util::future::poll_fn;
 use once_cell::sync::OnceCell;
@@ -533,7 +537,8 @@ fn install_handler(signum: libc::c_int) -> io::Result<libc::sigaction> {
 /// to still valid for subsequent signal delivery.
 unsafe fn restore_handler(signum: libc::c_int, prev: &libc::sigaction) -> io::Result<()> {
     // SAFETY: the caller supplies the previous action returned by sigaction;
-    // its handler and flags are restored unchanged. No old-action output is requested.
+    // its handler and flags are restored unchanged. No old-action output is
+    // requested.
     let rc = unsafe { libc::sigaction(signum, prev, std::ptr::null_mut()) };
     if rc == -1 {
         return Err(io::Error::last_os_error());

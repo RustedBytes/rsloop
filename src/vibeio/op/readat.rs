@@ -1,7 +1,9 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io;
-use std::task::{Context, Poll};
+use std::{
+    io,
+    task::{Context, Poll},
+};
 
 #[cfg(windows)]
 use windows_sys::Win32::{
@@ -10,14 +12,14 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
-use crate::vibeio::io::IoBufMut;
-use crate::vibeio::op::Op;
-use crate::vibeio::op::io_util::CompletionBuffer;
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    fd_inner::InnerRawHandle,
+    io::IoBufMut,
+    op::{Op, io_util::CompletionBuffer},
+};
 
 pub struct ReadAtOp<'a, B: IoBufMut> {
     handle: &'a InnerRawHandle,

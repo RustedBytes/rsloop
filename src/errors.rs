@@ -1,8 +1,10 @@
 //! Translation of callback failures into `asyncio` exception-handler behavior.
 
-use pyo3::exceptions::{PyBaseException, PyException};
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{
+    exceptions::{PyBaseException, PyException},
+    prelude::*,
+    types::PyDict,
+};
 
 use crate::engine::LoopCore;
 

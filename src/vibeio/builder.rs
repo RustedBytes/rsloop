@@ -68,8 +68,10 @@ fn ensure_supported_macos_release(buffer: &[u8], length: usize) -> std::io::Resu
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
 fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
-    use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
-    use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+    use windows_sys::{
+        Wdk::System::SystemServices::RtlGetVersion,
+        Win32::System::SystemInformation::OSVERSIONINFOW,
+    };
 
     let mut info = OSVERSIONINFOW {
         dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
@@ -178,7 +180,8 @@ impl RuntimeBuilder {
     )]
     /// Creates a new runtime builder with default configuration.
     ///
-    /// By default, the builder will select the best available driver for the platform.
+    /// By default, the builder will select the best available driver for the
+    /// platform.
     pub fn new() -> Self {
         Self {
             driver_kind: None,
@@ -231,7 +234,8 @@ impl RuntimeBuilder {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "RuntimeBuilder")
     )]
-    /// Selects the runtime's configured blocking pool for filesystem operations.
+    /// Selects the runtime's configured blocking pool for filesystem
+    /// operations.
     ///
     /// When disabled (the default), filesystem path operations use the shared
     /// `async-std` blocking pool. They never run blocking filesystem calls on
@@ -255,7 +259,8 @@ impl RuntimeBuilder {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "RuntimeBuilder")
     )]
-    /// Sets the default blocking thread pool for the runtime with specified maximum number of threads.
+    /// Sets the default blocking thread pool for the runtime with specified
+    /// maximum number of threads.
     #[cfg(feature = "blocking-default")]
     pub fn default_blocking_pool(mut self, max_threads: usize) -> Self {
         self.blocking_pool = Some(Box::new(DefaultBlockingThreadPool::with_max_threads(
@@ -270,7 +275,8 @@ impl RuntimeBuilder {
     )]
     /// Builds the async runtime with the configured settings.
     ///
-    /// If no driver was explicitly set, selects the best available driver for the platform.
+    /// If no driver was explicitly set, selects the best available driver for
+    /// the platform.
     pub fn build(self) -> Result<crate::vibeio::executor::Runtime, std::io::Error> {
         if self.rsloop_profile {
             ensure_rsloop_platform()?;

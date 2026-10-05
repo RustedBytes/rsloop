@@ -1,21 +1,19 @@
 #[cfg(target_os = "linux")]
-use std::future::poll_fn;
-use std::io::{self, ErrorKind};
-use std::path::Path;
-
-use crate::vibeio::executor::current_driver;
-#[cfg(target_os = "linux")]
-use crate::vibeio::op::Op;
-
-#[cfg(target_os = "linux")]
-use crate::vibeio::op::OpenOp;
-
-#[cfg(target_os = "linux")]
 use std::ffi::CString;
 #[cfg(target_os = "linux")]
+use std::future::poll_fn;
+#[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStrExt;
+use std::{
+    io::{self, ErrorKind},
+    path::Path,
+};
 
-use crate::vibeio::fs::file::File;
+#[cfg(target_os = "linux")]
+use crate::vibeio::op::Op;
+#[cfg(target_os = "linux")]
+use crate::vibeio::op::OpenOp;
+use crate::vibeio::{executor::current_driver, fs::file::File};
 
 /// Options and flags for opening files.
 ///
@@ -26,8 +24,9 @@ use crate::vibeio::fs::file::File;
 ///
 /// # Examples
 ///
-/// See "Filesystem offload" in `tools/vibeio-check/EXAMPLES.md` for an executable
-/// example of opening for reading and truncating a scratch file for writing.
+/// See "Filesystem offload" in `tools/vibeio-check/EXAMPLES.md` for an
+/// executable example of opening for reading and truncating a scratch file for
+/// writing.
 #[derive(Clone, Debug)]
 pub struct OpenOptions {
     read: bool,
@@ -117,7 +116,8 @@ impl OpenOptions {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
-    /// Sets whether the file should be created exclusively (fails if it already exists).
+    /// Sets whether the file should be created exclusively (fails if it already
+    /// exists).
     #[inline]
     pub fn create_new(&mut self, create_new: bool) -> &mut Self {
         self.create_new = create_new;
@@ -183,9 +183,10 @@ impl OpenOptions {
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this uses the `openat` syscall directly.
-    /// - On other platforms, this either offloads to a blocking thread pool or falls back
-    ///   to [`std::fs::OpenOptions::open`].
+    /// - On Linux with io_uring support, this uses the `openat` syscall
+    ///   directly.
+    /// - On other platforms, this either offloads to a blocking thread pool or
+    ///   falls back to [`std::fs::OpenOptions::open`].
     ///
     /// # Errors
     ///
@@ -196,8 +197,8 @@ impl OpenOptions {
     /// # Examples
     ///
     /// See the executable "Filesystem offload" example in
-    /// `tools/vibeio-check/EXAMPLES.md`; all modified paths belong to its scratch
-    /// directory rather than the current working directory.
+    /// `tools/vibeio-check/EXAMPLES.md`; all modified paths belong to its
+    /// scratch directory rather than the current working directory.
     #[inline]
     pub async fn open(&self, path: impl AsRef<Path>) -> io::Result<File> {
         self.validate()?;
@@ -254,6 +255,7 @@ impl OpenOptions {
         crate::vibeio::spawn_blocking(move || {
             #[cfg(windows)]
             use std::os::windows::fs::OpenOptionsExt;
+
             #[cfg(windows)]
             use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
 
@@ -284,6 +286,7 @@ impl OpenOptions {
     fn open_blocking(&self, path: &Path) -> io::Result<std::fs::File> {
         #[cfg(windows)]
         use std::os::windows::fs::OpenOptionsExt;
+
         #[cfg(windows)]
         use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
 

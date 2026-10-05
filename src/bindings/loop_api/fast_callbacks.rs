@@ -3,10 +3,7 @@
 
 use std::sync::OnceLock;
 
-use pyo3::exceptions::PyTypeError;
-use pyo3::prelude::*;
-use pyo3::types::PyTuple;
-use pyo3::{ffi, get_trampoline_function};
+use pyo3::{exceptions::PyTypeError, ffi, get_trampoline_function, prelude::*, types::PyTuple};
 
 use super::PyLoop;
 use crate::engine::{CallbackArgs, CallbackKind};

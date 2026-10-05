@@ -1,20 +1,20 @@
 //! Raw descriptor conversions used by stream transports.
 
-use std::fs::File;
-use std::net::{TcpListener, TcpStream};
-
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use socket2::Socket;
-
-use crate::fd_ops;
-
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(windows)]
 use std::os::windows::io::{
     AsRawHandle, AsRawSocket, FromRawHandle, FromRawSocket, RawHandle, RawSocket,
 };
+use std::{
+    fs::File,
+    net::{TcpListener, TcpStream},
+};
+
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
+use socket2::Socket;
+
+use crate::fd_ops;
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]

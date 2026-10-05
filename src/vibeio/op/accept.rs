@@ -3,17 +3,19 @@
 
 #[cfg(windows)]
 use std::ffi::c_void;
-use std::io;
 #[cfg(unix)]
 use std::mem::{self, MaybeUninit};
-use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, FromRawSocket, OwnedSocket};
 #[cfg(windows)]
 use std::ptr;
-use std::task::{Context, Poll};
+use std::{
+    io,
+    net::SocketAddr,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 #[cfg(windows)]
@@ -26,17 +28,17 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::vibeio::driver::AnyDriver;
 #[cfg(not(target_os = "linux"))]
 use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
-use crate::vibeio::op::Op;
-use crate::vibeio::op::socket_addr::sockaddr_storage_to_socketaddr;
-
 #[cfg(unix)]
 use crate::vibeio::op::io_util::set_cloexec;
+use crate::vibeio::{
+    driver::AnyDriver,
+    fd_inner::InnerRawHandle,
+    op::{Op, socket_addr::sockaddr_storage_to_socketaddr},
+};
 
 #[cfg(unix)]
 type OwnedAcceptSocket = OwnedFd;
@@ -622,10 +624,11 @@ impl Drop for AcceptOp<'_> {
 
 #[cfg(test)]
 mod ownership_tests {
-    use super::*;
     use std::io::Read;
     #[cfg(unix)]
     use std::os::unix::net::UnixStream;
+
+    use super::*;
 
     #[cfg(windows)]
     #[test]

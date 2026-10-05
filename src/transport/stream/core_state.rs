@@ -6,18 +6,21 @@
 //! signals, so a paused connection resumes immediately instead of sleeping
 //! through a poll interval.
 
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::{
+    sync::{Arc, atomic::Ordering},
+    time::Duration,
+};
 
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyValueError, prelude::*};
 
-use super::core_write::{WriteBufferSignal, reconcile_write_buffer_limits};
-use super::io_targets::TaskedDirectWriter;
-use super::protocol::build_protocol_callbacks;
-use super::tuning::DEFAULT_WRITE_BUFFER_HIGH_WATER;
-use super::{StreamTransportCore, make_stream_extra};
+use super::{
+    StreamTransportCore,
+    core_write::{WriteBufferSignal, reconcile_write_buffer_limits},
+    io_targets::TaskedDirectWriter,
+    make_stream_extra,
+    protocol::build_protocol_callbacks,
+    tuning::DEFAULT_WRITE_BUFFER_HIGH_WATER,
+};
 use crate::fd_ops;
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]

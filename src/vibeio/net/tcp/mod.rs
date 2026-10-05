@@ -6,15 +6,19 @@ pub use stream::*;
 
 #[cfg(test)]
 mod tests {
-    use std::io::{self as std_io};
-    use std::net::{Shutdown, SocketAddr};
+    use std::{
+        io::{self as std_io},
+        net::{Shutdown, SocketAddr},
+    };
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    use crate::vibeio::test_support::{read_exact, write_all};
-    use crate::vibeio::{driver::AnyDriver, executor::spawn};
-
     use super::{PollTcpStream, TcpListener, TcpStream};
+    use crate::vibeio::{
+        driver::AnyDriver,
+        executor::spawn,
+        test_support::{read_exact, write_all},
+    };
 
     #[inline]
     fn try_bind_listener(address: SocketAddr) -> Option<TcpListener> {

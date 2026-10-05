@@ -1,17 +1,18 @@
 //! Windows descriptor, socket, handle, and polling operations.
 
-use std::io;
-use std::mem;
-use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+use std::{
+    io, mem,
+    os::windows::io::{FromRawSocket, IntoRawSocket},
+};
 
 use socket2::Socket;
-use windows_sys::Win32::Foundation::{
-    DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
+use windows_sys::Win32::{
+    Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE},
+    Networking::WinSock::{
+        FD_SET, FD_SETSIZE, SOCKET, SOCKET_ERROR, TIMEVAL, select as winsock_select,
+    },
+    System::Threading::GetCurrentProcess,
 };
-use windows_sys::Win32::Networking::WinSock::{
-    FD_SET, FD_SETSIZE, SOCKET, SOCKET_ERROR, TIMEVAL, select as winsock_select,
-};
-use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 use super::{RawFd, raw_fd_to_c_int};
 
@@ -45,8 +46,9 @@ pub(super) fn duplicate_socket(fd: RawFd) -> io::Result<RawFd> {
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn socket_from_raw(socket: SOCKET) -> Socket {
-    // SAFETY: The caller provides a raw socket handle that should be temporarily owned by
-    // `Socket`; callers must prevent unintended closure when they only borrow the source handle.
+    // SAFETY: The caller provides a raw socket handle that should be temporarily
+    // owned by `Socket`; callers must prevent unintended closure when they only
+    // borrow the source handle.
     unsafe { Socket::from_raw_socket(socket as _) }
 }
 
@@ -61,8 +63,9 @@ fn duplicate_handle_raw(
     let access = 0;
     let inherit = 0;
     let call = DuplicateHandle;
-    // SAFETY: `handle` must be valid for `process`, and `duplicated` must be a valid
-    // out-parameter. The wrapper forwards directly to Windows `DuplicateHandle`.
+    // SAFETY: `handle` must be valid for `process`, and `duplicated` must be a
+    // valid out-parameter. The wrapper forwards directly to Windows
+    // `DuplicateHandle`.
     unsafe {
         call(
             process, handle, target, duplicated, access, inherit, options,
@@ -73,8 +76,8 @@ fn duplicate_handle_raw(
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn raw_fd_to_handle(fd: RawFd) -> io::Result<HANDLE> {
     let fd = raw_fd_to_c_int(fd)?;
-    // SAFETY: `_get_osfhandle` only reads the C runtime fd table for this validated fd and returns
-    // `-1` on failure.
+    // SAFETY: `_get_osfhandle` only reads the C runtime fd table for this validated
+    // fd and returns `-1` on failure.
     let handle = unsafe { libc::get_osfhandle(fd) };
     if handle == -1 {
         return Err(io::Error::last_os_error());
@@ -92,8 +95,8 @@ pub fn duplicate_handle(handle: HANDLE) -> io::Result<HANDLE> {
     }
 
     let mut duplicated = 0 as HANDLE;
-    // SAFETY: `GetCurrentProcess` returns the always-valid pseudo-handle for the current
-    // process and does not require any cleanup by the caller.
+    // SAFETY: `GetCurrentProcess` returns the always-valid pseudo-handle for the
+    // current process and does not require any cleanup by the caller.
     let process = unsafe { GetCurrentProcess() };
     let ok = duplicate_handle_raw(process, handle, &mut duplicated, DUPLICATE_SAME_ACCESS);
     if ok == 0 {
@@ -135,7 +138,8 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     } else {
         std::ptr::null_mut()
     };
-    // SAFETY: the fd sets and timeout live for the call; disabled interests use null pointers.
+    // SAFETY: the fd sets and timeout live for the call; disabled interests use
+    // null pointers.
     let ready = unsafe { winsock_select(0, readfds_ptr, writefds_ptr, &mut exceptfds, &timeout) };
     if ready == SOCKET_ERROR {
         return Err(io::Error::last_os_error());

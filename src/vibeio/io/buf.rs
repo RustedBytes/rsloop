@@ -21,9 +21,10 @@
 //!
 //! # Examples
 //!
-//! See the executable "Buffer length and capacity" and "Pipe buffer ownership" examples in
-//! `tools/vibeio-check/EXAMPLES.md`. Read errors must be handled separately from
-//! EOF; the returned buffer contains the data initialized by the operation.
+//! See the executable "Buffer length and capacity" and "Pipe buffer ownership"
+//! examples in `tools/vibeio-check/EXAMPLES.md`. Read errors must be handled
+//! separately from EOF; the returned buffer contains the data initialized by
+//! the operation.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::undocumented_unsafe_blocks)]
@@ -40,8 +41,8 @@ use std::io::{IoSlice, IoSliceMut};
 /// `buf_len()` bytes while the buffer value stays at a fixed address. Callers
 /// must not move the value while a submitted pointer is outstanding; completion
 /// operations enforce this by retaining the same boxed buffer allocation across
-/// cancellation. Moving a Vec or Box may preserve its pointer, but inline arrays
-/// require this caller-side address stability. The
+/// cancellation. Moving a Vec or Box may preserve its pointer, but inline
+/// arrays require this caller-side address stability. The
 /// reported length must not exceed `buf_capacity()`.
 pub unsafe trait IoBuf: Send + 'static {
     /// Returns a raw pointer to the inner buffer.
@@ -498,8 +499,9 @@ unsafe impl IoBuf for IoBufTemporaryPoll {
     }
 }
 
-// SAFETY: mutable use requires exclusive storage under the constructor contract.
-// Only the initialized prefix supplied by a successful read is exposed.
+// SAFETY: mutable use requires exclusive storage under the constructor
+// contract. Only the initialized prefix supplied by a successful read is
+// exposed.
 unsafe impl IoBufMut for IoBufTemporaryPoll {
     #[cfg_attr(
         feature = "hotpath-profile",
@@ -569,8 +571,8 @@ pub unsafe trait IoVectoredBuf: 'static {
 /// descriptors in order, skipping empty regions. Unlike `IoBufMut`, this trait
 /// has no initialization-length setter: reads do not resize individual buffers
 /// or update custom initialization metadata. Implementations exposing spare
-/// capacity must use the returned byte count before exposing those bytes safely.
-/// # Safety
+/// capacity must use the returned byte count before exposing those bytes
+/// safely. # Safety
 ///
 /// Every returned vector must describe exclusively writable memory that remains
 /// valid and stable for as long as the I/O operation owns this value. Writable
@@ -581,7 +583,8 @@ pub unsafe trait IoVectoredBufMut: IoVectoredBuf {
 }
 
 // SAFETY: each box owns initialized bytes at an address stable across moves of
-// the vector. Unlike a collection of libc::iovec, it owns the pointed-to storage.
+// the vector. Unlike a collection of libc::iovec, it owns the pointed-to
+// storage.
 unsafe impl IoVectoredBuf for Vec<Box<[u8]>> {
     #[cfg_attr(
         feature = "hotpath-profile",
@@ -607,8 +610,8 @@ unsafe impl IoVectoredBuf for Vec<Box<[u8]>> {
     }
 }
 
-// SAFETY: distinct owned boxes cannot overlap; &mut self grants exclusive access
-// to every initialized buffer for the duration of the operation.
+// SAFETY: distinct owned boxes cannot overlap; &mut self grants exclusive
+// access to every initialized buffer for the duration of the operation.
 unsafe impl IoVectoredBufMut for Vec<Box<[u8]>> {
     #[cfg_attr(
         feature = "hotpath-profile",
@@ -639,9 +642,10 @@ impl IoVectoredBufTemporaryPoll {
     ///
     /// # Safety
     ///
-    /// All backing borrows must outlive this wrapper and any use of its pointers.
-    /// Use only for synchronous write polling, never completion submission or
-    /// mutable I/O. No pointer may be retained after the poll returns.
+    /// All backing borrows must outlive this wrapper and any use of its
+    /// pointers. Use only for synchronous write polling, never completion
+    /// submission or mutable I/O. No pointer may be retained after the poll
+    /// returns.
     #[inline]
     pub(crate) unsafe fn new(iovecs: &[IoSlice<'_>]) -> Self {
         let iovecs = iovecs
@@ -930,8 +934,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn owned_vectors_round_trip_through_unix_stream() {
-        use crate::vibeio::io::{AsyncRead, AsyncWrite};
         use std::io::{Read, Write};
+
+        use crate::vibeio::io::{AsyncRead, AsyncWrite};
         let runtime = crate::vibeio::executor::Runtime::new(
             crate::vibeio::driver::AnyDriver::new_mio().unwrap(),
         );
@@ -983,6 +988,7 @@ mod tests {
             pin::Pin,
             task::{Context, Poll},
         };
+
         use tokio::io::ReadBuf;
 
         let mut storage = [MaybeUninit::uninit(); 8];

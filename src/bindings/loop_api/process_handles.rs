@@ -2,8 +2,7 @@
 
 use std::fs::File;
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
 use crate::fd_ops;
 
@@ -49,8 +48,8 @@ pub(super) fn new_pipe() -> PyResult<(File, File)> {
 fn file_from_owned_handle(handle: windows_sys::Win32::Foundation::HANDLE) -> File {
     use std::os::windows::io::FromRawHandle;
 
-    // SAFETY: Callers pass a newly owned Windows handle. `File::from_raw_handle` takes ownership and
-    // closes it exactly once.
+    // SAFETY: Callers pass a newly owned Windows handle. `File::from_raw_handle`
+    // takes ownership and closes it exactly once.
     unsafe { File::from_raw_handle(handle.cast()) }
 }
 
@@ -59,8 +58,8 @@ fn file_from_owned_handle(handle: windows_sys::Win32::Foundation::HANDLE) -> Fil
 fn file_from_owned_fd(fd: i32) -> File {
     use std::os::fd::FromRawFd;
 
-    // SAFETY: Callers pass a newly owned file descriptor. `File::from_raw_fd` takes ownership and
-    // closes it exactly once.
+    // SAFETY: Callers pass a newly owned file descriptor. `File::from_raw_fd` takes
+    // ownership and closes it exactly once.
     unsafe { File::from_raw_fd(fd) }
 }
 
@@ -70,13 +69,12 @@ fn create_pipe_handles() -> PyResult<(
     windows_sys::Win32::Foundation::HANDLE,
     windows_sys::Win32::Foundation::HANDLE,
 )> {
-    use windows_sys::Win32::Foundation::HANDLE;
-    use windows_sys::Win32::System::Pipes::CreatePipe;
+    use windows_sys::Win32::{Foundation::HANDLE, System::Pipes::CreatePipe};
 
     let mut read_end: HANDLE = std::ptr::null_mut();
     let mut write_end: HANDLE = std::ptr::null_mut();
-    // SAFETY: The out-pointers are valid for writes and the security attributes pointer is null as
-    // permitted by `CreatePipe`.
+    // SAFETY: The out-pointers are valid for writes and the security attributes
+    // pointer is null as permitted by `CreatePipe`.
     let ok = unsafe { CreatePipe(&mut read_end, &mut write_end, std::ptr::null(), 0) };
     if ok == 0 {
         return Err(PyRuntimeError::new_err(

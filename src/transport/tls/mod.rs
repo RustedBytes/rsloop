@@ -1,17 +1,22 @@
 //! Rustls configuration derived from Python SSL contexts.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
-use pyo3::ffi::c_str;
-use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyCapsuleMethods, PyDict};
-use rustls::client::ClientConfig;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::server::ServerConfig;
-use rustls::{DigitallySignedStruct, Error as TlsError, SignatureScheme, SupportedProtocolVersion};
+use pyo3::{
+    exceptions::{PyRuntimeError, PyTypeError, PyValueError},
+    ffi::c_str,
+    prelude::*,
+    types::{PyCapsule, PyCapsuleMethods, PyDict},
+};
+use rustls::{
+    DigitallySignedStruct, Error as TlsError, SignatureScheme, SupportedProtocolVersion,
+    client::{
+        ClientConfig,
+        danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    },
+    pki_types::{CertificateDer, ServerName, UnixTime},
+    server::ServerConfig,
+};
 
 mod material;
 use material::{

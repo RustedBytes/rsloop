@@ -13,13 +13,16 @@
 )]
 //!
 //! Implementation notes:
-//! - On Linux with io_uring support, some operations use native async syscalls (e.g. `accept4`, `sendto`)
-//!   via the async driver. When io_uring completion is available, operations complete directly.
-//! - Poll mode uses nonblocking socket calls and driver readiness notifications,
-//!   not a blocking-pool fallback. Binding and ToSocketAddrs resolution are
-//!   synchronous setup operations; prefer resolved addresses if DNS may block.
+//! - On Linux with io_uring support, some operations use native async syscalls
+//!   (e.g. `accept4`, `sendto`) via the async driver. When io_uring completion
+//!   is available, operations complete directly.
+//! - Poll mode uses nonblocking socket calls and driver readiness
+//!   notifications, not a blocking-pool fallback. Binding and ToSocketAddrs
+//!   resolution are synchronous setup operations; prefer resolved addresses if
+//!   DNS may block.
 //! - Register sockets and drive async I/O inside a runtime. Missing-runtime
-//!   registration returns an error; direct address/option queries need no current runtime.
+//!   registration returns an error; direct address/option queries need no
+//!   current runtime.
 //!
 //! # Examples
 //!
@@ -134,13 +137,16 @@ mod registration_tests {
 
 #[cfg(all(test, unix))]
 mod ownership_tests {
+    use std::{
+        os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd},
+        sync::Arc,
+    };
+
     use super::*;
     use crate::vibeio::{
         driver::AnyDriver,
         executor::{Runtime, current_driver},
     };
-    use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
-    use std::sync::Arc;
 
     fn transfer(socket: impl IntoRawFd) -> OwnedFd {
         // SAFETY: IntoRawFd transfers sole ownership; reclaim it immediately.

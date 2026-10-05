@@ -2,41 +2,51 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 //!
 //! This module provides:
-//! - [`UnixStream`]: An async Unix domain socket stream that can use either completion-based or poll-based I/O.
-//! - [`PollUnixStream`]: A poll-only variant that always uses readiness-based operations.
+//! - [`UnixStream`]: An async Unix domain socket stream that can use either
+//!   completion-based or poll-based I/O.
+//! - [`PollUnixStream`]: A poll-only variant that always uses readiness-based
+//!   operations.
 //!
 //! # Implementation details
 //!
-//! - Unix domain sockets use native async syscalls via the async driver when available.
+//! - Unix domain sockets use native async syscalls via the async driver when
+//!   available.
 //! - When io_uring completion is available, operations complete directly.
-//! - Poll mode uses nonblocking socket calls and driver readiness notifications.
-//! - Register sockets and drive async I/O inside a runtime. Registration without
-//!   one returns an error; direct address/option queries need no current runtime.
+//! - Poll mode uses nonblocking socket calls and driver readiness
+//!   notifications.
+//! - Register sockets and drive async I/O inside a runtime. Registration
+//!   without one returns an error; direct address/option queries need no
+//!   current runtime.
 
-use std::cell::RefCell;
-use std::future::poll_fn;
-use std::io::{self, IoSlice};
-use std::mem::MaybeUninit;
-use std::net::Shutdown;
-use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::net::{SocketAddr, UnixStream as StdUnixStream};
-use std::path::Path;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{
+    cell::RefCell,
+    future::poll_fn,
+    io::{self, IoSlice},
+    mem::MaybeUninit,
+    net::Shutdown,
+    os::{
+        fd::{AsRawFd, IntoRawFd, RawFd},
+        unix::{
+            ffi::OsStrExt,
+            net::{SocketAddr, UnixStream as StdUnixStream},
+        },
+    },
+    path::Path,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite, ReadBuf};
 
-use crate::vibeio::io::{
-    AsInnerRawHandle, AsyncReadPoll, AsyncWritePoll, IoBuf, IoBufMut, IoBufTemporaryPoll,
-    IoVectoredBuf, IoVectoredBufMut, IoVectoredBufTemporaryPoll,
-};
-use crate::vibeio::op::{ConnectOp, ReadOp, ReadinessOp, ReadvOp, WriteOp, WritevOp};
 use crate::vibeio::{
     driver::RegistrationMode,
     fd_inner::InnerRawHandle,
-    io::{AsyncRead, AsyncWrite},
+    io::{
+        AsInnerRawHandle, AsyncRead, AsyncReadPoll, AsyncWrite, AsyncWritePoll, IoBuf, IoBufMut,
+        IoBufTemporaryPoll, IoVectoredBuf, IoVectoredBufMut, IoVectoredBufTemporaryPoll,
+    },
+    op::{ConnectOp, ReadOp, ReadinessOp, ReadvOp, WriteOp, WritevOp},
 };
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
@@ -103,17 +113,21 @@ fn new_socket(
     Ok((owned.into(), raw_addr, raw_addr_len))
 }
 
-/// An async Unix domain socket stream that can use either completion-based or poll-based I/O.
+/// An async Unix domain socket stream that can use either completion-based or
+/// poll-based I/O.
 ///
 /// This is the async version of [`std::os::unix::net::UnixStream`].
 ///
 /// # Implementation details
 ///
-/// - Unix domain sockets use native async syscalls via the async driver when available.
+/// - Unix domain sockets use native async syscalls via the async driver when
+///   available.
 /// - When io_uring completion is available, operations complete directly.
-/// - Poll mode uses nonblocking socket calls and driver readiness notifications.
+/// - Poll mode uses nonblocking socket calls and driver readiness
+///   notifications.
 /// - Registration needs an entered runtime and returns an error without one.
-///   Drive async I/O inside a runtime; direct socket queries need no current runtime.
+///   Drive async I/O inside a runtime; direct socket queries need no current
+///   runtime.
 ///
 /// # Examples
 ///
@@ -148,7 +162,8 @@ impl UnixStream {
     )]
     /// Connects to the specified Unix domain socket path.
     ///
-    /// This is the async version of [`std::os::unix::net::UnixStream::connect`].
+    /// This is the async version of
+    /// [`std::os::unix::net::UnixStream::connect`].
     ///
     /// # Errors
     ///
@@ -177,7 +192,8 @@ impl UnixStream {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not connected.
+    /// This function will return an error if the underlying socket is not
+    /// connected.
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()
@@ -191,7 +207,8 @@ impl UnixStream {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not connected.
+    /// This function will return an error if the underlying socket is not
+    /// connected.
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.peer_addr()
@@ -219,7 +236,8 @@ impl UnixStream {
     ///
     /// # Errors
     ///
-    /// This function will return an error if registration with the async driver fails.
+    /// This function will return an error if registration with the async driver
+    /// fails.
     #[inline]
     pub fn from_std(inner: StdUnixStream) -> Result<Self, io::Error> {
         Self::from_std_with_mode(inner, RegistrationMode::Completion)
@@ -229,7 +247,8 @@ impl UnixStream {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "UnixStream")
     )]
-    /// Creates a new `UnixStream` from a standard library `UnixStream` with a specific registration mode.
+    /// Creates a new `UnixStream` from a standard library `UnixStream` with a
+    /// specific registration mode.
     #[inline]
     pub(crate) fn from_std_with_mode(
         inner: StdUnixStream,
@@ -357,7 +376,8 @@ impl PollUnixStream {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUnixStream")
     )]
-    /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
+    /// Tries to perform an I/O operation on the socket, returning an error if
+    /// it is not ready.
     #[inline]
     pub fn try_io_readable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -370,7 +390,8 @@ impl PollUnixStream {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUnixStream")
     )]
-    /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
+    /// Tries to perform an I/O operation on the socket, returning an error if
+    /// it is not ready.
     #[inline]
     pub fn try_io_writable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -515,9 +536,11 @@ impl UnixStream {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "UnixStream")
     )]
-    /// Creates a new `UnixStream` that is ready to use with readiness-based I/O.
+    /// Creates a new `UnixStream` that is ready to use with readiness-based
+    /// I/O.
     ///
-    /// This is useful when you want to create a Unix stream that uses poll-based I/O.
+    /// This is useful when you want to create a Unix stream that uses
+    /// poll-based I/O.
     #[inline]
     pub fn from_std_poll(inner: StdUnixStream) -> Result<PollUnixStream, io::Error> {
         Ok(PollUnixStream {
@@ -738,7 +761,7 @@ mod tests {
     #[test]
     fn created_unix_socket_is_close_on_exec() {
         // Construction validates the path but does not bind or create a file.
-        let (socket, _, _) = new_socket(Path::new("vibeio-unbound.sock")).unwrap();
+        let (socket, ..) = new_socket(Path::new("vibeio-unbound.sock")).unwrap();
         // SAFETY: socket owns a live fd; F_GETFD only returns integer flags.
         let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFD) };
         assert_ne!(flags, -1);

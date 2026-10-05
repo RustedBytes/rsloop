@@ -1,22 +1,25 @@
-use std::cell::RefCell;
-use std::io::{self, ErrorKind};
-use std::os::fd::RawFd;
-use std::sync::Arc;
-use std::task::Waker;
-use std::time::Duration;
-
 #[cfg(target_vendor = "apple")]
 use std::os::fd::AsRawFd;
 #[cfg(target_vendor = "apple")]
 use std::os::unix::net::UnixDatagram;
+use std::{
+    cell::RefCell,
+    io::{self, ErrorKind},
+    os::fd::RawFd,
+    sync::Arc,
+    task::Waker,
+    time::Duration,
+};
 
 #[cfg(not(target_vendor = "apple"))]
 use mio::Waker as MioWaker;
 use mio::{Events, Interest, Poll, Registry, Token};
 use slab::Slab;
 
-use crate::vibeio::driver::Interruptor;
-use crate::vibeio::{driver::Driver, fd_inner::InnerRawHandle};
+use crate::vibeio::{
+    driver::{Driver, Interruptor},
+    fd_inner::InnerRawHandle,
+};
 
 // Keep one selector wait within the same one-day bound used by asyncio.
 // Darwin's kqueue rejects very large timespec values with EINVAL, while
@@ -401,8 +404,10 @@ impl Driver for MioDriver {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use super::{MAX_POLL_TIMEOUT, MioDriver, bounded_poll_timeout};
     use crate::vibeio::driver::{Driver, Interruptor};
@@ -438,11 +443,12 @@ mod tests {
 
     #[test]
     fn waiter_callbacks_can_reenter_on_replace_remove_and_readiness() {
+        use std::{io::Write, os::fd::AsRawFd, rc::Rc, task::Waker, time::Duration};
+
         use crate::vibeio::{
             driver::{AnyDriver, RegistrationMode},
             fd_inner::InnerRawHandle,
         };
-        use std::{io::Write, os::fd::AsRawFd, rc::Rc, task::Waker, time::Duration};
         for action in 0..3 {
             let driver = Rc::new(AnyDriver::Mio(MioDriver::new().unwrap()));
             let (socket, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
@@ -590,8 +596,7 @@ mod tests {
 
     #[test]
     fn repeated_cross_thread_interrupts_wake_driver() {
-        use std::sync::mpsc;
-        use std::time::Duration;
+        use std::{sync::mpsc, time::Duration};
 
         let driver = MioDriver::new().expect("mio driver should initialize");
         let interruptor = driver.get_interruptor();

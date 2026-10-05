@@ -7,16 +7,20 @@
 //! Keeping the lock discipline in a single module is what lets the reader and
 //! writer workers share one session without stepping on each other.
 
-use std::io::{self, Read as _, Write as _};
-use std::sync::{Arc, Mutex, Weak};
-use std::thread;
-use std::time::Duration;
+use std::{
+    io::{self, Read as _, Write as _},
+    sync::{Arc, Mutex, Weak},
+    thread,
+    time::Duration,
+};
 
 use rustls::{ClientConnection, ServerConnection};
 
-use super::io_targets::StreamKind;
-use super::poll::{wait_socket_ready, wait_socket_ready_once, wait_socket_ready_until};
-use super::{PendingReadEvent, ServerCore, StreamTransportCore};
+use super::{
+    PendingReadEvent, ServerCore, StreamTransportCore,
+    io_targets::StreamKind,
+    poll::{wait_socket_ready, wait_socket_ready_once, wait_socket_ready_until},
+};
 use crate::fd_ops;
 
 pub(super) enum TlsConnectionKind {
@@ -448,15 +452,15 @@ pub(super) fn tls_io_error(err: rustls::Error) -> io::Error {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::fs;
-    use std::io::{BufReader, Cursor, Read, Write};
-    use std::os::fd::AsRawFd;
-    use std::os::unix::net::UnixStream;
-    use std::time::Duration;
+    use std::{
+        fs,
+        io::{BufReader, Cursor, Read, Write},
+        os::{fd::AsRawFd, unix::net::UnixStream},
+        time::Duration,
+    };
 
     use pyo3::Python;
-    use rustls::pki_types::ServerName;
-    use rustls::{ClientConfig, RootCertStore};
+    use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 
     use super::*;
     use crate::transport::stream::server_core::tests::{build_test_server, shutdown_test_server};

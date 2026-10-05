@@ -12,32 +12,32 @@
 //! against the high/low water marks and translated into
 //! `pause_writing`/`resume_writing` on the protocol.
 
-use std::io::{self, Write as _};
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
-
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-
-use super::buffers::OwnedWriteBuffer;
-use super::io_targets::{StreamKind, TaskedDirectWriter};
-use super::stats::{
-    TRANSPORT_DIRECT_WRITE_ATTEMPTS, TRANSPORT_STAGED_WRITES, transport_stats_enabled,
+use std::{
+    io::{self, Write as _},
+    sync::{Arc, atomic::Ordering},
 };
+
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
+
 #[cfg(windows)]
 use super::tuning::SERVER_POLL_READER_WRITE_THRESHOLD;
-use super::tuning::{
-    SMALL_WRITE_COALESCE_MAX_BYTES, SMALL_WRITE_COALESCE_MIN_BYTES, max_write_buffer_size,
-};
 #[cfg(unix)]
 use super::unix_stream_from_owned_socket_fd;
-use super::writer::is_transient_write_backpressure;
 use super::{
     PendingReadEvent, StreamTransportCore, TransportSpawnContext, WriterCommand,
+    buffers::OwnedWriteBuffer,
+    io_targets::{StreamKind, TaskedDirectWriter},
+    stats::{TRANSPORT_DIRECT_WRITE_ATTEMPTS, TRANSPORT_STAGED_WRITES, transport_stats_enabled},
     stop_socket_reader, tcp_stream_from_owned_socket_fd,
+    tuning::{
+        SMALL_WRITE_COALESCE_MAX_BYTES, SMALL_WRITE_COALESCE_MIN_BYTES, max_write_buffer_size,
+    },
+    writer::is_transient_write_backpressure,
 };
-use crate::engine::{LoopCommand, LoopTransportCommand};
-use crate::fd_ops;
+use crate::{
+    engine::{LoopCommand, LoopTransportCommand},
+    fd_ops,
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
@@ -379,7 +379,8 @@ impl StreamTransportCore {
     )]
     /// Hand staged bytes to the writer before a graceful shutdown. On Windows
     /// a normal flush can defer while the completion reader is being rebound;
-    /// close/write_eof must not bypass those bytes via the lazy-writer shortcut.
+    /// close/write_eof must not bypass those bytes via the lazy-writer
+    /// shortcut.
     #[cfg(any(windows, test))]
     pub(super) fn queue_pending_direct_write(self: &Arc<Self>) {
         self.direct_write_scheduled.store(false, Ordering::Release);
@@ -867,10 +868,12 @@ mod tests {
     use pyo3::prelude::*;
 
     use super::{OwnedWriteBuffer, is_write_batch_candidate, stage_owned_buffer};
-    use crate::transport::stream::test_support::{build_test_core, shutdown_test_core};
-    use crate::transport::stream::tuning::{
-        SMALL_WRITE_COALESCE_MAX_BYTES, SMALL_WRITE_COALESCE_MIN_BYTES, STREAM_READ_BUFFER_SIZE,
-        max_write_buffer_size,
+    use crate::transport::stream::{
+        test_support::{build_test_core, shutdown_test_core},
+        tuning::{
+            SMALL_WRITE_COALESCE_MAX_BYTES, SMALL_WRITE_COALESCE_MIN_BYTES,
+            STREAM_READ_BUFFER_SIZE, max_write_buffer_size,
+        },
     };
 
     #[test]
@@ -890,8 +893,9 @@ mod tests {
 
     #[test]
     fn deferred_staged_bytes_precede_shutdown_without_double_accounting() {
-        use super::super::WriterCommand;
         use std::sync::atomic::Ordering;
+
+        use super::super::WriterCommand;
 
         crate::initialize_python_for_tests();
         Python::attach(|py| {

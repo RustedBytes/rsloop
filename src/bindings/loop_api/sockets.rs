@@ -1,13 +1,15 @@
 //! Address resolution and socket construction for the loop's transport methods.
 //!
-//! Everything here runs Python's `socket` module rather than binding addresses in
-//! Rust, so that `family`/`proto`/`flags` handling and the resulting `OSError`s
-//! match what `asyncio` callers already expect.
+//! Everything here runs Python's `socket` module rather than binding addresses
+//! in Rust, so that `family`/`proto`/`flags` handling and the resulting
+//! `OSError`s match what `asyncio` callers already expect.
 
 #[cfg(unix)]
 use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule, PyTuple};
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyModule, PyTuple},
+};
 
 #[cfg(unix)]
 use crate::fd_ops;
@@ -132,8 +134,8 @@ fn set_socket_bool_option_unix(
         .try_into()
         .expect("socklen_t can represent c_int size");
     let value_ptr = (&value as *const libc::c_int).cast();
-    // SAFETY: `fd` is range-checked as a socket descriptor, and `value` points to a live `c_int`
-    // with the correct length for boolean socket options.
+    // SAFETY: `fd` is range-checked as a socket descriptor, and `value` points to a
+    // live `c_int` with the correct length for boolean socket options.
     let result = unsafe { libc::setsockopt(fd, level, option, value_ptr, value_len) };
     if result == 0 {
         Ok(())

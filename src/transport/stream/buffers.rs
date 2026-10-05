@@ -1,14 +1,17 @@
 //! Owned buffers shared by stream reader and writer paths.
 
-use std::ops::{Deref, DerefMut};
 #[cfg(test)]
 use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::{
+    ops::{Deref, DerefMut},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
-use futures::future::poll_fn;
-use futures::task::AtomicWaker;
+use futures::{future::poll_fn, task::AtomicWaker};
 
 use super::tuning::{
     MAX_STREAM_READ_BUFFER_SIZE, MIN_WRITE_BUFFER_CAPACITY, READ_BUFFER_POOL_LIMIT,
@@ -786,8 +789,10 @@ mod verification {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use super::{
         MAX_STREAM_READ_BUFFER_SIZE, OwnedReadBuffer, OwnedWriteBuffer, PendingReadBuffer,
@@ -979,8 +984,10 @@ mod tests {
 
     #[test]
     fn exhausted_read_pool_wakes_async_waiter_for_reused_and_discarded_buffers() {
-        use std::future::Future;
-        use std::task::{Context, Poll, Wake, Waker};
+        use std::{
+            future::Future,
+            task::{Context, Poll, Wake, Waker},
+        };
 
         struct WakeCount(AtomicUsize);
         impl Wake for WakeCount {

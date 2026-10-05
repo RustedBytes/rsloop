@@ -2,14 +2,17 @@
 //!
 //! This module provides async versions of common file system operations:
 //! - File operations: [`File`] with async read/write methods
-//! - Path operations: [`canonicalize`], [`hard_link`], [`rename`], [`remove_dir`], [`remove_file`]
-//! - Directory operations: [`create_dir`], [`create_dir_all`], [`symlink_dir`], [`symlink_file`]
+//! - Path operations: [`canonicalize`], [`hard_link`], [`rename`],
+//!   [`remove_dir`], [`remove_file`]
+//! - Directory operations: [`create_dir`], [`create_dir_all`], [`symlink_dir`],
+//!   [`symlink_file`]
 //! - File content helpers: [`read`], [`read_to_string`], [`write()`]
 //! - Metadata: [`metadata`], [`symlink_metadata`] for file information
 //!
 //! Implementation notes:
-//! - On Linux with io_uring support, some operations use native async syscalls (e.g. `statx`, `linkat`)
-//!   via the async driver. When io_uring completion is available, operations complete directly.
+//! - On Linux with io_uring support, some operations use native async syscalls
+//!   (e.g. `statx`, `linkat`) via the async driver. When io_uring completion is
+//!   available, operations complete directly.
 //! - For platforms without native async support, operations run on a blocking
 //!   thread pool so they never block the thread polling the async operation.
 //! - A runtime-configured pool is preferred when file I/O offload is enabled;
@@ -18,8 +21,8 @@
 //! # Examples
 //!
 //! See the executable "Filesystem offload" example in
-//! `tools/vibeio-check/EXAMPLES.md`. It configures a pool explicitly and confines
-//! writes and cleanup to a newly created temporary directory.
+//! `tools/vibeio-check/EXAMPLES.md`. It configures a pool explicitly and
+//! confines writes and cleanup to a newly created temporary directory.
 
 mod file;
 mod metadata;
@@ -70,8 +73,8 @@ where
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Creates a symbolic link to a directory on Windows.
 ///
-/// Creates the link at `path`, pointing to `target`, using the standard library.
-/// For cross-platform symlink creation, use [`symlink_dir`] instead.
+/// Creates the link at `path`, pointing to `target`, using the standard
+/// library. For cross-platform symlink creation, use [`symlink_dir`] instead.
 ///
 /// # Platform-specific behavior
 ///
@@ -92,8 +95,8 @@ pub fn windows_symlink_dir(path: String, target: String) -> std::io::Result<()> 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Creates a symbolic link to a file on Windows.
 ///
-/// Creates the link at `path`, pointing to `target`, using the standard library.
-/// For cross-platform symlink creation, use [`symlink_file`] instead.
+/// Creates the link at `path`, pointing to `target`, using the standard
+/// library. For cross-platform symlink creation, use [`symlink_file`] instead.
 ///
 /// # Platform-specific behavior
 ///
@@ -118,8 +121,8 @@ pub fn windows_symlink_file(path: String, target: String) -> std::io::Result<()>
 ///
 /// # Platform-specific behavior
 ///
-/// - On most platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::canonicalize`].
+/// - On most platforms, this either offloads to a blocking thread pool or falls
+///   back to [`std::fs::canonicalize`].
 ///
 /// # Errors
 ///
@@ -139,8 +142,8 @@ pub async fn canonicalize<P: AsRef<std::path::Path>>(path: P) -> std::io::Result
 ///
 /// # Platform-specific behavior
 ///
-/// - On most platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::read`].
+/// - On most platforms, this either offloads to a blocking thread pool or falls
+///   back to [`std::fs::read`].
 ///
 /// # Errors
 ///
@@ -174,8 +177,8 @@ pub async fn read(path: impl AsRef<std::path::Path>) -> std::io::Result<Vec<u8>>
 ///
 /// # Platform-specific behavior
 ///
-/// - On most platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::read_to_string`].
+/// - On most platforms, this either offloads to a blocking thread pool or falls
+///   back to [`std::fs::read_to_string`].
 ///
 /// # Errors
 ///
@@ -195,8 +198,8 @@ pub async fn read_to_string(path: impl AsRef<std::path::Path>) -> std::io::Resul
 ///
 /// # Platform-specific behavior
 ///
-/// - On most platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::write`].
+/// - On most platforms, this either offloads to a blocking thread pool or falls
+///   back to [`std::fs::write`].
 ///
 /// # Errors
 ///
@@ -229,8 +232,8 @@ pub async fn write(
 /// # Platform-specific behavior
 ///
 /// - On Linux with io_uring support, this uses the `linkat` syscall directly.
-/// - On other platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::hard_link`].
+/// - On other platforms, this either offloads to a blocking thread pool or
+///   falls back to [`std::fs::hard_link`].
 ///
 /// # Errors
 ///
@@ -279,8 +282,8 @@ pub async fn hard_link(
 ///
 /// # Platform-specific behavior
 ///
-/// - On platforms other than Linux, this either offloads to a blocking thread pool
-///   or falls back to [`std::fs::hard_link`].
+/// - On platforms other than Linux, this either offloads to a blocking thread
+///   pool or falls back to [`std::fs::hard_link`].
 ///
 /// # Errors
 ///
@@ -307,10 +310,11 @@ pub async fn hard_link(
 ///
 /// # Platform-specific behavior
 ///
-/// - On Linux with io_uring support, this uses the `symlinkat` syscall directly.
+/// - On Linux with io_uring support, this uses the `symlinkat` syscall
+///   directly.
 /// - On Windows, this uses [`std::os::windows::fs::symlink_dir`].
-/// - On other Unix platforms, this either offloads to a blocking thread pool or falls back
-///   to [std::os::unix::fs::symlink](https://doc.rust-lang.org/std/os/unix/fs/fn.symlink.html).
+/// - On other Unix platforms, this either offloads to a blocking thread pool or
+///   falls back to [std::os::unix::fs::symlink](https://doc.rust-lang.org/std/os/unix/fs/fn.symlink.html).
 ///
 /// # Errors
 ///
@@ -336,9 +340,10 @@ pub async fn symlink_dir(
 ///
 /// # Platform-specific behavior
 ///
-/// - On Linux with io_uring support, this uses the `symlinkat` syscall directly.
-/// - On other Unix platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::os::unix::fs::symlink`].
+/// - On Linux with io_uring support, this uses the `symlinkat` syscall
+///   directly.
+/// - On other Unix platforms, this either offloads to a blocking thread pool or
+///   falls back to [`std::os::unix::fs::symlink`].
 ///
 /// # Errors
 ///
@@ -415,10 +420,11 @@ pub async fn symlink_dir(
 ///
 /// # Platform-specific behavior
 ///
-/// - On Linux with io_uring support, this uses the `symlinkat` syscall directly.
+/// - On Linux with io_uring support, this uses the `symlinkat` syscall
+///   directly.
 /// - On Windows, this uses [`std::os::windows::fs::symlink_file`].
-/// - On other Unix platforms, this either offloads to a blocking thread pool or falls back
-///   to [std::os::unix::fs::symlink](https://doc.rust-lang.org/std/os/unix/fs/fn.symlink.html).
+/// - On other Unix platforms, this either offloads to a blocking thread pool or
+///   falls back to [std::os::unix::fs::symlink](https://doc.rust-lang.org/std/os/unix/fs/fn.symlink.html).
 ///
 /// # Errors
 ///
@@ -444,9 +450,10 @@ pub async fn symlink_file(
 ///
 /// # Platform-specific behavior
 ///
-/// - On Linux with io_uring support, this uses the `symlinkat` syscall directly.
-/// - On other Unix platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::os::unix::fs::symlink`].
+/// - On Linux with io_uring support, this uses the `symlinkat` syscall
+///   directly.
+/// - On other Unix platforms, this either offloads to a blocking thread pool or
+///   falls back to [`std::os::unix::fs::symlink`].
 ///
 /// # Errors
 ///
@@ -518,10 +525,11 @@ pub async fn symlink_file(
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Creates a symbolic link.
 ///
-/// This is a convenience function that calls [`symlink_file`]. Use this when you
-/// don't know or don't care whether the source is a file or directory.
+/// This is a convenience function that calls [`symlink_file`]. Use this when
+/// you don't know or don't care whether the source is a file or directory.
 ///
-/// For explicit symlink creation, use [`symlink_file`] or [`symlink_dir`] instead.
+/// For explicit symlink creation, use [`symlink_file`] or [`symlink_dir`]
+/// instead.
 ///
 /// # Platform-specific behavior
 ///
@@ -545,8 +553,8 @@ pub async fn symlink(
 /// # Platform-specific behavior
 ///
 /// - On Linux with io_uring support, this uses the `renameat` syscall directly.
-/// - On other platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::rename`].
+/// - On other platforms, this either offloads to a blocking thread pool or
+///   falls back to [`std::fs::rename`].
 ///
 /// # Errors
 ///
@@ -594,8 +602,8 @@ pub async fn rename(
 ///
 /// # Platform-specific behavior
 ///
-/// - On platforms other than Linux, this either offloads to a blocking thread pool
-///   or falls back to [`std::fs::rename`].
+/// - On platforms other than Linux, this either offloads to a blocking thread
+///   pool or falls back to [`std::fs::rename`].
 ///
 /// # Errors
 ///
@@ -622,8 +630,8 @@ pub async fn rename(
 /// # Platform-specific behavior
 ///
 /// - On Linux with io_uring support, this uses the `unlinkat` syscall directly.
-/// - On other platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::remove_dir`].
+/// - On other platforms, this either offloads to a blocking thread pool or
+///   falls back to [`std::fs::remove_dir`].
 ///
 /// # Errors
 ///
@@ -660,8 +668,8 @@ pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 ///
 /// # Platform-specific behavior
 ///
-/// - On platforms other than Linux, this either offloads to a blocking thread pool
-///   or falls back to [`std::fs::remove_dir`].
+/// - On platforms other than Linux, this either offloads to a blocking thread
+///   pool or falls back to [`std::fs::remove_dir`].
 ///
 /// # Errors
 ///
@@ -684,8 +692,8 @@ pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 /// # Platform-specific behavior
 ///
 /// - On Linux with io_uring support, this uses the `unlinkat` syscall directly.
-/// - On other platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::remove_file`].
+/// - On other platforms, this either offloads to a blocking thread pool or
+///   falls back to [`std::fs::remove_file`].
 ///
 /// # Errors
 ///
@@ -720,8 +728,8 @@ pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<(
 ///
 /// # Platform-specific behavior
 ///
-/// - On platforms other than Linux, this either offloads to a blocking thread pool
-///   or falls back to [`std::fs::remove_file`].
+/// - On platforms other than Linux, this either offloads to a blocking thread
+///   pool or falls back to [`std::fs::remove_file`].
 ///
 /// # Errors
 ///
@@ -742,8 +750,8 @@ pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<(
 /// # Platform-specific behavior
 ///
 /// - On Linux with io_uring support, this uses the `mkdirat` syscall directly.
-/// - On other platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::create_dir`].
+/// - On other platforms, this either offloads to a blocking thread pool or
+///   falls back to [`std::fs::create_dir`].
 ///
 /// # Errors
 ///
@@ -781,8 +789,8 @@ pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 ///
 /// # Platform-specific behavior
 ///
-/// - On platforms other than Linux, this either offloads to a blocking thread pool
-///   or falls back to [`std::fs::create_dir`].
+/// - On platforms other than Linux, this either offloads to a blocking thread
+///   pool or falls back to [`std::fs::create_dir`].
 ///
 /// # Errors
 ///
@@ -798,14 +806,15 @@ pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 }
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
-/// Creates a new, empty directory and all its parent components if they don't exist.
+/// Creates a new, empty directory and all its parent components if they don't
+/// exist.
 ///
 /// This is the async version of [`std::fs::create_dir_all`].
 ///
 /// # Platform-specific behavior
 ///
-/// - This function internally calls [`create_dir`] for each directory component,
-///   so it inherits the platform-specific behavior of that function.
+/// - This function internally calls [`create_dir`] for each directory
+///   component, so it inherits the platform-specific behavior of that function.
 ///
 /// # Errors
 ///
@@ -870,10 +879,10 @@ pub async fn create_dir_all(path: impl AsRef<std::path::Path>) -> std::io::Resul
 ///
 /// # Platform-specific behavior
 ///
-/// - On Linux with io_uring support and glibc/musl v1.2.3+, this uses the `statx` syscall directly
-///   for better async performance.
-/// - On other platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::metadata`].
+/// - On Linux with io_uring support and glibc/musl v1.2.3+, this uses the
+///   `statx` syscall directly for better async performance.
+/// - On other platforms, this either offloads to a blocking thread pool or
+///   falls back to [`std::fs::metadata`].
 ///
 /// # Errors
 ///
@@ -917,8 +926,8 @@ pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Meta
 ///
 /// # Platform-specific behavior
 ///
-/// - On platforms other than Linux with glibc/musl v1.2.3+, this either offloads
-///   to a blocking thread pool or falls back to [`std::fs::metadata`].
+/// - On platforms other than Linux with glibc/musl v1.2.3+, this either
+///   offloads to a blocking thread pool or falls back to [`std::fs::metadata`].
 ///
 /// # Errors
 ///
@@ -940,10 +949,11 @@ pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Meta
 ///
 /// # Platform-specific behavior
 ///
-/// - On Linux with io_uring support and glibc/musl v1.2.3+, this uses the `statx` syscall directly
-///   with `AT_SYMLINK_NOFOLLOW` flag for better async performance.
-/// - On other platforms, this either offloads to a blocking thread pool or falls back
-///   to [`std::fs::symlink_metadata`].
+/// - On Linux with io_uring support and glibc/musl v1.2.3+, this uses the
+///   `statx` syscall directly with `AT_SYMLINK_NOFOLLOW` flag for better async
+///   performance.
+/// - On other platforms, this either offloads to a blocking thread pool or
+///   falls back to [`std::fs::symlink_metadata`].
 ///
 /// # Errors
 ///
@@ -987,8 +997,9 @@ pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Res
 ///
 /// # Platform-specific behavior
 ///
-/// - On platforms other than Linux with glibc/musl v1.2.3+, this either offloads
-///   to a blocking thread pool or falls back to [`std::fs::symlink_metadata`].
+/// - On platforms other than Linux with glibc/musl v1.2.3+, this either
+///   offloads to a blocking thread pool or falls back to
+///   [`std::fs::symlink_metadata`].
 ///
 /// # Errors
 ///
@@ -1005,8 +1016,10 @@ pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Res
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::{
+        path::PathBuf,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
     use crate::vibeio::{
         executor::Runtime,
@@ -1574,7 +1587,8 @@ mod tests {
                 .expect("symlink_metadata should succeed");
             assert!(md.is_symlink());
 
-            // metadata on the symlink should follow the link and return info about the target
+            // metadata on the symlink should follow the link and return info about the
+            // target
             let target_md = metadata(&link).await.expect("metadata should succeed");
             assert!(target_md.is_file());
             assert!(!target_md.is_symlink());

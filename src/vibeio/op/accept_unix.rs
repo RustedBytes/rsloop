@@ -1,17 +1,21 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io;
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
-use std::task::{Context, Poll};
+use std::{
+    io,
+    os::fd::{FromRawFd, OwnedFd, RawFd},
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 
-use crate::vibeio::driver::{AnyDriver, CompletionIoResult};
-use crate::vibeio::fd_inner::InnerRawHandle;
-use crate::vibeio::op::Op;
 #[cfg(any(not(syscall_accept4), not(target_os = "linux")))]
 use crate::vibeio::op::io_util::set_cloexec;
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    fd_inner::InnerRawHandle,
+    op::Op,
+};
 
 pub struct AcceptUnixOp<'a> {
     handle: &'a InnerRawHandle,
@@ -189,7 +193,6 @@ impl Drop for AcceptUnixOp<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(target_os = "linux")]
     use std::os::fd::AsRawFd;
     #[cfg(target_os = "linux")]
@@ -199,6 +202,8 @@ mod tests {
     use std::rc::Rc;
     #[cfg(target_os = "linux")]
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -232,9 +237,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn discarding_completion_accept_results_closes_tcp_and_unix_connections() {
-        use crate::vibeio::driver::RegistrationMode;
-        use crate::vibeio::op::AcceptOp;
         use std::time::{Duration, Instant};
+
+        use crate::vibeio::{driver::RegistrationMode, op::AcceptOp};
 
         fn complete<O: Op>(op: &mut O, driver: &AnyDriver) -> O::Output {
             let deadline = Instant::now() + crate::vibeio::test_support::WATCHDOG;

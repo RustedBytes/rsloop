@@ -3,12 +3,14 @@
 
 #[cfg(windows)]
 use std::ffi::c_void;
-use std::io;
 #[cfg(unix)]
 use std::mem;
 #[cfg(unix)]
 use std::mem::MaybeUninit;
-use std::task::{Context, Poll};
+use std::{
+    io,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 #[cfg(windows)]
@@ -20,12 +22,13 @@ use windows_sys::Win32::Networking::WinSock::{
 #[cfg(windows)]
 use windows_sys::Win32::System::IO::OVERLAPPED;
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
-use crate::vibeio::op::Op;
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    fd_inner::InnerRawHandle,
+    op::Op,
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
@@ -272,7 +275,8 @@ pub struct ConnectOp<'a> {
 
 impl<'a> ConnectOp<'a> {
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
-    /// Own aligned address storage; callers cannot submit a dangling raw pointer.
+    /// Own aligned address storage; callers cannot submit a dangling raw
+    /// pointer.
     pub fn new(
         handle: &'a InnerRawHandle,
         addr: NativeAddress,
@@ -684,8 +688,9 @@ impl Drop for ConnectOp<'_> {
 
 #[cfg(test)]
 mod ownership_tests {
-    use super::*;
     use std::rc::Rc;
+
+    use super::*;
 
     #[cfg(windows)]
     #[test]

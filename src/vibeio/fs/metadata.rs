@@ -1,8 +1,6 @@
-use std::io;
-use std::time::SystemTime;
-
 #[cfg(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3)))]
 use std::time::{Duration, UNIX_EPOCH};
+use std::{io, time::SystemTime};
 
 /// File metadata information.
 ///
@@ -13,7 +11,8 @@ use std::time::{Duration, UNIX_EPOCH};
 ///
 /// # Platform-specific behavior
 ///
-/// - On supported Linux targets, completion-backed queries use `statx` directly.
+/// - On supported Linux targets, completion-backed queries use `statx`
+///   directly.
 /// - Other queries use the standard library's `std::fs::Metadata`.
 ///
 /// # Examples
@@ -227,7 +226,8 @@ mod tests {
 /// # Examples
 ///
 /// See "Filesystem offload" in `tools/vibeio-check/EXAMPLES.md` for executable
-/// file-type checks, including the difference between metadata and symlink_metadata.
+/// file-type checks, including the difference between metadata and
+/// symlink_metadata.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct FileType {
     is_dir: bool,

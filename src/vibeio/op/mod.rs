@@ -42,9 +42,10 @@ mod write;
 mod writeat;
 mod writev;
 
-use std::io;
-use std::task::Context;
-use std::task::Poll;
+use std::{
+    io,
+    task::{Context, Poll},
+};
 
 pub use accept::AcceptOp;
 #[cfg(unix)]
@@ -178,13 +179,15 @@ pub trait Op {
 
 #[cfg(all(test, target_os = "linux"))]
 mod vectored_uring_tests {
-    use std::future::poll_fn;
-    use std::os::fd::AsRawFd;
+    use std::{future::poll_fn, os::fd::AsRawFd};
 
     use mio::Interest;
 
-    use crate::vibeio::op::{ReadvOp, WritevOp};
-    use crate::vibeio::{driver::AnyDriver, fd_inner::InnerRawHandle};
+    use crate::vibeio::{
+        driver::AnyDriver,
+        fd_inner::InnerRawHandle,
+        op::{ReadvOp, WritevOp},
+    };
 
     #[test]
     fn io_uring_vectored_read_write_pipe() {
@@ -234,7 +237,8 @@ mod vectored_uring_tests {
                 vec![0u8; total_len - 3].into_boxed_slice(),
             ];
 
-            // Read using vectored read. poll_readv will choose completion-path when available.
+            // Read using vectored read. poll_readv will choose completion-path when
+            // available.
             let rhandle_ref = &rhandle;
             let mut readv_op = ReadvOp::new(rhandle_ref, rd_bufs);
             let read_res = poll_fn(|cx| rhandle_ref.poll_op(cx, &mut readv_op)).await;

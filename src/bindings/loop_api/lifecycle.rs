@@ -1,11 +1,12 @@
 //! Starting, stopping, and closing the loop.
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule};
+use pyo3::{
+    exceptions::PyRuntimeError,
+    prelude::*,
+    types::{PyDict, PyModule},
+};
 
-use super::PyLoop;
-use super::asyncgens::AsyncgenHooksGuard;
+use super::{PyLoop, asyncgens::AsyncgenHooksGuard};
 use crate::engine::LoopCoreError;
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]

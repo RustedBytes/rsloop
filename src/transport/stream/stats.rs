@@ -6,8 +6,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{prelude::*, types::PyDict};
 
 pub(super) static TRANSPORT_READ_EVENTS: AtomicU64 = AtomicU64::new(0);
 pub(super) static TRANSPORT_READ_BYTES: AtomicU64 = AtomicU64::new(0);

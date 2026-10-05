@@ -13,32 +13,40 @@
 //! in `tools/vibeio-check/EXAMPLES.md` for executable examples.
 //!
 //! # Implementation notes
-//! - The runtime is single-threaded, with a local ready queue and a remote wake queue.
+//! - The runtime is single-threaded, with a local ready queue and a remote wake
+//!   queue.
 //! - Tasks are polled in batches for better performance.
-//! - The runtime supports timers, blocking pools, and file I/O offloading via features.
+//! - The runtime supports timers, blocking pools, and file I/O offloading via
+//!   features.
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Poll, Wake, Waker};
+use std::{
+    cell::RefCell,
+    collections::VecDeque,
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::{Context, Poll, Wake, Waker},
+};
 
-use crate::vibeio::batch_allocator::{Batch, BatchAllocator, batch, drain_batch};
 use crossbeam_queue::SegQueue;
 use slab::Slab;
 
 #[cfg(feature = "blocking-default")]
 use crate::vibeio::blocking::DefaultBlockingThreadPool;
-use crate::vibeio::blocking::{BlockingThreadPool, SpawnBlockingError};
-use crate::vibeio::driver::{AnyDriver, AnyInterruptor};
 #[cfg(feature = "process")]
 use crate::vibeio::process::{ZombieReaperMessage, start_zombie_reaper};
-use crate::vibeio::task::{RemoteWakeContext, Task, TaskWake};
+use crate::vibeio::{
+    batch_allocator::{Batch, BatchAllocator, batch, drain_batch},
+    blocking::{BlockingThreadPool, SpawnBlockingError},
+    driver::{AnyDriver, AnyInterruptor},
+    task::{RemoteWakeContext, Task, TaskWake},
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(crate) fn enqueue_local_wake(wake: &Arc<TaskWake>, remote: &Arc<RemoteWakeContext>) -> bool {
@@ -149,8 +157,9 @@ where
 
 /// A handle to a spawned asynchronous task.
 ///
-/// This handle implements `Future` and can be `await`ed to retrieve the task's output.
-/// It allows you to wait for a spawned task to complete and get its result.
+/// This handle implements `Future` and can be `await`ed to retrieve the task's
+/// output. It allows you to wait for a spawned task to complete and get its
+/// result.
 ///
 /// # Examples
 /// See "Spawning and joining tasks" in `tools/vibeio-check/EXAMPLES.md` for
@@ -395,7 +404,8 @@ pub(crate) fn current_driver() -> Option<Rc<AnyDriver>> {
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Get the timer for the current runtime.
 ///
-/// Returns `None` if called outside a runtime context or if timers are not enabled.
+/// Returns `None` if called outside a runtime context or if timers are not
+/// enabled.
 pub(crate) fn current_timer() -> Option<Rc<Timer>> {
     CURRENT_RUNTIME.with(|runtime| {
         let runtime = runtime.borrow();
@@ -408,7 +418,8 @@ pub(crate) fn current_timer() -> Option<Rc<Timer>> {
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Get the zombie reaper channel for the current runtime.
 ///
-/// Returns `None` if called outside a runtime context or if process support is not enabled.
+/// Returns `None` if called outside a runtime context or if process support is
+/// not enabled.
 #[cfg(feature = "process")]
 pub(crate) async fn current_zombie_reaper() -> Option<async_channel::Sender<ZombieReaperMessage>> {
     let runtime = CURRENT_RUNTIME.with(|runtime| {
@@ -425,8 +436,8 @@ pub(crate) async fn current_zombie_reaper() -> Option<async_channel::Sender<Zomb
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Spawn a task on the current runtime.
 ///
-/// This function spawns the given future on the runtime and returns a `JoinHandle`
-/// that can be awaited to get the task's output.
+/// This function spawns the given future on the runtime and returns a
+/// `JoinHandle` that can be awaited to get the task's output.
 ///
 /// # Panics
 /// Panics if called outside a runtime context.
@@ -461,7 +472,8 @@ where
 ///
 /// # Examples
 /// See "Blocking work with an explicit pool" in
-/// `tools/vibeio-check/EXAMPLES.md` for a checked result and pool configuration.
+/// `tools/vibeio-check/EXAMPLES.md` for a checked result and pool
+/// configuration.
 pub async fn spawn_blocking<T, F>(f: F) -> Result<T, SpawnBlockingError>
 where
     T: Send + 'static,
@@ -477,7 +489,8 @@ where
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Check if file I/O should use this runtime's configured blocking pool.
 ///
-/// Returns `true` if runtime-specific fs offload is enabled and we're inside a runtime.
+/// Returns `true` if runtime-specific fs offload is enabled and we're inside a
+/// runtime.
 #[cfg(feature = "fs")]
 #[inline]
 pub(crate) fn offload_fs() -> bool {
@@ -892,7 +905,8 @@ impl Runtime {
                         let mut future_slot = task.future.borrow_mut();
                         *future_slot = Some(future);
                     } else {
-                        // Future completed, remove task from token_to_task slab to prevent memory leaks
+                        // Future completed, remove task from token_to_task slab to prevent memory
+                        // leaks
                         inner.token_to_task.borrow_mut().remove(task.token);
                     }
                 } else {
@@ -1014,9 +1028,12 @@ mod tests {
         });
     }
 
+    use std::{
+        cell::Cell,
+        task::{RawWaker, RawWakerVTable},
+    };
+
     use super::*;
-    use std::cell::Cell;
-    use std::task::{RawWaker, RawWakerVTable};
 
     #[test]
     fn local_ready_queue_preserves_fifo_and_drain_budget() {

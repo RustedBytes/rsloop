@@ -1,6 +1,8 @@
-use std::cell::RefCell;
-use std::task::Waker;
-use std::time::{Duration, Instant};
+use std::{
+    cell::RefCell,
+    task::Waker,
+    time::{Duration, Instant},
+};
 
 use slab::Slab;
 
@@ -313,9 +315,12 @@ impl Default for Timer {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn frozen_timer() -> Timer {
         let timer = Timer::new();

@@ -1,11 +1,15 @@
 //! Zero-copy I/O utilities using `splice` and `sendfile`.
 //!
 //! This module provides async-aware zero-copy I/O operations:
-//! - `splice()`: transfer data between file descriptors without copying to userspace.
-//! - `splice_exact()`: transfer up to `len` bytes using `splice`, stopping at EOF.
-//! - `sendfile_exact()`: transfer data from a file to a socket using a pipe as an intermediary.
+//! - `splice()`: transfer data between file descriptors without copying to
+//!   userspace.
+//! - `splice_exact()`: transfer up to `len` bytes using `splice`, stopping at
+//!   EOF.
+//! - `sendfile_exact()`: transfer data from a file to a socket using a pipe as
+//!   an intermediary.
 //!
-//! These operations are only available on Linux with the `splice` feature enabled.
+//! These operations are only available on Linux with the `splice` feature
+//! enabled.
 //!
 //! # Examples
 //!
@@ -23,17 +27,17 @@ use crate::vibeio::{fd_inner::InnerRawHandle, io::AsInnerRawHandle, op::SpliceOp
 ///
 /// This function uses the kernel's `splice` system call to transfer data
 /// between file descriptors without copying to userspace.
-/// A single call requests at most `i32::MAX` bytes to fit the completion result;
-/// short transfers are permitted. Use `splice_exact` to keep transferring up to
-/// the requested length or EOF.
+/// A single call requests at most `i32::MAX` bytes to fit the completion
+/// result; short transfers are permitted. Use `splice_exact` to keep
+/// transferring up to the requested length or EOF.
 ///
 /// With a readiness-based driver, an empty source is watched for readability;
 /// otherwise a blocked transfer watches the destination for writability. The
 /// source watch uses a temporary duplicated descriptor and is removed when the
-/// operation finishes or is cancelled. Do not concurrently read from the source.
-/// Sockets used with a readiness-based driver must be nonblocking; this function
-/// does not change the source descriptor's status flags. Regular-file access may
-/// still block on storage I/O.
+/// operation finishes or is cancelled. Do not concurrently read from the
+/// source. Sockets used with a readiness-based driver must be nonblocking; this
+/// function does not change the source descriptor's status flags. Regular-file
+/// access may still block on storage I/O.
 ///
 /// Completion-based transfers retain owned duplicates of both descriptors until
 /// the kernel finishes. Dropping the future does not roll back bytes already
@@ -51,10 +55,12 @@ pub async fn splice<'a, 'b>(
 }
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
-/// Transfer exactly `len` bytes from one file descriptor to another using `splice`.
+/// Transfer exactly `len` bytes from one file descriptor to another using
+/// `splice`.
 ///
-/// This function calls `splice()` repeatedly until `len` bytes have been transferred
-/// or EOF is reached. Interrupted calls are retried without resetting progress.
+/// This function calls `splice()` repeatedly until `len` bytes have been
+/// transferred or EOF is reached. Interrupted calls are retried without
+/// resetting progress.
 pub async fn splice_exact<'a, 'b>(
     from: &'a impl AsRawFd,
     to: &'b impl AsInnerRawHandle<'b>,
@@ -185,9 +191,10 @@ impl<'a> AsInnerRawHandle<'a> for WriteOwnedFd {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, future::ready, io};
+
     use super::*;
     use crate::vibeio::{driver::AnyDriver, executor::Runtime};
-    use std::{cell::Cell, future::ready, io};
 
     #[test]
     fn staging_writer_closes_on_drop_and_failed_registration() {
@@ -247,8 +254,10 @@ mod tests {
 
     #[test]
     fn sendfile_transfers_file_contents_and_reports_early_eof() {
-        use std::io::{Read, Seek, Write};
-        use std::os::fd::FromRawFd;
+        use std::{
+            io::{Read, Seek, Write},
+            os::fd::FromRawFd,
+        };
         // SAFETY: the name is NUL-terminated and the flag requests owned,
         // close-on-exec storage. No pointers are retained by memfd_create.
         let fd = unsafe { libc::memfd_create(c"vibeio-splice-test".as_ptr(), libc::MFD_CLOEXEC) };

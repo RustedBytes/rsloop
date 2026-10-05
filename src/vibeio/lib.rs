@@ -8,11 +8,13 @@
 //!
 //! A high-performance, cross-platform asynchronous runtime for Rust.
 //!
-//! `vibeio` provides an efficient I/O event loop that leverages the best available driver for each operating system:
+//! `vibeio` provides an efficient I/O event loop that leverages the best
+//! available driver for each operating system:
 //!
 //! - **Linux** - uses `io_uring` for true asynchronous I/O.
 //! - **Windows** - uses I/O Completion Ports (IOCP) for scalable I/O.
-//! - **macOS / BSD / Others** - uses `kqueue` or `epoll` via `mio` for event notification.
+//! - **macOS / BSD / Others** - uses `kqueue` or `epoll` via `mio` for event
+//!   notification.
 //!
 //! ## Core features
 //!
@@ -21,20 +23,27 @@
 //! - **Timers** - efficient timer and sleep functionality.
 //! - **Signals** - handling of OS signals.
 //! - **Process management** - spawning and managing child processes.
-//! - **Blocking tasks** - offload CPU-intensive or blocking operations to a thread pool.
+//! - **Blocking tasks** - offload CPU-intensive or blocking operations to a
+//!   thread pool.
 //!
 //! ## Concurrency model: thread-per-core
 //!
-//! `vibeio` is designed as a **single-threaded** runtime. To utilize multiple cores, you should employ a **thread-per-core** architecture, where a separate `Runtime` is pinned to each processor core. This approach minimizes synchronization overhead and maximizes cache locality.
+//! `vibeio` is designed as a **single-threaded** runtime. To utilize multiple
+//! cores, you should employ a **thread-per-core** architecture, where a
+//! separate `Runtime` is pinned to each processor core. This approach minimizes
+//! synchronization overhead and maximizes cache locality.
 //!
-//! Shared state can be communicated between runtimes using message passing (e.g., channels) or shared atomic structures, but I/O resources are typically owned by the thread that created them.
+//! Shared state can be communicated between runtimes using message passing
+//! (e.g., channels) or shared atomic structures, but I/O resources are
+//! typically owned by the thread that created them.
 //!
 //! ## Getting started
 //!
 //! This is rsloop's embedded runtime, accessed internally as `crate::vibeio`.
-//! It is not a separately published package or part of rsloop's public Rust API.
-//! Build and test it from the repository root; installing the upstream crate
-//! does not provide this implementation. See `docs/development.md` for commands.
+//! It is not a separately published package or part of rsloop's public Rust
+//! API. Build and test it from the repository root; installing the upstream
+//! crate does not provide this implementation. See `docs/development.md` for
+//! commands.
 //!
 //! ## Feature flags
 //!
@@ -75,12 +84,6 @@ pub mod time;
 mod timer;
 pub mod util;
 
-pub use crate::vibeio::builder::*;
-// Public runtime API; not every embedding uses this re-export.
-#[allow(unused_imports)]
-pub use crate::vibeio::driver::RegistrationMode;
-pub use crate::vibeio::executor::*;
-
 // Embedding-only readiness plumbing; standalone runtime checks do not use it.
 #[allow(unused_imports)]
 pub(crate) use fd_inner::InnerRawHandle;
@@ -89,3 +92,8 @@ pub(crate) use fd_inner::InnerRawHandle;
 pub(crate) use fd_inner::RawOsHandle;
 #[allow(unused_imports)]
 pub(crate) use op::ReadinessOp;
+
+// Public runtime API; not every embedding uses this re-export.
+#[allow(unused_imports)]
+pub use crate::vibeio::driver::RegistrationMode;
+pub use crate::vibeio::{builder::*, executor::*};

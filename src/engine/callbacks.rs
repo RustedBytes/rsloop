@@ -5,11 +5,12 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use pyo3::prelude::*;
-use pyo3::types::PyTuple;
+use pyo3::{prelude::*, types::PyTuple};
 
-use crate::context::{enter_context, exit_context, is_nested_context_error};
-use crate::fd_ops::RawFd;
+use crate::{
+    context::{enter_context, exit_context, is_nested_context_error},
+    fd_ops::RawFd,
+};
 
 pub type CallbackId = u64;
 
@@ -79,7 +80,8 @@ impl ReadyCallback {
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     #[inline]
-    /// Builds a ready callback and selects a zero-, one-, or many-argument fast path.
+    /// Builds a ready callback and selects a zero-, one-, or many-argument fast
+    /// path.
     ///
     /// `context_needs_run` records whether invocation must enter `context`.
     pub fn new(
@@ -198,8 +200,8 @@ impl ReadyCallback {
 
     /// Invokes the callback with its stored arguments and execution context.
     ///
-    /// A nested-context error falls back to direct invocation because that means
-    /// the desired context is already active on this thread.
+    /// A nested-context error falls back to direct invocation because that
+    /// means the desired context is already active on this thread.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ReadyCallback")
@@ -350,8 +352,7 @@ impl PyTimerHandle {
 
 #[cfg(test)]
 mod tests {
-    use pyo3::ffi::c_str;
-    use pyo3::types::PyTuple;
+    use pyo3::{ffi::c_str, types::PyTuple};
 
     use super::*;
     use crate::context::capture_context;

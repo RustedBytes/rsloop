@@ -1,6 +1,8 @@
-use std::rc::Rc;
-use std::task::Poll;
-use std::{io, task::Context};
+use std::{
+    io,
+    rc::Rc,
+    task::{Context, Poll},
+};
 
 use mio::{Interest, Token};
 
@@ -230,8 +232,9 @@ impl InnerRawHandle {
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     /// Replace the registration. If deregistration fails, return its error
-    /// without attempting a replacement. If acquiring the new registration fails, the
-    /// handle is unregistered: callers must drop it or retry before doing I/O.
+    /// without attempting a replacement. If acquiring the new registration
+    /// fails, the handle is unregistered: callers must drop it or retry
+    /// before doing I/O.
     #[inline]
     pub(crate) fn rebind_mode(
         &mut self,
@@ -318,11 +321,12 @@ impl Drop for InnerRawHandle {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(unix)]
     use std::os::fd::AsRawFd;
     #[cfg(unix)]
     use std::os::unix::net::UnixStream;
+
+    use super::*;
 
     #[cfg(windows)]
     #[test]

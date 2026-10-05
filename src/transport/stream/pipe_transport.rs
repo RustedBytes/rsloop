@@ -6,28 +6,24 @@
 //! `io::sink()`, and a write pipe never starts a reader. The descriptor is
 //! duplicated so closing the transport does not close the caller's file object.
 
-use std::collections::HashMap;
-use std::fs;
-use std::io;
-use std::sync::Arc;
+use std::{collections::HashMap, fs, io, sync::Arc};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
-use super::builder::{
-    StreamTransportStateConfig, fail_transport_worker_start, new_py_stream_transport,
-    new_stream_transport_core, stream_transport_state_parts,
-};
-use super::io_targets::{ReaderTarget, WriterTarget};
 #[cfg(not(windows))]
 use super::platform::from_owned_raw_fd;
 #[cfg(windows)]
 use super::platform::from_owned_raw_handle;
-use super::protocol::build_protocol_callbacks;
-use super::write_queue::{WriterReceiver, channel as writer_channel};
 use super::{
-    PyStreamTransport, StreamTransportCore, TransportSpawnContext, spawn_reader_worker,
-    spawn_writer_worker,
+    PyStreamTransport, StreamTransportCore, TransportSpawnContext,
+    builder::{
+        StreamTransportStateConfig, fail_transport_worker_start, new_py_stream_transport,
+        new_stream_transport_core, stream_transport_state_parts,
+    },
+    io_targets::{ReaderTarget, WriterTarget},
+    protocol::build_protocol_callbacks,
+    spawn_reader_worker, spawn_writer_worker,
+    write_queue::{WriterReceiver, channel as writer_channel},
 };
 use crate::fd_ops;
 

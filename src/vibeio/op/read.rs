@@ -1,8 +1,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io;
-use std::task::{Context, Poll};
+use std::{
+    io,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 #[cfg(windows)]
@@ -13,15 +15,18 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
-use crate::vibeio::op::Op;
 #[cfg(any(target_os = "linux", windows))]
 use crate::vibeio::op::io_util::completion_len;
-use crate::vibeio::op::io_util::{CompletionBuffer, poll_result_or_wait};
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    fd_inner::InnerRawHandle,
+    op::{
+        Op,
+        io_util::{CompletionBuffer, poll_result_or_wait},
+    },
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
@@ -332,9 +337,11 @@ mod cancellation_tests {
     #[cfg(windows)]
     #[test]
     fn socket_read_initializes_spare_capacity_and_clears_length_at_eof() {
-        use std::io::Write;
-        use std::net::{Shutdown, TcpListener, TcpStream};
-        use std::os::windows::io::AsRawSocket;
+        use std::{
+            io::Write,
+            net::{Shutdown, TcpListener, TcpStream},
+            os::windows::io::AsRawSocket,
+        };
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let mut writer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -379,8 +386,7 @@ mod cancellation_tests {
     #[cfg(unix)]
     #[test]
     fn short_read_eof_and_error_preserve_initialized_prefix_contract() {
-        use std::io::Write;
-        use std::os::fd::AsRawFd;
+        use std::{io::Write, os::fd::AsRawFd};
         let driver = crate::vibeio::test_support::polling_driver();
         let (reader, mut writer) = std::io::pipe().unwrap();
         crate::vibeio::fd_inner::set_nonblocking(reader.as_raw_fd(), true).unwrap();

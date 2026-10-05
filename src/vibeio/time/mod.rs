@@ -2,16 +2,20 @@
 //!
 //! This module provides:
 //! - `Sleep`: a Future that completes after a duration.
-//! - `Interval`: a convenience type with a `tick().await` method to await periodic ticks.
-//! - `timeout`: a function / `Timeout` future that races a future against a timeout.
+//! - `Interval`: a convenience type with a `tick().await` method to await
+//!   periodic ticks.
+//! - `timeout`: a function / `Timeout` future that races a future against a
+//!   timeout.
 //!
 //! Implementation notes:
-//! - The runtime's `Timer` driver (in `crate::vibeio::timer`) is accessed through
-//!   `crate::vibeio::executor::current_timer()` which returns an `Rc<Timer>` when called
-//!   from inside a runtime. Calling these time utilities outside a runtime will
-//!   panic (matching the library's general behavior for runtime-only APIs).
-//! - The `Timer` driver accepts a `Waker` and returns an optional `TimerHandle`.
-//!   We store the `TimerHandle` and cancel it if the Sleep is dropped before firing.
+//! - The runtime's `Timer` driver (in `crate::vibeio::timer`) is accessed
+//!   through `crate::vibeio::executor::current_timer()` which returns an
+//!   `Rc<Timer>` when called from inside a runtime. Calling these time
+//!   utilities outside a runtime will panic (matching the library's general
+//!   behavior for runtime-only APIs).
+//! - The `Timer` driver accepts a `Waker` and returns an optional
+//!   `TimerHandle`. We store the `TimerHandle` and cancel it if the Sleep is
+//!   dropped before firing.
 
 mod interval;
 mod sleep;
@@ -88,7 +92,8 @@ pub fn interval(period: std::time::Duration) -> Interval {
 }
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
-/// Convenience builder: returns a `Sleep` that completes at the provided absolute `Instant`.
+/// Convenience builder: returns a `Sleep` that completes at the provided
+/// absolute `Instant`.
 #[inline]
 pub fn sleep_until(deadline: std::time::Instant) -> Sleep {
     Sleep::sleep_until(deadline)
@@ -122,9 +127,10 @@ pub fn interval_at(
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use super::*;
     use crate::vibeio::driver::AnyDriver;
-    use std::time::{Duration, Instant};
 
     #[test]
     fn deadline_addition_is_exact_or_saturates_at_platform_limit() {

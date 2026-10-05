@@ -6,8 +6,7 @@
 
 use pyo3::prelude::*;
 
-use super::PyLoop;
-use super::socket_connect::connect_socket_to_address;
+use super::{PyLoop, socket_connect::connect_socket_to_address};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn sock_recv<'py>(

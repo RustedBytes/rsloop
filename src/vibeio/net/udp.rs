@@ -2,38 +2,44 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 //!
 //! This module provides:
-//! - [`UdpSocket`]: An async UDP socket that can use either completion-based or poll-based I/O.
+//! - [`UdpSocket`]: An async UDP socket that can use either completion-based or
+//!   poll-based I/O.
 //!
 //! # Implementation details
 //!
-//! - On Linux with io_uring support, UDP operations use native async syscalls via the async driver.
+//! - On Linux with io_uring support, UDP operations use native async syscalls
+//!   via the async driver.
 //! - When io_uring completion is available, operations complete directly.
-//! - Poll mode uses nonblocking socket calls and driver readiness notifications.
-//! - Register sockets and drive async I/O inside a runtime. Registration without
-//!   one returns an error; direct address/option queries need no current runtime.
+//! - Poll mode uses nonblocking socket calls and driver readiness
+//!   notifications.
+//! - Register sockets and drive async I/O inside a runtime. Registration
+//!   without one returns an error; direct address/option queries need no
+//!   current runtime.
 
-use std::cell::RefCell;
-use std::future::poll_fn;
-use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket as StdUdpSocket};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, IntoRawSocket, RawSocket};
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::time::Duration;
+use std::{
+    cell::RefCell,
+    future::poll_fn,
+    io,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs, UdpSocket as StdUdpSocket},
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use mio::Interest;
 
-use crate::vibeio::driver::RegistrationMode;
-use crate::vibeio::fd_inner::InnerRawHandle;
-use crate::vibeio::io::{
-    AsInnerRawHandle, AsyncReadPoll, AsyncWritePoll, IoBuf, IoBufMut, IoBufTemporaryPoll,
-};
 #[cfg(unix)]
 use crate::vibeio::op::{ConnectOp, socket_addr_to_raw};
-use crate::vibeio::op::{ReadinessOp, RecvOp, RecvfromOp, SendOp, SendtoOp};
+use crate::vibeio::{
+    driver::RegistrationMode,
+    fd_inner::InnerRawHandle,
+    io::{AsInnerRawHandle, AsyncReadPoll, AsyncWritePoll, IoBuf, IoBufMut, IoBufTemporaryPoll},
+    op::{ReadinessOp, RecvOp, RecvfromOp, SendOp, SendtoOp},
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[cfg(unix)]
@@ -52,7 +58,8 @@ async fn connect_one(handle: &InnerRawHandle, address: SocketAddr) -> Result<(),
 /// # Implementation details
 ///
 /// - Completion mode submits operations through the owning runtime driver.
-/// - Poll mode uses nonblocking socket calls and waits for readiness on WouldBlock.
+/// - Poll mode uses nonblocking socket calls and waits for readiness on
+///   WouldBlock.
 /// - Bind and from_std need an entered runtime for registration and return an
 ///   error if none is available. Not every method requires a current runtime;
 ///   for example, local_addr queries the already-owned socket directly.
@@ -92,14 +99,16 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if registration with the async driver fails.
+    /// This function will return an error if registration with the async driver
+    /// fails.
     #[inline]
     pub fn from_std(inner: StdUdpSocket) -> Result<Self, io::Error> {
         Self::from_std_with_mode(inner, RegistrationMode::Completion)
     }
 
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
-    /// Creates a new `UdpSocket` from a standard library `UdpSocket` with a specific registration mode.
+    /// Creates a new `UdpSocket` from a standard library `UdpSocket` with a
+    /// specific registration mode.
     #[inline]
     pub(crate) fn from_std_with_mode(
         inner: StdUdpSocket,
@@ -154,7 +163,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not bound.
+    /// This function will return an error if the underlying socket is not
+    /// bound.
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()
@@ -165,7 +175,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not connected.
+    /// This function will return an error if the underlying socket is not
+    /// connected.
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.peer_addr()
@@ -365,11 +376,13 @@ impl UdpSocket {
     }
 
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
-    /// Returns a new `UdpSocket` that shares the same underlying file descriptor.
+    /// Returns a new `UdpSocket` that shares the same underlying file
+    /// descriptor.
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be cloned.
+    /// This function will return an error if the underlying socket cannot be
+    /// cloned.
     #[inline]
     pub fn try_clone(&self) -> Result<Self, io::Error> {
         Self::from_std(self.inner.try_clone()?)
@@ -382,7 +395,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_broadcast(&self, broadcast: bool) -> Result<(), io::Error> {
         self.inner.set_broadcast(broadcast)
@@ -393,7 +407,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn broadcast(&self) -> Result<bool, io::Error> {
         self.inner.broadcast()
@@ -402,11 +417,13 @@ impl UdpSocket {
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the time-to-live (TTL) value.
     ///
-    /// This controls how many hops a packet can traverse before being discarded.
+    /// This controls how many hops a packet can traverse before being
+    /// discarded.
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_ttl(&self, ttl: u32) -> Result<(), io::Error> {
         self.inner.set_ttl(ttl)
@@ -417,7 +434,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn ttl(&self) -> Result<u32, io::Error> {
         self.inner.ttl()
@@ -430,7 +448,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_multicast_loop_v4(&self, multicast_loop_v4: bool) -> Result<(), io::Error> {
         self.inner.set_multicast_loop_v4(multicast_loop_v4)
@@ -441,7 +460,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn multicast_loop_v4(&self) -> Result<bool, io::Error> {
         self.inner.multicast_loop_v4()
@@ -454,7 +474,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_multicast_ttl_v4(&self, multicast_ttl_v4: u32) -> Result<(), io::Error> {
         self.inner.set_multicast_ttl_v4(multicast_ttl_v4)
@@ -465,7 +486,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn multicast_ttl_v4(&self) -> Result<u32, io::Error> {
         self.inner.multicast_ttl_v4()
@@ -478,7 +500,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_multicast_loop_v6(&self, multicast_loop_v6: bool) -> Result<(), io::Error> {
         self.inner.set_multicast_loop_v6(multicast_loop_v6)
@@ -489,7 +512,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn multicast_loop_v6(&self) -> Result<bool, io::Error> {
         self.inner.multicast_loop_v6()
@@ -500,7 +524,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn join_multicast_v4(
         &self,
@@ -515,7 +540,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> Result<(), io::Error> {
         self.inner.join_multicast_v6(multiaddr, interface)
@@ -526,7 +552,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn leave_multicast_v4(
         &self,
@@ -541,7 +568,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn leave_multicast_v6(
         &self,
@@ -556,7 +584,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn take_error(&self) -> Result<Option<io::Error>, io::Error> {
         self.inner.take_error()
@@ -567,7 +596,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_read_timeout(&self, dur: Option<Duration>) -> Result<(), io::Error> {
         self.inner.set_read_timeout(dur)
@@ -578,7 +608,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_write_timeout(&self, dur: Option<Duration>) -> Result<(), io::Error> {
         self.inner.set_write_timeout(dur)
@@ -589,7 +620,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn read_timeout(&self) -> Result<Option<Duration>, io::Error> {
         self.inner.read_timeout()
@@ -600,7 +632,8 @@ impl UdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn write_timeout(&self) -> Result<Option<Duration>, io::Error> {
         self.inner.write_timeout()
@@ -713,7 +746,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if registration with the async driver fails.
+    /// This function will return an error if registration with the async driver
+    /// fails.
     #[inline]
     pub fn from_std(inner: StdUdpSocket) -> Result<Self, io::Error> {
         Ok(Self {
@@ -741,7 +775,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the runtime does not support completion-based I/O.
+    /// This function will return an error if the runtime does not support
+    /// completion-based I/O.
     #[inline]
     pub fn into_completion(self) -> Result<UdpSocket, io::Error> {
         let mut socket = self.socket;
@@ -777,7 +812,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not bound.
+    /// This function will return an error if the underlying socket is not
+    /// bound.
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.socket.local_addr()
@@ -791,7 +827,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not connected.
+    /// This function will return an error if the underlying socket is not
+    /// connected.
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.socket.peer_addr()
@@ -884,11 +921,13 @@ impl PollUdpSocket {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Returns a new `PollUdpSocket` that shares the same underlying file descriptor.
+    /// Returns a new `PollUdpSocket` that shares the same underlying file
+    /// descriptor.
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be cloned.
+    /// This function will return an error if the underlying socket cannot be
+    /// cloned.
     #[inline]
     pub fn try_clone(&self) -> Result<Self, io::Error> {
         Ok(Self {
@@ -908,7 +947,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_broadcast(&self, broadcast: bool) -> Result<(), io::Error> {
         self.socket.set_broadcast(broadcast)
@@ -922,7 +962,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn broadcast(&self) -> Result<bool, io::Error> {
         self.socket.broadcast()
@@ -934,11 +975,13 @@ impl PollUdpSocket {
     )]
     /// Sets the time-to-live (TTL) value.
     ///
-    /// This controls how many hops a packet can traverse before being discarded.
+    /// This controls how many hops a packet can traverse before being
+    /// discarded.
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_ttl(&self, ttl: u32) -> Result<(), io::Error> {
         self.socket.set_ttl(ttl)
@@ -952,7 +995,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn ttl(&self) -> Result<u32, io::Error> {
         self.socket.ttl()
@@ -968,7 +1012,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_multicast_loop_v4(&self, multicast_loop_v4: bool) -> Result<(), io::Error> {
         self.socket.set_multicast_loop_v4(multicast_loop_v4)
@@ -982,7 +1027,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn multicast_loop_v4(&self) -> Result<bool, io::Error> {
         self.socket.multicast_loop_v4()
@@ -998,7 +1044,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_multicast_ttl_v4(&self, multicast_ttl_v4: u32) -> Result<(), io::Error> {
         self.socket.set_multicast_ttl_v4(multicast_ttl_v4)
@@ -1012,7 +1059,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn multicast_ttl_v4(&self) -> Result<u32, io::Error> {
         self.socket.multicast_ttl_v4()
@@ -1028,7 +1076,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_multicast_loop_v6(&self, multicast_loop_v6: bool) -> Result<(), io::Error> {
         self.socket.set_multicast_loop_v6(multicast_loop_v6)
@@ -1042,7 +1091,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn multicast_loop_v6(&self) -> Result<bool, io::Error> {
         self.socket.multicast_loop_v6()
@@ -1056,7 +1106,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn join_multicast_v4(
         &self,
@@ -1074,7 +1125,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> Result<(), io::Error> {
         self.socket.join_multicast_v6(multiaddr, interface)
@@ -1088,7 +1140,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn leave_multicast_v4(
         &self,
@@ -1106,7 +1159,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn leave_multicast_v6(
         &self,
@@ -1124,7 +1178,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn take_error(&self) -> Result<Option<io::Error>, io::Error> {
         self.socket.take_error()
@@ -1138,7 +1193,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_read_timeout(&self, dur: Option<Duration>) -> Result<(), io::Error> {
         self.socket.set_read_timeout(dur)
@@ -1152,7 +1208,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be modified.
+    /// This function will return an error if the underlying socket cannot be
+    /// modified.
     #[inline]
     pub fn set_write_timeout(&self, dur: Option<Duration>) -> Result<(), io::Error> {
         self.socket.set_write_timeout(dur)
@@ -1166,7 +1223,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn read_timeout(&self) -> Result<Option<Duration>, io::Error> {
         self.socket.read_timeout()
@@ -1180,7 +1238,8 @@ impl PollUdpSocket {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket cannot be queried.
+    /// This function will return an error if the underlying socket cannot be
+    /// queried.
     #[inline]
     pub fn write_timeout(&self) -> Result<Option<Duration>, io::Error> {
         self.socket.write_timeout()
@@ -1212,7 +1271,8 @@ impl PollUdpSocket {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Polls to receive a single datagram message, returning the sender's address.
+    /// Polls to receive a single datagram message, returning the sender's
+    /// address.
     ///
     /// This is the poll-based counterpart to [`UdpSocket::recv_from`].
     #[inline]
@@ -1326,7 +1386,8 @@ impl PollUdpSocket {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
+    /// Tries to perform an I/O operation on the socket, returning an error if
+    /// it is not ready.
     #[inline]
     pub fn try_io_readable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -1339,7 +1400,8 @@ impl PollUdpSocket {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Tries to perform an I/O operation on the socket, returning an error if it is not ready.
+    /// Tries to perform an I/O operation on the socket, returning an error if
+    /// it is not ready.
     #[inline]
     pub fn try_io_writable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -1448,20 +1510,24 @@ impl IntoRawSocket for PollUdpSocket {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{self as std_io};
-    use std::net::SocketAddr;
-    use std::pin::Pin;
-
-    use crate::vibeio::driver::AnyDriver;
+    use std::{
+        io::{self as std_io},
+        net::SocketAddr,
+        pin::Pin,
+    };
 
     use super::{PollUdpSocket, UdpSocket};
+    use crate::vibeio::driver::AnyDriver;
 
     #[cfg(windows)]
     #[test]
     fn udp_connect_preserves_registration_on_success_and_error() {
+        use std::{
+            future::Future,
+            task::{Context, Poll, Waker},
+        };
+
         use crate::vibeio::driver::RegistrationMode;
-        use std::future::Future;
-        use std::task::{Context, Poll, Waker};
 
         let runtime = crate::vibeio::executor::Runtime::new(AnyDriver::new_iocp().unwrap());
         runtime.block_on(async {
@@ -1698,8 +1764,10 @@ mod tests {
 
     #[test]
     fn borrowed_udp_poll_methods_release_buffers_on_pending() {
-        use std::future::poll_fn;
-        use std::task::{Context, Waker};
+        use std::{
+            future::poll_fn,
+            task::{Context, Waker},
+        };
         let runtime = crate::vibeio::Runtime::new(
             #[cfg(unix)]
             AnyDriver::new_mio().unwrap(),

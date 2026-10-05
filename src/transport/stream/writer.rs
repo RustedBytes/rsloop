@@ -10,23 +10,27 @@
 //! session's shutdown timeout so a peer that stops reading cannot hold the
 //! worker open.
 
-use std::io::{self, Write as _};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::Duration;
+use std::{
+    io::{self, Write as _},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
 use pyo3::exceptions::{PyRuntimeError, PyTimeoutError};
 
-use super::buffers::OwnedWriteBuffer;
-use super::io_targets::{WriterTarget, is_no_buffer_space_code};
-use super::tls_session::{
-    SharedTlsIoState, abort_tls_writer, close_tls_writer, flush_tls_io_locked,
+use super::{
+    StreamTransportCore, WriterCommand,
+    buffers::OwnedWriteBuffer,
+    io_targets::{WriterTarget, is_no_buffer_space_code},
+    tls_session::{SharedTlsIoState, abort_tls_writer, close_tls_writer, flush_tls_io_locked},
+    tuning::{BLOCKING_POLL_INTERVAL_MS, TLS_WORKER_STACK_SIZE},
+    worker::WorkerThread,
+    write_queue::{TryRecvError, WriterReceiver},
 };
-use super::tuning::{BLOCKING_POLL_INTERVAL_MS, TLS_WORKER_STACK_SIZE};
-use super::worker::WorkerThread;
-use super::write_queue::{TryRecvError, WriterReceiver};
-use super::{StreamTransportCore, WriterCommand};
 use crate::fd_ops;
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]

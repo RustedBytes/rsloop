@@ -1,9 +1,8 @@
 //! Small, audited `CPython` FFI call helpers.
 
-use pyo3::prelude::*;
-
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 use pyo3::ffi;
+use pyo3::prelude::*;
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn call_noargs(py: Python<'_>, callable: &Py<PyAny>) -> PyResult<Py<PyAny>> {
@@ -28,8 +27,9 @@ pub(super) fn vectorcall(
     nargsf: usize,
     kwnames: *mut ffi::PyObject,
 ) -> PyResult<Py<PyAny>> {
-    // SAFETY: The callable, positional argument array, and keyword tuple are all live under the GIL
-    // for this call. PyO3 converts null returns into `PyErr`.
+    // SAFETY: The callable, positional argument array, and keyword tuple are all
+    // live under the GIL for this call. PyO3 converts null returns into
+    // `PyErr`.
     let result = unsafe {
         let ptr = ffi::PyObject_Vectorcall(callable, args, nargsf, kwnames);
         Bound::from_owned_ptr_or_err(py, ptr)

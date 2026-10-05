@@ -7,14 +7,19 @@
 
 use std::net::Shutdown;
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyString};
+use pyo3::{
+    exceptions::PyRuntimeError,
+    prelude::*,
+    types::{PyBytes, PyString},
+};
 
 #[cfg(unix)]
 use super::io_targets::shutdown_unix_stream;
-use super::io_targets::{TaskedDirectWriter, shutdown_tcp_stream};
-use super::{PyStreamTransport, WriterCommand, stop_socket_reader_nowait};
+use super::{
+    PyStreamTransport, WriterCommand,
+    io_targets::{TaskedDirectWriter, shutdown_tcp_stream},
+    stop_socket_reader_nowait,
+};
 
 impl PyStreamTransport {
     #[cfg_attr(

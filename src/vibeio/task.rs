@@ -1,14 +1,20 @@
 #![forbid(unsafe_code)]
 
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::Waker;
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::Waker,
+};
 
 use crossbeam_queue::SegQueue;
-use futures_util::future::LocalBoxFuture;
-use futures_util::task::{ArcWake, WakerRef, waker, waker_ref};
+use futures_util::{
+    future::LocalBoxFuture,
+    task::{ArcWake, WakerRef, waker, waker_ref},
+};
 
 use crate::vibeio::driver::AnyInterruptor;
 

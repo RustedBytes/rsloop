@@ -11,15 +11,16 @@
 //! - `ChildStdin`, `ChildStdout`, `ChildStderr`: async-aware stdio streams.
 //!
 //! Implementation notes:
-//! - On Unix, the module uses `mio`/`io_uring` drivers to register child process
-//!   file descriptors for async I/O when possible. Falls back to a blocking pool
-//!   when the driver is unavailable or registration fails.
-//! - Child drop retains reaping ownership through a runtime reaper when available
-//!   or a background-thread fallback otherwise.
-//! - Construction and child waiting can run outside a runtime. Inside a runtime,
-//!   stdio's blocking fallback and Command::status/output require a blocking
-//!   pool. Outside a runtime, those fallback operations execute synchronously
-//!   when polled. Command::spawn always invokes std's synchronous spawn.
+//! - On Unix, the module uses `mio`/`io_uring` drivers to register child
+//!   process file descriptors for async I/O when possible. Falls back to a
+//!   blocking pool when the driver is unavailable or registration fails.
+//! - Child drop retains reaping ownership through a runtime reaper when
+//!   available or a background-thread fallback otherwise.
+//! - Construction and child waiting can run outside a runtime. Inside a
+//!   runtime, stdio's blocking fallback and Command::status/output require a
+//!   blocking pool. Outside a runtime, those fallback operations execute
+//!   synchronously when polled. Command::spawn always invokes std's synchronous
+//!   spawn.
 //!
 //! # Cancellation of blocking operations
 //!
@@ -32,32 +33,33 @@
 
 mod reaper;
 
-use reaper::ZombieReaper;
-pub(crate) use reaper::{ZombieReaperMessage, start_zombie_reaper};
-
-use std::ffi::OsStr;
 #[cfg(unix)]
 use std::future::poll_fn;
-use std::io::{self, Read, Write};
-
-#[cfg(unix)]
-use mio::Interest;
-
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, IntoRawHandle, RawHandle};
+pub use std::process::{ExitStatus, Output, Stdio};
+use std::{
+    ffi::OsStr,
+    io::{self, Read, Write},
+};
+
+#[cfg(unix)]
+use mio::Interest;
+use reaper::ZombieReaper;
+pub(crate) use reaper::{ZombieReaperMessage, start_zombie_reaper};
 
 #[cfg(unix)]
 use crate::vibeio::driver::RegistrationMode;
-use crate::vibeio::executor::current_driver;
 #[cfg(unix)]
 use crate::vibeio::fd_inner::InnerRawHandle;
-use crate::vibeio::io::{AsyncRead, AsyncWrite, IoBuf, IoBufMut, iobuf_to_slice, read_into_buf};
 #[cfg(unix)]
 use crate::vibeio::op::{ReadOp, WriteOp};
-
-pub use std::process::{ExitStatus, Output, Stdio};
+use crate::vibeio::{
+    executor::current_driver,
+    io::{AsyncRead, AsyncWrite, IoBuf, IoBufMut, iobuf_to_slice, read_into_buf},
+};
 
 #[cfg(unix)]
 enum ChildIo {
@@ -228,7 +230,8 @@ impl ChildStdin {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ChildStdin")
     )]
-    /// Consume this `ChildStdin` and return the underlying `std::process::ChildStdin`.
+    /// Consume this `ChildStdin` and return the underlying
+    /// `std::process::ChildStdin`.
     #[inline]
     pub fn into_std(mut self) -> std::process::ChildStdin {
         self.inner.take().expect("child stdin is already taken")
@@ -269,7 +272,8 @@ impl ChildStdout {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ChildStdout")
     )]
-    /// Consume this `ChildStdout` and return the underlying `std::process::ChildStdout`.
+    /// Consume this `ChildStdout` and return the underlying
+    /// `std::process::ChildStdout`.
     #[inline]
     pub fn into_std(mut self) -> std::process::ChildStdout {
         self.inner.take().expect("child stdout is already taken")
@@ -310,7 +314,8 @@ impl ChildStderr {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ChildStderr")
     )]
-    /// Consume this `ChildStderr` and return the underlying `std::process::ChildStderr`.
+    /// Consume this `ChildStderr` and return the underlying
+    /// `std::process::ChildStderr`.
     #[inline]
     pub fn into_std(mut self) -> std::process::ChildStderr {
         self.inner.take().expect("child stderr is already taken")
@@ -930,8 +935,8 @@ impl Command {
     ///
     /// This is an async version of `std::process::Command::status`.
     /// Inside a runtime it requires a blocking pool; outside one it blocks when
-    /// polled. Canceling a pending offload leaves this command consumed and does
-    /// not stop the worker. See the module's cancellation notes.
+    /// polled. Canceling a pending offload leaves this command consumed and
+    /// does not stop the worker. See the module's cancellation notes.
     #[inline]
     pub async fn status(&mut self) -> io::Result<ExitStatus> {
         if current_driver().is_some() {
@@ -953,8 +958,8 @@ impl Command {
     ///
     /// This is an async version of `std::process::Command::output`.
     /// Inside a runtime it requires a blocking pool; outside one it blocks when
-    /// polled. Canceling a pending offload leaves this command consumed and does
-    /// not stop the worker. See the module's cancellation notes.
+    /// polled. Canceling a pending offload leaves this command consumed and
+    /// does not stop the worker. See the module's cancellation notes.
     #[inline]
     pub async fn output(&mut self) -> io::Result<Output> {
         if current_driver().is_some() {
@@ -976,7 +981,8 @@ impl Command {
     }
 
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
-    /// Consume this `Command` and return the underlying `std::process::Command`.
+    /// Consume this `Command` and return the underlying
+    /// `std::process::Command`.
     #[inline]
     pub fn into_std(mut self) -> std::process::Command {
         self.inner.take().expect("command has been consumed")
@@ -988,8 +994,10 @@ mod tests {
     use super::*;
     #[cfg(any(unix, feature = "blocking-default"))]
     use crate::vibeio::driver::AnyDriver;
-    use crate::vibeio::executor::Runtime;
-    use crate::vibeio::io::{AsyncRead, AsyncWrite, IoBufWithCursor};
+    use crate::vibeio::{
+        executor::Runtime,
+        io::{AsyncRead, AsyncWrite, IoBufWithCursor},
+    };
 
     #[cfg(unix)]
     #[test]

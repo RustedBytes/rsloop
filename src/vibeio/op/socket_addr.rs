@@ -1,8 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io;
-use std::net::SocketAddr;
+use std::{io, net::SocketAddr};
 #[cfg(unix)]
 type NativeAddress = libc::sockaddr_storage;
 #[cfg(windows)]
@@ -160,7 +159,8 @@ pub(super) fn socketaddr_from_buffer(
     #[cfg(windows)]
     type Storage = SOCKADDR_STORAGE;
     validate_address_length(bytes.len(), 0, std::mem::size_of::<Storage>())?;
-    // SAFETY: socket address storage contains integer/byte fields valid when zeroed.
+    // SAFETY: socket address storage contains integer/byte fields valid when
+    // zeroed.
     let mut storage: Storage = unsafe { std::mem::zeroed() };
     // SAFETY: the length is bounded by storage capacity, the source slice is
     // initialized, and the fresh destination cannot overlap it. Byte copying

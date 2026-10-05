@@ -1,7 +1,8 @@
 //! Support for spawning blocking tasks in an async runtime.
 //!
-//! This module provides a trait for pluggable blocking thread pools and a default implementation
-//! using a thread pool with automatically adjusted thread count and a work-stealing queue.
+//! This module provides a trait for pluggable blocking thread pools and a
+//! default implementation using a thread pool with automatically adjusted
+//! thread count and a work-stealing queue.
 
 #[cfg(feature = "blocking-default")]
 mod default;
@@ -28,9 +29,10 @@ impl fmt::Display for SpawnBlockingError {
 impl std::error::Error for SpawnBlockingError {}
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
-/// Offload a borrowed operation while retaining ownership through worker unwind.
-/// Cancellation drops the caller's share; a queued/running worker retains its
-/// share until it stops using the buffer. Partial mutations are not rolled back.
+/// Offload a borrowed operation while retaining ownership through worker
+/// unwind. Cancellation drops the caller's share; a queued/running worker
+/// retains its share until it stops using the buffer. Partial mutations are not
+/// rolled back.
 #[cfg(any(feature = "fs", feature = "stdio", feature = "process"))]
 pub(crate) async fn with_buffer<B, R>(
     buf: B,
@@ -62,15 +64,18 @@ where
 
 #[cfg(all(test, any(feature = "fs", feature = "stdio", feature = "process")))]
 mod buffer_tests {
-    use super::*;
-    use std::cell::RefCell;
-    use std::future::Future;
-    use std::rc::Rc;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        cell::RefCell,
+        future::Future,
+        rc::Rc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Poll, Waker},
     };
-    use std::task::{Context, Poll, Waker};
+
+    use super::*;
 
     #[derive(Default)]
     struct QueuedPool(RefCell<Option<Box<dyn FnOnce() + Send>>>);
@@ -119,13 +124,14 @@ mod buffer_tests {
 
 /// A trait for pluggable blocking thread pools.
 ///
-/// This trait allows users to provide their own implementation of a thread pool for executing
-/// blocking tasks. The thread pool must be able to spawn tasks and shut down gracefully.
+/// This trait allows users to provide their own implementation of a thread pool
+/// for executing blocking tasks. The thread pool must be able to spawn tasks
+/// and shut down gracefully.
 pub trait BlockingThreadPool: 'static {
     /// Spawns a blocking task onto the thread pool.
     ///
-    /// The task will be executed on one of the threads in the pool, and its output will be
-    /// returned back to `spawn_blocking`.
+    /// The task will be executed on one of the threads in the pool, and its
+    /// output will be returned back to `spawn_blocking`.
     fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>);
 }
 

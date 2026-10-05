@@ -1,27 +1,30 @@
 //! The blocking threads that watch the child and its output pipes.
 //!
-//! One reader thread per output pipe blocks on `read` and enqueues what it gets;
-//! a single waiter thread owns the `Child`, polls `try_wait`, and is the only
-//! place signals are delivered — commands from Python arrive over the control
-//! channel rather than touching the child from the loop thread.
+//! One reader thread per output pipe blocks on `read` and enqueues what it
+//! gets; a single waiter thread owns the `Child`, polls `try_wait`, and is the
+//! only place signals are delivered — commands from Python arrive over the
+//! control channel rather than touching the child from the loop thread.
 //!
-//! The waiter's poll interval doubles as the control-channel receive timeout, so
-//! a `kill()` is acted on promptly without a second wakeup source. On exit it
-//! closes stdin's pipe bookkeeping first, matching the order asyncio reports.
+//! The waiter's poll interval doubles as the control-channel receive timeout,
+//! so a `kill()` is acted on promptly without a second wakeup source. On exit
+//! it closes stdin's pipe bookkeeping first, matching the order asyncio
+//! reports.
 
-use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
-use std::process::Child;
-use std::sync::Arc;
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::{
+    io::Read,
+    process::Child,
+    sync::{
+        Arc,
+        mpsc::{Receiver, RecvTimeoutError},
+    },
+    time::Duration,
+};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
-use super::params::BoxedProcessReader;
-use super::{ProcessCommand, ProcessTransportCore};
+use super::{ProcessCommand, ProcessTransportCore, params::BoxedProcessReader};
 
 const PROCESS_READER_BUFFER_SIZE: usize = 65_536;
 const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -53,8 +56,9 @@ pub(super) fn send_process_signal(child: &Child, signal: i32) -> std::io::Result
     let pid = i32::try_from(child.id()).map_err(|_| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "child PID out of range")
     })?;
-    // SAFETY: `libc::kill` is called with the child PID returned by `std::process::Child`
-    // and a signal value supplied by the caller/Python API. It does not retain pointers.
+    // SAFETY: `libc::kill` is called with the child PID returned by
+    // `std::process::Child` and a signal value supplied by the caller/Python
+    // API. It does not retain pointers.
     let result = unsafe { libc::kill(pid, signal) };
     if result == 0 {
         Ok(())

@@ -1,14 +1,17 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::ffi::CString;
-use std::io;
-use std::os::fd::{FromRawFd, OwnedFd};
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::{
+    ffi::CString,
+    io,
+    os::fd::{FromRawFd, OwnedFd},
+    rc::Rc,
+    task::{Context, Poll},
+};
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::op::Op;
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    op::Op,
+};
 
 pub struct OpenOp {
     driver: Rc<AnyDriver>,
@@ -137,9 +140,11 @@ mod cancellation_tests {
 
     #[test]
     fn dropping_successful_open_result_closes_the_descriptor() {
-        use std::io::Read;
-        use std::os::fd::AsRawFd;
-        use std::time::{Duration, Instant};
+        use std::{
+            io::Read,
+            os::fd::AsRawFd,
+            time::{Duration, Instant},
+        };
 
         let driver = match AnyDriver::new_uring_custom(io_uring::IoUring::builder()) {
             Ok(driver) => Rc::new(driver),

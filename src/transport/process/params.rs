@@ -2,22 +2,19 @@
 //!
 //! `ProcessTransportParams` is built up across `loop_api::process_spawn`, which
 //! resolves the Python arguments, and `loop_api::process_stdio`, which may hand
-//! back its own readers — hence `stdout_override` / `stderr_override`, used when
-//! a pipe had to be created outside `std::process::Command` (for example
+//! back its own readers — hence `stdout_override` / `stderr_override`, used
+//! when a pipe had to be created outside `std::process::Command` (for example
 //! `stderr=STDOUT`, where one reader feeds both descriptors).
 //!
 //! `ProcessTextConfig` is present only for `universal_newlines`/`text` mode; it
 //! travels to the stdin pipe transport as extra info so writes are encoded the
 //! way Python expects.
 
-use std::io::Read;
-use std::process::Child;
-use std::sync::Arc;
+use std::{io::Read, process::Child, sync::Arc};
 
 use pyo3::prelude::*;
 
-use crate::engine::LoopCore;
-use crate::transport::stream::TransportSpawnContext;
+use crate::{engine::LoopCore, transport::stream::TransportSpawnContext};
 
 #[derive(Clone)]
 pub struct ProcessTextConfig {

@@ -8,8 +8,7 @@
 
 use std::sync::Arc;
 
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyValueError, prelude::*};
 
 use crate::transport::tls::{
     ClientTlsSettings, ServerTlsSettings, client_tls_settings, server_tls_settings,

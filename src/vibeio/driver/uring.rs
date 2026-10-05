@@ -1,22 +1,27 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::io::{self, ErrorKind};
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
-use std::sync::Arc as StdArc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Poll, Waker};
-use std::time::Duration;
+use std::{
+    cell::RefCell,
+    collections::VecDeque,
+    io::{self, ErrorKind},
+    os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd},
+    sync::{
+        Arc as StdArc,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::{Context, Poll, Waker},
+    time::Duration,
+};
 
-use io_uring::types::{SubmitArgs, Timespec};
-use io_uring::{IoUring, cqueue, opcode, squeue, types};
+use io_uring::{
+    IoUring, cqueue, opcode, squeue, types,
+    types::{SubmitArgs, Timespec},
+};
 use mio::{Interest, Token};
 use slab::Slab;
 
-use crate::vibeio::driver::{CompletionIoResult, Interruptor};
 use crate::vibeio::{
-    driver::{Driver, RegistrationMode},
+    driver::{CompletionIoResult, Driver, Interruptor, RegistrationMode},
     fd_inner::InnerRawHandle,
 };
 
@@ -753,9 +758,9 @@ mod memory_fallback_tests {
 
     #[test]
     fn live_shutdown_cancels_queued_and_submitted_reads() {
+        use std::{cell::Cell, rc::Rc};
+
         use super::*;
-        use std::cell::Cell;
-        use std::rc::Rc;
 
         struct Buffer {
             bytes: Box<[u8; 8]>,
@@ -1287,11 +1292,16 @@ impl Driver for UringDriver {
 
 #[cfg(test)]
 mod completion_cleanup_tests {
+    use std::{
+        io::Read,
+        os::{
+            fd::{FromRawFd, IntoRawFd, OwnedFd},
+            unix::net::UnixStream,
+        },
+        sync::Arc,
+    };
+
     use super::*;
-    use std::io::Read;
-    use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
-    use std::os::unix::net::UnixStream;
-    use std::sync::Arc;
 
     #[test]
     fn listener_teardown_releases_accept_waker_outside_driver_borrows() {

@@ -8,22 +8,27 @@
 
 use std::time::Duration;
 
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
-
-use super::connections::{self, CreateConnectionParams, CreateUnixConnectionParams};
-use super::executor::{self, AddrInfoRequest};
-use super::process_spawn::{
-    self, SubprocessParams, exec_command, parse_process_text_config, shell_command,
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{PyDict, PyTuple},
 };
-use super::process_stdio::{ProcessStdioSpecs, default_stdio_pipe};
-use super::servers::{self, CreateServerParams, CreateUnixServerParams};
-use super::sockets::TcpServerSocketOptions;
-use super::tasks::{self, TaskOptions};
-use super::tls_params::TlsParams;
+
 use super::{
-    MAX_TIMER_DELAY_SECS, PyLoop, asyncgens, lifecycle, pipes, signals, sock_ops, watchers,
+    MAX_TIMER_DELAY_SECS, PyLoop, asyncgens,
+    connections::{self, CreateConnectionParams, CreateUnixConnectionParams},
+    executor::{self, AddrInfoRequest},
+    lifecycle, pipes,
+    process_spawn::{
+        self, SubprocessParams, exec_command, parse_process_text_config, shell_command,
+    },
+    process_stdio::{ProcessStdioSpecs, default_stdio_pipe},
+    servers::{self, CreateServerParams, CreateUnixServerParams},
+    signals, sock_ops,
+    sockets::TcpServerSocketOptions,
+    tasks::{self, TaskOptions},
+    tls_params::TlsParams,
+    watchers,
 };
 use crate::engine::{CallbackKind, LoopCore, PyTimerHandle};
 

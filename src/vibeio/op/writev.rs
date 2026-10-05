@@ -1,7 +1,9 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io;
-use std::task::{Context, Poll};
+use std::{
+    io,
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 #[cfg(windows)]
@@ -12,16 +14,19 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
-use crate::vibeio::io::IoVectoredBuf;
-use crate::vibeio::op::Op;
 #[cfg(unix)]
 use crate::vibeio::op::io_util::iovec_to_system;
-use crate::vibeio::op::io_util::{iovec_count, poll_result_or_wait};
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    fd_inner::InnerRawHandle,
+    io::IoVectoredBuf,
+    op::{
+        Op,
+        io_util::{iovec_count, poll_result_or_wait},
+    },
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(windows)]
@@ -351,8 +356,8 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
         .build()
         .user_data(user_data);
 
-        // Store the iovec array for the completion, because it needs to be kept alive until the
-        // completion is ready.
+        // Store the iovec array for the completion, because it needs to be kept alive
+        // until the completion is ready.
         self.completion_system_iovecs = Some(iovecs);
 
         Ok(entry)

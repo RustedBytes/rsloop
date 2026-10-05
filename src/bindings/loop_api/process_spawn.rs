@@ -1,11 +1,12 @@
 //! Subprocess spawning: `Popen`-style keyword translation and the shared
 //! `subprocess_shell` / `subprocess_exec` pipeline.
 //!
-//! `asyncio` forwards arbitrary `subprocess.Popen` keywords through to the loop,
-//! so the keyword handling below mirrors `Popen`'s semantics (including
+//! `asyncio` forwards arbitrary `subprocess.Popen` keywords through to the
+//! loop, so the keyword handling below mirrors `Popen`'s semantics (including
 //! `umask=-1` meaning "leave unchanged" and `preexec_fn` being rejected rather
 //! than emulated). The Unix-only keywords are collected into
-//! [`UnixPreExecConfig`] and applied between fork and exec by [`super::pre_exec`].
+//! [`UnixPreExecConfig`] and applied between fork and exec by
+//! [`super::pre_exec`].
 //!
 //! Every keyword `Popen` accepts has to be accepted here at its default value,
 //! even the ones rsloop cannot act on: callers wrap this API and forward the
@@ -19,15 +20,16 @@ use std::os::unix::process::CommandExt;
 use std::os::windows::process::CommandExt;
 use std::process::Command;
 
-use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::{
+    exceptions::{PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError},
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 
-use super::PyLoop;
-use super::pre_exec;
-use super::process_stdio::{ProcessStdioSpecs, apply_stdio};
-use super::spawn_env::{
-    LoopSpawnEnv, is_asyncio_subprocess_stream_protocol, transport_protocol_pair,
+use super::{
+    PyLoop, pre_exec,
+    process_stdio::{ProcessStdioSpecs, apply_stdio},
+    spawn_env::{LoopSpawnEnv, is_asyncio_subprocess_stream_protocol, transport_protocol_pair},
 };
 use crate::transport::process::{
     ProcessTextConfig, ProcessTransportParams, spawn_process_transport,
@@ -747,9 +749,9 @@ mod tests {
         });
     }
 
-    /// Regression test for #68: `AnyIO` forwards the whole `Popen` keyword set to
-    /// `loop.subprocess_exec()`, so each keyword has to be accepted at the
-    /// default value a caller gets when it says nothing.
+    /// Regression test for #68: `AnyIO` forwards the whole `Popen` keyword set
+    /// to `loop.subprocess_exec()`, so each keyword has to be accepted at
+    /// the default value a caller gets when it says nothing.
     #[test]
     fn defaulted_popen_keywords_are_all_accepted() {
         crate::initialize_python_for_tests();

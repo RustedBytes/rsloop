@@ -5,12 +5,16 @@
 //! protocol: set the flag, optionally wake a thread parked in a syscall, then
 //! join with a timeout so one stuck worker cannot block loop shutdown.
 
-use std::io;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::thread;
-use std::time::Duration;
+use std::{
+    io,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, RecvTimeoutError},
+    },
+    thread,
+    time::Duration,
+};
 
 use super::tuning::WORKER_JOIN_TIMEOUT;
 
@@ -113,10 +117,14 @@ impl WorkerThread {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::mpsc;
-    use std::time::{Duration, Instant};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
+        time::{Duration, Instant},
+    };
 
     use super::WorkerThread;
 

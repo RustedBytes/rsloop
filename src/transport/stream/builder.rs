@@ -13,29 +13,29 @@
 //! whose workers could not start must still deliver `connection_lost` to the
 //! protocol before the error reaches Python.
 
-use std::collections::{HashMap, VecDeque};
-use std::io;
-use std::net::TcpStream as StdTcpStream;
-use std::os::raw::c_int;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::{
+    collections::{HashMap, VecDeque},
+    io,
+    net::TcpStream as StdTcpStream,
+    os::raw::c_int,
+    sync::{
+        Arc, Condvar, Mutex, Weak,
+        atomic::{AtomicBool, AtomicU8, AtomicUsize},
+    },
+};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict};
 use pyo3_async_runtimes::TaskLocals;
 
-use super::buffers::{ReadBufferPool, WriteBufferPool};
-use super::io_targets::{LazyWriterConfig, TaskedDirectWriter};
-use super::protocol::{ProtocolCallbacks, StreamReaderFastPath};
-use super::write_queue::WriterSender;
 use super::{
     PyStreamTransport, READ_EVENT_OPEN, ServerCore, StreamTransportCore, StreamTransportState,
     StreamWriteBufferState, TransportSpawnContext,
+    buffers::{ReadBufferPool, WriteBufferPool},
+    io_targets::{LazyWriterConfig, TaskedDirectWriter},
+    protocol::{ProtocolCallbacks, StreamReaderFastPath},
+    write_queue::WriterSender,
 };
-use crate::async_event::AsyncEvent;
-use crate::engine::LoopCore;
-use crate::fd_ops;
+use crate::{async_event::AsyncEvent, engine::LoopCore, fd_ops};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn task_locals_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<TaskLocals> {

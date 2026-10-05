@@ -1,7 +1,9 @@
 //! Allocation-stable command queue for a transport writer worker.
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Condvar, Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Condvar, Mutex},
+};
 
 use super::WriterCommand;
 

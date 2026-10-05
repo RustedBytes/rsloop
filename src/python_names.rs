@@ -1,7 +1,6 @@
 //! Interned Python method names and low-overhead method-call helpers.
 
-use pyo3::prelude::*;
-use pyo3::types::PyString;
+use pyo3::{prelude::*, types::PyString};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(crate) fn cancelled<'py>(py: Python<'py>) -> &'py Bound<'py, PyString> {

@@ -2,19 +2,20 @@
 //!
 //! Each registration keeps one persistent [`ReadyCallback`]: every readiness
 //! event schedules that same object, and removal cancels it so events already
-//! queued for the old registration are skipped. The keepalive map also holds the
-//! Python file object, because the caller may drop its last reference while the
-//! watch is live.
+//! queued for the old registration are skipped. The keepalive map also holds
+//! the Python file object, because the caller may drop its last reference while
+//! the watch is live.
 
 use std::sync::Arc;
 
-use pyo3::prelude::*;
-use pyo3::types::PyTuple;
+use pyo3::{prelude::*, types::PyTuple};
 
 use super::PyLoop;
-use crate::context::capture_context;
-use crate::engine::{CallbackKind, FdWatch, LoopCommand, LoopIoCommand, ReadyCallback};
-use crate::fd_ops;
+use crate::{
+    context::capture_context,
+    engine::{CallbackKind, FdWatch, LoopCommand, LoopIoCommand, ReadyCallback},
+    fd_ops,
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn add_reader(

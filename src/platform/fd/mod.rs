@@ -2,8 +2,7 @@
 
 use std::io;
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
@@ -33,8 +32,9 @@ pub fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
     #[cfg(unix)]
     {
         let fd = raw_fd_to_c_int(fd)?;
-        // SAFETY: `fd` was range-checked as a C file descriptor. `dup` returns a new descriptor
-        // or `-1` with errno set and does not retain Rust references.
+        // SAFETY: `fd` was range-checked as a C file descriptor. `dup` returns a new
+        // descriptor or `-1` with errno set and does not retain Rust
+        // references.
         let duped = unsafe { libc::dup(fd) };
         if duped < 0 {
             return Err(io::Error::last_os_error());
@@ -92,8 +92,9 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     };
 
     loop {
-        // SAFETY: `pollfd` points to one initialized `libc::pollfd` and the count is `1`; `poll`
-        // only mutates the `revents` field and reports errors through errno.
+        // SAFETY: `pollfd` points to one initialized `libc::pollfd` and the count is
+        // `1`; `poll` only mutates the `revents` field and reports errors
+        // through errno.
         let ready = unsafe { libc::poll(&mut pollfd, 1, timeout_ms) };
         if ready >= 0 {
             break;
@@ -224,7 +225,8 @@ pub fn socket_so_error(fd: RawFd) -> io::Result<i32> {
         .expect("socklen_t can represent c_int size");
     let value_ptr = (&mut value as *mut libc::c_int).cast();
     let result = {
-        // SAFETY: `fd` is a socket and the correctly sized out-parameters live for the call.
+        // SAFETY: `fd` is a socket and the correctly sized out-parameters live for the
+        // call.
         unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_ERROR, value_ptr, &mut len) }
     };
     if result == 0 {
@@ -359,8 +361,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn poll_reports_pipe_readiness_hangup_and_invalid_descriptors() {
-        use std::io::Write;
-        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use std::{
+            io::Write,
+            os::fd::{AsRawFd, FromRawFd, OwnedFd},
+        };
 
         let mut fds = [-1; 2];
         // SAFETY: `fds` has room for both descriptors returned by `pipe`.

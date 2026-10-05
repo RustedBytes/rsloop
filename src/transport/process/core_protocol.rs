@@ -11,8 +11,7 @@
 
 use std::sync::Arc;
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
 use super::{PendingProcessEvent, ProcessTransportCore, PyProcessTransport};
 

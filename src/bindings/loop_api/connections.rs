@@ -1,13 +1,14 @@
 //! Outgoing connections, accepted sockets, and TLS upgrades.
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 
-use super::PyLoop;
-use super::socket_connect::connect_socket_to_address;
-use super::sockets::{build_stream_socket, resolve_stream_addrinfos};
-use super::spawn_env::{LoopSpawnEnv, transport_protocol_pair};
-use super::tls_params::TlsParams;
+use super::{
+    PyLoop,
+    socket_connect::connect_socket_to_address,
+    sockets::{build_stream_socket, resolve_stream_addrinfos},
+    spawn_env::{LoopSpawnEnv, transport_protocol_pair},
+    tls_params::TlsParams,
+};
 use crate::transport::stream::{
     PyStreamTransport, prepare_start_tls_transport, start_tls_transport, transport_from_socket,
     transport_from_socket_server_tls, transport_from_socket_tls,

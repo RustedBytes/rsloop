@@ -9,13 +9,14 @@
 
 use std::sync::Arc;
 
-use pyo3::prelude::*;
-use pyo3::types::PyTuple;
+use pyo3::{prelude::*, types::PyTuple};
 
 use super::PyLoop;
-use crate::context::{capture_context, ensure_running_loop, run_in_context};
-use crate::engine::LoopCore;
-use crate::transport::stream::TransportSpawnContext;
+use crate::{
+    context::{capture_context, ensure_running_loop, run_in_context},
+    engine::LoopCore,
+    transport::stream::TransportSpawnContext,
+};
 
 pub(super) struct LoopSpawnEnv {
     pub(super) core: Arc<LoopCore>,
@@ -47,8 +48,9 @@ impl LoopSpawnEnv {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "LoopSpawnEnv")
     )]
-    /// Builds the spawn context handed to the transport constructors. `protocol`
-    /// is the protocol instance, or the protocol factory for server creation.
+    /// Builds the spawn context handed to the transport constructors.
+    /// `protocol` is the protocol instance, or the protocol factory for
+    /// server creation.
     pub(super) fn spawn_context(
         &self,
         py: Python<'_>,

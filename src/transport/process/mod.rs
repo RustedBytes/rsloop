@@ -18,15 +18,14 @@
 //! Submodules reach back into the private fields declared here, so those stay
 //! private — the module tree is the encapsulation boundary, not the file.
 
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc::Sender},
+};
 
 use pyo3::prelude::*;
 
-use crate::async_event::AsyncEvent;
-use crate::engine::LoopCore;
+use crate::{async_event::AsyncEvent, engine::LoopCore};
 
 mod core_events;
 mod core_protocol;

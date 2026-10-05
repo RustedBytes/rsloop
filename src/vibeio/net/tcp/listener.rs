@@ -1,28 +1,33 @@
 //! TCP listener types for async I/O.
 //!
 //! This module provides:
-//! - [`TcpListener`]: An async TCP listener that can use either completion-based or poll-based I/O.
+//! - [`TcpListener`]: An async TCP listener that can use either
+//!   completion-based or poll-based I/O.
 //!
 //! # Implementation details
 //!
-//! - On Linux with io_uring support, TCP operations use native async syscalls via the async driver.
+//! - On Linux with io_uring support, TCP operations use native async syscalls
+//!   via the async driver.
 //! - When io_uring completion is available, operations complete directly.
-//! - Poll mode uses nonblocking socket calls and driver readiness notifications.
-//! - Register sockets and drive async I/O inside a runtime. Registration without
-//!   one returns an error; direct address/option queries need no current runtime.
+//! - Poll mode uses nonblocking socket calls and driver readiness
+//!   notifications.
+//! - Register sockets and drive async I/O inside a runtime. Registration
+//!   without one returns an error; direct address/option queries need no
+//!   current runtime.
 
-use std::future::poll_fn;
-use std::io;
-use std::net::{SocketAddr, TcpListener as StdTcpListener, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, IntoRawSocket, RawSocket};
+use std::{
+    future::poll_fn,
+    io,
+    net::{SocketAddr, TcpListener as StdTcpListener, ToSocketAddrs},
+};
 
 use mio::Interest;
 
-use crate::vibeio::op::AcceptOp;
-use crate::vibeio::{fd_inner::InnerRawHandle, net::TcpStream};
+use crate::vibeio::{fd_inner::InnerRawHandle, net::TcpStream, op::AcceptOp};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn bind_one(address: SocketAddr) -> Result<StdTcpListener, io::Error> {
@@ -47,23 +52,27 @@ fn bind_one(address: SocketAddr) -> Result<StdTcpListener, io::Error> {
     Ok(socket.into())
 }
 
-/// An async TCP listener that can use either completion-based or poll-based I/O.
+/// An async TCP listener that can use either completion-based or poll-based
+/// I/O.
 ///
 /// This is the async version of [`std::net::TcpListener`].
 ///
 /// # Implementation details
 ///
-/// - On Linux with io_uring support, TCP operations use native async syscalls via the async driver.
+/// - On Linux with io_uring support, TCP operations use native async syscalls
+///   via the async driver.
 /// - When io_uring completion is available, operations complete directly.
-/// - Poll mode uses nonblocking socket calls and driver readiness notifications.
+/// - Poll mode uses nonblocking socket calls and driver readiness
+///   notifications.
 /// - Registration needs an entered runtime and returns an error without one.
-///   Drive async I/O inside a runtime; direct socket queries need no current runtime.
+///   Drive async I/O inside a runtime; direct socket queries need no current
+///   runtime.
 ///
 /// # Examples
 ///
 /// See "TCP loopback with the Tokio I/O adapter" in
-/// `tools/vibeio-check/EXAMPLES.md`. Bind is synchronous and fallible; accepting
-/// a connection is asynchronous.
+/// `tools/vibeio-check/EXAMPLES.md`. Bind is synchronous and fallible;
+/// accepting a connection is asynchronous.
 pub struct TcpListener {
     // Deregister before closing the socket (field declaration order).
     handle: InnerRawHandle,
@@ -75,7 +84,8 @@ impl TcpListener {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "TcpListener")
     )]
-    /// Creates a new `TcpListener` which will be bound to the specified address.
+    /// Creates a new `TcpListener` which will be bound to the specified
+    /// address.
     ///
     /// This is the async version of [`std::net::TcpListener::bind`].
     ///
@@ -109,7 +119,8 @@ impl TcpListener {
     ///
     /// # Errors
     ///
-    /// This function will return an error if registration with the async driver fails.
+    /// This function will return an error if registration with the async driver
+    /// fails.
     #[inline]
     pub fn from_std(inner: std::net::TcpListener) -> Result<Self, io::Error> {
         #[cfg(unix)]
@@ -127,13 +138,15 @@ impl TcpListener {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "TcpListener")
     )]
-    /// Creates a new `TcpListener` from a standard library `TcpListener` in poll mode.
+    /// Creates a new `TcpListener` from a standard library `TcpListener` in
+    /// poll mode.
     ///
     /// This could be useful when using cloned `TcpListener` on Windows.
     ///
     /// # Errors
     ///
-    /// This function will return an error if registration with the async driver fails.
+    /// This function will return an error if registration with the async driver
+    /// fails.
     #[cfg(windows)]
     #[inline]
     pub fn from_std_poll(inner: std::net::TcpListener) -> Result<Self, io::Error> {
@@ -154,7 +167,8 @@ impl TcpListener {
     ///
     /// # Errors
     ///
-    /// This function will return an error if the underlying socket is not bound.
+    /// This function will return an error if the underlying socket is not
+    /// bound.
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()

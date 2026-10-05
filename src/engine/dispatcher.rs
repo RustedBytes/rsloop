@@ -5,24 +5,31 @@
 
 #[cfg(not(unix))]
 use std::collections::HashSet;
-use std::collections::{HashMap, VecDeque};
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use std::task::{Context, Poll};
-use std::thread;
-
-use super::commands::{
-    LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
-    LoopTransportCommand, ReadyItem,
+use std::{
+    collections::{HashMap, VecDeque},
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+    },
+    task::{Context, Poll},
+    thread,
 };
-use super::loop_core::LoopCore;
-use crate::fd_ops;
+
 use crossbeam_channel::{Receiver, TryRecvError};
 use pyo3::prelude::*;
 #[cfg(unix)]
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
+
+use super::{
+    commands::{
+        LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
+        LoopTransportCommand, ReadyItem,
+    },
+    loop_core::LoopCore,
+};
+use crate::fd_ops;
 
 /// Long-lived future driven by the coordination thread's `vibeio` runtime.
 struct RuntimeDispatcher {

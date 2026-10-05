@@ -9,8 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::vibeio::executor::current_timer;
-use crate::vibeio::timer::{Timer, TimerHandle};
+use crate::vibeio::{
+    executor::current_timer,
+    timer::{Timer, TimerHandle},
+};
 
 /// Behavior for zero-duration sleeps (duration < 1 ms).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,8 +28,8 @@ pub enum ZeroBehavior {
 /// Polling requires a runtime built with `enable_timer(true)`.
 /// See `tools/vibeio-check/EXAMPLES.md` for an executable sleep example.
 pub struct Sleep {
-    /// The timer handle returned by the timer driver when the timer was scheduled.
-    /// `None` means we haven't scheduled yet.
+    /// The timer handle returned by the timer driver when the timer was
+    /// scheduled. `None` means we haven't scheduled yet.
     handle: Option<TimerHandle>,
     /// Whether the timer has already fired / completed.
     fired: Cell<bool>,
@@ -45,7 +47,8 @@ pub struct Sleep {
 impl Sleep {
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     /// Create a new Sleep instance for the provided `duration`.
-    /// Deadlines beyond the platform's Instant range saturate at its upper limit.
+    /// Deadlines beyond the platform's Instant range saturate at its upper
+    /// limit.
     #[inline]
     pub fn new(duration: Duration) -> Self {
         Self::sleep_until(super::deadline_after(Instant::now(), duration))
@@ -197,7 +200,8 @@ impl Future for Sleep {
                                 return Poll::Pending;
                             }
                             None => {
-                                // Timer driver woke us immediately (duration rounded to 0 or similar).
+                                // Timer driver woke us immediately (duration rounded to 0 or
+                                // similar).
                                 this.fired.set(true);
                                 return Poll::Ready(());
                             }
@@ -237,9 +241,13 @@ mod tests {
         assert_eq!(sleep.deadline, deadline);
         assert!(matches!(sleep.zero_behavior, ZeroBehavior::Yield));
     }
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::task::{Wake, Waker};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Wake, Waker},
+    };
 
     struct WakeCounter(AtomicUsize);
     impl Wake for WakeCounter {

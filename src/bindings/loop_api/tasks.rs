@@ -1,26 +1,26 @@
 //! `Future` and `Task` construction.
 //!
 //! `create_task` runs once per scheduled coroutine, so this module is written
-//! around avoiding work on the common call. When the loop is the running loop and
-//! no task factory or keyword is involved, `asyncio.Task(coro)` is called
-//! directly — no `loop=` keyword, no kwargs dict, and on 3.11+ no `**` unpacking,
-//! because the constructor is reached through a vectorcall.
+//! around avoiding work on the common call. When the loop is the running loop
+//! and no task factory or keyword is involved, `asyncio.Task(coro)` is called
+//! directly — no `loop=` keyword, no kwargs dict, and on 3.11+ no `**`
+//! unpacking, because the constructor is reached through a vectorcall.
 
 use std::sync::Arc;
 
-use pyo3::exceptions::PyTypeError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{exceptions::PyTypeError, prelude::*, types::PyDict};
 
-use super::PyLoop;
-use super::asyncio_cache::{
-    asyncio_future_cls, asyncio_get_running_loop_fn, asyncio_task_cls, asyncio_task_kwarg_support,
-    call_callable_noargs, call_callable_onearg,
-};
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 use super::asyncio_cache::{asyncio_future_loop_kwnames, asyncio_task_kwnames_for_options};
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 use super::ffi_helpers;
+use super::{
+    PyLoop,
+    asyncio_cache::{
+        asyncio_future_cls, asyncio_get_running_loop_fn, asyncio_task_cls,
+        asyncio_task_kwarg_support, call_callable_noargs, call_callable_onearg,
+    },
+};
 
 /// The keyword-only arguments `loop.create_task()` accepts, plus any extras the
 /// caller passed for a custom task factory.

@@ -2,19 +2,20 @@
 //!
 //! Callers pass either one of `asyncio.subprocess`'s marker constants
 //! (`PIPE`/`DEVNULL`/`STDOUT`) or something with a `fileno()`. `STDOUT` is only
-//! legal for `stderr`, and the `stdout=PIPE, stderr=STDOUT` combination cannot be
-//! expressed with `std::process::Stdio` alone — it needs one pipe handed to both
-//! child descriptors, which is why that case builds the pipe itself.
+//! legal for `stderr`, and the `stdout=PIPE, stderr=STDOUT` combination cannot
+//! be expressed with `std::process::Stdio` alone — it needs one pipe handed to
+//! both child descriptors, which is why that case builds the pipe itself.
 
 use std::process::Command;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
+use pyo3::{
+    exceptions::{PyRuntimeError, PyValueError},
+    prelude::*,
+    sync::PyOnceLock,
+};
 
 use super::process_handles;
-use crate::fd_ops;
-use crate::transport::process::BoxedProcessReader;
+use crate::{fd_ops, transport::process::BoxedProcessReader};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ProcessStdioSpec {
@@ -90,8 +91,9 @@ static PIPE_CELL: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Default for an omitted `stdin`/`stdout`/`stderr`: `subprocess.PIPE` (== -1),
-/// matching `CPython`'s loop methods. An explicit `None` arrives as `Option::None`
-/// instead and is honored as "inherit the parent's fd" by `parse_process_stdio`.
+/// matching `CPython`'s loop methods. An explicit `None` arrives as
+/// `Option::None` instead and is honored as "inherit the parent's fd" by
+/// `parse_process_stdio`.
 pub(super) fn default_stdio_pipe() -> Py<PyAny> {
     Python::attach(|py| {
         PIPE_CELL

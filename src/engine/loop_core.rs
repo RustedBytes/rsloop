@@ -3,34 +3,46 @@
 //! `LoopCore` owns lifecycle state and ready queues. Python callbacks execute
 //! on the caller's loop thread; other threads only enqueue commands or results.
 
-use std::cell::{Cell, RefCell};
-use std::collections::{BinaryHeap, HashMap, VecDeque};
-use std::fmt;
-use std::future::Future;
-use std::ops::DerefMut;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
-
-use super::callbacks::{CallbackArgs, CallbackId, CallbackKind, ReadyCallback};
-#[cfg(unix)]
-use super::commands::TcpReaderStart;
-use super::commands::{
-    LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopTransportCommand, ReadyItem,
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BinaryHeap, HashMap, VecDeque},
+    fmt,
+    future::Future,
+    ops::DerefMut,
+    pin::Pin,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc,
+    },
+    task::{Context, Poll, Waker},
+    thread::{self, JoinHandle},
+    time::{Duration, Instant},
 };
-use super::dispatcher::run_runtime_thread;
-use super::timer_entry::{TimerEntry, TimerQueue};
-use crate::context::{capture_context, clear_running_loop, ensure_running_loop};
-use crate::errors::handle_callback_error;
-use crate::fd_ops::RawFd;
+
 use crossbeam_channel::Sender;
 use futures::task::AtomicWaker;
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PySet, PyTuple};
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PySet, PyTuple},
+};
+
+#[cfg(unix)]
+use super::commands::TcpReaderStart;
+use super::{
+    callbacks::{CallbackArgs, CallbackId, CallbackKind, ReadyCallback},
+    commands::{
+        LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopTransportCommand,
+        ReadyItem,
+    },
+    dispatcher::run_runtime_thread,
+    timer_entry::{TimerEntry, TimerQueue},
+};
+use crate::{
+    context::{capture_context, clear_running_loop, ensure_running_loop},
+    errors::handle_callback_error,
+    fd_ops::RawFd,
+};
 
 thread_local! {
     /// Per-loop vibeio runtime hosted on the loop thread. Keyed by `LoopCore`
@@ -364,7 +376,8 @@ impl LoopState {
     }
 }
 
-/// Shared event-loop owner used by Python bindings, the dispatcher, and transports.
+/// Shared event-loop owner used by Python bindings, the dispatcher, and
+/// transports.
 pub struct LoopCore {
     /// Mutable lifecycle and Python-facing configuration.
     pub state: Mutex<LoopState>,
@@ -590,8 +603,9 @@ impl LoopCore {
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Captures context and schedules a callback after `delay`.
     ///
-    /// Returns the shared callback and its absolute value on [`LoopCore::time`],
-    /// which the Python `TimerHandle` exposes as `when()`.
+    /// Returns the shared callback and its absolute value on
+    /// [`LoopCore::time`], which the Python `TimerHandle` exposes as
+    /// `when()`.
     pub fn schedule_timer(
         self: &Arc<Self>,
         py: Python<'_>,
@@ -652,8 +666,8 @@ impl LoopCore {
     /// Runs callbacks and I/O until [`LoopCore::schedule_stop`] is processed.
     ///
     /// The caller is the Python loop thread. While parked, the GIL is released
-    /// and the thread drives the loop's `vibeio` runtime; callback drains attach
-    /// to Python again before invoking user code.
+    /// and the thread drives the loop's `vibeio` runtime; callback drains
+    /// attach to Python again before invoking user code.
     ///
     /// Returns an error if the loop is closed or already running.
     pub fn run_forever(self: &Arc<Self>, py: Python<'_>, loop_obj: Py<PyAny>) -> PyResult<()> {
@@ -1126,7 +1140,8 @@ impl LoopCore {
 
 impl LoopCore {
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
-    /// Dispatches an asyncio error-context dictionary to the configured handler.
+    /// Dispatches an asyncio error-context dictionary to the configured
+    /// handler.
     ///
     /// Falls back to [`LoopCore::default_exception_handler`] when no custom
     /// handler is installed.
@@ -1157,7 +1172,8 @@ impl LoopCore {
     }
 
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
-    /// Writes an unhandled callback error and traceback to Python's `sys.stderr`.
+    /// Writes an unhandled callback error and traceback to Python's
+    /// `sys.stderr`.
     pub fn default_exception_handler(&self, py: Python<'_>, context: Py<PyAny>) -> PyResult<()> {
         let sys = py.import("sys")?;
         let stderr = sys.getattr("stderr")?;
@@ -1179,7 +1195,8 @@ impl LoopCore {
         Ok(())
     }
 
-    /// Invokes one ready callback and converts callback failures into loop errors.
+    /// Invokes one ready callback and converts callback failures into loop
+    /// errors.
     ///
     /// Returns a secondary error only when reporting the original callback
     /// failure through the exception handler also fails.
@@ -1264,9 +1281,9 @@ impl LoopCore {
     }
 
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
-    /// Marks the ready queue non-empty and wakes the parked loop thread. Used by
-    /// cross-thread ready producers (the transitional runtime thread, signal and
-    /// transport workers).
+    /// Marks the ready queue non-empty and wakes the parked loop thread. Used
+    /// by cross-thread ready producers (the transitional runtime thread,
+    /// signal and transport workers).
     #[inline]
     pub(crate) fn signal_ready(&self) {
         self.wake.signal();
@@ -1276,8 +1293,9 @@ impl LoopCore {
     /// Spawns a detached I/O task on this loop's on-thread vibeio runtime. Must
     /// be called on the loop thread (asyncio contract). The task begins running
     /// the next time the loop parks in `block_on`; its completions push ready
-    /// items and wake the loop **on the same thread**, with no cross-thread hop.
-    /// Returns `false` if the loop has no runtime yet (spawned before first run).
+    /// items and wake the loop **on the same thread**, with no cross-thread
+    /// hop. Returns `false` if the loop has no runtime yet (spawned before
+    /// first run).
     pub(crate) fn spawn_io<F>(&self, future: F) -> bool
     where
         F: Future<Output = ()> + 'static,
@@ -1297,10 +1315,10 @@ impl LoopCore {
     }
 
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
-    /// Spawns a cancellable I/O task (accept loop / socket reader) on this loop's
-    /// runtime, tracked by `fd` so `stop_io_task` can cancel it. Any existing
-    /// task registered for `fd` is cancelled first. Must run on the loop thread.
-    /// Returns `false` if the loop has no runtime yet.
+    /// Spawns a cancellable I/O task (accept loop / socket reader) on this
+    /// loop's runtime, tracked by `fd` so `stop_io_task` can cancel it. Any
+    /// existing task registered for `fd` is cancelled first. Must run on
+    /// the loop thread. Returns `false` if the loop has no runtime yet.
     pub(crate) fn spawn_io_tracked<F>(&self, fd: RawFd, future: F) -> bool
     where
         F: Future<Output = ()> + 'static,
@@ -1327,8 +1345,8 @@ impl LoopCore {
     }
 
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
-    /// Cancels the tracked I/O task registered for `fd`, if any. Must run on the
-    /// loop thread.
+    /// Cancels the tracked I/O task registered for `fd`, if any. Must run on
+    /// the loop thread.
     ///
     /// Returns whether a task was actually found and cancelled. `IO_TASKS` is a
     /// thread-local, so a task handed to the runtime thread instead is simply

@@ -1,19 +1,26 @@
 //! Messages exchanged by the Python loop thread, dispatcher, and I/O workers.
 
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use pyo3::prelude::*;
 
 use super::callbacks::{PyHandle, ReadyCallback};
-use crate::fd_ops::RawFd;
-use crate::transport::process::ProcessTransportCore;
-use crate::transport::stream::{
-    AcceptedStream, ReaderTarget, ServerAcceptTaskGuard, ServerCore, ServerListener,
-    StreamTransportCore,
+use crate::{
+    fd_ops::RawFd,
+    transport::{
+        process::ProcessTransportCore,
+        stream::{
+            AcceptedStream, ReaderTarget, ServerAcceptTaskGuard, ServerCore, ServerListener,
+            StreamTransportCore,
+        },
+    },
 };
 
-/// Work that must be completed on the Python loop thread, usually under the GIL.
+/// Work that must be completed on the Python loop thread, usually under the
+/// GIL.
 pub enum ReadyItem {
     Callback(Arc<ReadyCallback>),
     HandleCallback(Py<PyHandle>),
@@ -83,7 +90,8 @@ pub enum LoopCommand {
         /// Error reported while waiting for writability, or zero.
         wait_errno: i32,
     },
-    /// Requests that the active `run_forever` call return after ready work drains.
+    /// Requests that the active `run_forever` call return after ready work
+    /// drains.
     RequestStop,
     /// Shuts down the dispatcher and its runtime thread.
     Close,

@@ -10,13 +10,15 @@
 //!
 //! # Implementation notes
 //! - Read operations are buffered with a 4KB buffer size.
-//! - Writes accept at most 4KB per call; subsequent writes drain the previous batch.
+//! - Writes accept at most 4KB per call; subsequent writes drain the previous
+//!   batch.
 //! - A pending write accepts no bytes from its caller, so cancellation and a
 //!   different buffer on the next call cannot misattribute an old completion.
 //! - Errors writing accepted bytes are reported by the next write, read, flush,
 //!   or shutdown that drains them. Dropping the wrapper does not flush.
-//! - A failed write drain is terminal: later delivery operations return the same
-//!   error kind rather than acknowledging more bytes after data was discarded.
+//! - A failed write drain is terminal: later delivery operations return the
+//!   same error kind rather than acknowledging more bytes after data was
+//!   discarded.
 //! - Concurrent operations are rejected with an error.
 //! - The wrapper is `Unpin` regardless of the inner type.
 
@@ -32,7 +34,8 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 type Buffer = Box<[u8]>;
 const BUFFER_SIZE: usize = 4096;
 
-/// A wrapper that adapts `vibeio`'s `AsyncRead`/`AsyncWrite` to `tokio::io` traits.
+/// A wrapper that adapts `vibeio`'s `AsyncRead`/`AsyncWrite` to `tokio::io`
+/// traits.
 ///
 /// This type bridges the gap between `vibeio`'s async I/O traits and tokio's
 /// `AsyncRead`/`AsyncWrite` traits, allowing `vibeio` types to be used with
@@ -41,18 +44,19 @@ const BUFFER_SIZE: usize = 4096;
 /// An in-flight operation owns the inner object until completion. This adapter
 /// does not support concurrent full-duplex operations; prefer native poll-based
 /// stream types for that use case.
-/// Writes are buffered: successful counts acknowledge owned bytes, not completed
-/// kernel writes. Call flush or shutdown before drop to finish delivery. Shutdown
-/// flushes but cannot half-close the inner stream: the buffer-owning trait has no
-/// shutdown operation.
+/// Writes are buffered: successful counts acknowledge owned bytes, not
+/// completed kernel writes. Call flush or shutdown before drop to finish
+/// delivery. Shutdown flushes but cannot half-close the inner stream: the
+/// buffer-owning trait has no shutdown operation.
 /// A write-drain error permanently fails the adapter. The first error retains
 /// its original details; subsequent operations that drain writes return its
 /// error kind. Interrupted writes are retried internally and do not fail it.
 ///
 /// # Examples
 /// See "TCP loopback with the Tokio I/O adapter" in
-/// `tools/vibeio-check/EXAMPLES.md` for an executable request/response exchange,
-/// including explicit flushes and reading through EOF after peer closure.
+/// `tools/vibeio-check/EXAMPLES.md` for an executable request/response
+/// exchange, including explicit flushes and reading through EOF after peer
+/// closure.
 pub struct AsyncWrap<T> {
     inner: Option<T>,
     write_error: Option<std::io::ErrorKind>,
@@ -293,11 +297,15 @@ impl<T> Unpin for AsyncWrap<T> {}
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-    use std::pin::Pin;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex};
-    use std::task::{Context, Poll};
+    use std::{
+        io,
+        pin::Pin,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Context, Poll},
+    };
 
     use futures_util::task::noop_waker;
     use tokio::io::{

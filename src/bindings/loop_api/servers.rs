@@ -1,20 +1,20 @@
 //! `create_server` / `create_unix_server`.
 //!
 //! Both resolve their listening sockets through Python's `socket` module (so an
-//! explicitly supplied `sock` and a host/port pair take the same path), hand the
-//! descriptors to the Rust listeners, and only then start accepting — deferred
-//! when the caller passes `start_serving=False`.
+//! explicitly supplied `sock` and a host/port pair take the same path), hand
+//! the descriptors to the Rust listeners, and only then start accepting —
+//! deferred when the caller passes `start_serving=False`.
 
 use pyo3::prelude::*;
 
-use super::PyLoop;
 #[cfg(unix)]
 use super::sockets::build_unix_server_socket;
-use super::sockets::{
-    TcpServerSocketOptions, build_tcp_server_sockets, listener_sources_from_sockets,
+use super::{
+    PyLoop,
+    sockets::{TcpServerSocketOptions, build_tcp_server_sockets, listener_sources_from_sockets},
+    spawn_env::LoopSpawnEnv,
+    tls_params::TlsParams,
 };
-use super::spawn_env::LoopSpawnEnv;
-use super::tls_params::TlsParams;
 use crate::transport::stream::{PyServer, ServerCreateParams, create_server as create_py_server};
 
 pub(super) struct CreateServerParams {

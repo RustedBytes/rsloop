@@ -1,11 +1,14 @@
-use std::ffi::CString;
-use std::io;
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::{
+    ffi::CString,
+    io,
+    rc::Rc,
+    task::{Context, Poll},
+};
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::op::Op;
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    op::Op,
+};
 
 pub struct RenameOp {
     driver: Rc<AnyDriver>,

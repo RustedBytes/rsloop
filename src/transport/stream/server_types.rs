@@ -1,15 +1,16 @@
 //! Inputs and owned listener values used when creating stream servers.
 
-use std::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{
+    net::{TcpListener, TcpStream},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use pyo3::prelude::*;
 
-use crate::engine::LoopCore;
-use crate::transport::tls::ServerTlsSettings;
+use crate::{engine::LoopCore, transport::tls::ServerTlsSettings};
 
 pub enum ServerListener {
     Tcp(TcpListener),

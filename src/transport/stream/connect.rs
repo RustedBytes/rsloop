@@ -1,16 +1,19 @@
 //! Completing a non-blocking `connect()` on the loop runtime.
 
-use std::io;
-use std::net::TcpStream as StdTcpStream;
-use std::os::fd::FromRawFd;
-use std::os::raw::c_int;
-use std::sync::Arc;
+use std::{
+    io,
+    net::TcpStream as StdTcpStream,
+    os::{fd::FromRawFd, raw::c_int},
+    sync::Arc,
+};
 
-use crate::vibeio::net::PollTcpStream as VibePollTcpStream;
 use pyo3::prelude::*;
 
-use crate::engine::{LoopCommand, LoopCore};
-use crate::fd_ops;
+use crate::{
+    engine::{LoopCommand, LoopCore},
+    fd_ops,
+    vibeio::net::PollTcpStream as VibePollTcpStream,
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Waits for a connecting TCP socket to become writable on the vibeio reactor,

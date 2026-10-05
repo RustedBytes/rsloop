@@ -10,14 +10,18 @@
 //! data is pushed straight into the reader's buffer, skipping the round trip
 //! through `data_received`.
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::sync::critical_section::with_critical_section;
-use pyo3::types::{PyByteArray, PyByteArrayMethods};
+use pyo3::{
+    exceptions::PyRuntimeError,
+    prelude::*,
+    sync::critical_section::with_critical_section,
+    types::{PyByteArray, PyByteArrayMethods},
+};
 
-use super::PyStreamTransport;
-use super::buffers::ReadBufferPool;
-use super::fast::{PyFastStreamProtocol, PyFastStreamReader};
+use super::{
+    PyStreamTransport,
+    buffers::ReadBufferPool,
+    fast::{PyFastStreamProtocol, PyFastStreamReader},
+};
 use crate::python_names;
 
 pub(super) struct ProtocolCallbacks {

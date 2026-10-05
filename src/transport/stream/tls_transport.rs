@@ -11,32 +11,34 @@
 //! reader races the handshake) and returns the pieces a fresh TLS transport is
 //! then built from.
 
-use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, Weak},
+    time::Duration,
+};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use rustls::{ClientConnection, ServerConnection};
 
-use super::builder::{
-    StreamTransportStateConfig, fail_transport_worker_start, make_stream_extra, merge_extra,
-    new_py_stream_transport, new_stream_transport_core, stream_transport_state_parts, tcp_family,
-};
-use super::io_targets::StreamKind;
-use super::platform::tcp_stream_raw_fd;
 #[cfg(unix)]
 use super::platform::unix_raw_fd;
-use super::protocol::build_protocol_callbacks;
-use super::tls_session::{
-    SharedTlsIoState, TlsConnectionKind, TlsIoState, complete_tls_handshake, tls_server_closed,
-};
-use super::write_queue::channel as writer_channel;
 use super::{
-    PyStreamTransport, ServerCore, TransportSpawnContext, spawn_tls_reader_worker,
-    spawn_tls_writer_worker,
+    PyStreamTransport, ServerCore, TransportSpawnContext,
+    builder::{
+        StreamTransportStateConfig, fail_transport_worker_start, make_stream_extra, merge_extra,
+        new_py_stream_transport, new_stream_transport_core, stream_transport_state_parts,
+        tcp_family,
+    },
+    io_targets::StreamKind,
+    platform::tcp_stream_raw_fd,
+    protocol::build_protocol_callbacks,
+    spawn_tls_reader_worker, spawn_tls_writer_worker,
+    tls_session::{
+        SharedTlsIoState, TlsConnectionKind, TlsIoState, complete_tls_handshake, tls_server_closed,
+    },
+    write_queue::channel as writer_channel,
 };
 use crate::transport::tls::{ClientTlsSettings, ServerTlsSettings, tls_extra};
 

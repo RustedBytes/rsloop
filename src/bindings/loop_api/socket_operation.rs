@@ -3,22 +3,29 @@
 //! The detached reactor only handles an owned duplicate and Rust wake state;
 //! it never calls Python while the runtime is borrowed.
 
-use std::io;
-use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::task::Poll;
+use std::{
+    io,
+    mem::ManuallyDrop,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    task::Poll,
+};
 
-use futures::future::poll_fn;
-use futures::task::AtomicWaker;
-use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::types::PyTuple;
+use futures::{future::poll_fn, task::AtomicWaker};
+use pyo3::{
+    exceptions::{PyOSError, PyRuntimeError, PyValueError},
+    prelude::*,
+    types::PyTuple,
+};
 
 use super::PyLoop;
-use crate::engine::{CallbackArgs, CallbackKind, LoopCommand, LoopCore, ReadyCallback};
-use crate::fd_ops;
-use crate::vibeio::{InnerRawHandle, ReadinessOp, RegistrationMode};
+use crate::{
+    engine::{CallbackArgs, CallbackKind, LoopCommand, LoopCore, ReadyCallback},
+    fd_ops,
+    vibeio::{InnerRawHandle, ReadinessOp, RegistrationMode},
+};
 
 pub(super) enum SocketAction {
     Recv(usize),

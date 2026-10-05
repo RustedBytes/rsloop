@@ -1,9 +1,11 @@
 //! Timer-heap entry with stable ordering for equal deadlines.
 
-use std::cmp::Ordering;
-use std::collections::{BinaryHeap, VecDeque};
-use std::sync::Arc;
-use std::time::Instant;
+use std::{
+    cmp::Ordering,
+    collections::{BinaryHeap, VecDeque},
+    sync::Arc,
+    time::Instant,
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn compare_timer_parts<T: Ord>(
@@ -213,12 +215,13 @@ mod verification {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BinaryHeap;
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use std::{
+        collections::BinaryHeap,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
-    use pyo3::prelude::*;
-    use pyo3::types::PyTuple;
+    use pyo3::{prelude::*, types::PyTuple};
 
     use super::{TimerEntry, TimerQueue};
     use crate::engine::callbacks::{CallbackKind, ReadyCallback};

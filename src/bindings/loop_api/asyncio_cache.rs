@@ -1,17 +1,14 @@
 //! Cached lookups into the `asyncio` module.
 //!
 //! `Task`, `Future`, and `_get_running_loop` are resolved once per process and
-//! reused, because the loop touches them on the hottest paths (`create_task` runs
-//! for every coroutine step). The keyword-name tuples exist for the same reason:
-//! `PyObject_Vectorcall` needs a `kwnames` tuple, and rebuilding it per call
-//! would allocate on every task creation.
-
-use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
-use pyo3::types::PyModule;
+//! reused, because the loop touches them on the hottest paths (`create_task`
+//! runs for every coroutine step). The keyword-name tuples exist for the same
+//! reason: `PyObject_Vectorcall` needs a `kwnames` tuple, and rebuilding it per
+//! call would allocate on every task creation.
 
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
 use pyo3::types::PyTuple;
+use pyo3::{prelude::*, sync::PyOnceLock, types::PyModule};
 
 use super::ffi_helpers;
 #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
@@ -233,8 +230,10 @@ pub(super) fn asyncio_task_kwnames_for_options(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Barrier};
-    use std::thread;
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use super::*;
 

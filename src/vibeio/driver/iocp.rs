@@ -1,39 +1,47 @@
-use std::cell::RefCell;
-use std::ffi::c_void;
-use std::io::{self, ErrorKind};
-use std::mem::MaybeUninit;
-use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
-use std::ptr;
-use std::sync::Arc;
-use std::task::Waker;
-use std::time::Duration;
+use std::{
+    cell::RefCell,
+    ffi::c_void,
+    io::{self, ErrorKind},
+    mem::MaybeUninit,
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle},
+    ptr,
+    sync::Arc,
+    task::Waker,
+    time::Duration,
+};
 
 use mio::{Interest, Token};
 use slab::Slab;
-use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
-use windows_sys::Wdk::Storage::FileSystem::{
-    FILE_COMPLETION_INFORMATION, FILE_OPEN, FileReplaceCompletionInformation, NtCancelIoFileEx,
-    NtCreateFile, NtSetInformationFile,
-};
-use windows_sys::Wdk::System::IO::NtDeviceIoControlFile;
-use windows_sys::Win32::Foundation::{
-    ERROR_ABANDONED_WAIT_0, ERROR_ARITHMETIC_OVERFLOW, HANDLE, INVALID_HANDLE_VALUE, NTSTATUS,
-    OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError, UNICODE_STRING, WAIT_TIMEOUT,
-};
-use windows_sys::Win32::Networking::WinSock::{
-    self as WinSock, INVALID_SOCKET, SIO_BASE_HANDLE, SIO_BSP_HANDLE_POLL, SOCKET, SOCKET_ERROR,
-};
-use windows_sys::Win32::Storage::FileSystem::{
-    FILE_SHARE_READ, FILE_SHARE_WRITE, SetFileCompletionNotificationModes,
-};
-use windows_sys::Win32::System::IO::{
-    CancelIoEx, CreateIoCompletionPort, GetQueuedCompletionStatusEx, IO_STATUS_BLOCK, OVERLAPPED,
-    OVERLAPPED_ENTRY, PostQueuedCompletionStatus,
+use windows_sys::{
+    Wdk::{
+        Foundation::OBJECT_ATTRIBUTES,
+        Storage::FileSystem::{
+            FILE_COMPLETION_INFORMATION, FILE_OPEN, FileReplaceCompletionInformation,
+            NtCancelIoFileEx, NtCreateFile, NtSetInformationFile,
+        },
+        System::IO::NtDeviceIoControlFile,
+    },
+    Win32::{
+        Foundation::{
+            ERROR_ABANDONED_WAIT_0, ERROR_ARITHMETIC_OVERFLOW, HANDLE, INVALID_HANDLE_VALUE,
+            NTSTATUS, OBJ_CASE_INSENSITIVE, RtlNtStatusToDosError, UNICODE_STRING, WAIT_TIMEOUT,
+        },
+        Networking::WinSock::{
+            self as WinSock, INVALID_SOCKET, SIO_BASE_HANDLE, SIO_BSP_HANDLE_POLL, SOCKET,
+            SOCKET_ERROR,
+        },
+        Storage::FileSystem::{
+            FILE_SHARE_READ, FILE_SHARE_WRITE, SetFileCompletionNotificationModes,
+        },
+        System::IO::{
+            CancelIoEx, CreateIoCompletionPort, GetQueuedCompletionStatusEx, IO_STATUS_BLOCK,
+            OVERLAPPED, OVERLAPPED_ENTRY, PostQueuedCompletionStatus,
+        },
+    },
 };
 
-use crate::vibeio::driver::{CompletionIoResult, Interruptor};
 use crate::vibeio::{
-    driver::{Driver, RegistrationMode},
+    driver::{CompletionIoResult, Driver, Interruptor, RegistrationMode},
     fd_inner::{InnerRawHandle, RawOsHandle},
     op::Op,
 };
@@ -45,9 +53,12 @@ const IOCP_DRAIN_BATCHES: usize = 8;
 
 #[cfg(test)]
 mod retirement_tests {
+    use std::{
+        cell::Cell,
+        rc::{Rc, Weak},
+    };
+
     use super::*;
-    use std::cell::Cell;
-    use std::rc::{Rc, Weak};
 
     thread_local! {
         static WAKER_DROP_DRIVER: RefCell<Option<Rc<IocpDriver>>> = const { RefCell::new(None) };
@@ -1140,8 +1151,9 @@ impl IocpDriver {
                     continue;
                 }
 
-                // SAFETY: every AFD poll submission passes a pointer to AfdIoStatusCtx::io_status,
-                // and AfdIoStatusCtx is repr(C) with io_status as its first field.
+                // SAFETY: every AFD poll submission passes a pointer to
+                // AfdIoStatusCtx::io_status, and AfdIoStatusCtx is repr(C) with
+                // io_status as its first field.
                 let poll_token = unsafe { (*entry.lpOverlapped.cast::<AfdIoStatusCtx>()).token };
                 let registration = state
                     .poll_ops
@@ -1170,9 +1182,9 @@ impl IocpDriver {
                 continue;
             }
 
-            // SAFETY: every OVERLAPPED pointer submitted by completion operations points to the
-            // first field of OverlappedCtx (repr(C), first field), and lives in Completion::overlapped
-            // until consumed here.
+            // SAFETY: every OVERLAPPED pointer submitted by completion operations points to
+            // the first field of OverlappedCtx (repr(C), first field), and
+            // lives in Completion::overlapped until consumed here.
             let completion_token = unsafe { (*entry.lpOverlapped.cast::<OverlappedCtx>()).token };
             if let Some(completion) = state.completions.get_mut(completion_token) {
                 completion.completed = Some(Self::completion_result_from_entry(entry));

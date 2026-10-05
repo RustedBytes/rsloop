@@ -4,11 +4,9 @@
 //! `sockets` / `is_serving` accessors. The waiting methods return awaitables
 //! bound to the server's own loop so they can be awaited from any task.
 
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
 
-use pyo3::prelude::*;
-use pyo3::types::PyTuple;
+use pyo3::{prelude::*, types::PyTuple};
 
 use super::PyServer;
 

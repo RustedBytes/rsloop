@@ -1,12 +1,12 @@
 //! Non-blocking `connect` and its completion handling.
 //!
-//! A non-blocking `connect()` to a reachable peer reports `EINPROGRESS`, so every
-//! path here is "start the connect, then wait for writability and read
+//! A non-blocking `connect()` to a reachable peer reports `EINPROGRESS`, so
+//! every path here is "start the connect, then wait for writability and read
 //! `SO_ERROR`". Two variants exist for a reason: the generic
 //! [`connect_socket_to_address`] runs on the async runtime and works for any
-//! address Python can parse, while [`fast_sock_connect`] stays on the loop thread
-//! and skips both `socket.connect`'s `BlockingIOError` and the cross-thread
-//! wakeup.
+//! address Python can parse, while [`fast_sock_connect`] stays on the loop
+//! thread and skips both `socket.connect`'s `BlockingIOError` and the
+//! cross-thread wakeup.
 
 #[cfg(unix)]
 use std::sync::Arc;
@@ -83,7 +83,8 @@ fn connect_so_error(fd: fd_ops::RawFd, sock: &Py<PyAny>) -> PyResult<i32> {
             .expect("socklen_t can represent c_int size");
         let value_ptr = (&mut value as *mut libc::c_int).cast();
         let result = {
-            // SAFETY: `fd` is a live socket and the out-parameters remain valid for the call.
+            // SAFETY: `fd` is a live socket and the out-parameters remain valid for the
+            // call.
             unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_ERROR, value_ptr, &mut len) }
         };
         if result == 0 {

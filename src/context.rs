@@ -1,9 +1,6 @@
 //! `contextvars` propagation and running-loop bookkeeping for Python callbacks.
 
-use pyo3::ffi;
-use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
-use pyo3::types::PyTuple;
+use pyo3::{ffi, prelude::*, sync::PyOnceLock, types::PyTuple};
 
 static SET_RUNNING_LOOP_FN: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
@@ -24,8 +21,9 @@ pub fn capture_context(py: Python<'_>, explicit: Option<Py<PyAny>>) -> PyResult<
     let context = if let Some(context) = explicit {
         context
     } else {
-        // SAFETY: The GIL is held by `py`, and `PyContext_CopyCurrent` returns a new owned
-        // reference or null with a Python exception set. PyO3 converts both cases correctly.
+        // SAFETY: The GIL is held by `py`, and `PyContext_CopyCurrent` returns a new
+        // owned reference or null with a Python exception set. PyO3 converts
+        // both cases correctly.
         unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyContext_CopyCurrent())?.unbind() }
     };
 
@@ -47,8 +45,8 @@ pub fn is_nested_context_error(py: Python<'_>, err: &PyErr) -> bool {
 #[inline]
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn enter_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
-    // SAFETY: `context` is a live Python context object and the GIL is held. CPython returns
-    // `0` on success and sets an exception on failure.
+    // SAFETY: `context` is a live Python context object and the GIL is held.
+    // CPython returns `0` on success and sets an exception on failure.
     let status = unsafe { ffi::PyContext_Enter(context.as_ptr()) };
     if status == 0 {
         Ok(())
@@ -60,8 +58,9 @@ pub fn enter_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
 #[inline]
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn exit_context(py: Python<'_>, context: &Py<PyAny>) -> PyResult<()> {
-    // SAFETY: `context` is the same kind of live Python context object expected by CPython and
-    // the GIL is held. A nonzero result means an exception is available via `PyErr::fetch`.
+    // SAFETY: `context` is the same kind of live Python context object expected by
+    // CPython and the GIL is held. A nonzero result means an exception is
+    // available via `PyErr::fetch`.
     let status = unsafe { ffi::PyContext_Exit(context.as_ptr()) };
     if status == 0 {
         Ok(())
@@ -192,8 +191,10 @@ pub fn clear_running_loop(py: Python<'_>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use pyo3::ffi::c_str;
-    use pyo3::types::{PyDict, PyTuple};
+    use pyo3::{
+        ffi::c_str,
+        types::{PyDict, PyTuple},
+    };
 
     use super::*;
 

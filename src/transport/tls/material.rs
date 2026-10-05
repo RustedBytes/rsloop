@@ -1,14 +1,20 @@
 //! Certificate, private-key, and root-store loading.
 
-use std::fs;
-use std::io::{self, BufReader, Cursor};
-use std::sync::OnceLock;
+use std::{
+    fs,
+    io::{self, BufReader, Cursor},
+    sync::OnceLock,
+};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
-use rustls::RootCertStore;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use pyo3::{
+    exceptions::PyRuntimeError,
+    prelude::*,
+    types::{PyBytes, PyDict},
+};
+use rustls::{
+    RootCertStore,
+    pki_types::{CertificateDer, PrivateKeyDer},
+};
 
 static NATIVE_ROOTS: OnceLock<Result<Vec<CertificateDer<'static>>, String>> = OnceLock::new();
 

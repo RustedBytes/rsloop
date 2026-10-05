@@ -10,17 +10,22 @@
 //! held back until the process has exited and every pipe has closed, which is
 //! the guarantee `asyncio.SubprocessProtocol` expects.
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::{
+    collections::VecDeque,
+    sync::{Arc, atomic::Ordering},
+};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::{
+    exceptions::PyRuntimeError,
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 
 use super::{PendingProcessEvent, ProcessTransportCore};
-use crate::context::{ensure_running_loop, run_in_context};
-use crate::engine::{LoopCommand, LoopTransportCommand};
+use crate::{
+    context::{ensure_running_loop, run_in_context},
+    engine::{LoopCommand, LoopTransportCommand},
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProcessEventKind {

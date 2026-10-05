@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use crate::vibeio::driver::{Driver, Interruptor};
 use mio::{Interest, Token};
+
+use crate::vibeio::driver::{Driver, Interruptor};
 
 pub struct MockInterruptor {
     thread: std::thread::Thread,

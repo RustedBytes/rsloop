@@ -17,7 +17,8 @@ fn duration_remainder(duration: Duration, divisor: Duration) -> Duration {
 /// How to handle missed ticks for `Interval`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissedTickBehavior {
-    /// Skip missed ticks and schedule the next tick at the next future multiple.
+    /// Skip missed ticks and schedule the next tick at the next future
+    /// multiple.
     Skip,
     /// Return the number of missed ticks so the caller can run catch-up loop.
     CatchUp,
@@ -70,9 +71,11 @@ impl Interval {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "Interval", future = true)
     )]
-    /// Await the next tick. Returns the number of ticks that should be processed:
+    /// Await the next tick. Returns the number of ticks that should be
+    /// processed:
     /// - For `MissedTickBehavior::Skip` this will be `1`.
-    /// - For `MissedTickBehavior::CatchUp` this may be `> 1` if several periods were missed.
+    /// - For `MissedTickBehavior::CatchUp` this may be `> 1` if several periods
+    ///   were missed.
     /// A zero period yields once and returns one tick in either mode.
     pub async fn tick(&mut self) -> u64 {
         self.tick_at(Instant::now()).await
@@ -208,11 +211,12 @@ mod tests {
             }
         });
     }
-    use crate::vibeio::{driver::AnyDriver, executor::Runtime};
     use std::{
         future::Future,
         task::{Context, Poll, Waker},
     };
+
+    use crate::vibeio::{driver::AnyDriver, executor::Runtime};
 
     #[test]
     fn zero_period_yields_on_every_tick_in_both_modes() {

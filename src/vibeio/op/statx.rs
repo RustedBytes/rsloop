@@ -1,14 +1,17 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::ffi::CString;
-use std::io;
-use std::mem::MaybeUninit;
-use std::rc::Rc;
-use std::task::{Context, Poll};
+use std::{
+    ffi::CString,
+    io,
+    mem::MaybeUninit,
+    rc::Rc,
+    task::{Context, Poll},
+};
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::op::Op;
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    op::Op,
+};
 
 pub struct StatxOp {
     driver: Rc<AnyDriver>,

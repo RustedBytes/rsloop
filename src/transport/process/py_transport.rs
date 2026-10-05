@@ -5,8 +5,7 @@
 //! which already owns the `Child` and is the only place allowed to reap it.
 //! That keeps `kill()` from racing the `try_wait()` that observes the exit.
 
-use pyo3::exceptions::PyProcessLookupError;
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyProcessLookupError, prelude::*};
 
 use super::{ProcessCommand, PyProcessTransport};
 

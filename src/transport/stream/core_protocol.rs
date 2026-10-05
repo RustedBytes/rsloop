@@ -7,17 +7,20 @@
 //! protocol code are reported to the loop's exception handler rather than
 //! propagated into the I/O worker that triggered them.
 
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::{
+    exceptions::PyRuntimeError,
+    prelude::*,
+    types::{PyBytes, PyDict},
+};
 
-use super::buffers::PendingReadBuffer;
-use super::protocol::StreamReaderFastPath;
-use super::tuning::{PENDING_READ_HIGH_WATER, PENDING_READ_LOW_WATER};
-use super::{PendingReadEvent, PyStreamTransport, StreamTransportCore};
+use super::{
+    PendingReadEvent, PyStreamTransport, StreamTransportCore,
+    buffers::PendingReadBuffer,
+    protocol::StreamReaderFastPath,
+    tuning::{PENDING_READ_HIGH_WATER, PENDING_READ_LOW_WATER},
+};
 use crate::context::{run_in_context_noargs, run_in_context_onearg};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
@@ -82,8 +85,9 @@ fn copy_to_protocol_buffer_locked(buffer: &Bound<'_, PyAny>, source: &[u8]) -> P
 
 #[cfg(test)]
 mod buffer_tests {
-    use super::copy_to_protocol_buffer;
     use pyo3::prelude::*;
+
+    use super::copy_to_protocol_buffer;
 
     #[test]
     fn copies_prefix_and_releases_export_before_resize() {

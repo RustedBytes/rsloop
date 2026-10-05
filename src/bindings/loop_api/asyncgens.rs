@@ -1,15 +1,17 @@
 //! Async-generator tracking and shutdown.
 //!
 //! `sys.set_asyncgen_hooks` is process-wide, so a running loop installs its own
-//! hooks for the duration of `run_forever` and restores the previous pair on the
-//! way out — including when the loop exits with an error, which is why the
-//! install returns a `Drop` guard. The hooks themselves are exposed to Python so
-//! `functools.partial` can bind them to a specific loop.
+//! hooks for the duration of `run_forever` and restores the previous pair on
+//! the way out — including when the loop exits with an error, which is why the
+//! install returns a `Drop` guard. The hooks themselves are exposed to Python
+//! so `functools.partial` can bind them to a specific loop.
 
 use std::sync::Arc;
 
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyModule, PySet, PyWeakrefMethods, PyWeakrefReference};
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyModule, PySet, PyWeakrefMethods, PyWeakrefReference},
+};
 
 use super::PyLoop;
 use crate::engine::LoopCore;

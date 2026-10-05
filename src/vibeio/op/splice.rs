@@ -1,16 +1,18 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::task::{Context, Poll};
+use std::{
+    io,
+    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::driver::{AnyDriver, RegistrationMode};
-use crate::vibeio::fd_inner::InnerRawHandle;
-use crate::vibeio::op::Op;
-use crate::vibeio::op::io_util::poll_result_or_wait;
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult, RegistrationMode},
+    fd_inner::InnerRawHandle,
+    op::{Op, io_util::poll_result_or_wait},
+};
 
 pub struct SpliceOp<'a> {
     fd_in: RawFd,
@@ -243,16 +245,19 @@ impl Drop for SpliceOp<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        rc::Rc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        task::{Wake, Waker},
+        time::Duration,
+    };
+
     use super::*;
     use crate::vibeio::driver::RegistrationMode;
-    use std::io::{Read, Write};
-    use std::rc::Rc;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    use std::task::{Wake, Waker};
-    use std::time::Duration;
 
     struct WakeCount(AtomicUsize);
 

@@ -1,28 +1,25 @@
-use std::future::poll_fn;
-use std::io::{self, ErrorKind};
-use std::path::Path;
-
-use mio::Interest;
-
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawHandle, IntoRawHandle, RawHandle};
+use std::{
+    future::poll_fn,
+    io::{self, ErrorKind},
+    path::Path,
+};
 
-use crate::vibeio::fs::Metadata;
-use crate::vibeio::io::{IoBuf, IoBufMut, IoBufWithCursor, iobuf_to_slice, read_into_buf};
+use mio::Interest;
+
+#[cfg(windows)]
+use crate::vibeio::fd_inner::RawOsHandle;
 use crate::vibeio::{
     driver::RegistrationMode,
     executor::current_driver,
     fd_inner::InnerRawHandle,
-    io::{AsyncRead, AsyncWrite},
+    fs::{Metadata, open_options::OpenOptions},
+    io::{AsyncRead, AsyncWrite, IoBuf, IoBufMut, IoBufWithCursor, iobuf_to_slice, read_into_buf},
     op::{ReadAtOp, WriteAtOp},
 };
-
-#[cfg(windows)]
-use crate::vibeio::fd_inner::RawOsHandle;
-
-use crate::vibeio::fs::open_options::OpenOptions;
 
 /// Selects completion-based I/O or the synchronous/offloaded fallback.
 enum FileIo {
@@ -33,13 +30,14 @@ enum FileIo {
 /// A file handle for asynchronous file I/O operations.
 ///
 /// This struct provides async versions of common file operations like reading,
-/// writing, and syncing. It supports both io_uring completion-based I/O on Linux
-/// and blocking thread pool fallback for other platforms.
+/// writing, and syncing. It supports both io_uring completion-based I/O on
+/// Linux and blocking thread pool fallback for other platforms.
 ///
 /// # Examples
 ///
-/// See "Filesystem offload" in `tools/vibeio-check/EXAMPLES.md` for an executable
-/// example of opening a file and using the returned count and owned read buffer.
+/// See "Filesystem offload" in `tools/vibeio-check/EXAMPLES.md` for an
+/// executable example of opening a file and using the returned count and owned
+/// read buffer.
 pub struct File {
     // Fields drop in declaration order: deregister before closing the file.
     io: FileIo,
@@ -58,9 +56,10 @@ impl File {
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this uses the `openat` syscall directly.
-    /// - On other platforms, this either offloads to a blocking thread pool or falls back
-    ///   to [`std::fs::File::open`].
+    /// - On Linux with io_uring support, this uses the `openat` syscall
+    ///   directly.
+    /// - On other platforms, this either offloads to a blocking thread pool or
+    ///   falls back to [`std::fs::File::open`].
     ///
     /// # Errors
     ///
@@ -87,9 +86,10 @@ impl File {
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this uses the `openat` syscall directly.
-    /// - On other platforms, this either offloads to a blocking thread pool or falls back
-    ///   to [`std::fs::File::create`].
+    /// - On Linux with io_uring support, this uses the `openat` syscall
+    ///   directly.
+    /// - On other platforms, this either offloads to a blocking thread pool or
+    ///   falls back to [`std::fs::File::create`].
     ///
     /// # Errors
     ///
@@ -123,16 +123,19 @@ impl File {
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Creates a new `File` from a standard library file.
     ///
-    /// This is a convenience method equivalent to `File::from_std_with_cursor(inner, 0)`.
+    /// This is a convenience method equivalent to
+    /// `File::from_std_with_cursor(inner, 0)`.
     #[inline]
     pub fn from_std(inner: std::fs::File) -> io::Result<Self> {
         Self::from_std_with_cursor(inner, 0)
     }
 
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
-    /// Creates a new `File` from a standard library file with a specified cursor position.
+    /// Creates a new `File` from a standard library file with a specified
+    /// cursor position.
     ///
-    /// This is an internal method used to create a `File` with a custom cursor position.
+    /// This is an internal method used to create a `File` with a custom cursor
+    /// position.
     #[inline]
     pub(crate) fn from_std_with_cursor(inner: std::fs::File, cursor: u64) -> io::Result<Self> {
         let io = if let Some(driver) = current_driver() {
@@ -191,9 +194,10 @@ impl File {
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this submits positional `Read` operations.
-    /// - On other platforms, this either offloads to a blocking thread pool or falls back
-    ///   to synchronous reading.
+    /// - On Linux with io_uring support, this submits positional `Read`
+    ///   operations.
+    /// - On other platforms, this either offloads to a blocking thread pool or
+    ///   falls back to synchronous reading.
     ///
     /// # Errors
     ///
@@ -229,19 +233,21 @@ impl File {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
-    /// Reads bytes from the file at a specific offset, filling the entire buffer.
+    /// Reads bytes from the file at a specific offset, filling the entire
+    /// buffer.
     ///
-    /// This method fills the provided buffer's writable capacity starting at the
-    /// given offset, including spare capacity in an empty Vec. The cursor
-    /// position of the file is not modified.
+    /// This method fills the provided buffer's writable capacity starting at
+    /// the given offset, including spare capacity in an empty Vec. The
+    /// cursor position of the file is not modified.
     /// Interrupted reads are retried. Reaching EOF before filling the buffer
     /// returns [`io::ErrorKind::UnexpectedEof`].
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this submits positional `Read` operations.
-    /// - On other platforms, this either offloads to a blocking thread pool or falls back
-    ///   to synchronous reading.
+    /// - On Linux with io_uring support, this submits positional `Read`
+    ///   operations.
+    /// - On other platforms, this either offloads to a blocking thread pool or
+    ///   falls back to synchronous reading.
     ///
     /// # Errors
     ///
@@ -268,14 +274,15 @@ impl File {
     )]
     /// Writes bytes to the file at a specific offset.
     ///
-    /// This method writes from the provided buffer starting at the given offset.
-    /// The cursor position of the file is not modified.
+    /// This method writes from the provided buffer starting at the given
+    /// offset. The cursor position of the file is not modified.
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this submits positional `Write` operations.
-    /// - On other platforms, this either offloads to a blocking thread pool or falls back
-    ///   to synchronous writing.
+    /// - On Linux with io_uring support, this submits positional `Write`
+    ///   operations.
+    /// - On other platforms, this either offloads to a blocking thread pool or
+    ///   falls back to synchronous writing.
     ///
     /// # Errors
     ///
@@ -314,18 +321,20 @@ impl File {
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
-    /// Writes bytes to the file at a specific offset, writing the entire buffer.
+    /// Writes bytes to the file at a specific offset, writing the entire
+    /// buffer.
     ///
-    /// This method writes from the provided buffer starting at the given offset,
-    /// ensuring the entire buffer is written. The cursor position of the file is not modified.
-    /// Interrupted writes are retried. A write that makes no progress returns
-    /// [`io::ErrorKind::WriteZero`].
+    /// This method writes from the provided buffer starting at the given
+    /// offset, ensuring the entire buffer is written. The cursor position
+    /// of the file is not modified. Interrupted writes are retried. A write
+    /// that makes no progress returns [`io::ErrorKind::WriteZero`].
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this submits positional `Write` operations.
-    /// - On other platforms, this either offloads to a blocking thread pool or falls back
-    ///   to synchronous writing.
+    /// - On Linux with io_uring support, this submits positional `Write`
+    ///   operations.
+    /// - On other platforms, this either offloads to a blocking thread pool or
+    ///   falls back to synchronous writing.
     ///
     /// # Errors
     ///
@@ -356,9 +365,10 @@ impl File {
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this uses the `fsync` syscall directly.
-    /// - On other platforms, this either offloads to a blocking thread pool or falls back
-    ///   to [`std::fs::File::sync_all`].
+    /// - On Linux with io_uring support, this uses the `fsync` syscall
+    ///   directly.
+    /// - On other platforms, this either offloads to a blocking thread pool or
+    ///   falls back to [`std::fs::File::sync_all`].
     ///
     /// # Errors
     ///
@@ -399,9 +409,10 @@ impl File {
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support, this uses the `fsync` syscall directly.
-    /// - On other platforms, this either offloads to a blocking thread pool or falls back
-    ///   to [`std::fs::File::sync_data`].
+    /// - On Linux with io_uring support, this uses the `fsync` syscall
+    ///   directly.
+    /// - On other platforms, this either offloads to a blocking thread pool or
+    ///   falls back to [`std::fs::File::sync_data`].
     ///
     /// # Errors
     ///
@@ -442,9 +453,10 @@ impl File {
     ///
     /// # Platform-specific behavior
     ///
-    /// - On Linux with io_uring support and glibc/musl v1.2.3+, this uses the `statx` syscall directly.
-    /// - On other platforms, this either offloads to a blocking thread pool or falls back
-    ///   to [`std::fs::File::metadata`].
+    /// - On Linux with io_uring support and glibc/musl v1.2.3+, this uses the
+    ///   `statx` syscall directly.
+    /// - On other platforms, this either offloads to a blocking thread pool or
+    ///   falls back to [`std::fs::File::metadata`].
     ///
     /// # Errors
     ///

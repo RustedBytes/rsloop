@@ -1,7 +1,9 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io;
-use std::task::{Context, Poll};
+use std::{
+    io,
+    task::{Context, Poll},
+};
 
 #[cfg(windows)]
 use windows_sys::Win32::{
@@ -10,14 +12,14 @@ use windows_sys::Win32::{
     System::IO::OVERLAPPED,
 };
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::driver::CompletionIoResult;
-use crate::vibeio::fd_inner::InnerRawHandle;
 #[cfg(windows)]
 use crate::vibeio::fd_inner::RawOsHandle;
-use crate::vibeio::io::IoBuf;
-use crate::vibeio::op::Op;
-use crate::vibeio::op::io_util::CompletionBuffer;
+use crate::vibeio::{
+    driver::{AnyDriver, CompletionIoResult},
+    fd_inner::InnerRawHandle,
+    io::IoBuf,
+    op::{Op, io_util::CompletionBuffer},
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(windows, test))]
@@ -222,13 +224,14 @@ mod cancellation_tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn positioned_completions_preserve_cursor_offsets_and_buffer_lengths() {
-        use crate::vibeio::driver::RegistrationMode;
-        use crate::vibeio::op::ReadAtOp;
-        use std::io::{Seek, SeekFrom};
-        use std::os::fd::AsRawFd;
-        use std::os::unix::fs::FileExt;
-        use std::rc::Rc;
-        use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+        use std::{
+            io::{Seek, SeekFrom},
+            os::{fd::AsRawFd, unix::fs::FileExt},
+            rc::Rc,
+            time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+        };
+
+        use crate::vibeio::{driver::RegistrationMode, op::ReadAtOp};
 
         fn complete<O: Op>(op: &mut O, driver: &AnyDriver) -> io::Result<O::Output> {
             let deadline = Instant::now() + crate::vibeio::test_support::WATCHDOG;

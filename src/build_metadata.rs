@@ -1,7 +1,6 @@
 //! Runtime-visible metadata about the native extension build.
 
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{prelude::*, types::PyDict};
 
 #[cfg(windows)]
 const REACTOR: &str = "iocp";

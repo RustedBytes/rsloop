@@ -2,9 +2,11 @@
 
 #[cfg(all(feature = "scheduler-batch-cache", not(kani)))]
 mod native {
-    use std::alloc::{AllocError, Allocator, Layout, System};
-    use std::cell::Cell;
-    use std::ptr::NonNull;
+    use std::{
+        alloc::{AllocError, Allocator, Layout, System},
+        cell::Cell,
+        ptr::NonNull,
+    };
 
     #[derive(Clone, Copy)]
     struct Block {
@@ -291,17 +293,17 @@ mod native {
 }
 
 #[cfg(all(feature = "scheduler-batch-cache", not(kani)))]
-pub(crate) use native::{Batch, BatchAllocator, batch};
-
-#[cfg(all(feature = "scheduler-batch-cache", not(kani)))]
 pub(crate) use draining::drain_batch;
+#[cfg(all(feature = "scheduler-batch-cache", not(kani)))]
+pub(crate) use native::{Batch, BatchAllocator, batch};
 
 #[cfg(all(feature = "scheduler-batch-cache", not(kani)))]
 mod draining {
     use super::Batch;
 
-    /// Full-range drain using stabilized Vec primitives. The allocation stays with
-    /// its Vec, and the iterator owns the removed elements until they are yielded.
+    /// Full-range drain using stabilized Vec primitives. The allocation stays
+    /// with its Vec, and the iterator owns the removed elements until they
+    /// are yielded.
     pub(crate) struct BatchDrain<'a, T> {
         remaining: &'a mut [T],
     }

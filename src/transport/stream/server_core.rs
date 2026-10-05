@@ -2,40 +2,44 @@
 //!
 //! A `ServerCore` owns its listeners, the accept workers, and the counters that
 //! `wait_closed` waits on. TLS servers additionally admit only
-//! `max_pending_tls_handshakes()` concurrent handshakes: `reserve_tls_handshake`
-//! hands out a guard whose `Drop` releases the slot, so a handshake flood is
-//! shed at accept time rather than exhausting worker threads.
+//! `max_pending_tls_handshakes()` concurrent handshakes:
+//! `reserve_tls_handshake` hands out a guard whose `Drop` releases the slot, so
+//! a handshake flood is shed at accept time rather than exhausting worker
+//! threads.
 
-use std::net::TcpStream as StdTcpStream;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as StdUnixStream;
 #[cfg(unix)]
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::{
+    net::TcpStream as StdTcpStream,
+    sync::{Arc, atomic::Ordering},
+};
 
-use pyo3::exceptions::PyRuntimeError;
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
+use pyo3::{
+    exceptions::PyRuntimeError,
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 use pyo3_async_runtimes::TaskLocals;
 
-use super::platform::tcp_listener_raw_fd;
 #[cfg(unix)]
 use super::platform::unix_raw_fd;
 #[cfg(unix)]
 use super::remove_unix_socket_if_present;
 #[cfg(unix)]
 use super::run_unix_accept_loop;
-use super::tuning::max_pending_tls_handshakes;
-use super::worker::WorkerThread;
 use super::{
     BlockingAcceptLoop, PendingTlsHandshake, ServerAcceptTaskGuard, ServerCore, ServerListener,
-    run_server_accept_task, run_tcp_accept_loop, task_locals_for_loop,
+    platform::tcp_listener_raw_fd, run_server_accept_task, run_tcp_accept_loop,
+    task_locals_for_loop, tuning::max_pending_tls_handshakes, worker::WorkerThread,
 };
-use crate::context::{ensure_running_loop, run_in_context};
-use crate::engine::{LoopCommand, LoopIoCommand};
+use crate::{
+    context::{ensure_running_loop, run_in_context},
+    engine::{LoopCommand, LoopIoCommand},
+};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn reserve_tls_slot(current: usize, limit: usize, closed: bool) -> Option<usize> {
@@ -406,13 +410,13 @@ mod verification {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
 
     use super::*;
-    use crate::async_event::AsyncEvent;
-    use crate::engine::LoopCore;
-    use crate::transport::stream::ServerState;
+    use crate::{async_event::AsyncEvent, engine::LoopCore, transport::stream::ServerState};
 
     pub(in crate::transport::stream) fn build_test_server(
         py: Python<'_>,

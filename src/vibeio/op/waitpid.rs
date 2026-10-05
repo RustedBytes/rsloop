@@ -1,18 +1,21 @@
-use std::io;
-use std::os::fd::{FromRawFd, OwnedFd};
-use std::task::{Context, Poll};
+use std::{
+    io,
+    os::fd::{FromRawFd, OwnedFd},
+    task::{Context, Poll},
+};
 
 use mio::Interest;
 
-use crate::vibeio::driver::AnyDriver;
-use crate::vibeio::fd_inner::InnerRawHandle;
-use crate::vibeio::op::Op;
+use crate::vibeio::{driver::AnyDriver, fd_inner::InnerRawHandle, op::Op};
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        future::poll_fn,
+        process::{Command, Stdio},
+    };
+
     use super::*;
-    use std::future::poll_fn;
-    use std::process::{Command, Stdio};
 
     struct ChildGuard(std::process::Child);
     impl Drop for ChildGuard {
@@ -82,7 +85,8 @@ mod tests {
 enum WaitPidState {
     /// Initial state: we have the child PID but haven't opened the pidfd yet.
     Init { pid: libc::pid_t },
-    /// The pidfd is open and registered with the driver; waiting for readability.
+    /// The pidfd is open and registered with the driver; waiting for
+    /// readability.
     Polling {
         pid: libc::pid_t,
         // Deregister before closing the descriptor (fields drop in order).

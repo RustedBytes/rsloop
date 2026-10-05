@@ -115,7 +115,8 @@ where
 /// does not complete within `duration`.
 ///
 /// Pending futures require a timer-enabled runtime. See
-/// `tools/vibeio-check/EXAMPLES.md` for executable success and timeout examples.
+/// `tools/vibeio-check/EXAMPLES.md` for executable success and timeout
+/// examples.
 #[inline]
 pub async fn timeout<T>(
     duration: Duration,
@@ -126,8 +127,9 @@ pub async fn timeout<T>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{cell::Cell, marker::PhantomPinned, rc::Rc, task::Waker};
+
+    use super::*;
 
     #[test]
     fn absolute_expiration_drops_pending_future_but_ready_result_wins() {

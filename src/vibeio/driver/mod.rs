@@ -10,10 +10,9 @@ mod uring;
 
 #[cfg(any(windows, test))]
 use std::collections::HashSet;
-use std::task::Waker;
 #[cfg(target_os = "linux")]
 use std::task::{Context, Poll};
-use std::{io, time::Duration};
+use std::{io, task::Waker, time::Duration};
 
 use ::mio::{Interest, Token};
 
@@ -23,11 +22,13 @@ use crate::vibeio::driver::iocp::{IocpDriver, IocpInterruptor};
 use crate::vibeio::driver::kqueue::{KqueueDriver, KqueueInterruptor};
 #[cfg(unix)]
 use crate::vibeio::driver::mio::{MioDriver, MioInterruptor};
-use crate::vibeio::driver::mock::MockInterruptor;
 #[cfg(target_os = "linux")]
 use crate::vibeio::driver::uring::{UringDriver, UringInterruptor};
-use crate::vibeio::op::Op;
-use crate::vibeio::{driver::mock::MockDriver, fd_inner::InnerRawHandle};
+use crate::vibeio::{
+    driver::mock::{MockDriver, MockInterruptor},
+    fd_inner::InnerRawHandle,
+    op::Op,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RegistrationMode {
@@ -69,9 +70,9 @@ fn retain_completion_data(
 
 #[cfg(test)]
 mod retained_completion_tests {
+    use std::{cell::Cell, rc::Rc};
+
     use super::*;
-    use std::cell::Cell;
-    use std::rc::Rc;
 
     #[test]
     fn repeated_retention_preserves_allocations_and_drops_a_flat_list() {
@@ -358,7 +359,8 @@ pub trait Driver {
     fn flush(&self) {}
 
     #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
-    /// Returns whether the executor should call `flush` after polling a task batch.
+    /// Returns whether the executor should call `flush` after polling a task
+    /// batch.
     #[inline]
     fn should_flush(&self) -> bool {
         true
@@ -877,11 +879,12 @@ mod tests {
         }
     }
 
-    use super::AnyDriver;
     use std::{
         future::poll_fn,
         task::{Poll, Waker},
     };
+
+    use super::AnyDriver;
 
     #[cfg(unix)]
     #[test]

@@ -1,8 +1,8 @@
 //! The Python objects standing in for the subprocess pipes.
 //!
 //! `PyProcessPipeTransport` is a stub for stdout and stderr: those are read by
-//! worker threads, so the object exists only to satisfy `get_pipe_transport(fd)`
-//! and carry `close()`/`is_closing()`.
+//! worker threads, so the object exists only to satisfy
+//! `get_pipe_transport(fd)` and carry `close()`/`is_closing()`.
 //!
 //! stdin is a real stream transport, and `PyProcessStdinProtocol` is the
 //! protocol attached to it — it forwards the pipe's `connection_lost` into the

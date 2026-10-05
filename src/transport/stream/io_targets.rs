@@ -9,25 +9,29 @@
 //! writer thread: the duplicate descriptor is only materialised once a write
 //! actually has to be queued.
 
-use std::io::{self, Read};
-use std::net::{Shutdown, TcpStream as StdTcpStream};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as StdUnixStream;
-use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
+use std::{
+    io::{self, Read},
+    net::{Shutdown, TcpStream as StdTcpStream},
+    sync::Arc,
+    thread,
+    time::Duration,
+};
 
 use pyo3::prelude::*;
 
-use super::duplicate_configured_tcp_stream;
 #[cfg(unix)]
 use super::duplicate_unix_direct_writer;
 #[cfg(unix)]
 use super::platform::unix_raw_fd;
-use super::platform::{file_raw_fd, tcp_stream_raw_fd};
-use super::write_queue::WriterReceiver;
+use super::{
+    duplicate_configured_tcp_stream,
+    platform::{file_raw_fd, tcp_stream_raw_fd},
+    write_queue::WriterReceiver,
+};
 use crate::fd_ops;
 
 pub(super) enum TaskedDirectWriter {

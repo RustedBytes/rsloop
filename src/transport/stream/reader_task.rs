@@ -11,14 +11,22 @@
 //! `ERROR_OPERATION_ABORTED`) and rebinds the same socket in readiness mode
 //! until the write is through.
 
-use std::io;
-use std::net::TcpStream as StdTcpStream;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream as StdUnixStream;
-use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::atomic::Ordering;
+use std::{io, net::TcpStream as StdTcpStream, sync::Arc};
 
+use tokio::io::AsyncReadExt;
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED;
+
+#[cfg(windows)]
+use super::tuning::SERVER_POLL_READER_TINY_TRIGGER_MAX_BYTES;
+use super::{
+    PendingReadEvent, StreamTransportCore,
+    tuning::{MAX_STREAM_READ_BUFFER_SIZE, STREAM_READ_BUFFER_SIZE},
+};
 #[cfg(windows)]
 use crate::vibeio::io::AsyncRead as VibeAsyncRead;
 use crate::vibeio::net::PollTcpStream as VibePollTcpStream;
@@ -26,14 +34,6 @@ use crate::vibeio::net::PollTcpStream as VibePollTcpStream;
 use crate::vibeio::net::PollUnixStream as VibePollUnixStream;
 #[cfg(windows)]
 use crate::vibeio::net::TcpStream as VibeTcpStream;
-use tokio::io::AsyncReadExt;
-#[cfg(windows)]
-use windows_sys::Win32::Foundation::ERROR_OPERATION_ABORTED;
-
-#[cfg(windows)]
-use super::tuning::SERVER_POLL_READER_TINY_TRIGGER_MAX_BYTES;
-use super::tuning::{MAX_STREAM_READ_BUFFER_SIZE, STREAM_READ_BUFFER_SIZE};
-use super::{PendingReadEvent, StreamTransportCore};
 
 #[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[cfg(not(windows))]

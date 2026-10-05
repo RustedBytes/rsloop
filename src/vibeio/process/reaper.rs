@@ -1,13 +1,14 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-use std::io::{self};
-use std::process::ExitStatus;
-use std::task::{Context, Poll, Waker};
-
-use futures_util::FutureExt;
-
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
+use std::{
+    io::{self},
+    process::ExitStatus,
+    task::{Context, Poll, Waker},
+};
+
+use futures_util::FutureExt;
 
 use crate::vibeio::current_zombie_reaper;
 
@@ -159,9 +160,12 @@ fn wait_in_background((mut child, sender): ZombieReaperMessage) {
 
 #[cfg(all(test, unix))]
 mod ownership_tests {
+    use std::{
+        process::{Command, Stdio},
+        time::{Duration, Instant},
+    };
+
     use super::*;
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
 
     fn held_child() -> (std::process::Child, std::process::ChildStdin) {
         let mut child = Command::new("sh")
@@ -405,6 +409,7 @@ fn register_process_wait(message: ZombieReaperMessage) {
         Arc, Mutex,
         atomic::{AtomicPtr, Ordering},
     };
+
     use windows_sys::Win32::System::Threading::{
         INFINITE, RegisterWaitForSingleObject, WT_EXECUTEONLYONCE,
     };
@@ -468,8 +473,9 @@ async fn zombie_reaper_fn(rx: async_channel::Receiver<ZombieReaperMessage>) {
 
 #[cfg(all(test, windows))]
 mod windows_wait_tests {
-    use super::*;
     use std::sync::{Arc, Mutex, atomic::AtomicPtr};
+
+    use super::*;
 
     #[test]
     fn early_callback_cannot_destroy_registrar_context() {
