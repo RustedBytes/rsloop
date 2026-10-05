@@ -100,6 +100,7 @@ pub(super) fn run_stream_writer(
     core.report_connection_lost_result(core.connection_lost(None));
 }
 
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn release_file_writer(writer: &mut WriterTarget) {
     if matches!(writer, WriterTarget::File(_)) {
         drop(std::mem::replace(writer, WriterTarget::Sink(io::sink())));
