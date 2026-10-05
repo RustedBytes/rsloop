@@ -1145,6 +1145,60 @@ class TestCompatibility:
 
         assert rsloop.run(main()) == "echo:ping"
 
+    def test_datagram_write_limits_and_connected_source_address(self) -> None:
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            transport, _ = await loop.create_datagram_endpoint(
+                asyncio.DatagramProtocol,
+                local_addr=("0.0.0.0", 0),
+                remote_addr=("127.0.0.1", 9),
+            )
+            try:
+                assert transport.get_extra_info("sockname")[0] == "127.0.0.1"
+                assert transport.get_write_buffer_limits() == (16 * 1024, 64 * 1024)
+                transport.set_write_buffer_limits(0)
+                assert transport.get_write_buffer_limits() == (0, 0)
+                transport.set_write_buffer_limits(low=100)
+                assert transport.get_write_buffer_limits() == (100, 400)
+                with pytest.raises(ValueError):
+                    transport.set_write_buffer_limits(high=1, low=2)
+                assert transport.get_write_buffer_limits() == (100, 400)
+            finally:
+                transport.close()
+
+        rsloop.run(main())
+
+    def test_connected_datagram_close_releases_socket_before_callback(self) -> None:
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+                peer.bind(("127.0.0.1", 0))
+                port = None
+                for _ in range(2):
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    try:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                        sock.bind(("127.0.0.1", port or 0))
+                        port = sock.getsockname()[1]
+                        sock.connect(peer.getsockname())
+                        sock.setblocking(False)
+                        lost = loop.create_future()
+
+                        class Protocol(asyncio.DatagramProtocol):
+                            def connection_lost(self, exc):
+                                lost.set_result(exc)
+
+                        transport, _ = await loop.create_datagram_endpoint(
+                            Protocol, sock=sock
+                        )
+                        transport.close()
+                        assert await asyncio.wait_for(lost, 1) is None
+                        assert sock.fileno() == -1
+                    finally:
+                        sock.close()
+
+        rsloop.run(main())
+
     def test_sendfile_fallback_writes_file_contents(self) -> None:
         async def main(path: str, expected: bytes) -> tuple[int, bytes]:
             loop = asyncio.get_running_loop()

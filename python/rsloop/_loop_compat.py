@@ -290,6 +290,23 @@ class __RsloopDatagramTransport:
     def get_write_buffer_size(self):
         return self._buffer_size
 
+    def get_write_buffer_limits(self):
+        return self._low_water, self._high_water
+
+    def set_write_buffer_limits(self, high=None, low=None):
+        if high is None:
+            high = 64 * 1024 if low is None else 4 * low
+        if low is None:
+            low = high // 4
+        if not high >= low >= 0:
+            raise ValueError(
+                f"high ({high!r}) must be >= low ({low!r}) must be >= 0"
+            )
+        self._high_water = high
+        self._low_water = low
+        self._maybe_pause_protocol()
+        self._maybe_resume_protocol()
+
     def _maybe_pause_protocol(self):
         if self._buffer_size > self._high_water and not self._protocol_paused:
             self._protocol_paused = True
@@ -334,13 +351,9 @@ class __RsloopDatagramTransport:
     async def _read_loop(self):
         while not self._closing:
             try:
+                data, addr = await self._loop.sock_recvfrom(self._sock, self.max_size)
                 if self._extra["peername"] is not None:
-                    data = await self._loop.sock_recv(self._sock, self.max_size)
                     addr = self._extra["peername"]
-                else:
-                    data, addr = await self._loop.sock_recvfrom(
-                        self._sock, self.max_size
-                    )
             except _asyncio.CancelledError:
                 return
             except OSError as exc:
@@ -384,6 +397,9 @@ class __RsloopDatagramTransport:
 
     def _call_connection_lost(self, exc):
         if self._conn_lost:
+            return
+        if not self._reader_task.done():
+            self._reader_task.add_done_callback(lambda _: self._call_connection_lost(exc))
             return
         self._conn_lost += 1
         try:
@@ -583,16 +599,15 @@ async def __loop_create_datagram_endpoint(
             sock.setsockopt(__socket.SOL_SOCKET, __socket.SO_BROADCAST, 1)
         if local_addr is not None:
             sock.bind(local_addr)
-        elif resolved_remote_addr is not None:
-            if allow_broadcast:
-                if family == __socket.AF_INET6:
-                    sock.bind(("::", 0))
-                else:
-                    sock.bind(("0.0.0.0", 0))
+        elif resolved_remote_addr is not None and allow_broadcast:
+            if family == __socket.AF_INET6:
+                sock.bind(("::", 0))
             else:
-                # Connect the datagram socket so getpeername()/peername work and
-                # the local source address is filled in.
-                sock.connect(resolved_remote_addr)
+                sock.bind(("0.0.0.0", 0))
+        if resolved_remote_addr is not None and not allow_broadcast:
+            # Connect even when a local address was bound so the socket reports
+            # the selected source address and filters unrelated datagrams.
+            sock.connect(resolved_remote_addr)
     else:
         sock.setblocking(False)
 
