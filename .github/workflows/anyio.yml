@@ -1,4 +1,4 @@
-name: AnyIO upstream test suite
+name: AnyIO
 
 on:
   workflow_dispatch:
