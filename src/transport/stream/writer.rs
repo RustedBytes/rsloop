@@ -96,7 +96,14 @@ pub(super) fn run_stream_writer(
         return;
     }
 
+    drop(writer);
     core.report_connection_lost_result(core.connection_lost(None));
+}
+
+fn release_file_writer(writer: &mut WriterTarget) {
+    if matches!(writer, WriterTarget::File(_)) {
+        drop(std::mem::replace(writer, WriterTarget::Sink(io::sink())));
+    }
 }
 
 #[cfg_attr(feature = "profile", hotpath::measure)]
@@ -113,11 +120,15 @@ pub(super) fn handle_stream_writer_command(
         }
         WriterCommand::WriteEof => handle_stream_write_eof(core, writer),
         WriterCommand::Close => {
-            report_writer_close_result(core, writer.shutdown_write());
+            let result = writer.shutdown_write();
+            release_file_writer(writer);
+            report_writer_close_result(core, result);
             false
         }
         WriterCommand::Abort => {
-            report_writer_close_result(core, writer.shutdown_close());
+            let result = writer.shutdown_close();
+            release_file_writer(writer);
+            report_writer_close_result(core, result);
             false
         }
         WriterCommand::Stop => false,
@@ -153,6 +164,7 @@ pub(super) fn write_stream_data_batch(
             }
             Err(TryRecvError::Disconnected) => {
                 core.set_write_backpressure_active(false);
+                release_file_writer(writer);
                 core.report_connection_lost_result(core.connection_lost(None));
                 return false;
             }
@@ -172,6 +184,7 @@ pub(super) fn write_one_stream_buffer(
 ) -> bool {
     let buffered_len = data.remaining().len();
     if let Err(err) = write_all_owned(writer, data) {
+        release_file_writer(writer);
         report_writer_io_error(core, err);
         return false;
     }
@@ -189,6 +202,7 @@ pub(super) fn handle_stream_write_eof(
         return false;
     }
     if core.close_on_write_eof() {
+        release_file_writer(writer);
         core.report_connection_lost_result(core.connection_lost(None));
         return false;
     }

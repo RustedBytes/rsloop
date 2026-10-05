@@ -40,3 +40,30 @@ def test_loop_subprocess_exec_defaults_to_pipe() -> None:
             transport.close()
 
     rsloop.run(main())
+
+
+def test_exited_process_releases_stdin_for_inherited_pipe_reader() -> None:
+    code = (
+        "import subprocess, sys; "
+        "subprocess.Popen([sys.executable, '-c', "
+        "'import select, sys; select.select([sys.stdin], [], [], 10)'])"
+    )
+
+    async def main() -> None:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            code,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        assert proc.stdin is not None
+        assert proc.stdout is not None
+        assert proc.stderr is not None
+        assert await asyncio.wait_for(proc.wait(), 5) == 0
+        proc.stdin.close()
+        await asyncio.wait_for(proc.stdout.read(), 3)
+        await asyncio.wait_for(proc.stderr.read(), 3)
+
+    rsloop.run(main())

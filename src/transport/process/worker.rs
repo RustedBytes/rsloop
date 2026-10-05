@@ -7,8 +7,8 @@
 //!
 //! The waiter's poll interval doubles as the control-channel receive timeout,
 //! so a `kill()` is acted on promptly without a second wakeup source. On exit
-//! it closes stdin's pipe bookkeeping first, matching the order asyncio
-//! reports.
+//! it closes stdin's transport; the pipe bookkeeping is updated after the
+//! writer has released its descriptor.
 
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -97,8 +97,13 @@ pub(super) fn handle_process_exit(core: &Arc<ProcessTransportCore>, code: i32) {
     {
         report_process_result(
             core,
-            core.pipe_connection_lost(0, None),
-            "subprocess pipe_connection_lost failed",
+            Python::attach(|py| {
+                if let Some(stdin) = core.pipe_transport(py, 0) {
+                    stdin.call_method0(py, "close")?;
+                }
+                Ok(())
+            }),
+            "subprocess stdin close failed",
         );
     }
     report_process_result(
