@@ -7,7 +7,7 @@ type NativeAddress = libc::sockaddr_storage;
 #[cfg(windows)]
 type NativeAddress = windows_sys::Win32::Networking::WinSock::SOCKADDR_STORAGE;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub(crate) fn socket_addr_to_raw(address: SocketAddr) -> (NativeAddress, socket2::socklen_t) {
     let address = socket2::SockAddr::from(address);
@@ -24,7 +24,7 @@ use windows_sys::Win32::Networking::WinSock::{
     AF_INET, AF_INET6, SOCKADDR_IN, SOCKADDR_IN6, SOCKADDR_STORAGE,
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn validate_address_length(length: usize, expected: usize, capacity: usize) -> io::Result<()> {
     if length < expected || length > capacity {
         return Err(io::Error::new(
@@ -35,7 +35,7 @@ fn validate_address_length(length: usize, expected: usize, capacity: usize) -> i
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 pub(super) fn sockaddr_storage_to_socketaddr(
@@ -84,7 +84,7 @@ pub(super) fn sockaddr_storage_to_socketaddr(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 pub(super) fn sockaddr_storage_to_socketaddr(
@@ -133,7 +133,7 @@ pub(super) fn sockaddr_storage_to_socketaddr(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 pub(super) fn socketaddr_from_buffer(
     buffer: &[u8],

@@ -42,7 +42,7 @@ pub(super) enum TaskedDirectWriter {
 
 impl TaskedDirectWriter {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TaskedDirectWriter")
     )]
     pub(super) fn fd(&self) -> fd_ops::RawFd {
@@ -54,7 +54,7 @@ impl TaskedDirectWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TaskedDirectWriter")
     )]
     pub(super) fn shutdown_close(&self) -> io::Result<()> {
@@ -66,7 +66,7 @@ impl TaskedDirectWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TaskedDirectWriter")
     )]
     pub(super) fn shutdown_write(&self) -> io::Result<()> {
@@ -87,7 +87,7 @@ pub enum ReaderTarget {
 
 impl ReaderTarget {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReaderTarget")
     )]
     pub(super) fn fd(&self) -> fd_ops::RawFd {
@@ -100,7 +100,7 @@ impl ReaderTarget {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReaderTarget")
     )]
     #[cfg(windows)]
@@ -109,7 +109,7 @@ impl ReaderTarget {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReaderTarget")
     )]
     #[cfg(not(windows))]
@@ -120,7 +120,7 @@ impl ReaderTarget {
 
 impl Read for ReaderTarget {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReaderTarget as Read>")
     )]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -154,7 +154,7 @@ pub(super) enum LazyWriterTarget {
 
 impl LazyWriterTarget {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "LazyWriterTarget")
     )]
     pub(super) fn materialize(self) -> PyResult<WriterTarget> {
@@ -168,7 +168,7 @@ impl LazyWriterTarget {
 
 impl WriterTarget {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriterTarget")
     )]
     pub(super) fn fd(&self) -> Option<fd_ops::RawFd> {
@@ -182,7 +182,7 @@ impl WriterTarget {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriterTarget")
     )]
     #[cfg(windows)]
@@ -191,7 +191,7 @@ impl WriterTarget {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriterTarget")
     )]
     #[cfg(not(windows))]
@@ -200,7 +200,7 @@ impl WriterTarget {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriterTarget")
     )]
     pub(super) fn shutdown_write(&self) -> io::Result<()> {
@@ -213,7 +213,7 @@ impl WriterTarget {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriterTarget")
     )]
     pub(super) fn shutdown_close(&self) -> io::Result<()> {
@@ -234,7 +234,7 @@ pub(super) enum StreamKind {
 
 impl StreamKind {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamKind")
     )]
     pub(super) fn fd(&self) -> fd_ops::RawFd {
@@ -246,7 +246,7 @@ impl StreamKind {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamKind")
     )]
     #[cfg(windows)]
@@ -255,7 +255,7 @@ impl StreamKind {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamKind")
     )]
     #[cfg(not(windows))]
@@ -264,7 +264,7 @@ impl StreamKind {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamKind")
     )]
     pub(super) fn shutdown_close(&self) -> io::Result<()> {
@@ -278,7 +278,7 @@ impl StreamKind {
 
 impl Read for StreamKind {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<StreamKind as Read>")
     )]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -292,7 +292,7 @@ impl Read for StreamKind {
 
 impl io::Write for StreamKind {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<StreamKind as io :: Write>")
     )]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -304,7 +304,7 @@ impl io::Write for StreamKind {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<StreamKind as io :: Write>")
     )]
     fn flush(&mut self) -> io::Result<()> {
@@ -318,7 +318,7 @@ impl io::Write for StreamKind {
 
 impl io::Write for WriterTarget {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriterTarget as io :: Write>")
     )]
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -332,7 +332,7 @@ impl io::Write for WriterTarget {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriterTarget as io :: Write>")
     )]
     fn flush(&mut self) -> io::Result<()> {
@@ -346,7 +346,7 @@ impl io::Write for WriterTarget {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn shutdown_tcp_stream(stream: &StdTcpStream, how: Shutdown) -> io::Result<()> {
     for attempt in 0..=100 {
         match stream.shutdown(how) {
@@ -368,7 +368,7 @@ pub(super) fn shutdown_tcp_stream(stream: &StdTcpStream, how: Shutdown) -> io::R
     unreachable!("bounded shutdown retry loop always returns")
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn shutdown_unix_stream(stream: &StdUnixStream, how: Shutdown) -> io::Result<()> {
     for attempt in 0..=100 {
@@ -391,7 +391,7 @@ pub(super) fn shutdown_unix_stream(stream: &StdUnixStream, how: Shutdown) -> io:
     unreachable!("bounded shutdown retry loop always returns")
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub(super) fn is_no_buffer_space_code(raw_os_error: Option<i32>) -> bool {
     #[cfg(unix)]
@@ -404,7 +404,7 @@ pub(super) fn is_no_buffer_space_code(raw_os_error: Option<i32>) -> bool {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn is_no_buffer_space(err: &io::Error) -> bool {
     is_no_buffer_space_code(err.raw_os_error())

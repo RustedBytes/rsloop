@@ -18,7 +18,7 @@ pub struct SpawnBlockingError;
 
 impl fmt::Display for SpawnBlockingError {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<SpawnBlockingError as fmt :: Display>")
     )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -32,7 +32,7 @@ impl std::error::Error for SpawnBlockingError {}
 /// unwind. Cancellation drops the caller's share; a queued/running worker
 /// retains its share until it stops using the buffer. Partial mutations are not
 /// rolled back.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(any(feature = "fs", feature = "stdio", feature = "process"))]
 pub(crate) async fn with_buffer<B, R>(
     buf: B,
@@ -138,7 +138,7 @@ pub trait BlockingThreadPool: 'static {
 /// Spawns a blocking task onto a blocking thread pool.
 ///
 /// This function is a convenience wrapper around a blocking thread pool.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 pub(crate) async fn spawn_blocking<T, F>(
     pool: &dyn BlockingThreadPool,

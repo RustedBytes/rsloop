@@ -28,7 +28,7 @@ use crate::vibeio::{
     },
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn socket_read_vectored<B: IoVectoredBufMut>(socket: SOCKET, bufs: &mut B) -> io::Result<usize> {
@@ -86,7 +86,7 @@ pub struct ReadvOp<'a, B: IoVectoredBufMut> {
 }
 
 impl<'a, B: IoVectoredBufMut> ReadvOp<'a, B> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadvOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadvOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, bufs: B) -> Self {
         Self {
@@ -100,7 +100,7 @@ impl<'a, B: IoVectoredBufMut> ReadvOp<'a, B> {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadvOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadvOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -115,7 +115,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
     type Output = usize;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadvOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -159,7 +159,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadvOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -240,7 +240,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadvOp as Op>")
     )]
     #[cfg(windows)]
@@ -347,7 +347,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadvOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -385,7 +385,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
 
 impl<B: IoVectoredBufMut> Drop for ReadvOp<'_, B> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadvOp as Drop>")
     )]
     #[inline]

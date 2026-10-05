@@ -33,7 +33,7 @@ use super::{
 };
 use crate::fd_ops;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn spawn_writer_worker(
     core: Arc<StreamTransportCore>,
     writer: WriterTarget,
@@ -47,7 +47,7 @@ pub(super) fn spawn_writer_worker(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn spawn_tls_writer_worker(
     core: Arc<StreamTransportCore>,
     tls_state: SharedTlsIoState,
@@ -63,7 +63,7 @@ pub(super) fn spawn_tls_writer_worker(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn run_stream_writer(
     core: Arc<StreamTransportCore>,
     mut writer: WriterTarget,
@@ -99,7 +99,7 @@ pub(super) fn run_stream_writer(
     core.report_connection_lost_result(core.connection_lost(None));
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn handle_stream_writer_command(
     core: &Arc<StreamTransportCore>,
     writer: &mut WriterTarget,
@@ -124,7 +124,7 @@ pub(super) fn handle_stream_writer_command(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn write_stream_data_batch(
     core: &Arc<StreamTransportCore>,
     writer: &mut WriterTarget,
@@ -164,7 +164,7 @@ pub(super) fn write_stream_data_batch(
     true
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn write_one_stream_buffer(
     core: &Arc<StreamTransportCore>,
     writer: &mut WriterTarget,
@@ -179,7 +179,7 @@ pub(super) fn write_one_stream_buffer(
     true
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn handle_stream_write_eof(
     core: &Arc<StreamTransportCore>,
     writer: &mut WriterTarget,
@@ -195,14 +195,14 @@ pub(super) fn handle_stream_write_eof(
     true
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn report_writer_io_error(core: &Arc<StreamTransportCore>, err: io::Error) {
     core.report_connection_lost_result(
         core.connection_lost(Some(PyRuntimeError::new_err(err.to_string()))),
     );
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn report_writer_close_result(core: &Arc<StreamTransportCore>, result: io::Result<()>) {
     core.report_connection_lost_result(
         core.connection_lost(
@@ -213,7 +213,7 @@ pub(super) fn report_writer_close_result(core: &Arc<StreamTransportCore>, result
     );
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn run_tls_writer(
     core: Arc<StreamTransportCore>,
     tls_state: SharedTlsIoState,
@@ -243,7 +243,7 @@ pub(super) fn run_tls_writer(
     core.report_connection_lost_result(core.connection_lost(None));
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn handle_tls_writer_command(
     core: &Arc<StreamTransportCore>,
     tls_state: &SharedTlsIoState,
@@ -268,7 +268,7 @@ pub(super) fn handle_tls_writer_command(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn write_tls_data_batch(
     core: &Arc<StreamTransportCore>,
     tls_state: &SharedTlsIoState,
@@ -327,7 +327,7 @@ pub(super) fn write_tls_data_batch(
     true
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn report_tls_close_result(core: &Arc<StreamTransportCore>, result: io::Result<()>) {
     match result {
         Ok(()) => core.report_connection_lost_result(core.connection_lost(None)),
@@ -338,7 +338,7 @@ pub(super) fn report_tls_close_result(core: &Arc<StreamTransportCore>, result: i
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn write_all_owned(
     writer: &mut WriterTarget,
     data: &mut OwnedWriteBuffer,
@@ -380,7 +380,7 @@ pub(super) fn write_all_owned(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub(super) fn is_transient_write_backpressure(err: &io::Error) -> bool {
     if err.kind() == io::ErrorKind::WouldBlock {

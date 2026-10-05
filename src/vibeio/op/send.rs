@@ -26,7 +26,7 @@ use crate::vibeio::{
     },
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn socket_send<B: IoBuf>(socket: SOCKET, buf: &B) -> io::Result<usize> {
@@ -76,7 +76,7 @@ pub struct SendOp<'a, B: IoBuf> {
 }
 
 impl<'a, B: IoBuf> SendOp<'a, B> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "SendOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "SendOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B) -> Self {
         Self {
@@ -86,7 +86,7 @@ impl<'a, B: IoBuf> SendOp<'a, B> {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "SendOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "SendOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -101,7 +101,7 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
     type Output = usize;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<SendOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -145,7 +145,7 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<SendOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -184,7 +184,7 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<SendOp as Op>")
     )]
     #[cfg(windows)]
@@ -242,7 +242,7 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<SendOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -269,7 +269,7 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
 
 impl<B: IoBuf> Drop for SendOp<'_, B> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<SendOp as Drop>")
     )]
     #[inline]

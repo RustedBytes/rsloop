@@ -7,7 +7,7 @@ use std::{
     time::Instant,
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn compare_timer_parts<T: Ord>(
     left_when: &T,
     left_seq: u64,
@@ -39,7 +39,7 @@ pub(super) struct TimerQueue {
 
 impl TimerQueue {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TimerQueue")
     )]
     pub(super) fn new() -> Self {
@@ -47,7 +47,7 @@ impl TimerQueue {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TimerQueue")
     )]
     pub(super) fn is_empty(&self) -> bool {
@@ -55,7 +55,7 @@ impl TimerQueue {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TimerQueue")
     )]
     pub(super) fn push(&mut self, entry: TimerEntry, immediate: bool) {
@@ -69,7 +69,7 @@ impl TimerQueue {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TimerQueue")
     )]
     pub(super) fn peek(&self) -> Option<&TimerEntry> {
@@ -81,7 +81,7 @@ impl TimerQueue {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TimerQueue")
     )]
     pub(super) fn pop(&mut self) -> Option<TimerEntry> {
@@ -93,7 +93,7 @@ impl TimerQueue {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TimerQueue")
     )]
     pub(super) fn append_heap(&mut self, other: &mut BinaryHeap<TimerEntry>) {
@@ -101,7 +101,7 @@ impl TimerQueue {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TimerQueue")
     )]
     pub(super) fn drain_into(&mut self, other: &mut BinaryHeap<TimerEntry>) {
@@ -112,7 +112,7 @@ impl TimerQueue {
 
 impl PartialEq for TimerEntry {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<TimerEntry as PartialEq>")
     )]
     fn eq(&self, other: &Self) -> bool {
@@ -124,7 +124,7 @@ impl Eq for TimerEntry {}
 
 impl PartialOrd for TimerEntry {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<TimerEntry as PartialOrd>")
     )]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -134,7 +134,7 @@ impl PartialOrd for TimerEntry {
 
 impl Ord for TimerEntry {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<TimerEntry as Ord>")
     )]
     fn cmp(&self, other: &Self) -> Ordering {

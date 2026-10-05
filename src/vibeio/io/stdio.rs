@@ -41,74 +41,74 @@ pub struct Stderr {
 }
 
 /// Get an async-aware stdin reader.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub fn stdin() -> Stdin {
     Stdin { _private: () }
 }
 
 /// Get an async-aware stdout writer.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub fn stdout() -> Stdout {
     Stdout { _private: () }
 }
 
 /// Get an async-aware stderr writer.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub fn stderr() -> Stderr {
     Stderr { _private: () }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn read_stdin_blocking(buf: &mut [u8]) -> io::Result<usize> {
     let mut stdin = std::io::stdin();
     stdin.read(buf)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn write_stdout_blocking(buf: &[u8]) -> io::Result<usize> {
     let mut stdout = std::io::stdout();
     stdout.write(buf)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn write_stderr_blocking(buf: &[u8]) -> io::Result<usize> {
     let mut stderr = std::io::stderr();
     stderr.write(buf)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn flush_stdout_blocking() -> io::Result<()> {
     let mut stdout = std::io::stdout();
     stdout.flush()
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn flush_stderr_blocking() -> io::Result<()> {
     let mut stderr = std::io::stderr();
     stderr.flush()
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn blocking_pool_io_error() -> io::Error {
     io::Error::other("can't spawn blocking task for stdio I/O")
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 async fn read_in_blocking_pool<B: IoBufMut>(buf: B) -> (io::Result<usize>, B) {
     stdio_in_blocking_pool(buf, |buf| read_into_buf(buf, read_stdin_blocking)).await
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 async fn stdio_in_blocking_pool<B: Send + 'static>(
     buf: B,
     operation: impl FnOnce(&mut B) -> io::Result<usize> + Send + 'static,
@@ -120,13 +120,13 @@ async fn stdio_in_blocking_pool<B: Send + 'static>(
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 async fn write_stdout_in_blocking_pool<B: IoBuf>(buf: B) -> (io::Result<usize>, B) {
     stdio_in_blocking_pool(buf, |buf| write_stdout_blocking(iobuf_to_slice(buf))).await
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 async fn write_stderr_in_blocking_pool<B: IoBuf>(buf: B) -> (io::Result<usize>, B) {
     stdio_in_blocking_pool(buf, |buf| write_stderr_blocking(iobuf_to_slice(buf))).await
@@ -231,7 +231,7 @@ mod tests {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 async fn flush_stdout_in_blocking_pool() -> io::Result<()> {
     crate::vibeio::spawn_blocking(flush_stdout_blocking)
@@ -239,7 +239,7 @@ async fn flush_stdout_in_blocking_pool() -> io::Result<()> {
         .map_err(|_| blocking_pool_io_error())?
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 async fn flush_stderr_in_blocking_pool() -> io::Result<()> {
     crate::vibeio::spawn_blocking(flush_stderr_blocking)
@@ -249,7 +249,7 @@ async fn flush_stderr_in_blocking_pool() -> io::Result<()> {
 
 impl AsyncRead for Stdin {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Stdin as AsyncRead>", future = true)
     )]
     #[inline]
@@ -269,7 +269,7 @@ impl AsyncRead for Stdin {
 
 impl AsyncWrite for Stdout {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Stdout as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -287,7 +287,7 @@ impl AsyncWrite for Stdout {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Stdout as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -302,7 +302,7 @@ impl AsyncWrite for Stdout {
 
 impl AsyncWrite for Stderr {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Stderr as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -320,7 +320,7 @@ impl AsyncWrite for Stderr {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Stderr as AsyncWrite>", future = true)
     )]
     #[inline]

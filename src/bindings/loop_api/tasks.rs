@@ -31,7 +31,7 @@ pub(super) struct TaskOptions {
     pub(super) kwargs: Option<Py<PyDict>>,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn is_current_running_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<bool> {
     let current = asyncio_get_running_loop_fn(py)?.call0(py)?;
     if current.is_none(py) {
@@ -40,7 +40,7 @@ fn is_current_running_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<boo
     Ok(current.bind(py).is(loop_obj.bind(py)))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn create_asyncio_future_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     #[cfg(any(Py_3_12, all(Py_3_11, not(Py_LIMITED_API))))]
     {
@@ -58,7 +58,7 @@ fn create_asyncio_future_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyRes
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn create_asyncio_future_for_running_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
     call_callable_noargs(py, asyncio_future_cls(py)?)
 }
@@ -67,7 +67,7 @@ fn create_asyncio_future_for_running_loop(py: Python<'_>) -> PyResult<Py<PyAny>>
 /// when `loop_obj` is exactly a `PyLoop` running on this thread, skip the
 /// Python-level `create_future` method dispatch. Returns `Ok(None)` when the
 /// caller must fall back to calling `loop.create_future()`.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn try_fast_create_future(
     py: Python<'_>,
     loop_obj: &Py<PyAny>,
@@ -81,7 +81,7 @@ pub(crate) fn try_fast_create_future(
     create_asyncio_future_for_running_loop(py).map(Some)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn try_fast_create_task(
     py: Python<'_>,
     loop_obj: &Py<PyAny>,
@@ -97,7 +97,7 @@ pub(crate) fn try_fast_create_task(
     create_asyncio_task_for_running_loop(py, loop_obj.bind(py), coro).map(Some)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn create_asyncio_task_for_loop(
     py: Python<'_>,
     loop_obj: &Py<PyAny>,
@@ -145,7 +145,7 @@ fn create_asyncio_task_for_loop(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn create_asyncio_task_for_running_loop(
     py: Python<'_>,
@@ -156,7 +156,7 @@ fn create_asyncio_task_for_running_loop(
     call_callable_onearg(py, task_cls, coro.bind(py))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn create_asyncio_task_with_kwargs(
     py: Python<'_>,
     loop_obj: Option<&Py<PyAny>>,
@@ -170,7 +170,7 @@ fn create_asyncio_task_with_kwargs(
     asyncio_task_cls(py)?.call(py, (coro,), Some(&task_kwargs))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn trim_task_source_traceback(py: Python<'_>, task: &Py<PyAny>) -> PyResult<()> {
     let Ok(source_traceback) = task.getattr(py, "_source_traceback") else {
         return Ok(());
@@ -187,7 +187,7 @@ fn trim_task_source_traceback(py: Python<'_>, task: &Py<PyAny>) -> PyResult<()> 
     source_traceback.del_item(source_traceback.len()? - 1)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn create_future(slf: Py<PyLoop>, py: Python<'_>) -> PyResult<Py<PyAny>> {
     if slf.get().core.on_runtime_thread() {
         return create_asyncio_future_for_running_loop(py);
@@ -201,7 +201,7 @@ pub(super) fn create_future(slf: Py<PyLoop>, py: Python<'_>) -> PyResult<Py<PyAn
     create_asyncio_future_for_loop(py, &loop_obj)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn create_task(
     slf: Py<PyLoop>,
     py: Python<'_>,

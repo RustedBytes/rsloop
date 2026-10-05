@@ -12,7 +12,7 @@ const REACTOR: &str = "kqueue";
 const REACTOR: &str = "mio";
 
 /// Return stable diagnostics that help identify the installed native build.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[pyfunction]
 pub(crate) fn build_info(py: Python<'_>) -> PyResult<Py<PyDict>> {
     let info = PyDict::new(py);
@@ -43,7 +43,7 @@ pub(crate) fn build_info(py: Python<'_>) -> PyResult<Py<PyDict>> {
         },
     )?;
     info.set_item("tls_backend", "rustls")?;
-    info.set_item("hotpath_profile", cfg!(feature = "hotpath-profile"))?;
+    info.set_item("hotpath_profile", cfg!(feature = "profile"))?;
     info.set_item(
         "hotpath_alloc_profile",
         cfg!(feature = "hotpath-alloc-profile"),

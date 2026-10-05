@@ -17,7 +17,7 @@ struct QueueState {
 
 impl QueueState {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "QueueState")
     )]
     fn new() -> Self {
@@ -25,7 +25,7 @@ impl QueueState {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "QueueState")
     )]
     fn with_capacity(capacity: usize) -> Self {
@@ -37,7 +37,7 @@ impl QueueState {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "QueueState")
     )]
     fn enqueue(&mut self, command: WriterCommand) -> Result<(), WriterCommand> {
@@ -55,7 +55,7 @@ impl QueueState {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "QueueState")
     )]
     fn try_dequeue(&mut self) -> Result<WriterCommand, TryRecvError> {
@@ -87,7 +87,7 @@ pub(super) enum TryRecvError {
     Disconnected,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn channel() -> (WriterSender, WriterReceiver) {
     let shared = Arc::new(SharedQueue {
         state: Mutex::new(QueueState::new()),
@@ -103,7 +103,7 @@ pub(super) fn channel() -> (WriterSender, WriterReceiver) {
 
 impl WriterSender {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriterSender")
     )]
     pub(super) fn send(&self, command: WriterCommand) -> Result<(), WriterCommand> {
@@ -117,7 +117,7 @@ impl WriterSender {
 
 impl Drop for WriterSender {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriterSender as Drop>")
     )]
     fn drop(&mut self) {
@@ -136,7 +136,7 @@ impl Drop for WriterSender {
 
 impl WriterReceiver {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriterReceiver")
     )]
     pub(super) fn recv(&self) -> Result<WriterCommand, ()> {
@@ -157,7 +157,7 @@ impl WriterReceiver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriterReceiver")
     )]
     pub(super) fn try_recv(&self) -> Result<WriterCommand, TryRecvError> {
@@ -171,7 +171,7 @@ impl WriterReceiver {
 
 impl Drop for WriterReceiver {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriterReceiver as Drop>")
     )]
     fn drop(&mut self) {

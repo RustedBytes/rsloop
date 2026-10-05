@@ -41,7 +41,7 @@ use crate::vibeio::{fd_inner::InnerRawHandle, io::AsInnerRawHandle, op::SpliceOp
 /// Completion-based transfers retain owned duplicates of both descriptors until
 /// the kernel finishes. Dropping the future does not roll back bytes already
 /// transferred or guarantee that a queued transfer will not run.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn splice<'a, 'b>(
     from: &'a impl AsRawFd,
     to: &'b impl AsInnerRawHandle<'b>,
@@ -60,7 +60,7 @@ pub async fn splice<'a, 'b>(
 /// This function calls `splice()` repeatedly until `len` bytes have been
 /// transferred or EOF is reached. Interrupted calls are retried without
 /// resetting progress.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn splice_exact<'a, 'b>(
     from: &'a impl AsRawFd,
     to: &'b impl AsInnerRawHandle<'b>,
@@ -87,7 +87,7 @@ pub async fn splice_exact<'a, 'b>(
 /// Returns the transferred count if the source reaches EOF before `len` bytes.
 /// Reports `WriteZero` if draining a nonempty staging pipe makes no progress.
 /// Interrupted fills and drains are retried without discarding staged bytes.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn sendfile_exact<'a, 'b>(
     from: &'a impl AsRawFd,
     to: &'b impl AsInnerRawHandle<'b>,
@@ -108,7 +108,7 @@ pub async fn sendfile_exact<'a, 'b>(
     .await
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 async fn retry_splice<F>(mut transfer: impl FnMut() -> F) -> std::io::Result<usize>
 where
     F: std::future::Future<Output = std::io::Result<usize>>,
@@ -121,7 +121,7 @@ where
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 async fn transfer_batches<F, D, Fill, Drain>(
     len: u64,
     mut fill: Fill,
@@ -165,7 +165,7 @@ struct WriteOwnedFd {
 
 impl WriteOwnedFd {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriteOwnedFd")
     )]
     fn new(writer: OwnedFd) -> std::io::Result<Self> {
@@ -180,7 +180,7 @@ impl WriteOwnedFd {
 
 impl<'a> AsInnerRawHandle<'a> for WriteOwnedFd {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteOwnedFd as AsInnerRawHandle < 'a >>")
     )]
     #[inline]

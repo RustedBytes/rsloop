@@ -26,14 +26,14 @@ use crate::context::{run_in_context_noargs, run_in_context_onearg};
 /// Copy raw bytes into a writable C-contiguous export, regardless of its
 /// element format. The export is released before calling buffer_updated, which
 /// is allowed to resize or replace the protocol's buffer.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn copy_to_protocol_buffer(buffer: &Bound<'_, PyAny>, source: &[u8]) -> PyResult<usize> {
     pyo3::sync::critical_section::with_critical_section(buffer, || {
         copy_to_protocol_buffer_locked(buffer, source)
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn copy_to_protocol_buffer_locked(buffer: &Bound<'_, PyAny>, source: &[u8]) -> PyResult<usize> {
     let py = buffer.py();
     // Exporters can make Py_buffer self-referential; keep its address stable.
@@ -131,7 +131,7 @@ mod buffer_tests {
 
 impl StreamTransportCore {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn apply_pending_read_backpressure(&self) {
@@ -148,7 +148,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn record_pending_read_drained(&self, len: usize) {
@@ -175,7 +175,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[inline]
@@ -190,7 +190,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[inline]
@@ -206,7 +206,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn flush_pending_data_with_py(
@@ -229,7 +229,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn report_error_with_py(
@@ -246,7 +246,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn report_error(&self, err: PyErr, message: &str) {
@@ -254,7 +254,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub fn connection_made(&self, transport: Py<PyStreamTransport>) -> PyResult<()> {
@@ -289,7 +289,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub fn data_received(&self, data: &[u8]) -> PyResult<()> {
@@ -297,7 +297,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub fn eof_received(&self) -> PyResult<bool> {
@@ -305,7 +305,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub fn connection_lost(self: &Arc<Self>, exc: Option<PyErr>) -> PyResult<()> {
@@ -320,7 +320,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn report_connection_lost_result(&self, result: PyResult<()>) {
@@ -330,7 +330,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn data_received_with_py(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
@@ -351,7 +351,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn data_received_slow_path(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
@@ -417,7 +417,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn eof_received_with_py(&self, py: Python<'_>) -> PyResult<bool> {
@@ -449,7 +449,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn connection_lost_with_py(

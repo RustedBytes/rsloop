@@ -16,7 +16,7 @@ use windows_sys::Win32::{
 
 use super::{RawFd, raw_fd_to_c_int};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
     match duplicate_socket(fd) {
         Ok(duped) => Ok(duped),
@@ -34,7 +34,7 @@ pub(super) fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn duplicate_socket(fd: RawFd) -> io::Result<RawFd> {
     let socket = raw_fd_to_socket(fd)?;
     let socket = socket_from_raw(socket);
@@ -44,7 +44,7 @@ pub(super) fn duplicate_socket(fd: RawFd) -> io::Result<RawFd> {
     Ok(raw.cast_signed())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn socket_from_raw(socket: SOCKET) -> Socket {
     // SAFETY: The caller provides a raw socket handle that should be temporarily
     // owned by `Socket`; callers must prevent unintended closure when they only
@@ -52,7 +52,7 @@ fn socket_from_raw(socket: SOCKET) -> Socket {
     unsafe { Socket::from_raw_socket(socket as _) }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn duplicate_handle_raw(
     process: HANDLE,
     handle: HANDLE,
@@ -73,7 +73,7 @@ fn duplicate_handle_raw(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn raw_fd_to_handle(fd: RawFd) -> io::Result<HANDLE> {
     let fd = raw_fd_to_c_int(fd)?;
     // SAFETY: `_get_osfhandle` only reads the C runtime fd table for this validated
@@ -85,7 +85,7 @@ pub fn raw_fd_to_handle(fd: RawFd) -> io::Result<HANDLE> {
     Ok(handle as HANDLE)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn duplicate_handle(handle: HANDLE) -> io::Result<HANDLE> {
     if handle.is_null() || handle == INVALID_HANDLE_VALUE {
         return Err(io::Error::new(
@@ -105,12 +105,12 @@ pub fn duplicate_handle(handle: HANDLE) -> io::Result<HANDLE> {
     Ok(duplicated)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn duplicate_handle_from_fd(fd: RawFd) -> io::Result<HANDLE> {
     duplicate_handle(raw_fd_to_handle(fd)?)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Result<(bool, bool)> {
     if !read && !write {
         return Ok((false, false));
@@ -151,13 +151,13 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     ))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn raw_fd_to_socket(fd: RawFd) -> io::Result<SOCKET> {
     fd.try_into()
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "socket handle out of range"))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn new_fd_set(socket: SOCKET, enabled: bool) -> FD_SET {
     let mut set = FD_SET {
         fd_count: 0,

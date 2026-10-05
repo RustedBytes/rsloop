@@ -30,7 +30,7 @@ struct PyImmediateRead {
 #[pymethods]
 impl PyImmediateRead {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyImmediateRead")
     )]
     fn __await__(slf: Py<Self>) -> Py<Self> {
@@ -38,7 +38,7 @@ impl PyImmediateRead {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyImmediateRead")
     )]
     fn __iter__(slf: Py<Self>) -> Py<Self> {
@@ -46,7 +46,7 @@ impl PyImmediateRead {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyImmediateRead")
     )]
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -55,7 +55,7 @@ impl PyImmediateRead {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn asyncio_iscoroutine(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
     static ISCOROUTINE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
     Ok(ISCOROUTINE
@@ -67,7 +67,7 @@ fn asyncio_iscoroutine(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
 
 /// Create a future on `loop_obj`, skipping the Python-level method dispatch
 /// when the loop is a native rsloop instance running on this thread.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn loop_create_future(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     if let Some(future) = crate::bindings::try_fast_create_future(py, loop_obj)? {
         return Ok(future);
@@ -85,7 +85,7 @@ struct ReadBuffer {
 
 impl ReadBuffer {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBuffer")
     )]
     fn with_capacity(capacity: usize) -> Self {
@@ -98,7 +98,7 @@ impl ReadBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBuffer")
     )]
     #[inline]
@@ -107,7 +107,7 @@ impl ReadBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBuffer")
     )]
     #[inline]
@@ -116,7 +116,7 @@ impl ReadBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBuffer")
     )]
     #[inline]
@@ -125,7 +125,7 @@ impl ReadBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBuffer")
     )]
     fn extend(&mut self, data: &[u8]) {
@@ -138,7 +138,7 @@ impl ReadBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBuffer")
     )]
     fn extend_owned(&mut self, data: OwnedReadBuffer) -> Option<OwnedReadBuffer> {
@@ -156,7 +156,7 @@ impl ReadBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBuffer")
     )]
     fn consume(&mut self, n: usize) {
@@ -165,7 +165,7 @@ impl ReadBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBuffer")
     )]
     #[inline]
@@ -175,7 +175,7 @@ impl ReadBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBuffer")
     )]
     fn replace(&mut self, data: &[u8]) {
@@ -185,7 +185,7 @@ impl ReadBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBuffer")
     )]
     fn compact_if_needed(&mut self) {
@@ -361,7 +361,7 @@ mod read_buffer_tests {
 }
 
 /// `bytes.find(needle, from)` over a slice.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn find_from(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     if from > haystack.len() {
@@ -391,7 +391,7 @@ enum UntilScan {
 }
 
 impl UntilScan {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UntilScan"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UntilScan"))]
     #[inline]
     fn is_pending(&self, eof: bool) -> bool {
         matches!(self, Self::NeedMore) && !eof
@@ -418,7 +418,7 @@ enum Separators {
 
 impl Separators {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "Separators")
     )]
     fn single(bytes: &[u8]) -> Self {
@@ -434,7 +434,7 @@ impl Separators {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "Separators")
     )]
     fn from_list(list: Vec<Vec<u8>>) -> Self {
@@ -448,7 +448,7 @@ impl Separators {
     /// has to stay stable so equal-length separators keep their given
     /// order.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "Separators")
     )]
     fn sort_by_length(&mut self) {
@@ -458,7 +458,7 @@ impl Separators {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "Separators")
     )]
     fn shortest(&self) -> Option<&[u8]> {
@@ -469,7 +469,7 @@ impl Separators {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "Separators")
     )]
     fn longest_len(&self) -> usize {
@@ -480,7 +480,7 @@ impl Separators {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn separator_match_replaces(best: Option<(usize, usize)>, candidate_end: usize) -> bool {
     best.is_none_or(|(_, best_end)| candidate_end < best_end)
 }
@@ -501,7 +501,7 @@ struct UntilReadState {
 
 impl UntilReadState {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UntilReadState")
     )]
     fn new(mut separators: Separators, line_mode: bool) -> PyResult<Self> {
@@ -531,7 +531,7 @@ impl UntilReadState {
 
     /// One iteration of asyncio's `readuntil` scan loop.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UntilReadState")
     )]
     fn scan(&mut self, buffer: &[u8], limit: usize) -> UntilScan {
@@ -1147,7 +1147,7 @@ enum UntilOutcome {
 }
 
 /// Collect the separator argument, accepting the tuple form Python 3.13+ takes.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn extract_separators(separator: &Bound<'_, PyAny>) -> PyResult<Separators> {
     if let Ok(tuple) = separator.cast::<PyTuple>() {
         let mut list = Vec::with_capacity(tuple.len());
@@ -1164,7 +1164,7 @@ fn extract_separators(separator: &Bound<'_, PyAny>) -> PyResult<Separators> {
     Ok(Separators::single(&separator.extract::<Vec<u8>>()?))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn extract_separator_bytes(value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     if let Ok(bytes) = value.cast::<PyBytes>() {
         return Ok(bytes.as_bytes().to_vec());
@@ -1196,7 +1196,7 @@ struct ExactReadAccumulator {
     expected: usize,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn exact_fill_amount(buffer_len: usize, filled: usize, expected: usize) -> usize {
     debug_assert!(filled <= expected);
     buffer_len.min(expected - filled)
@@ -1204,7 +1204,7 @@ fn exact_fill_amount(buffer_len: usize, filled: usize, expected: usize) -> usize
 
 impl ExactReadAccumulator {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ExactReadAccumulator")
     )]
     fn new(py: Python<'_>, expected: usize) -> PyResult<Self> {
@@ -1230,7 +1230,7 @@ impl ExactReadAccumulator {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ExactReadAccumulator")
     )]
     fn fill_from(&mut self, buffer: &mut ReadBuffer) {
@@ -1251,7 +1251,7 @@ impl ExactReadAccumulator {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ExactReadAccumulator")
     )]
     fn partial(&self) -> &[u8] {
@@ -1285,7 +1285,7 @@ pub struct PyFastStreamReader {
 
 impl PyFastStreamReader {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn set_future_result_or_ignore_cancelled(
@@ -1310,7 +1310,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn set_future_exception_or_ignore_cancelled(
@@ -1336,7 +1336,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn new_with_loop(py: Python<'_>, loop_obj: Py<PyAny>, limit: usize) -> PyResult<Self> {
@@ -1359,7 +1359,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[inline]
@@ -1368,7 +1368,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn ready_result_awaitable(&self, py: Python<'_>, value: Py<PyAny>) -> PyResult<Py<PyAny>> {
@@ -1376,7 +1376,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn ready_exception_future(&self, py: Python<'_>, exc: Py<PyAny>) -> PyResult<Py<PyAny>> {
@@ -1391,7 +1391,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[inline]
@@ -1400,7 +1400,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn unread_bytes_object(&mut self, py: Python<'_>, n: usize) -> Py<PyAny> {
@@ -1411,7 +1411,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn unread_all_bytes_object(&mut self, py: Python<'_>) -> Py<PyAny> {
@@ -1421,7 +1421,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn incomplete_read_error(
@@ -1437,7 +1437,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn maybe_resume_transport(&mut self, py: Python<'_>) -> PyResult<()> {
@@ -1453,7 +1453,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn maybe_pause_transport(&mut self, py: Python<'_>) -> PyResult<()> {
@@ -1485,7 +1485,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn maybe_complete_waiter(&mut self, py: Python<'_>) -> PyResult<()> {
@@ -1578,7 +1578,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn start_waiter(
@@ -1621,7 +1621,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     pub(crate) fn set_transport_obj(
@@ -1634,7 +1634,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     pub(crate) fn feed_data_internal(&mut self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
@@ -1647,7 +1647,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     pub(super) fn feed_owned_data_internal(
@@ -1666,7 +1666,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[inline]
@@ -1676,7 +1676,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     pub(crate) fn set_exception_internal(
@@ -1689,7 +1689,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn build_read_future(&mut self, py: Python<'_>, n: isize) -> PyResult<Py<PyAny>> {
@@ -1716,7 +1716,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn build_readexactly_future(&mut self, py: Python<'_>, n: usize) -> PyResult<Py<PyAny>> {
@@ -1740,7 +1740,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn limit_overrun_error(py: Python<'_>, message: &str, consumed: usize) -> PyResult<Py<PyAny>> {
@@ -1754,7 +1754,7 @@ impl PyFastStreamReader {
     /// `IncompleteReadError` with an undefined expected size, which is what
     /// `readuntil()` raises: the caller never said how many bytes it wanted.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn incomplete_until_error(py: Python<'_>, partial: Py<PyAny>) -> PyResult<Py<PyAny>> {
@@ -1766,7 +1766,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn until_limit_overrun(
@@ -1803,7 +1803,7 @@ impl PyFastStreamReader {
     /// Only called once `UntilScan::is_pending` has ruled out waiting, so
     /// `NeedMore` here always means EOF arrived first.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn resolve_until_scan(
@@ -1851,7 +1851,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn build_until_future(
@@ -1880,7 +1880,7 @@ impl PyFastStreamReader {
 #[pymethods]
 impl PyFastStreamReader {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[new]
@@ -1897,7 +1897,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[getter(_rsloop_fast_reader)]
@@ -1906,7 +1906,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[getter(_loop)]
@@ -1915,7 +1915,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[getter(_limit)]
@@ -1924,7 +1924,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[getter(_buffer)]
@@ -1935,7 +1935,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[setter(_buffer)]
@@ -1946,7 +1946,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[getter(_waiter)]
@@ -1958,7 +1958,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[getter(_transport)]
@@ -1967,7 +1967,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[getter(_paused)]
@@ -1976,7 +1976,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[getter(_eof)]
@@ -1985,7 +1985,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[getter(_exception)]
@@ -1997,7 +1997,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn exception(&self, py: Python<'_>) -> Py<PyAny> {
@@ -2005,7 +2005,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn set_exception(&mut self, py: Python<'_>, exc: Py<PyAny>) -> PyResult<()> {
@@ -2013,7 +2013,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn set_transport_public(&mut self, py: Python<'_>, transport: Py<PyAny>) -> PyResult<()> {
@@ -2021,7 +2021,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn feed_data(&mut self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
@@ -2029,7 +2029,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn feed_eof(&mut self, py: Python<'_>) -> PyResult<()> {
@@ -2037,7 +2037,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn at_eof(&self) -> bool {
@@ -2045,7 +2045,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[pyo3(signature = (n=-1))]
@@ -2054,7 +2054,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn readexactly(&mut self, py: Python<'_>, n: usize) -> PyResult<Py<PyAny>> {
@@ -2062,7 +2062,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[pyo3(signature = (separator=None))]
@@ -2085,7 +2085,7 @@ impl PyFastStreamReader {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn readline(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -2111,7 +2111,7 @@ pub struct PyFastStreamProtocol {
 
 impl PyFastStreamProtocol {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn new_with_loop(
@@ -2144,7 +2144,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn has_client_connected_cb(&self, py: Python<'_>) -> bool {
@@ -2152,7 +2152,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     pub(crate) fn reader_ref(&self, py: Python<'_>) -> Py<PyFastStreamReader> {
@@ -2160,7 +2160,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn ready_none_future(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -2168,7 +2168,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn ready_exception_future(&self, py: Python<'_>, exc: Py<PyAny>) -> PyResult<Py<PyAny>> {
@@ -2183,7 +2183,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn push_drain_waiter(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -2193,7 +2193,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn resolve_drain_waiters(&mut self, py: Python<'_>, exc: Option<Py<PyAny>>) -> PyResult<()> {
@@ -2228,7 +2228,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn build_drain_future(
@@ -2254,7 +2254,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     pub(crate) fn handle_connection_made(
@@ -2321,7 +2321,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     pub(crate) fn handle_connection_lost(
@@ -2378,7 +2378,7 @@ impl PyFastStreamProtocol {
 #[pymethods]
 impl PyFastStreamProtocol {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     #[new]
@@ -2405,7 +2405,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     #[getter(_rsloop_fast_reader)]
@@ -2414,7 +2414,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn connection_made(slf: Py<Self>, py: Python<'_>, transport: Py<PyAny>) -> PyResult<()> {
@@ -2422,7 +2422,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn pause_writing(&mut self) {
@@ -2430,7 +2430,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn resume_writing(&mut self, py: Python<'_>) -> PyResult<()> {
@@ -2439,7 +2439,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn _drain_helper(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -2447,7 +2447,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn data_received(&mut self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
@@ -2455,7 +2455,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     pub(super) fn eof_received(&mut self, py: Python<'_>) -> PyResult<bool> {
@@ -2465,7 +2465,7 @@ impl PyFastStreamProtocol {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
     fn connection_lost(&mut self, py: Python<'_>, exc: Option<Py<PyAny>>) -> PyResult<()> {
@@ -2487,7 +2487,7 @@ pub struct PyFastStreamWriter {
 #[pymethods]
 impl PyFastStreamWriter {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
     )]
     #[getter]
@@ -2496,7 +2496,7 @@ impl PyFastStreamWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
     )]
     fn write(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -2510,7 +2510,7 @@ impl PyFastStreamWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
     )]
     fn writelines(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -2522,7 +2522,7 @@ impl PyFastStreamWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
     )]
     fn write_eof(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -2530,7 +2530,7 @@ impl PyFastStreamWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
     )]
     fn can_write_eof(&self, py: Python<'_>) -> PyResult<bool> {
@@ -2540,7 +2540,7 @@ impl PyFastStreamWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
     )]
     fn close(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -2548,7 +2548,7 @@ impl PyFastStreamWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
     )]
     fn is_closing(&self, py: Python<'_>) -> PyResult<bool> {
@@ -2556,7 +2556,7 @@ impl PyFastStreamWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
     )]
     #[pyo3(signature = (name, default=None))]
@@ -2574,7 +2574,7 @@ impl PyFastStreamWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
     )]
     fn wait_closed(&self, py: Python<'_>) -> Py<PyAny> {
@@ -2582,7 +2582,7 @@ impl PyFastStreamWriter {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
     )]
     fn drain(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -2607,7 +2607,7 @@ struct PyFastClientDoneCallback {
 #[pymethods]
 impl PyFastClientDoneCallback {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastClientDoneCallback")
     )]
     fn __call__(&self, py: Python<'_>, task: Py<PyAny>) -> PyResult<()> {
@@ -2642,7 +2642,7 @@ struct PyFastProtocolFactory {
 #[pymethods]
 impl PyFastProtocolFactory {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyFastProtocolFactory")
     )]
     fn __call__(&self, py: Python<'_>) -> PyResult<Py<PyFastStreamProtocol>> {
@@ -2662,7 +2662,7 @@ impl PyFastProtocolFactory {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn running_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
     Ok(py
         .import("asyncio.events")?
@@ -2670,7 +2670,7 @@ fn running_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
         .unbind())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn copy_kwargs<'py>(
     py: Python<'py>,
     kwargs: Option<&Bound<'py, PyDict>>,
@@ -2686,7 +2686,7 @@ fn copy_kwargs<'py>(
     Ok(Some(copied))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn native_stream_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let loop_obj = running_loop(py)?;
     if !loop_obj.bind(py).is_instance_of::<PyLoop>() {
@@ -2697,7 +2697,7 @@ fn native_stream_loop(py: Python<'_>) -> PyResult<Py<PyAny>> {
     Ok(loop_obj)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn host_port_objects(
     py: Python<'_>,
     host: Option<Py<PyAny>>,
@@ -2714,7 +2714,7 @@ fn host_port_objects(
     (host_obj, port_obj)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn fast_open_connection_awaitable(
     py: Python<'_>,
     loop_obj: &Py<PyAny>,
@@ -2738,7 +2738,7 @@ fn fast_open_connection_awaitable(
     Ok((locals, awaitable))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn fast_open_connection_result(py: Python<'_>, created: Py<PyAny>) -> PyResult<Py<PyAny>> {
     let result = created.bind(py).cast::<PyTuple>()?;
     let transport = result.get_item(0)?.unbind();
@@ -2764,7 +2764,7 @@ fn fast_open_connection_result(py: Python<'_>, created: Py<PyAny>) -> PyResult<P
 /// A running rsloop event loop is required.
 ///
 /// Extra keyword arguments are forwarded to the loop connection factory.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[pyfunction(signature = (host=None, port=None, *, limit=DEFAULT_STREAM_LIMIT, **kwargs))]
 pub fn open_connection(
     py: Python<'_>,
@@ -2803,7 +2803,7 @@ pub fn open_connection(
 ///
 /// `limit` controls each reader's buffer limit; extra keyword arguments are
 /// forwarded to the loop server factory.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[pyfunction(signature = (client_connected_cb, host=None, port=None, *, limit=DEFAULT_STREAM_LIMIT, **kwargs))]
 pub fn start_server(
     py: Python<'_>,

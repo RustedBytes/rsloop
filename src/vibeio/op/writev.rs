@@ -28,7 +28,7 @@ use crate::vibeio::{
     },
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn socket_write_vectored<B: IoVectoredBuf>(socket: SOCKET, bufs: &B) -> io::Result<usize> {
@@ -85,7 +85,7 @@ pub struct WritevOp<'a, B: IoVectoredBuf> {
 }
 
 impl<'a, B: IoVectoredBuf> WritevOp<'a, B> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WritevOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WritevOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, bufs: B) -> Self {
         Self {
@@ -99,7 +99,7 @@ impl<'a, B: IoVectoredBuf> WritevOp<'a, B> {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WritevOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WritevOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -114,7 +114,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
     type Output = usize;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WritevOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -159,7 +159,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WritevOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -210,7 +210,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WritevOp as Op>")
     )]
     #[cfg(windows)]
@@ -328,7 +328,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WritevOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -366,7 +366,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
 
 impl<B: IoVectoredBuf> Drop for WritevOp<'_, B> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WritevOp as Drop>")
     )]
     #[inline]

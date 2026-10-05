@@ -37,12 +37,12 @@ use super::{
 };
 use crate::{async_event::AsyncEvent, engine::LoopCore, fd_ops};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn task_locals_for_loop(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<TaskLocals> {
     TaskLocals::new(loop_obj.clone_ref(py).into_bound(py)).copy_context(py)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub(super) fn detached_socket_handle(
     py: Python<'_>,
@@ -51,7 +51,7 @@ pub(super) fn detached_socket_handle(
     socket_obj.call_method0(py, "detach")?.extract(py)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn tcp_family(stream: &StdTcpStream) -> c_int {
     #[cfg(windows)]
     use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
@@ -85,7 +85,7 @@ pub(super) struct StreamTransportBuildParts {
     pub(super) state: StreamTransportState,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn stream_transport_state_parts(
     spawn_context: TransportSpawnContext,
     callbacks: ProtocolCallbacks,
@@ -127,7 +127,7 @@ pub(super) fn stream_transport_state_parts(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn new_stream_transport_core(
     parts: StreamTransportBuildParts,
     writer_tx: WriterSender,
@@ -190,7 +190,7 @@ pub(super) fn new_stream_transport_core(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn new_py_stream_transport(
     py: Python<'_>,
     core: &Arc<StreamTransportCore>,
@@ -202,7 +202,7 @@ pub(super) fn new_py_stream_transport(
         },
     )
 }
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn merge_extra(
     mut base: HashMap<String, Py<PyAny>>,
     extra: HashMap<String, Py<PyAny>>,
@@ -210,7 +210,7 @@ pub(super) fn merge_extra(
     base.extend(extra);
     base
 }
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn fail_transport_worker_start(
     py: Python<'_>,
     core: &Arc<StreamTransportCore>,
@@ -222,7 +222,7 @@ pub(super) fn fail_transport_worker_start(
     let _ = core.connection_lost_with_py(py, Some(PyRuntimeError::new_err(message.clone())));
     PyRuntimeError::new_err(message)
 }
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn make_stream_extra(
     py: Python<'_>,
     fd: fd_ops::RawFd,

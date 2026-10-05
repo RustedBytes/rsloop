@@ -39,7 +39,7 @@ pub struct ProcessTransportParams {
 
 impl ProcessTransportParams {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportParams")
     )]
     pub fn new(spawn_context: TransportSpawnContext, child: Child) -> Self {
@@ -65,7 +65,7 @@ impl ProcessTransportParams {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportParams")
     )]
     pub fn with_text_config(mut self, text_config: Option<ProcessTextConfig>) -> Self {
@@ -74,7 +74,7 @@ impl ProcessTransportParams {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportParams")
     )]
     pub fn with_stdio_overrides(

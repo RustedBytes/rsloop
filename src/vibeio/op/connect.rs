@@ -30,7 +30,7 @@ use crate::vibeio::{
     op::Op,
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 fn start_nonblocking_connect(
     fd: std::os::fd::RawFd,
@@ -54,7 +54,7 @@ fn start_nonblocking_connect(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn start_nonblocking_connect(
     socket: std::os::windows::io::RawSocket,
@@ -76,7 +76,7 @@ fn start_nonblocking_connect(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn connectex_bind_error(err_code: i32) -> io::Result<()> {
     // bind documents WSAEINVAL as "already bound". WSAEADDRINUSE instead
@@ -89,7 +89,7 @@ fn connectex_bind_error(err_code: i32) -> io::Result<()> {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn ensure_connectex_bound(socket: SOCKET, address: &ConnectAddress) -> Result<(), io::Error> {
     let AddressStorage::Inet(addr) = &address.storage;
@@ -142,7 +142,7 @@ fn ensure_connectex_bound(socket: SOCKET, address: &ConnectAddress) -> Result<()
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn load_connect_ex(socket: SOCKET) -> Result<WinSock::LPFN_CONNECTEX, io::Error> {
     let mut bytes_returned: u32 = 0;
@@ -181,7 +181,7 @@ fn load_connect_ex(socket: SOCKET) -> Result<WinSock::LPFN_CONNECTEX, io::Error>
     Ok(connect_ex)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn set_connect_context(socket: SOCKET) -> Result<(), io::Error> {
     // SAFETY: this option requires no payload; null and zero provide none.
@@ -228,7 +228,7 @@ struct ConnectAddress {
 
 impl ConnectAddress {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ConnectAddress")
     )]
     fn raw(&self) -> (AddressPointer, AddressLength) {
@@ -241,7 +241,7 @@ impl ConnectAddress {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ConnectAddress")
     )]
     fn validate_len(len: AddressLength, capacity: usize) -> io::Result<()> {
@@ -276,7 +276,7 @@ pub struct ConnectOp<'a> {
 impl<'a> ConnectOp<'a> {
     /// Own aligned address storage; callers cannot submit a dangling raw
     /// pointer.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ConnectOp"))]
     pub fn new(
         handle: &'a InnerRawHandle,
         addr: NativeAddress,
@@ -294,7 +294,7 @@ impl<'a> ConnectOp<'a> {
         ))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ConnectOp"))]
     #[cfg(unix)]
     pub fn new_unix(
         handle: &'a InnerRawHandle,
@@ -317,7 +317,7 @@ impl<'a> ConnectOp<'a> {
         ))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ConnectOp"))]
     fn with_address(handle: &'a InnerRawHandle, addr: ConnectAddress) -> Self {
         Self {
             handle,
@@ -331,7 +331,7 @@ impl<'a> ConnectOp<'a> {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ConnectOp"))]
     #[cfg(any(target_os = "linux", windows, test))]
     fn address(&self) -> (AddressPointer, AddressLength) {
         self.addr.as_ref().expect("connect address missing").raw()
@@ -342,7 +342,7 @@ impl Op for ConnectOp<'_> {
     type Output = ();
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ConnectOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -535,7 +535,7 @@ impl Op for ConnectOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ConnectOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -591,7 +591,7 @@ impl Op for ConnectOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ConnectOp as Op>")
     )]
     #[cfg(windows)]
@@ -650,7 +650,7 @@ impl Op for ConnectOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ConnectOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -673,7 +673,7 @@ impl Op for ConnectOp<'_> {
 
 impl Drop for ConnectOp<'_> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ConnectOp as Drop>")
     )]
     fn drop(&mut self) {

@@ -16,7 +16,7 @@ pub(super) static TRANSPORT_STAGED_WRITES: AtomicU64 = AtomicU64::new(0);
 pub(super) static TRANSPORT_DIRECT_WRITE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 pub(super) static TRANSPORT_POLL_REBINDS: AtomicU64 = AtomicU64::new(0);
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn transport_stats_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -26,7 +26,7 @@ pub(super) fn transport_stats_enabled() -> bool {
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[pyfunction]
 pub fn transport_stats(py: Python<'_>) -> PyResult<Py<PyDict>> {
     let stats = PyDict::new(py);
@@ -56,7 +56,7 @@ pub fn transport_stats(py: Python<'_>) -> PyResult<Py<PyDict>> {
     Ok(stats.unbind())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[pyfunction]
 pub fn reset_transport_stats() {
     TRANSPORT_READ_EVENTS.store(0, Ordering::Relaxed);

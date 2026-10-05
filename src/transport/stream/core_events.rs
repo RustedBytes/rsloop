@@ -55,7 +55,7 @@ enum ReadEventKind {
     Resume,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn read_event_kind(event: &PendingReadEvent) -> ReadEventKind {
     match event {
         PendingReadEvent::Data(_) => ReadEventKind::Data,
@@ -66,7 +66,7 @@ fn read_event_kind(event: &PendingReadEvent) -> ReadEventKind {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn transition_read_event_state(state: u8, event: ReadEventKind) -> Option<u8> {
     match event {
         ReadEventKind::Data if state == READ_EVENT_OPEN => Some(READ_EVENT_OPEN),
@@ -77,12 +77,12 @@ fn transition_read_event_state(state: u8, event: ReadEventKind) -> Option<u8> {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn can_coalesce_read_data(current: usize, incoming: usize, limit: usize) -> bool {
     incoming <= limit.saturating_sub(current)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn read_drain_budget_reached(
     drained_events: usize,
     drained_bytes: usize,
@@ -94,7 +94,7 @@ fn read_drain_budget_reached(
 
 impl StreamTransportCore {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[cfg(windows)]
@@ -104,7 +104,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[cfg(windows)]
@@ -128,7 +128,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[cfg(windows)]
@@ -146,7 +146,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[cfg(windows)]
@@ -175,7 +175,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn close_extra_socket_with_py(&self, py: Python<'_>) {
@@ -192,7 +192,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[inline]
@@ -204,7 +204,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn abort_workers(&self) {
@@ -220,7 +220,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn ensure_writer_worker(self: &Arc<Self>) {
@@ -247,7 +247,7 @@ impl StreamTransportCore {
     /// must follow queued data through that worker; `writer_registered` is a
     /// transient fast-path hint and can race an enqueue.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn writer_is_still_lazy(&self) -> bool {
@@ -258,7 +258,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[inline]
@@ -272,7 +272,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn call_in_loop_context<T>(
@@ -288,7 +288,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn enqueue_pending_read_event(self: &Arc<Self>, event: PendingReadEvent) {
@@ -361,7 +361,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(crate) fn drain_pending_read_events_with_py(
@@ -576,7 +576,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn reschedule_pending_read_events(

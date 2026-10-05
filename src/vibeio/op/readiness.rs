@@ -12,7 +12,7 @@ pub struct ReadinessOp<'a> {
 
 impl<'a> ReadinessOp<'a> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadinessOp")
     )]
     #[inline]
@@ -24,7 +24,7 @@ impl<'a> ReadinessOp<'a> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadinessOp")
     )]
     #[inline]
@@ -40,7 +40,7 @@ impl Op for ReadinessOp<'_> {
     type Output = ();
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadinessOp as Op>")
     )]
     #[inline]

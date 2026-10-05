@@ -27,7 +27,7 @@ pub(super) struct WorkerThread {
 
 impl WorkerThread {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WorkerThread")
     )]
     pub(super) fn spawn(
@@ -38,7 +38,7 @@ impl WorkerThread {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WorkerThread")
     )]
     pub(super) fn spawn_with_stack(
@@ -71,7 +71,7 @@ impl WorkerThread {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WorkerThread")
     )]
     pub(super) fn spawn_interruptible(
@@ -85,7 +85,7 @@ impl WorkerThread {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WorkerThread")
     )]
     pub(super) fn abort(self) {
@@ -93,7 +93,7 @@ impl WorkerThread {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WorkerThread")
     )]
     fn abort_with_timeout(mut self, join_timeout: Duration) {

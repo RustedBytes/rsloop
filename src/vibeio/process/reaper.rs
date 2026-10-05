@@ -26,7 +26,7 @@ impl std::ops::Deref for ReapChild {
     type Target = std::process::Child;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReapChild as std :: ops :: Deref>")
     )]
     fn deref(&self) -> &Self::Target {
@@ -36,7 +36,7 @@ impl std::ops::Deref for ReapChild {
 
 impl std::ops::DerefMut for ReapChild {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReapChild as std :: ops :: DerefMut>")
     )]
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -46,7 +46,7 @@ impl std::ops::DerefMut for ReapChild {
 
 impl Drop for ReapChild {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReapChild as Drop>")
     )]
     fn drop(&mut self) {
@@ -67,7 +67,7 @@ impl Drop for ReapChild {
 
 type PendingChild = std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn wait_pending_child(pending: &PendingChild) {
     // This mutex only transfers ownership; never retain its guard while waiting.
     let child = pending.lock().unwrap().take();
@@ -76,7 +76,7 @@ fn wait_pending_child(pending: &PendingChild) {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn reap_with_worker(
     child: std::process::Child,
     start: impl FnOnce(PendingChild) -> io::Result<()>,
@@ -94,7 +94,7 @@ fn reap_with_worker(
 impl ZombieReaper {
     /// Creates a new zombie reaper instance.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ZombieReaper")
     )]
     #[inline]
@@ -104,7 +104,7 @@ impl ZombieReaper {
 
     /// Waits on a child process asynchronously.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ZombieReaper", future = true)
     )]
     #[inline]
@@ -126,7 +126,7 @@ impl ZombieReaper {
 
     /// Reaps a child process on drop, waiting asynchronously if possible.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ZombieReaper")
     )]
     #[inline]
@@ -145,7 +145,7 @@ impl ZombieReaper {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn wait_in_background((mut child, sender): ZombieReaperMessage) {
     // On spawn failure, dropping the closure still drops the reaping guard.
     let _ = std::thread::Builder::new()
@@ -347,7 +347,7 @@ mod ownership_tests {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub(crate) fn start_zombie_reaper() -> async_channel::Sender<ZombieReaperMessage> {
     let (tx, rx) = async_channel::unbounded();
@@ -368,7 +368,7 @@ struct WaitContext {
 #[cfg(windows)]
 impl Drop for WaitContext {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WaitContext as Drop>")
     )]
     fn drop(&mut self) {
@@ -402,7 +402,7 @@ unsafe extern "system" fn wait_callback(ctx: *mut std::ffi::c_void, _timed_out: 
     // returned, even when this callback finishes before RegisterWait returns.
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn register_process_wait(message: ZombieReaperMessage) {
     use std::sync::{
@@ -450,7 +450,7 @@ fn register_process_wait(message: ZombieReaperMessage) {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 #[cfg(windows)]
 async fn zombie_reaper_fn(rx: async_channel::Receiver<ZombieReaperMessage>) {
@@ -517,7 +517,7 @@ mod windows_wait_tests {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 #[cfg(unix)]
 async fn zombie_reaper_fn(rx: async_channel::Receiver<ZombieReaperMessage>) {
@@ -539,7 +539,7 @@ async fn zombie_reaper_fn(rx: async_channel::Receiver<ZombieReaperMessage>) {
 // ---------------------------------------------------------------------------
 
 /// Probe whether `pidfd_open` is supported on this kernel.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(target_os = "linux")]
 #[inline]
 fn pidfd_available() -> bool {
@@ -565,7 +565,7 @@ fn pidfd_available() -> bool {
 }
 
 /// Convert a raw `waitpid` status into a `std::process::ExitStatus`.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(target_os = "linux")]
 #[inline]
 fn exit_status_from_raw(raw: i32) -> ExitStatus {
@@ -573,7 +573,7 @@ fn exit_status_from_raw(raw: i32) -> ExitStatus {
     ExitStatus::from_raw(raw)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(target_os = "linux")]
 #[inline]
 async fn zombie_reaper_fn_linux_pidfd(rx: async_channel::Receiver<ZombieReaperMessage>) {
@@ -643,7 +643,7 @@ async fn zombie_reaper_fn_linux_pidfd(rx: async_channel::Receiver<ZombieReaperMe
 // Generic Unix reaper implementations (non-Linux or kernel < 5.3)
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 #[cfg(all(unix, feature = "signal"))]
 async fn zombie_reaper_fn_unix(rx: async_channel::Receiver<ZombieReaperMessage>) {
@@ -708,14 +708,14 @@ async fn zombie_reaper_fn_unix(rx: async_channel::Receiver<ZombieReaperMessage>)
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 #[cfg(all(unix, not(feature = "signal")))]
 async fn zombie_reaper_fn_unix(rx: async_channel::Receiver<ZombieReaperMessage>) {
     zombie_reaper_fn_threads(rx).await;
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(unix)]
 async fn zombie_reaper_fn_threads(rx: async_channel::Receiver<ZombieReaperMessage>) {
     // Process support does not require an optional runtime blocking pool.

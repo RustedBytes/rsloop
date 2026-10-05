@@ -73,7 +73,7 @@ pub trait AsyncRead {
 
     /// Read data into vectored buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AsyncRead", future = true)
     )]
     #[inline]
@@ -103,7 +103,7 @@ pub trait AsyncWrite {
 
     /// Write data from vectored buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AsyncWrite", future = true)
     )]
     #[inline]
@@ -119,7 +119,7 @@ pub trait AsyncWrite {
 
     /// Flush the writer.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AsyncWrite", future = true)
     )]
     #[inline]
@@ -136,7 +136,7 @@ pub trait AsInnerRawHandle<'a> {
 
 impl<'a> AsInnerRawHandle<'a> for InnerRawHandle {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<InnerRawHandle as AsInnerRawHandle < 'a >>")
     )]
     #[inline]
@@ -152,7 +152,7 @@ pub trait AsyncReadPoll {
 
     /// Returns a future that resolves when the reader becomes readable.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AsyncReadPoll", future = true)
     )]
     #[inline]
@@ -168,7 +168,7 @@ pub trait AsyncWritePoll {
 
     /// Returns a future that resolves when the writer becomes writable.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AsyncWritePoll", future = true)
     )]
     #[inline]

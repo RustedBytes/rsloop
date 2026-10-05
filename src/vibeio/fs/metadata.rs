@@ -33,7 +33,7 @@ enum MetadataInner {
 
 impl Metadata {
     /// Creates a new `Metadata` from a standard library `std::fs::Metadata`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[inline]
     pub(crate) fn from_std(md: std::fs::Metadata) -> Self {
         Self {
@@ -42,7 +42,7 @@ impl Metadata {
     }
 
     /// Creates a new `Metadata` from a `libc::statx` structure.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[cfg(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3)))]
     #[inline]
     pub(crate) fn from_statx(st: libc::statx) -> Self {
@@ -52,7 +52,7 @@ impl Metadata {
     }
 
     /// Returns the size of the file in bytes.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[allow(clippy::len_without_is_empty)]
     #[inline]
     pub fn len(&self) -> u64 {
@@ -64,7 +64,7 @@ impl Metadata {
     }
 
     /// Returns the file permissions.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[inline]
     pub fn permissions(&self) -> std::fs::Permissions {
         match &self.inner {
@@ -78,7 +78,7 @@ impl Metadata {
     }
 
     /// Returns the file type.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[inline]
     pub fn file_type(&self) -> FileType {
         FileType {
@@ -89,7 +89,7 @@ impl Metadata {
     }
 
     /// Returns `true` if this metadata is for a directory.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[inline]
     pub fn is_dir(&self) -> bool {
         match &self.inner {
@@ -100,7 +100,7 @@ impl Metadata {
     }
 
     /// Returns `true` if this metadata is for a regular file.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[inline]
     pub fn is_file(&self) -> bool {
         match &self.inner {
@@ -111,7 +111,7 @@ impl Metadata {
     }
 
     /// Returns `true` if this metadata is for a symbolic link.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[inline]
     pub fn is_symlink(&self) -> bool {
         match &self.inner {
@@ -127,7 +127,7 @@ impl Metadata {
     ///
     /// This function will return an error in the following situations:
     /// - The timestamp is invalid
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[inline]
     pub fn accessed(&self) -> io::Result<SystemTime> {
         match &self.inner {
@@ -143,7 +143,7 @@ impl Metadata {
     ///
     /// This function will return an error in the following situations:
     /// - The timestamp is invalid
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[inline]
     pub fn created(&self) -> io::Result<SystemTime> {
         match &self.inner {
@@ -159,7 +159,7 @@ impl Metadata {
     ///
     /// This function will return an error in the following situations:
     /// - The timestamp is invalid
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Metadata"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Metadata"))]
     #[inline]
     pub fn modified(&self) -> io::Result<SystemTime> {
         match &self.inner {
@@ -171,7 +171,7 @@ impl Metadata {
 }
 
 /// Converts a `libc::statx_timestamp` to a `SystemTime`.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3)))]
 #[inline]
 fn statx_timestamp_to_system_time(ts: &libc::statx_timestamp) -> io::Result<SystemTime> {
@@ -241,7 +241,7 @@ impl FileType {
     /// # Examples
     ///
     /// The "Filesystem offload" harness example creates and checks a directory.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "FileType"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "FileType"))]
     #[inline]
     pub fn is_dir(&self) -> bool {
         self.is_dir
@@ -252,7 +252,7 @@ impl FileType {
     /// # Examples
     ///
     /// The "Filesystem offload" harness example checks a regular file's type.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "FileType"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "FileType"))]
     #[inline]
     pub fn is_file(&self) -> bool {
         self.is_file
@@ -266,7 +266,7 @@ impl FileType {
     /// [`super::metadata`] follows it and reports the target's file type.
     /// See the Unix symlink checks in "Filesystem offload" in
     /// `tools/vibeio-check/EXAMPLES.md`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "FileType"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "FileType"))]
     #[inline]
     pub fn is_symlink(&self) -> bool {
         self.is_symlink

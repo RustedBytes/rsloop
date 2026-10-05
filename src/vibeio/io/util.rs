@@ -27,7 +27,7 @@ use crate::vibeio::io::{IoBuf, IoBufWithCursor};
 /// reached. Returns the number of bytes copied.
 /// Interrupted reads, writes and the final flush are retried; other errors
 /// terminate the copy. Already-written bytes are not rolled back on error.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn copy<R, W>(reader: &mut R, writer: &mut W) -> Result<u64, io::Error>
 where
     R: AsyncRead + ?Sized,
@@ -129,7 +129,7 @@ pub struct WriteHalf<T> {
 /// helper for full-duplex protocols that need a write to unblock a pending
 /// read; use poll-based streams with `tokio::io::split` or `copy_bidirectional`
 /// instead.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn split<T>(io: T) -> (ReadHalf<T>, WriteHalf<T>)
 where
     T: AsyncRead + AsyncWrite + 'static,
@@ -148,7 +148,7 @@ where
     T: AsyncRead + AsyncWrite + 'static,
 {
     /// Consume the half and return the shared inner `Arc<AsyncMutex<T>>`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadHalf"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadHalf"))]
     pub fn into_inner(self) -> Arc<AsyncMutex<T>> {
         self.inner
     }
@@ -159,7 +159,7 @@ where
     T: AsyncRead + AsyncWrite + 'static,
 {
     /// Consume the half and return the shared inner `Arc<AsyncMutex<T>>`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WriteHalf"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriteHalf"))]
     pub fn into_inner(self) -> Arc<AsyncMutex<T>> {
         self.inner
     }
@@ -170,7 +170,7 @@ where
     T: AsyncRead + AsyncWrite + 'static,
 {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadHalf as AsyncRead>", future = true)
     )]
     async fn read<B: crate::vibeio::io::IoBufMut>(
@@ -183,7 +183,7 @@ where
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadHalf as AsyncRead>", future = true)
     )]
     async fn read_vectored<B: crate::vibeio::io::IoVectoredBufMut>(
@@ -199,7 +199,7 @@ where
     T: AsyncRead + AsyncWrite + 'static,
 {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteHalf as AsyncWrite>", future = true)
     )]
     async fn write<B: crate::vibeio::io::IoBuf>(
@@ -211,7 +211,7 @@ where
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteHalf as AsyncWrite>", future = true)
     )]
     async fn write_vectored<B: crate::vibeio::io::IoVectoredBuf>(
@@ -222,7 +222,7 @@ where
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteHalf as AsyncWrite>", future = true)
     )]
     async fn flush(&mut self) -> Result<(), io::Error> {
@@ -233,7 +233,7 @@ where
 
 impl<R: AsyncRead + ?Sized> AsyncRead for Box<R> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Box as AsyncRead>", future = true)
     )]
     #[inline]
@@ -245,7 +245,7 @@ impl<R: AsyncRead + ?Sized> AsyncRead for Box<R> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Box as AsyncRead>", future = true)
     )]
     #[inline]
@@ -259,7 +259,7 @@ impl<R: AsyncRead + ?Sized> AsyncRead for Box<R> {
 
 impl<R: AsyncRead + ?Sized> AsyncRead for &mut R {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<& mut R as AsyncRead>", future = true)
     )]
     #[inline]
@@ -271,7 +271,7 @@ impl<R: AsyncRead + ?Sized> AsyncRead for &mut R {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<& mut R as AsyncRead>", future = true)
     )]
     #[inline]
@@ -285,7 +285,7 @@ impl<R: AsyncRead + ?Sized> AsyncRead for &mut R {
 
 impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Box as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -297,7 +297,7 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Box as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -309,7 +309,7 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Box as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -320,7 +320,7 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
 
 impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<& mut W as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -332,7 +332,7 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<& mut W as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -344,7 +344,7 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<& mut W as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -363,7 +363,7 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
 ///
 /// Returns (a_to_b, b_to_a). An error in either direction ends the copy
 /// promptly.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn copy_bidirectional<A, B>(mut a: A, mut b: B) -> Result<(u64, u64), io::Error>
 where
     A: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,

@@ -5,7 +5,7 @@
 use crate::vibeio::blocking::DefaultBlockingThreadPool;
 use crate::vibeio::{blocking::BlockingThreadPool, driver::AnyDriver};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(target_os = "linux")]
 fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
     // Linux vendors frequently backport io_uring features, while containers
@@ -14,7 +14,7 @@ fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(target_os = "macos")]
 fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
     let name = c"kern.osproductversion";
@@ -37,7 +37,7 @@ fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
     ensure_supported_macos_release(&buffer, length)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(any(target_os = "macos", test))]
 fn ensure_supported_macos_release(buffer: &[u8], length: usize) -> std::io::Result<()> {
     let invalid = || {
@@ -65,7 +65,7 @@ fn ensure_supported_macos_release(buffer: &[u8], length: usize) -> std::io::Resu
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
     use windows_sys::{
@@ -88,7 +88,7 @@ fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
     ensure_supported_windows_version(info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 fn ensure_supported_windows_version(
     major: u32,
@@ -104,7 +104,7 @@ fn ensure_supported_windows_version(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
     Err(std::io::Error::new(
@@ -137,7 +137,7 @@ pub enum DriverKind {
 impl DriverKind {
     /// Creates a new runtime I/O driver from this kind.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverKind")
     )]
     #[inline]
@@ -179,7 +179,7 @@ impl RuntimeBuilder {
     /// By default, the builder will select the best available driver for the
     /// platform.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeBuilder")
     )]
     pub fn new() -> Self {
@@ -199,7 +199,7 @@ impl RuntimeBuilder {
     /// starve one another. It is intentionally an explicit opt-in because the
     /// vendored crate is also built by its own tests and examples.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeBuilder")
     )]
     #[inline]
@@ -210,7 +210,7 @@ impl RuntimeBuilder {
 
     /// Sets the I/O driver for the runtime.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeBuilder")
     )]
     pub fn driver(mut self, driver_kind: DriverKind) -> Self {
@@ -222,7 +222,7 @@ impl RuntimeBuilder {
     ///
     /// By default, the timer is disabled.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeBuilder")
     )]
     pub fn enable_timer(mut self, enable: bool) -> Self {
@@ -237,7 +237,7 @@ impl RuntimeBuilder {
     /// `async-std` blocking pool. They never run blocking filesystem calls on
     /// the async executor thread.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeBuilder")
     )]
     pub fn enable_fs_offload(mut self, enable: bool) -> Self {
@@ -247,7 +247,7 @@ impl RuntimeBuilder {
 
     /// Sets the blocking thread pool for the runtime.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeBuilder")
     )]
     pub fn blocking_pool(mut self, blocking_pool: Box<dyn BlockingThreadPool>) -> Self {
@@ -258,7 +258,7 @@ impl RuntimeBuilder {
     /// Sets the default blocking thread pool for the runtime with specified
     /// maximum number of threads.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeBuilder")
     )]
     #[cfg(feature = "blocking-default")]
@@ -274,7 +274,7 @@ impl RuntimeBuilder {
     /// If no driver was explicitly set, selects the best available driver for
     /// the platform.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeBuilder")
     )]
     pub fn build(self) -> Result<crate::vibeio::executor::Runtime, std::io::Error> {
@@ -298,7 +298,7 @@ impl RuntimeBuilder {
 
 impl Default for RuntimeBuilder {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RuntimeBuilder as Default>")
     )]
     fn default() -> Self {

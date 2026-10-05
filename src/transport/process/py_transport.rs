@@ -12,7 +12,7 @@ use super::{ProcessCommand, PyProcessTransport};
 #[pymethods]
 impl PyProcessTransport {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessTransport")
     )]
     fn get_pid(&self) -> u32 {
@@ -20,7 +20,7 @@ impl PyProcessTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessTransport")
     )]
     #[inline]
@@ -29,7 +29,7 @@ impl PyProcessTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessTransport")
     )]
     fn is_closing(&self) -> bool {
@@ -37,7 +37,7 @@ impl PyProcessTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessTransport")
     )]
     fn get_pipe_transport(&self, py: Python<'_>, fd: i32) -> Option<Py<PyAny>> {
@@ -45,7 +45,7 @@ impl PyProcessTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessTransport")
     )]
     fn send_signal(&self, sig: i32) -> PyResult<()> {
@@ -59,7 +59,7 @@ impl PyProcessTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessTransport")
     )]
     fn terminate(&self) -> PyResult<()> {
@@ -73,7 +73,7 @@ impl PyProcessTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessTransport")
     )]
     fn kill(&self) -> PyResult<()> {
@@ -87,7 +87,7 @@ impl PyProcessTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessTransport")
     )]
     fn close(&self, py: Python<'_>) -> PyResult<()> {
@@ -103,7 +103,7 @@ impl PyProcessTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessTransport")
     )]
     fn __repr__(&self) -> String {
@@ -116,7 +116,7 @@ impl PyProcessTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessTransport")
     )]
     fn _wait<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {

@@ -51,7 +51,7 @@ pub(super) enum StreamReaderFastPath {
 
 impl StreamReaderFastPath {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamReaderFastPath")
     )]
     pub(super) fn clone_ref(&self, py: Python<'_>) -> Self {
@@ -75,7 +75,7 @@ impl StreamReaderFastPath {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamReaderFastPath")
     )]
     pub(super) fn connection_made(
@@ -120,7 +120,7 @@ impl StreamReaderFastPath {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamReaderFastPath")
     )]
     pub(super) fn feed_data(&self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
@@ -194,7 +194,7 @@ impl StreamReaderFastPath {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamReaderFastPath")
     )]
     pub(super) fn feed_owned_data(
@@ -216,7 +216,7 @@ impl StreamReaderFastPath {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamReaderFastPath")
     )]
     pub(super) fn feed_eof(&self, py: Python<'_>) -> PyResult<()> {
@@ -238,7 +238,7 @@ impl StreamReaderFastPath {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamReaderFastPath")
     )]
     pub(super) fn connection_lost(&self, py: Python<'_>, exc: Option<PyErr>) -> PyResult<()> {
@@ -313,7 +313,7 @@ impl StreamReaderFastPath {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamReaderFastPath")
     )]
     pub(super) fn eof_received(&self, py: Python<'_>) -> PyResult<bool> {
@@ -327,7 +327,7 @@ impl StreamReaderFastPath {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn build_protocol_callbacks(
     py: Python<'_>,
     protocol: &Py<PyAny>,
@@ -381,7 +381,7 @@ pub(super) fn build_protocol_callbacks(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn stream_reader_fast_path(
     py: Python<'_>,
     protocol: &Bound<'_, PyAny>,
@@ -395,7 +395,7 @@ pub(super) fn stream_reader_fast_path(
     asyncio_stream_reader_fast_path(py, protocol)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn native_stream_reader_fast_path(
     py: Python<'_>,
     protocol: &Bound<'_, PyAny>,
@@ -410,7 +410,7 @@ pub(super) fn native_stream_reader_fast_path(
     }))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn generic_stream_reader_fast_path(
     protocol: &Bound<'_, PyAny>,
 ) -> PyResult<Option<StreamReaderFastPath>> {
@@ -423,7 +423,7 @@ pub(super) fn generic_stream_reader_fast_path(
     stream_reader_fast_path_from_reader(Some(protocol.clone().unbind()), reader)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn asyncio_stream_reader_fast_path(
     py: Python<'_>,
     protocol: &Bound<'_, PyAny>,
@@ -441,7 +441,7 @@ pub(super) fn asyncio_stream_reader_fast_path(
     stream_reader_fast_path_from_reader(Some(protocol.clone().unbind()), reader)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn stream_reader_fast_path_from_reader(
     protocol: Option<Py<PyAny>>,
     reader: Bound<'_, PyAny>,

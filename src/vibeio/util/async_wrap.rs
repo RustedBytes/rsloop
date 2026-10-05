@@ -79,7 +79,7 @@ pub struct AsyncWrap<T> {
 }
 
 impl<T> AsyncWrap<T> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AsyncWrap"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AsyncWrap"))]
     fn poll_pending_write(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         if let Some(kind) = self.write_error {
             return Poll::Ready(Err(std::io::Error::new(
@@ -99,7 +99,7 @@ impl<T> AsyncWrap<T> {
         Poll::Ready(result)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AsyncWrap"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AsyncWrap"))]
     fn poll_pending_flush(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         let Some(future) = self.flush_fut.as_mut() else {
             return Poll::Ready(Ok(()));
@@ -111,7 +111,7 @@ impl<T> AsyncWrap<T> {
     }
 
     /// Create a new `AsyncWrap` wrapping the given inner value.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AsyncWrap"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AsyncWrap"))]
     #[inline]
     pub fn new(inner: T) -> Self {
         Self {
@@ -130,7 +130,7 @@ where
     T: crate::vibeio::io::AsyncRead + 'static,
 {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AsyncWrap as AsyncRead>")
     )]
     #[inline]
@@ -202,7 +202,7 @@ where
     T: crate::vibeio::io::AsyncWrite + 'static,
 {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AsyncWrap as AsyncWrite>")
     )]
     #[inline]
@@ -260,7 +260,7 @@ where
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AsyncWrap as AsyncWrite>")
     )]
     #[inline]
@@ -284,7 +284,7 @@ where
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AsyncWrap as AsyncWrite>")
     )]
     #[inline]

@@ -31,7 +31,7 @@ pub struct KqueueInterruptor {
 
 impl Interruptor for KqueueInterruptor {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<KqueueInterruptor as Interruptor>")
     )]
     #[inline]
@@ -49,7 +49,7 @@ struct DriverWaker {
 
 impl DriverWaker {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverWaker")
     )]
     fn new() -> io::Result<Self> {
@@ -60,7 +60,7 @@ impl DriverWaker {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverWaker")
     )]
     #[inline]
@@ -69,7 +69,7 @@ impl DriverWaker {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverWaker")
     )]
     fn acknowledge(&self) {
@@ -102,7 +102,7 @@ struct DriverState {
 
 impl Registration {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "Registration")
     )]
     fn record_readiness(&mut self, filter: i16) -> Option<Waker> {
@@ -133,7 +133,7 @@ pub struct KqueueDriver {
 
 impl KqueueDriver {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     pub(crate) fn new() -> io::Result<Self> {
@@ -165,7 +165,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     #[inline]
@@ -181,7 +181,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     #[inline]
@@ -190,7 +190,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     #[inline]
@@ -199,7 +199,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     fn apply_change(&self, change: libc::kevent) -> io::Result<()> {
@@ -207,7 +207,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     fn apply_changes(&self, changes: &[libc::kevent]) -> io::Result<()> {
@@ -231,7 +231,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     fn delete_filter(&self, fd: RawFd, filter: i16) -> io::Result<()> {
@@ -239,7 +239,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     fn delete_filter_with(mut delete: impl FnMut() -> io::Result<()>) -> io::Result<()> {
@@ -262,7 +262,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     fn install_registration_with(
@@ -294,7 +294,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     fn wait_events(&self, timeout: Option<Duration>) -> io::Result<()> {
@@ -364,7 +364,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     #[inline]
@@ -377,7 +377,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     fn deregister_with(
@@ -439,7 +439,7 @@ impl KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "KqueueDriver")
     )]
     fn reregister_with(
@@ -514,7 +514,7 @@ impl Driver for KqueueDriver {
     type Interruptor = KqueueInterruptor;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<KqueueDriver as Driver>")
     )]
     #[inline]
@@ -523,7 +523,7 @@ impl Driver for KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<KqueueDriver as Driver>")
     )]
     #[inline]
@@ -534,7 +534,7 @@ impl Driver for KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<KqueueDriver as Driver>")
     )]
     fn register_handle(&self, handle: &InnerRawHandle, interest: Interest) -> io::Result<Token> {
@@ -587,7 +587,7 @@ impl Driver for KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<KqueueDriver as Driver>")
     )]
     fn reregister_handle(&self, handle: &InnerRawHandle, interest: Interest) -> io::Result<()> {
@@ -606,7 +606,7 @@ impl Driver for KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<KqueueDriver as Driver>")
     )]
     fn deregister_handle(&self, handle: &InnerRawHandle) -> io::Result<()> {
@@ -614,7 +614,7 @@ impl Driver for KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<KqueueDriver as Driver>")
     )]
     fn submit_poll(
@@ -663,7 +663,7 @@ impl Driver for KqueueDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<KqueueDriver as Driver>")
     )]
     #[inline]

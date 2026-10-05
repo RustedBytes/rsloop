@@ -25,7 +25,7 @@ use crate::fd_ops;
 
 /// Resolve asyncio's optional write-buffer limits without overflowing when a
 /// caller supplies a very large low-water mark.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn normalize_write_buffer_limits(
     high: Option<usize>,
     low: Option<usize>,
@@ -41,7 +41,7 @@ fn normalize_write_buffer_limits(
 
 impl StreamTransportCore {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(crate) fn uses_native_stream_reader(&self) -> bool {
@@ -57,7 +57,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn set_protocol(&self, py: Python<'_>, protocol: Py<PyAny>) -> PyResult<()> {
@@ -69,7 +69,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn get_protocol(&self, py: Python<'_>) -> Py<PyAny> {
@@ -81,7 +81,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn get_extra(&self, py: Python<'_>, name: &str) -> Option<Py<PyAny>> {
@@ -122,7 +122,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[inline]
@@ -134,7 +134,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn runtime_socket_fd(&self) -> Option<fd_ops::RawFd> {
@@ -147,7 +147,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn detach_underlying_stream(&self, py: Python<'_>) {
@@ -165,7 +165,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn release_direct_writer(&self) {
@@ -175,7 +175,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn is_closing_or_lost(&self) -> bool {
@@ -184,7 +184,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn mark_write_eof(&self) {
@@ -195,7 +195,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn is_closing(&self) -> bool {
@@ -203,7 +203,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn can_write_eof(&self) -> bool {
@@ -214,7 +214,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn pause_reading(&self) {
@@ -225,7 +225,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn resume_reading(&self) {
@@ -242,7 +242,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn is_reading(&self) -> bool {
@@ -250,7 +250,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn wait_until_readable(&self) {
@@ -267,7 +267,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore", future = true)
     )]
     pub(super) async fn wait_until_async_readable(&self) {
@@ -284,7 +284,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn acquire_read_buffer_blocking(
@@ -305,7 +305,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore", future = true)
     )]
     pub(super) async fn acquire_read_buffer_async(&self, capacity: usize) -> Option<Vec<u8>> {
@@ -321,7 +321,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn is_writable(&self) -> bool {
@@ -332,7 +332,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn get_write_buffer_size(&self) -> usize {
@@ -344,7 +344,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn get_write_buffer_limits(&self) -> (usize, usize) {
@@ -353,7 +353,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn set_write_buffer_limits(

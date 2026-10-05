@@ -35,7 +35,7 @@ enum ProcessEventKind {
     Lost,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn process_event_kind(event: &PendingProcessEvent) -> ProcessEventKind {
     match event {
         PendingProcessEvent::PipeDataReceived { .. } => ProcessEventKind::PipeData,
@@ -45,13 +45,13 @@ fn process_event_kind(event: &PendingProcessEvent) -> ProcessEventKind {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn process_event_stops_drain(kind: ProcessEventKind) -> bool {
     kind == ProcessEventKind::Lost
 }
 impl ProcessTransportCore {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn enqueue_pending_event(self: &Arc<Self>, event: PendingProcessEvent) {
@@ -73,7 +73,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(crate) fn drain_pending_events_with_py(self: &Arc<Self>, py: Python<'_>) -> PyResult<()> {
@@ -136,7 +136,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn call_protocol_with_tuple(
@@ -159,7 +159,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn call_in_loop_context<T>(
@@ -173,7 +173,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn call_protocol_method0(
@@ -186,7 +186,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn call_protocol_method1(
@@ -200,7 +200,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn call_protocol_method2(
@@ -215,7 +215,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn report_error(&self, err: PyErr, message: &str) {

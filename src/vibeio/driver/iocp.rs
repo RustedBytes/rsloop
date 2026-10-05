@@ -431,7 +431,7 @@ struct AfdPollInfo {
 
 impl AfdPollInfo {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AfdPollInfo")
     )]
     #[inline]
@@ -455,7 +455,7 @@ pub struct IocpInterruptor {
 
 impl Interruptor for IocpInterruptor {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpInterruptor as Interruptor>")
     )]
     #[inline]
@@ -525,7 +525,7 @@ struct DriverState {
 
 impl DriverState {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverState")
     )]
     fn retain_cancelled(
@@ -566,7 +566,7 @@ pub struct IocpDriver {
 
 impl Drop for IocpDriver {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Drop>")
     )]
     fn drop(&mut self) {
@@ -586,7 +586,7 @@ impl Drop for IocpDriver {
 
 impl IocpDriver {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     fn quiesce(&mut self, timeout: Duration) -> io::Result<()> {
@@ -640,7 +640,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -669,7 +669,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -685,7 +685,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -694,7 +694,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -703,7 +703,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -719,7 +719,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -731,7 +731,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -746,7 +746,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -755,7 +755,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -777,7 +777,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -799,7 +799,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -839,7 +839,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -852,7 +852,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -913,7 +913,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -959,7 +959,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -1070,7 +1070,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -1100,7 +1100,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -1133,7 +1133,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -1206,7 +1206,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -1267,7 +1267,7 @@ impl IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "IocpDriver")
     )]
     #[inline]
@@ -1285,7 +1285,7 @@ impl Driver for IocpDriver {
     type Interruptor = IocpInterruptor;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1298,7 +1298,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1317,7 +1317,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1330,7 +1330,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1393,7 +1393,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1420,7 +1420,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1461,7 +1461,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1470,7 +1470,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1514,7 +1514,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1569,7 +1569,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1586,7 +1586,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1602,7 +1602,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1613,7 +1613,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]
@@ -1623,7 +1623,7 @@ impl Driver for IocpDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<IocpDriver as Driver>")
     )]
     #[inline]

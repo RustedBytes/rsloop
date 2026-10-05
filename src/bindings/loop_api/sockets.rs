@@ -34,7 +34,7 @@ pub(super) struct TcpServerSocketOptions {
     pub(super) keep_alive: Option<bool>,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn resolve_stream_addrinfos(
     py: Python<'_>,
     host: Option<Py<PyAny>>,
@@ -71,7 +71,7 @@ struct AddrInfoQuery {
     flags: i32,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn call_getaddrinfo<'py>(
     py: Python<'py>,
     socket_mod: &Bound<'py, PyModule>,
@@ -90,7 +90,7 @@ fn call_getaddrinfo<'py>(
         .call((host, port), Some(&kwargs))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn parse_stream_addrinfo(entry: Bound<'_, PyAny>) -> PyResult<ResolvedStreamAddrinfo> {
     let tuple = entry.cast::<PyTuple>()?;
     Ok((
@@ -101,7 +101,7 @@ fn parse_stream_addrinfo(entry: Bound<'_, PyAny>) -> PyResult<ResolvedStreamAddr
     ))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn build_stream_socket(
     py: Python<'_>,
     family: i32,
@@ -116,7 +116,7 @@ pub(super) fn build_stream_socket(
     Ok(sock.unbind())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 fn set_socket_bool_option_unix(
     py: Python<'_>,
@@ -144,7 +144,7 @@ fn set_socket_bool_option_unix(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn listener_sources_from_sockets(
     py: Python<'_>,
     sockets: &[Py<PyAny>],
@@ -175,7 +175,7 @@ pub(super) fn listener_sources_from_sockets(
     Ok(listeners)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn build_tcp_server_sockets(
     py: Python<'_>,
     host: Option<Py<PyAny>>,
@@ -231,7 +231,7 @@ struct TcpSocketOptionRefs<'py, 'a> {
     so_keepalive: &'a Bound<'py, PyAny>,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn apply_tcp_server_socket_options(
     py: Python<'_>,
     sock: &Py<PyAny>,
@@ -265,13 +265,13 @@ fn apply_tcp_server_socket_options(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 fn set_tcp_keepalive_option(py: Python<'_>, sock: &Py<PyAny>, keep_alive: bool) -> PyResult<()> {
     set_socket_bool_option_unix(py, sock, libc::SOL_SOCKET, libc::SO_KEEPALIVE, keep_alive)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(not(unix))]
 fn set_tcp_keepalive_option(
     py: Python<'_>,
@@ -291,7 +291,7 @@ fn set_tcp_keepalive_option(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn build_unix_server_socket(
     py: Python<'_>,
@@ -318,7 +318,7 @@ pub(super) fn build_unix_server_socket(
 }
 
 /// Builds the unnamed `AF_UNIX` socket used to dial a Unix server.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn build_unix_client_socket(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let socket_mod = py.import("socket")?;

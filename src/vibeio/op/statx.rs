@@ -24,7 +24,7 @@ pub struct StatxOp {
 }
 
 impl StatxOp {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "StatxOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "StatxOp"))]
     #[inline]
     pub fn new(
         driver: Rc<AnyDriver>,
@@ -49,7 +49,7 @@ impl Op for StatxOp {
     type Output = libc::statx;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<StatxOp as Op>")
     )]
     #[inline]
@@ -99,7 +99,7 @@ impl Op for StatxOp {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<StatxOp as Op>")
     )]
     #[inline]
@@ -136,7 +136,7 @@ impl Op for StatxOp {
 
 impl Drop for StatxOp {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<StatxOp as Drop>")
     )]
     fn drop(&mut self) {

@@ -18,7 +18,7 @@ pub struct SymlinkOp {
 }
 
 impl SymlinkOp {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "SymlinkOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "SymlinkOp"))]
     #[inline]
     pub fn new(driver: Rc<AnyDriver>, old_path: CString, new_path: CString) -> Self {
         Self {
@@ -34,7 +34,7 @@ impl Op for SymlinkOp {
     type Output = ();
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<SymlinkOp as Op>")
     )]
     #[inline]
@@ -79,7 +79,7 @@ impl Op for SymlinkOp {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<SymlinkOp as Op>")
     )]
     #[inline]
@@ -109,7 +109,7 @@ impl Op for SymlinkOp {
 
 impl Drop for SymlinkOp {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<SymlinkOp as Drop>")
     )]
     fn drop(&mut self) {

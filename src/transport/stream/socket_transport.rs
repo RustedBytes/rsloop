@@ -47,7 +47,7 @@ use crate::{
     transport::tls::{ClientTlsSettings, ServerTlsSettings},
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn transport_from_socket(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -75,7 +75,7 @@ pub fn transport_from_socket(
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn transport_from_socket_tls(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -108,7 +108,7 @@ pub fn transport_from_socket_tls(
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn transport_from_socket_server_tls(
     py: Python<'_>,
     spawn_context: TransportSpawnContext,
@@ -140,13 +140,13 @@ pub fn transport_from_socket_server_tls(
         true,
     )
 }
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub fn tcp_stream_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
     configured_tcp_stream_from_owned_fd(fd)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub fn unix_stream_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixStream> {
     let stream = from_owned_raw_fd::<StdUnixStream>(fd)?;
@@ -156,12 +156,12 @@ pub fn unix_stream_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixSt
     Ok(stream)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn tcp_listener_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpListener> {
     configured_tcp_listener_from_owned_fd(fd)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub fn unix_listener_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnixListener> {
     let listener = from_owned_raw_fd::<StdUnixListener>(fd)?;
@@ -171,13 +171,13 @@ pub fn unix_listener_from_owned_socket_fd(fd: fd_ops::RawFd) -> PyResult<StdUnix
     Ok(listener)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn duplicate_configured_tcp_stream(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
     let dup = fd_ops::dup_raw_fd(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     configured_tcp_stream_from_owned_fd(dup)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn configured_tcp_stream_from_owned_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpStream> {
     let socket = socket_from_owned_raw(fd)?;
     socket
@@ -189,7 +189,7 @@ pub(super) fn configured_tcp_stream_from_owned_fd(fd: fd_ops::RawFd) -> PyResult
     Ok(socket.into())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn configured_tcp_listener_from_owned_fd(fd: fd_ops::RawFd) -> PyResult<StdTcpListener> {
     let socket = socket_from_owned_raw(fd)?;
     socket
@@ -198,7 +198,7 @@ pub(super) fn configured_tcp_listener_from_owned_fd(fd: fd_ops::RawFd) -> PyResu
     Ok(socket.into())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn duplicate_unix_direct_writer(raw_fd: fd_ops::RawFd) -> PyResult<StdUnixStream> {
     let writer_fd =
@@ -209,7 +209,7 @@ pub(super) fn duplicate_unix_direct_writer(raw_fd: fd_ops::RawFd) -> PyResult<St
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     Ok(direct_writer)
 }
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn spawn_tcp_transport(
     py: Python<'_>,
     mut spawn_context: TransportSpawnContext,
@@ -264,7 +264,7 @@ pub fn spawn_tcp_transport(
     Ok(transport)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub fn spawn_unix_transport(
     py: Python<'_>,

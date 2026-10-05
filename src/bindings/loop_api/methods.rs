@@ -34,7 +34,7 @@ use crate::engine::{CallbackKind, LoopCore, PyTimerHandle};
 
 #[pymethods]
 impl PyLoop {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[new]
     pub(super) fn new() -> Self {
         Self {
@@ -42,7 +42,7 @@ impl PyLoop {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(callback, *args, context=None))]
     fn call_soon(
         &self,
@@ -60,7 +60,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(callback, *args, context=None))]
     fn call_soon_threadsafe(
         &self,
@@ -78,7 +78,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(delay, callback, *args, context=None))]
     fn call_later(
         &self,
@@ -105,7 +105,7 @@ impl PyLoop {
         Py::new(py, PyTimerHandle::new(ready.id(), when, &ready))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(when, callback, *args, context=None))]
     fn call_at(
         &self,
@@ -119,57 +119,57 @@ impl PyLoop {
         self.call_later(py, when - self.time(), callback, args, context)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn time(&self) -> f64 {
         self.core.time()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn stop(&self) -> PyResult<()> {
         self.core.schedule_stop().map_err(Self::map_loop_error)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         lifecycle::close(self, py)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn is_running(&self) -> bool {
         self.core.is_running()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn is_closed(&self) -> bool {
         self.core.is_closed()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn get_debug(&self) -> bool {
         self.core.get_debug()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn set_debug(&self, enabled: bool) {
         self.core.set_debug(enabled);
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn run_forever(slf: Py<Self>, py: Python<'_>) -> PyResult<()> {
         lifecycle::run_forever(slf, py)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn run_until_complete(slf: Py<Self>, py: Python<'_>, future: Py<PyAny>) -> PyResult<Py<PyAny>> {
         lifecycle::run_until_complete(slf, py, future)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn create_future(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
         tasks::create_future(slf, py)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(coro, *, name=None, context=None, eager_start=None, **kwargs))]
     fn create_task(
         slf: Py<Self>,
@@ -193,7 +193,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn set_task_factory(&self, factory: Option<Py<PyAny>>) {
         let installed = factory.is_some();
         self.core
@@ -204,7 +204,7 @@ impl PyLoop {
         self.core.set_task_factory_installed(installed);
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn get_task_factory(&self, py: Python<'_>) -> Option<Py<PyAny>> {
         self.core
             .state
@@ -215,12 +215,12 @@ impl PyLoop {
             .map(|factory| factory.clone_ref(py))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn default_exception_handler(&self, py: Python<'_>, context: Py<PyAny>) -> PyResult<()> {
         self.core.default_exception_handler(py, context)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn get_exception_handler(&self, py: Python<'_>) -> Option<Py<PyAny>> {
         self.core
             .state
@@ -231,7 +231,7 @@ impl PyLoop {
             .map(|handler| handler.clone_ref(py))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn set_exception_handler(&self, handler: Option<Py<PyAny>>) {
         self.core
             .state
@@ -240,14 +240,14 @@ impl PyLoop {
             .exception_handler = handler;
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn call_exception_handler(slf: Py<Self>, py: Python<'_>, context: Py<PyAny>) -> PyResult<()> {
         slf.borrow(py)
             .core
             .call_exception_handler(py, Some(&Self::as_py_any(py, &slf)), context)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn set_default_executor(&self, executor: Option<Py<PyAny>>) {
         self.core
             .state
@@ -256,7 +256,7 @@ impl PyLoop {
             .default_executor = executor;
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[getter]
     fn slow_callback_duration(&self) -> f64 {
         self.core
@@ -266,7 +266,7 @@ impl PyLoop {
             .slow_callback_duration
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[setter(slow_callback_duration)]
     fn set_slow_callback_duration(&self, value: f64) {
         self.core
@@ -276,7 +276,7 @@ impl PyLoop {
             .slow_callback_duration = value;
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn __repr__(&self) -> String {
         format!(
             "<rsloop.Loop running={} closed={} debug={}>",
@@ -286,7 +286,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(protocol_factory, host=None, port=None, *, family=0, flags=1, sock=None, backlog=100, ssl=None, reuse_address=None, reuse_port=None, keep_alive=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None, start_serving=true))]
     #[expect(
         clippy::too_many_arguments,
@@ -332,7 +332,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(protocol_factory, host=None, port=None, *, ssl=None, family=0, proto=0, flags=0, sock=None, local_addr=None, server_hostname=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None, happy_eyeballs_delay=None, interleave=None, all_errors=false))]
     #[expect(
         clippy::too_many_arguments,
@@ -380,7 +380,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(protocol_factory, sock, *, ssl=None, server_hostname=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None))]
     #[allow(clippy::too_many_arguments)]
     fn _create_connection_transport(
@@ -407,7 +407,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(protocol_factory, path=None, *, sock=None, backlog=100, ssl=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None, start_serving=true, cleanup_socket=true))]
     #[expect(
         clippy::too_many_arguments,
@@ -441,7 +441,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(protocol_factory, path=None, *, ssl=None, sock=None, server_hostname=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None))]
     #[expect(
         clippy::too_many_arguments,
@@ -475,7 +475,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(protocol_factory, sock, *, ssl=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None))]
     fn connect_accepted_socket(
         slf: Py<Self>,
@@ -495,7 +495,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(transport, protocol, sslcontext, *, server_side=false, server_hostname=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None))]
     #[expect(
         clippy::too_many_arguments,
@@ -527,7 +527,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(fd, callback, *args))]
     fn add_reader(
         &self,
@@ -539,12 +539,12 @@ impl PyLoop {
         watchers::add_reader(self, py, fd, callback, args)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn remove_reader(&self, py: Python<'_>, fd: &Bound<'_, PyAny>) -> PyResult<bool> {
         watchers::remove_reader(self, py, fd)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(fd, callback, *args))]
     fn add_writer(
         &self,
@@ -556,12 +556,12 @@ impl PyLoop {
         watchers::add_writer(self, py, fd, callback, args)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn remove_writer(&self, py: Python<'_>, fd: &Bound<'_, PyAny>) -> PyResult<bool> {
         watchers::remove_writer(self, py, fd)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn sock_recv(
         slf: Py<Self>,
         py: Python<'_>,
@@ -571,7 +571,7 @@ impl PyLoop {
         sock_ops::sock_recv(slf, py, sock, nbytes)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn sock_recv_into(
         slf: Py<Self>,
         py: Python<'_>,
@@ -581,7 +581,7 @@ impl PyLoop {
         sock_ops::sock_recv_into(slf, py, sock, buf)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn sock_sendall(
         slf: Py<Self>,
         py: Python<'_>,
@@ -591,12 +591,12 @@ impl PyLoop {
         sock_ops::sock_sendall(slf, py, sock, data)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn sock_accept(slf: Py<Self>, py: Python<'_>, sock: Py<PyAny>) -> PyResult<Bound<'_, PyAny>> {
         sock_ops::sock_accept(slf, py, sock)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn sock_connect(
         slf: Py<Self>,
         py: Python<'_>,
@@ -606,7 +606,7 @@ impl PyLoop {
         sock_ops::sock_connect(slf, py, sock, address)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn _sock_connect_fast<'py>(
         slf: Py<Self>,
         py: Python<'py>,
@@ -616,7 +616,7 @@ impl PyLoop {
         sock_ops::sock_connect_fast(slf, py, sock, address)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(host, port, *, family=0, r#type=0, proto=0, flags=0))]
     #[expect(
         clippy::too_many_arguments,
@@ -646,7 +646,7 @@ impl PyLoop {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(sockaddr, flags=0))]
     fn getnameinfo(
         slf: Py<Self>,
@@ -657,7 +657,7 @@ impl PyLoop {
         executor::getnameinfo(slf, py, sockaddr, flags)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(executor, func, *args))]
     fn run_in_executor<'py>(
         slf: Py<Self>,
@@ -669,7 +669,7 @@ impl PyLoop {
         super::executor::run_in_executor(slf, py, executor, func, args)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(protocol_factory, cmd, *, stdin=default_stdio_pipe(), stdout=default_stdio_pipe(), stderr=default_stdio_pipe(), universal_newlines=false, shell=true, bufsize=0, encoding=None, errors=None, text=None, **kwargs))]
     #[expect(
         clippy::too_many_arguments,
@@ -712,7 +712,7 @@ impl PyLoop {
         process_spawn::spawn_subprocess(&slf, py, params, move |py| shell_command(py, &cmd))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(protocol_factory, program, *args, stdin=default_stdio_pipe(), stdout=default_stdio_pipe(), stderr=default_stdio_pipe(), universal_newlines=false, shell=false, bufsize=0, encoding=None, errors=None, text=None, **kwargs))]
     #[expect(
         clippy::too_many_arguments,
@@ -757,7 +757,7 @@ impl PyLoop {
         })
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn connect_read_pipe(
         slf: Py<Self>,
         py: Python<'_>,
@@ -767,7 +767,7 @@ impl PyLoop {
         pipes::connect_read_pipe(slf, py, protocol_factory, pipe)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn connect_write_pipe(
         slf: Py<Self>,
         py: Python<'_>,
@@ -777,7 +777,7 @@ impl PyLoop {
         pipes::connect_write_pipe(slf, py, protocol_factory, pipe)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(sig, callback, *args))]
     fn add_signal_handler(
         slf: Py<Self>,
@@ -789,17 +789,17 @@ impl PyLoop {
         signals::add_signal_handler(slf, py, sig, callback, args)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn remove_signal_handler(slf: Py<Self>, py: Python<'_>, sig: i32) -> PyResult<bool> {
         signals::remove_signal_handler(slf, py, sig)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn shutdown_asyncgens(slf: Py<Self>, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         asyncgens::shutdown_asyncgens(slf, py)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[pyo3(signature=(timeout=None))]
     fn shutdown_default_executor(
         slf: Py<Self>,

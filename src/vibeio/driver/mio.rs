@@ -29,7 +29,7 @@ use crate::vibeio::{
 const MAX_POLL_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 const WAKE_TOKEN: Token = Token(usize::MAX);
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn bounded_poll_timeout(timeout: Option<Duration>) -> Option<Duration> {
     timeout.map(|timeout| timeout.min(MAX_POLL_TIMEOUT))
@@ -41,7 +41,7 @@ pub struct MioInterruptor {
 
 impl Interruptor for MioInterruptor {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MioInterruptor as Interruptor>")
     )]
     #[inline]
@@ -58,7 +58,7 @@ struct DriverWaker(MioWaker);
 #[cfg(not(target_vendor = "apple"))]
 impl DriverWaker {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverWaker")
     )]
     fn new(registry: &Registry) -> io::Result<Self> {
@@ -66,7 +66,7 @@ impl DriverWaker {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverWaker")
     )]
     #[inline]
@@ -75,7 +75,7 @@ impl DriverWaker {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverWaker")
     )]
     #[inline]
@@ -94,7 +94,7 @@ struct DriverWaker {
 #[cfg(target_vendor = "apple")]
 impl DriverWaker {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverWaker")
     )]
     fn new(registry: &Registry) -> io::Result<Self> {
@@ -111,7 +111,7 @@ impl DriverWaker {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverWaker")
     )]
     #[inline]
@@ -120,7 +120,7 @@ impl DriverWaker {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverWaker")
     )]
     fn acknowledge(&self) {
@@ -156,7 +156,7 @@ pub struct MioDriver {
 }
 
 impl MioDriver {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "MioDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "MioDriver"))]
     #[inline]
     pub(crate) fn new() -> Result<Self, io::Error> {
         let poll = Poll::new()?;
@@ -175,7 +175,7 @@ impl MioDriver {
         })
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "MioDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "MioDriver"))]
     #[inline]
     fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) -> Option<Waker> {
         if !waiter_slot
@@ -188,7 +188,7 @@ impl MioDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "MioDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "MioDriver"))]
     #[inline]
     pub(crate) fn wait_timeout(&self, timeout: Option<Duration>) {
         let mut poll = self.poll.borrow_mut();
@@ -232,7 +232,7 @@ impl Driver for MioDriver {
     type Interruptor = MioInterruptor;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MioDriver as Driver>")
     )]
     #[inline]
@@ -241,7 +241,7 @@ impl Driver for MioDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MioDriver as Driver>")
     )]
     #[inline]
@@ -253,7 +253,7 @@ impl Driver for MioDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MioDriver as Driver>")
     )]
     #[inline]
@@ -262,7 +262,7 @@ impl Driver for MioDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MioDriver as Driver>")
     )]
     #[inline]
@@ -273,7 +273,7 @@ impl Driver for MioDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MioDriver as Driver>")
     )]
     #[inline]
@@ -305,7 +305,7 @@ impl Driver for MioDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MioDriver as Driver>")
     )]
     #[inline]
@@ -333,7 +333,7 @@ impl Driver for MioDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MioDriver as Driver>")
     )]
     #[inline]
@@ -365,7 +365,7 @@ impl Driver for MioDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MioDriver as Driver>")
     )]
     #[inline]

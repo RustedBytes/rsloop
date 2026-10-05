@@ -42,7 +42,7 @@ impl OpenOptions {
     ///
     /// By default, all options are set to `false`.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[inline]
@@ -59,7 +59,7 @@ impl OpenOptions {
 
     /// Sets whether the file should be opened for reading.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[inline]
@@ -70,7 +70,7 @@ impl OpenOptions {
 
     /// Sets whether the file should be opened for writing.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[inline]
@@ -81,7 +81,7 @@ impl OpenOptions {
 
     /// Sets whether the file should be opened in append mode.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[inline]
@@ -92,7 +92,7 @@ impl OpenOptions {
 
     /// Sets whether the file should be truncated if it already exists.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[inline]
@@ -103,7 +103,7 @@ impl OpenOptions {
 
     /// Sets whether the file should be created if it does not exist.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[inline]
@@ -115,7 +115,7 @@ impl OpenOptions {
     /// Sets whether the file should be created exclusively (fails if it already
     /// exists).
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[inline]
@@ -128,7 +128,7 @@ impl OpenOptions {
     ///
     /// This is an internal method used to ensure the options are valid.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[inline]
@@ -161,7 +161,7 @@ impl OpenOptions {
     ///
     /// If append mode is enabled, the cursor is set to the end of the file.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[inline]
@@ -196,7 +196,7 @@ impl OpenOptions {
     /// `tools/vibeio-check/EXAMPLES.md`; all modified paths belong to its
     /// scratch directory rather than the current working directory.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions", future = true)
     )]
     #[inline]
@@ -239,7 +239,7 @@ impl OpenOptions {
     ///
     /// This is an internal method used when io_uring is not available.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions", future = true)
     )]
     #[inline]
@@ -279,7 +279,7 @@ impl OpenOptions {
     ///
     /// This is an internal method used when io_uring is not available.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[inline]
@@ -307,7 +307,7 @@ impl OpenOptions {
     ///
     /// This is an internal method used on Linux with io_uring support.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OpenOptions")
     )]
     #[cfg(target_os = "linux")]
@@ -364,7 +364,7 @@ impl Default for OpenOptions {
     ///
     /// This is equivalent to `OpenOptions::new()`.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<OpenOptions as Default>")
     )]
     #[inline]

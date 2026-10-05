@@ -13,7 +13,7 @@ pub type RawFd = i64;
 #[cfg(windows)]
 const FD_POLL_INTERVAL_MS: i32 = 50;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn fileobj_to_fd(_py: Python<'_>, fileobj: &Bound<'_, PyAny>) -> PyResult<RawFd> {
     if let Ok(fd) = fileobj.extract::<RawFd>() {
         return Ok(fd);
@@ -22,12 +22,12 @@ pub fn fileobj_to_fd(_py: Python<'_>, fileobj: &Bound<'_, PyAny>) -> PyResult<Ra
     fileobj.call_method0("fileno")?.extract::<RawFd>()
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn fileobj_keepalive(fileobj: &Bound<'_, PyAny>) -> Py<PyAny> {
     fileobj.clone().unbind().into_any()
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
     #[cfg(unix)]
     {
@@ -55,7 +55,7 @@ enum PollReadiness {
     Ready { read: bool, write: bool },
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 fn decode_poll_revents(read: bool, write: bool, revents: i32) -> PollReadiness {
     if revents & i32::from(libc::POLLNVAL) != 0 {
@@ -69,7 +69,7 @@ fn decode_poll_revents(read: bool, write: bool, revents: i32) -> PollReadiness {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Result<(bool, bool)> {
     if !read && !write {
@@ -116,12 +116,12 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn wait_writable(fd: RawFd) -> PyResult<()> {
     wait_for_interest(fd, false, true).await
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
     #[cfg(windows)]
     {
@@ -170,7 +170,7 @@ async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn is_retryable_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bool> {
     let builtins = py.import("builtins")?;
     let blocking = builtins.getattr("BlockingIOError")?;
@@ -178,12 +178,12 @@ pub fn is_retryable_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bool> 
     Ok(err.is_instance(py, &blocking) || err.is_instance(py, &interrupted))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn raw_fd_fits_c_int(fd: RawFd) -> bool {
     fd >= RawFd::from(libc::c_int::MIN) && fd <= RawFd::from(libc::c_int::MAX)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn raw_fd_to_c_int(fd: RawFd) -> io::Result<libc::c_int> {
     if raw_fd_fits_c_int(fd) {
         Ok(libc::c_int::try_from(fd)
@@ -197,7 +197,7 @@ fn raw_fd_to_c_int(fd: RawFd) -> io::Result<libc::c_int> {
 }
 
 /// A `connect()` attempt that is still completing in the background.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 pub fn is_connect_in_progress_errno(errno: i32) -> bool {
@@ -205,7 +205,7 @@ pub fn is_connect_in_progress_errno(errno: i32) -> bool {
 }
 
 /// The socket is already connected (a benign outcome for `connect()`).
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 pub fn is_already_connected_errno(errno: i32) -> bool {
@@ -214,7 +214,7 @@ pub fn is_already_connected_errno(errno: i32) -> bool {
 
 /// Reads the pending `SO_ERROR` for a socket via a direct `getsockopt`, so the
 /// connect-completion path resolves without acquiring the GIL.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 pub fn socket_so_error(fd: RawFd) -> io::Result<i32> {

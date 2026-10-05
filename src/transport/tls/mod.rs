@@ -51,7 +51,7 @@ pub struct ServerTlsSettings {
     pub ssl_context: Py<PyAny>,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn client_tls_settings(
     py: Python<'_>,
     ssl: &Bound<'_, PyAny>,
@@ -75,7 +75,7 @@ pub fn client_tls_settings(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn cached_client_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<Arc<ClientConfig>> {
     // The Python `SSLContext` owns the capsule, so repeated connections can
     // reuse an `Arc<ClientConfig>` until compatibility metadata changes.
@@ -116,7 +116,7 @@ fn cached_client_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<Arc
     Ok(config)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn server_tls_settings(
     py: Python<'_>,
     ssl: &Bound<'_, PyAny>,
@@ -136,7 +136,7 @@ pub fn server_tls_settings(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn handshake_timeout(value: Option<f64>) -> PyResult<Duration> {
     let secs = value.unwrap_or(DEFAULT_HANDSHAKE_TIMEOUT_SECS);
     if !secs.is_finite() || secs <= 0.0 {
@@ -147,7 +147,7 @@ fn handshake_timeout(value: Option<f64>) -> PyResult<Duration> {
     Ok(Duration::from_secs_f64(secs))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn shutdown_timeout(value: Option<f64>) -> PyResult<Duration> {
     let secs = value.unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT_SECS);
     if !secs.is_finite() || secs <= 0.0 {
@@ -158,7 +158,7 @@ fn shutdown_timeout(value: Option<f64>) -> PyResult<Duration> {
     Ok(Duration::from_secs_f64(secs))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn tls_extra(
     py: Python<'_>,
     ssl_context: &Py<PyAny>,
@@ -172,7 +172,7 @@ pub fn tls_extra(
     extra
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn normalize_client_ssl_context(py: Python<'_>, ssl: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     if ssl.is_none() {
         return Err(PyTypeError::new_err("ssl must not be None"));
@@ -189,7 +189,7 @@ fn normalize_client_ssl_context(py: Python<'_>, ssl: &Bound<'_, PyAny>) -> PyRes
     Ok(ssl.clone().unbind())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn normalize_server_ssl_context(py: Python<'_>, ssl: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
     if ssl.is_none() {
         return Err(PyTypeError::new_err("ssl must not be None"));
@@ -203,7 +203,7 @@ fn normalize_server_ssl_context(py: Python<'_>, ssl: &Bound<'_, PyAny>) -> PyRes
     Ok(ssl.clone().unbind())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn ensure_ssl_context(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
     let ssl_mod = py.import("ssl")?;
     let cls = ssl_mod.getattr("SSLContext")?;
@@ -215,7 +215,7 @@ fn ensure_ssl_context(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> 
     ))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn resolve_server_hostname(
     py: Python<'_>,
     ssl_context: &Py<PyAny>,
@@ -242,7 +242,7 @@ fn resolve_server_hostname(
     Ok("localhost".to_owned())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn build_client_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<ClientConfig> {
     let roots = root_store_from_context(py, ssl_context)?;
     let maybe_identity = load_cert_chain_metadata(py, ssl_context)?;
@@ -275,7 +275,7 @@ struct NoServerCertVerifier;
 
 impl ServerCertVerifier for NoServerCertVerifier {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<NoServerCertVerifier as ServerCertVerifier>")
     )]
     fn verify_server_cert(
@@ -290,7 +290,7 @@ impl ServerCertVerifier for NoServerCertVerifier {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<NoServerCertVerifier as ServerCertVerifier>")
     )]
     fn verify_tls12_signature(
@@ -303,7 +303,7 @@ impl ServerCertVerifier for NoServerCertVerifier {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<NoServerCertVerifier as ServerCertVerifier>")
     )]
     fn verify_tls13_signature(
@@ -316,7 +316,7 @@ impl ServerCertVerifier for NoServerCertVerifier {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<NoServerCertVerifier as ServerCertVerifier>")
     )]
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
@@ -337,7 +337,7 @@ impl ServerCertVerifier for NoServerCertVerifier {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn build_server_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<ServerConfig> {
     let (certs, key) = load_cert_chain_metadata(py, ssl_context)?.ok_or_else(|| {
         PyRuntimeError::new_err(
@@ -367,7 +367,7 @@ fn build_server_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<Serv
     Ok(config)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn default_protocol_versions() -> &'static [&'static SupportedProtocolVersion] {
     rustls::DEFAULT_VERSIONS
 }

@@ -18,7 +18,7 @@ use rustls::{
 
 static NATIVE_ROOTS: OnceLock<Result<Vec<CertificateDer<'static>>, String>> = OnceLock::new();
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn native_root_certificates() -> PyResult<&'static [CertificateDer<'static>]> {
     let result = NATIVE_ROOTS.get_or_init(|| {
         let native = rustls_native_certs::load_native_certs();
@@ -32,7 +32,7 @@ fn native_root_certificates() -> PyResult<&'static [CertificateDer<'static>]> {
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn root_store_from_context(
     py: Python<'_>,
     ssl_context: &Py<PyAny>,
@@ -65,7 +65,7 @@ pub(super) fn root_store_from_context(
     Ok(roots)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn load_cert_chain_metadata(
     py: Python<'_>,
     ssl_context: &Py<PyAny>,
@@ -88,7 +88,7 @@ pub(super) fn load_cert_chain_metadata(
     load_pem_identity(&certfile, &keyfile, password.as_deref())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn load_pem_identity(
     certfile: &str,
     keyfile: &str,
@@ -115,7 +115,7 @@ fn load_pem_identity(
     Ok(Some((certs, key)))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn load_private_key(key_data: Vec<u8>) -> PyResult<PrivateKeyDer<'static>> {
     let mut pkcs8_reader = BufReader::new(Cursor::new(key_data.clone()));
     if let Some(key) = rustls_pemfile::pkcs8_private_keys(&mut pkcs8_reader)
@@ -147,22 +147,22 @@ fn load_private_key(key_data: Vec<u8>) -> PyResult<PrivateKeyDer<'static>> {
     Err(PyRuntimeError::new_err("no supported private key found"))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn verify_mode_value(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<i32> {
     ssl_context.getattr(py, "verify_mode")?.extract::<i32>(py)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn ssl_verify_constant(py: Python<'_>, name: &str) -> PyResult<i32> {
     py.import("ssl")?.getattr(name)?.extract::<i32>()
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn io_err_to_py(err: io::Error) -> PyErr {
     PyRuntimeError::new_err(err.to_string())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn to_py_tls_err(err: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(err.to_string())
 }

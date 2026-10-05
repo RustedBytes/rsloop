@@ -53,7 +53,7 @@ def main() -> int:
     env = os.environ.copy()
     if args.all_features or any(
         name in (args.features or "").split(",")
-        for name in ("hotpath-profile", "hotpath-alloc-profile")
+        for name in ("profile", "hotpath-alloc-profile")
     ):
         # hotpath wraps nested async bodies in additional futures. In debug
         # builds, moving owned I/O arrays through those wrappers can exceed

@@ -24,7 +24,7 @@ pub struct AcceptUnixOp<'a> {
 
 impl<'a> AcceptUnixOp<'a> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AcceptUnixOp")
     )]
     #[inline]
@@ -40,7 +40,7 @@ impl Op for AcceptUnixOp<'_> {
     type Output = OwnedFd;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptUnixOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -49,7 +49,7 @@ impl Op for AcceptUnixOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptUnixOp as Op>")
     )]
     #[inline]
@@ -106,7 +106,7 @@ impl Op for AcceptUnixOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptUnixOp as Op>")
     )]
     #[inline]
@@ -154,7 +154,7 @@ impl Op for AcceptUnixOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptUnixOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -179,7 +179,7 @@ impl Op for AcceptUnixOp<'_> {
 
 impl Drop for AcceptUnixOp<'_> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptUnixOp as Drop>")
     )]
     #[inline]

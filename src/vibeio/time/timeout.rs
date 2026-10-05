@@ -16,7 +16,7 @@ pub struct TimeoutError;
 
 impl fmt::Display for TimeoutError {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<TimeoutError as fmt :: Display>")
     )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -45,14 +45,14 @@ pin_project_lite::pin_project! {
 
 impl<F> Timeout<F> {
     /// Create a new `Timeout` future.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timeout"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Timeout"))]
     #[inline]
     pub fn new(future: F, duration: Duration) -> Self {
         Self::new_at(future, super::deadline_after(Instant::now(), duration))
     }
 
     /// Create a timeout with an absolute deadline, without rebasing it on now.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timeout"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Timeout"))]
     #[inline]
     pub fn new_at(future: F, deadline: Instant) -> Self {
         Self {
@@ -70,7 +70,7 @@ where
     type Output = Result<F::Output, TimeoutError>;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Timeout as Future>")
     )]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -116,7 +116,7 @@ where
 /// Pending futures require a timer-enabled runtime. See
 /// `tools/vibeio-check/EXAMPLES.md` for executable success and timeout
 /// examples.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 pub async fn timeout<T>(
     duration: Duration,

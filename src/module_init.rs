@@ -18,7 +18,7 @@ use crate::{
     },
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn add_module_contents(m: &Bound<'_, PyModule>) -> PyResult<()> {
     add_module_classes(m)?;
     add_event_loop_functions(m)?;
@@ -28,7 +28,7 @@ pub(crate) fn add_module_contents(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn add_module_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLoop>()?;
     crate::bindings::install_fast_callbacks(m.py())?;
@@ -43,7 +43,7 @@ fn add_module_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn add_event_loop_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(new_event_loop, m)?)?;
     m.add_function(wrap_pyfunction!(asyncgen_firstiter_hook, m)?)?;
@@ -53,19 +53,19 @@ fn add_event_loop_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn add_stream_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(open_connection, m)?)?;
     m.add_function(wrap_pyfunction!(start_server, m)?)?;
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn add_diagnostic_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(build_info, m)?)?;
     m.add_function(wrap_pyfunction!(transport_stats, m)?)?;
     m.add_function(wrap_pyfunction!(reset_transport_stats, m)?)?;
-    #[cfg(feature = "hotpath-profile")]
+    #[cfg(feature = "profile")]
     {
         m.add_function(wrap_pyfunction!(crate::profile::hotpath_start, m)?)?;
         m.add_function(wrap_pyfunction!(crate::profile::hotpath_stop, m)?)?;
@@ -73,7 +73,7 @@ fn add_diagnostic_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn add_module_compat_aliases(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("_future_done_stop", m.getattr("future_done_stop")?)?;
     m.add(

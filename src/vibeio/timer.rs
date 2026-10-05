@@ -31,7 +31,7 @@ struct DeadlineHeap {
 
 impl DeadlineHeap {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DeadlineHeap")
     )]
     #[inline]
@@ -44,7 +44,7 @@ impl DeadlineHeap {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DeadlineHeap")
     )]
     #[inline]
@@ -55,7 +55,7 @@ impl DeadlineHeap {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DeadlineHeap")
     )]
     #[inline]
@@ -66,7 +66,7 @@ impl DeadlineHeap {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DeadlineHeap")
     )]
     fn sift_up(&mut self, mut index: usize) {
@@ -81,7 +81,7 @@ impl DeadlineHeap {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DeadlineHeap")
     )]
     fn sift_down(&mut self, mut index: usize) {
@@ -106,7 +106,7 @@ impl DeadlineHeap {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DeadlineHeap")
     )]
     #[inline]
@@ -132,7 +132,7 @@ impl DeadlineHeap {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DeadlineHeap")
     )]
     #[inline]
@@ -141,7 +141,7 @@ impl DeadlineHeap {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DeadlineHeap")
     )]
     fn remove(&mut self, handle: TimerHandle) -> Option<Waker> {
@@ -170,7 +170,7 @@ impl DeadlineHeap {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DeadlineHeap")
     )]
     #[inline]
@@ -196,7 +196,7 @@ pub struct Timer {
 }
 
 impl Timer {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Timer"))]
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -207,7 +207,7 @@ impl Timer {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Timer"))]
     #[inline]
     fn now(&self) -> Instant {
         #[cfg(test)]
@@ -217,7 +217,7 @@ impl Timer {
         Instant::now()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Timer"))]
     #[inline]
     pub fn submit(&self, deadline: Instant, waker: Waker) -> Option<TimerHandle> {
         if deadline <= self.now() {
@@ -227,7 +227,7 @@ impl Timer {
         Some(self.deadlines.borrow_mut().insert(deadline, waker))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Timer"))]
     #[inline]
     pub fn cancel(&self, handle: TimerHandle) {
         let waker = self.deadlines.borrow_mut().remove(handle);
@@ -237,7 +237,7 @@ impl Timer {
 
     /// Replace a live registration's waiter without changing its heap position.
     /// Returns false if the handle has expired, been cancelled, or been reused.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Timer"))]
     pub(crate) fn update_waker(&self, handle: TimerHandle, waker: &Waker) -> bool {
         {
             let deadlines = self.deadlines.borrow();
@@ -274,7 +274,7 @@ impl Timer {
     /// Wakes every expired timer and returns the exact duration until the next
     /// deadline. Unlike the old millisecond wheel this never discards partial
     /// elapsed time, so frequent scheduler spins cannot freeze timer progress.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Timer"))]
     #[inline]
     pub fn spin_and_get_deadline(&self) -> (Option<Duration>, bool) {
         let now = self.now();
@@ -305,7 +305,7 @@ impl Timer {
 
 impl Default for Timer {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Timer as Default>")
     )]
     fn default() -> Self {

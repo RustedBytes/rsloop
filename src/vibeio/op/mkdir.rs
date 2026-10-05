@@ -18,7 +18,7 @@ pub struct MkDirOp {
 }
 
 impl MkDirOp {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "MkDirOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "MkDirOp"))]
     #[inline]
     pub fn new(driver: Rc<AnyDriver>, path: CString, mode: libc::mode_t) -> Self {
         Self {
@@ -34,7 +34,7 @@ impl Op for MkDirOp {
     type Output = ();
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MkDirOp as Op>")
     )]
     #[inline]
@@ -79,7 +79,7 @@ impl Op for MkDirOp {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MkDirOp as Op>")
     )]
     #[inline]
@@ -103,7 +103,7 @@ impl Op for MkDirOp {
 
 impl Drop for MkDirOp {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<MkDirOp as Drop>")
     )]
     fn drop(&mut self) {

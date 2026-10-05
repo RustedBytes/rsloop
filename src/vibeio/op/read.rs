@@ -28,7 +28,7 @@ use crate::vibeio::{
     },
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn socket_read(socket: SOCKET, buf: &mut impl IoBufMut) -> io::Result<usize> {
@@ -80,7 +80,7 @@ pub struct ReadOp<'a, B: IoBufMut> {
 }
 
 impl<'a, B: IoBufMut> ReadOp<'a, B> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B) -> Self {
         Self {
@@ -90,7 +90,7 @@ impl<'a, B: IoBufMut> ReadOp<'a, B> {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -105,7 +105,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
     type Output = usize;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -157,7 +157,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -209,7 +209,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadOp as Op>")
     )]
     #[cfg(windows)]
@@ -283,7 +283,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -310,7 +310,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
 
 impl<B: IoBufMut> Drop for ReadOp<'_, B> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadOp as Drop>")
     )]
     #[inline]

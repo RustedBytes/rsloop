@@ -62,19 +62,19 @@ pub struct PyLoop {
 }
 
 impl PyLoop {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[inline]
     fn as_py_any(py: Python<'_>, slf: &Py<Self>) -> Py<PyAny> {
         slf.clone_ref(py).into_any()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[inline]
     fn task_locals(py: Python<'_>, slf: &Py<Self>) -> PyResult<TaskLocals> {
         TaskLocals::new(Self::as_py_any(py, slf).into_bound(py)).copy_context(py)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn schedule_now(
         &self,
         py: Python<'_>,
@@ -89,13 +89,13 @@ impl PyLoop {
         Ok(handle.into_any())
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     #[allow(dead_code)]
     fn not_implemented(feature: &str) -> PyErr {
         PyNotImplementedError::new_err(format!("{feature} is not implemented in rust-impl yet"))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyLoop"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     fn map_loop_error(err: LoopCoreError) -> PyErr {
         PyRuntimeError::new_err(err.to_string())
     }
@@ -106,7 +106,7 @@ impl PyLoop {
 ///
 /// The returned loop is not installed as the current event loop and does not
 /// start running until Python calls `run_forever()` or `run_until_complete()`.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn new_event_loop(py: Python<'_>) -> PyResult<Py<PyLoop>> {
     Py::new(py, PyLoop::new())
 }

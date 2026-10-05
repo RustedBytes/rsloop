@@ -32,7 +32,7 @@ pub struct ReadAtOp<'a, B: IoBufMut> {
 }
 
 impl<'a, B: IoBufMut> ReadAtOp<'a, B> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadAtOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadAtOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B, offset: u64) -> Self {
         Self {
@@ -43,7 +43,7 @@ impl<'a, B: IoBufMut> ReadAtOp<'a, B> {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadAtOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadAtOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -58,7 +58,7 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
     type Output = usize;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadAtOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -109,7 +109,7 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadAtOp as Op>")
     )]
     #[cfg(windows)]
@@ -167,7 +167,7 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadAtOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -202,7 +202,7 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
 
 impl<B: IoBufMut> Drop for ReadAtOp<'_, B> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ReadAtOp as Drop>")
     )]
     #[inline]

@@ -21,7 +21,7 @@ use crate::vibeio::{
     op::{Op, io_util::CompletionBuffer},
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 pub(crate) fn validate_windows_write_offset(offset: u64) -> io::Result<()> {
     // WriteFile interprets both offset words set to all-one bits as append.
@@ -46,7 +46,7 @@ pub struct WriteAtOp<'a, B: IoBuf> {
 }
 
 impl<'a, B: IoBuf> WriteAtOp<'a, B> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WriteAtOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriteAtOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B, offset: u64) -> Self {
         Self {
@@ -57,7 +57,7 @@ impl<'a, B: IoBuf> WriteAtOp<'a, B> {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WriteAtOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriteAtOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -72,7 +72,7 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
     type Output = usize;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteAtOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -111,7 +111,7 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteAtOp as Op>")
     )]
     #[cfg(windows)]
@@ -166,7 +166,7 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteAtOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -197,7 +197,7 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
 
 impl<B: IoBuf> Drop for WriteAtOp<'_, B> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteAtOp as Drop>")
     )]
     #[inline]

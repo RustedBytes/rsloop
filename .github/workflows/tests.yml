@@ -64,7 +64,7 @@ jobs:
   vibeio-native:
     uses: ./.github/workflows/vibeio-native.yml
 
-  hotpath-profile:
+  profile:
     uses: ./.github/workflows/hotpath.yml
 
   clippy:

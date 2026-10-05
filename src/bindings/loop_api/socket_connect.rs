@@ -21,7 +21,7 @@ use crate::fd_ops;
 
 const WSAEISCONN: i32 = 10056;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub(super) async fn connect_socket_to_address(sock: Py<PyAny>, address: Py<PyAny>) -> PyResult<()> {
     // Initiate the connect and look up the descriptor in a single GIL
     // acquisition. Every `Python::attach` here runs on the async runtime's
@@ -69,7 +69,7 @@ pub(super) async fn connect_socket_to_address(sock: Py<PyAny>, address: Py<PyAny
 /// Reads `SO_ERROR` for a connecting socket. On Unix this uses a direct
 /// `getsockopt` so the hot connect-completion path never re-acquires the GIL
 /// (or re-imports the `socket` module); Windows keeps the Python fallback.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn connect_so_error(fd: fd_ops::RawFd, sock: &Py<PyAny>) -> PyResult<i32> {
     #[cfg(unix)]
     {
@@ -101,7 +101,7 @@ fn connect_so_error(fd: fd_ops::RawFd, sock: &Py<PyAny>) -> PyResult<i32> {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn socket_so_error(py: Python<'_>, sock: &Py<PyAny>) -> PyResult<i32> {
     let socket_mod = py.import("socket")?;
@@ -116,7 +116,7 @@ fn socket_so_error(py: Python<'_>, sock: &Py<PyAny>) -> PyResult<i32> {
     .extract(py)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn socket_os_error(py: Python<'_>, errno: i32) -> PyResult<()> {
     let builtins = py.import("builtins")?;
     let oserror = builtins.getattr("OSError")?;
@@ -126,7 +126,7 @@ fn socket_os_error(py: Python<'_>, errno: i32) -> PyResult<()> {
     ))?))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn is_already_connected_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bool> {
     let builtins = py.import("builtins")?;
     let oserror = builtins.getattr("OSError")?;
@@ -141,13 +141,13 @@ fn is_already_connected_socket_error(py: Python<'_>, err: &PyErr) -> PyResult<bo
         .is_some_and(is_already_connected_errno))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn is_already_connected_errno(errno: i32) -> bool {
     errno == libc::EISCONN || errno == WSAEISCONN
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn is_connect_in_progress_errno(errno: i32) -> bool {
     errno == libc::EINPROGRESS || errno == libc::EALREADY || errno == libc::EWOULDBLOCK
@@ -159,7 +159,7 @@ fn is_connect_in_progress_errno(errno: i32) -> bool {
 /// every non-blocking connect). Returns `Some(errno)` when the libc path ran
 /// (0 = connected immediately), or `None` when the address is not a plain
 /// numeric literal and the caller must fall back to `socket.connect`.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 fn libc_connect_numeric(fd: fd_ops::RawFd, address: &Bound<'_, PyAny>) -> PyResult<Option<i32>> {
     let Ok(host_obj) = address.get_item(0) else {
@@ -194,7 +194,7 @@ fn libc_connect_numeric(fd: fd_ops::RawFd, address: &Bound<'_, PyAny>) -> PyResu
 /// Initiates a non-blocking connect on the loop thread and, when it does not
 /// complete synchronously, hands the writability wait to the vibeio reactor on
 /// this loop's own runtime. Returns the loop Future the caller awaits.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn fast_sock_connect<'py>(
     slf: &Py<PyLoop>,

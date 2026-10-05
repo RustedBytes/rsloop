@@ -29,7 +29,7 @@ impl LoopSpawnEnv {
     /// Snapshots the loop and the caller's context. Must run on the calling
     /// thread, before the transport future is constructed.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "LoopSpawnEnv")
     )]
     pub(super) fn capture(py: Python<'_>, slf: &Py<PyLoop>) -> PyResult<Self> {
@@ -48,7 +48,7 @@ impl LoopSpawnEnv {
     /// `protocol` is the protocol instance, or the protocol factory for
     /// server creation.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "LoopSpawnEnv")
     )]
     pub(super) fn spawn_context(
@@ -69,7 +69,7 @@ impl LoopSpawnEnv {
     /// Instantiates the protocol in the caller's context, rejecting the call if
     /// the loop is no longer running.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "LoopSpawnEnv")
     )]
     pub(super) fn call_protocol_factory(
@@ -91,7 +91,7 @@ impl LoopSpawnEnv {
 
 /// The `(transport, protocol)` tuple every `asyncio` transport-creating method
 /// resolves to.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn transport_protocol_pair(
     py: Python<'_>,
     transport: Py<PyAny>,
@@ -101,7 +101,7 @@ pub(super) fn transport_protocol_pair(
     Ok(result.unbind().into_any())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn is_asyncio_subprocess_stream_protocol(
     py: Python<'_>,
     protocol: &Py<PyAny>,

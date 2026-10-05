@@ -114,7 +114,7 @@ impl SignalKind {
 
 impl From<SignalKind> for libc::c_int {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<c_int as From < SignalKind >>")
     )]
     #[inline]
@@ -168,7 +168,7 @@ impl PendingSignals {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PendingSignals")
     )]
     fn take(&self, signum: usize) -> bool {
@@ -199,7 +199,7 @@ impl Signal {
     ///
     /// Creates a new signal listener for the given signal kind. If this is the
     /// first listener for this signal, the signal handler will be installed.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Signal"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Signal"))]
     pub fn new(kind: SignalKind) -> io::Result<Self> {
         let state = register_signal(kind)?;
         let last_seen = state.counter.load(Ordering::Acquire);
@@ -213,7 +213,7 @@ impl Signal {
     }
 
     /// Returns the signal kind being listened to.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Signal"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Signal"))]
     #[inline]
     pub fn kind(&self) -> SignalKind {
         self.kind
@@ -226,14 +226,14 @@ impl Signal {
     /// Repeated occurrences may coalesce before dispatch; this API does not
     /// preserve exact counts or ordering, including for real-time signal kinds.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "Signal", future = true)
     )]
     pub async fn recv(&mut self) -> io::Result<()> {
         poll_fn(|cx| self.poll_recv(cx)).await
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Signal"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Signal"))]
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         // Serialize checking the counter and registering with dispatcher wakeup.
         // Each listener owns one slot so its drop can release its waker.
@@ -272,7 +272,7 @@ impl Signal {
 
 impl Drop for Signal {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Signal as Drop>")
     )]
     fn drop(&mut self) {
@@ -289,7 +289,7 @@ impl Drop for Signal {
 /// Convenience builder for Unix signals.
 ///
 /// This is a wrapper around `Signal::new()` that provides a more ergonomic API.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub fn signal(kind: SignalKind) -> io::Result<Signal> {
     Signal::new(kind)
@@ -305,7 +305,7 @@ pub struct CtrlC {
 
 impl CtrlC {
     /// Create a new Ctrl-C listener.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "CtrlC"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CtrlC"))]
     pub fn new() -> io::Result<Self> {
         Ok(Self {
             signal: Signal::new(SignalKind::interrupt())?,
@@ -317,7 +317,7 @@ impl Future for CtrlC {
     type Output = io::Result<()>;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<CtrlC as Future>")
     )]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -329,13 +329,13 @@ impl Future for CtrlC {
 /// Cross-platform Ctrl-C support.
 ///
 /// Returns a future that resolves when Ctrl-C is received.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub fn ctrl_c() -> io::Result<CtrlC> {
     CtrlC::new()
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn register_signal(kind: SignalKind) -> io::Result<Arc<SignalState>> {
     if !(1..SIGNAL_SLOTS as libc::c_int).contains(&kind.0) {
         return Err(io::Error::new(
@@ -368,7 +368,7 @@ fn register_signal(kind: SignalKind) -> io::Result<Arc<SignalState>> {
     Ok(state)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn unregister_signal(kind: SignalKind) {
     let Some(registry) = REGISTRY.get() else {
         return;
@@ -394,17 +394,17 @@ fn unregister_signal(kind: SignalKind) {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn registry() -> io::Result<&'static Arc<Registry>> {
     REGISTRY.get_or_try_init(init_registry)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn init_registry() -> io::Result<Arc<Registry>> {
     init_registry_with_start(start_dispatch_thread)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn init_registry_with_start(
     start: impl FnOnce(Arc<Registry>) -> io::Result<()>,
 ) -> io::Result<Arc<Registry>> {
@@ -422,7 +422,7 @@ fn init_registry_with_start(
     Ok(registry)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn start_dispatch_thread(registry: Arc<Registry>) -> io::Result<()> {
     std::thread::Builder::new()
         .name("vibeio-signal-dispatch".to_string())
@@ -431,7 +431,7 @@ fn start_dispatch_thread(registry: Arc<Registry>) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn dispatch_loop(registry: Arc<Registry>) {
     let read_fd = registry.read_fd.as_raw_fd();
     let mut buf = [0u8; 128];
@@ -460,7 +460,7 @@ fn dispatch_loop(registry: Arc<Registry>) {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn dispatch_signal(registry: &Registry, signum: libc::c_int) {
     let state = {
         let signals = registry.signals.lock().unwrap();
@@ -507,7 +507,7 @@ fn write_signal_notification(fd: RawFd, signum: libc::c_int) {
     errno::set_errno(saved_errno);
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn install_handler(signum: libc::c_int) -> io::Result<libc::sigaction> {
     // SAFETY: sigaction's C fields admit zero initialization. The handler,
     // flags and mask are set below before the structure is passed to the OS.
@@ -534,7 +534,7 @@ fn install_handler(signum: libc::c_int) -> io::Result<libc::sigaction> {
 /// # Safety
 /// `prev` must be the action saved for this signal, with any handler it refers
 /// to still valid for subsequent signal delivery.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 unsafe fn restore_handler(signum: libc::c_int, prev: &libc::sigaction) -> io::Result<()> {
     // SAFETY: the caller supplies the previous action returned by sigaction;
     // its handler and flags are restored unchanged. No old-action output is
@@ -546,7 +546,7 @@ unsafe fn restore_handler(signum: libc::c_int, prev: &libc::sigaction) -> io::Re
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn create_pipe() -> io::Result<(OwnedFd, OwnedFd)> {
     let (reader, writer) = std::io::pipe()?;
     crate::vibeio::fd_inner::set_nonblocking(writer.as_raw_fd(), true)?;

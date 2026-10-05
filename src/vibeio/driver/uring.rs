@@ -32,7 +32,7 @@ const COMPLETION_KEY_KIND: u8 = 1;
 const ACCEPT_KEY_KIND: u8 = 2;
 const MEMORY_FALLBACK_ENTRIES: [u32; 2] = [256, 64];
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn build_with_memory_fallback<T>(
     entries: u32,
     mut build: impl FnMut(u32) -> io::Result<T>,
@@ -68,7 +68,7 @@ pub struct UringInterruptor {
 
 impl Interruptor for UringInterruptor {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringInterruptor as Interruptor>")
     )]
     #[inline]
@@ -130,7 +130,7 @@ struct Completion {
 
 impl Drop for Completion {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Completion as Drop>")
     )]
     fn drop(&mut self) {
@@ -160,7 +160,7 @@ struct CompletionBatch {
 
 impl CompletionBatch {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "CompletionBatch")
     )]
     fn dispatch(self) {
@@ -178,7 +178,7 @@ impl CompletionBatch {
 
 impl DriverState {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DriverState")
     )]
     fn ignore_completion(
@@ -217,7 +217,7 @@ pub struct UringDriver {
 
 impl Drop for UringDriver {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Drop>")
     )]
     fn drop(&mut self) {
@@ -237,7 +237,7 @@ impl Drop for UringDriver {
 impl UringDriver {
     /// Stop all submitted work before retained operation storage is released.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     fn quiesce(&mut self) -> io::Result<()> {
@@ -282,7 +282,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     fn drain_shutdown_cq(ring: &mut IoUring, state: &mut DriverState) {
@@ -307,7 +307,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -351,7 +351,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -367,7 +367,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -376,7 +376,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -387,7 +387,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -396,7 +396,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -405,7 +405,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -416,7 +416,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -425,7 +425,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -441,7 +441,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -455,7 +455,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -483,7 +483,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -502,7 +502,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -555,7 +555,7 @@ impl UringDriver {
 
     /// Drain the completion queue, deferring user callbacks until borrows end.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -673,7 +673,7 @@ impl UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
     #[inline]
@@ -893,7 +893,7 @@ impl Driver for UringDriver {
     type Interruptor = UringInterruptor;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -906,7 +906,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -915,7 +915,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -928,7 +928,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -939,7 +939,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -952,7 +952,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -995,7 +995,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -1022,7 +1022,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -1055,7 +1055,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -1064,7 +1064,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -1131,7 +1131,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -1167,7 +1167,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -1184,7 +1184,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     fn poll_multishot_accept(
@@ -1263,7 +1263,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]
@@ -1279,7 +1279,7 @@ impl Driver for UringDriver {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UringDriver as Driver>")
     )]
     #[inline]

@@ -19,7 +19,7 @@ pub struct HardLinkOp {
 
 impl HardLinkOp {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "HardLinkOp")
     )]
     #[inline]
@@ -37,7 +37,7 @@ impl Op for HardLinkOp {
     type Output = ();
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<HardLinkOp as Op>")
     )]
     #[inline]
@@ -82,7 +82,7 @@ impl Op for HardLinkOp {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<HardLinkOp as Op>")
     )]
     #[inline]
@@ -113,7 +113,7 @@ impl Op for HardLinkOp {
 
 impl Drop for HardLinkOp {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<HardLinkOp as Drop>")
     )]
     fn drop(&mut self) {

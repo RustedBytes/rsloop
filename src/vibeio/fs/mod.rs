@@ -55,7 +55,7 @@ use crate::vibeio::op::UnlinkOp;
 /// A caller-selected runtime pool takes precedence. The shared async-std pool
 /// keeps the async filesystem API non-blocking when that optional integration
 /// is disabled or when the future is polled by another executor.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 async fn run_blocking_fs<T, F>(operation: F) -> std::io::Result<T>
 where
     T: Send + 'static,
@@ -86,7 +86,7 @@ where
 /// - `path` already exists
 /// - The process lacks permissions to create the symlink
 /// - The platform does not support symbolic links
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 pub fn windows_symlink_dir(path: String, target: String) -> std::io::Result<()> {
     std::os::windows::fs::symlink_dir(target, path)
@@ -108,7 +108,7 @@ pub fn windows_symlink_dir(path: String, target: String) -> std::io::Result<()> 
 /// - `path` already exists
 /// - The process lacks permissions to create the symlink
 /// - The platform does not support symbolic links
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 pub fn windows_symlink_file(path: String, target: String) -> std::io::Result<()> {
     std::os::windows::fs::symlink_file(target, path)
@@ -129,7 +129,7 @@ pub fn windows_symlink_file(path: String, target: String) -> std::io::Result<()>
 /// - `path` does not exist
 /// - A component in the path is not a directory
 /// - The process lacks permissions to access components of the path
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn canonicalize<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<PathBuf> {
     let path = path.as_ref().to_path_buf();
     run_blocking_fs(move || path.canonicalize()).await
@@ -149,7 +149,7 @@ pub async fn canonicalize<P: AsRef<std::path::Path>>(path: P) -> std::io::Result
 /// This function will return an error in the following situations:
 /// - `path` does not exist
 /// - The process lacks permissions to read the file
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn read(path: impl AsRef<std::path::Path>) -> std::io::Result<Vec<u8>> {
     let mut file: File = OpenOptions::new().read(true).open(path).await?;
     let mut bytes = Vec::new();
@@ -184,7 +184,7 @@ pub async fn read(path: impl AsRef<std::path::Path>) -> std::io::Result<Vec<u8>>
 /// This function will return an error in the following situations:
 /// - [`read`] fails
 /// - The file contents are not valid UTF-8
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn read_to_string(path: impl AsRef<std::path::Path>) -> std::io::Result<String> {
     let bytes = read(path).await?;
     String::from_utf8(bytes)
@@ -205,7 +205,7 @@ pub async fn read_to_string(path: impl AsRef<std::path::Path>) -> std::io::Resul
 /// This function will return an error in the following situations:
 /// - The file cannot be opened for writing
 /// - The write operation fails
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn write(
     path: impl AsRef<std::path::Path>,
     contents: impl AsRef<[u8]>,
@@ -241,7 +241,7 @@ pub async fn write(
 /// - `dst` already exists
 /// - The source and destination are on different filesystems
 /// - The process lacks permissions
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(target_os = "linux")]
 pub async fn hard_link(
     src: impl AsRef<std::path::Path>,
@@ -291,7 +291,7 @@ pub async fn hard_link(
 /// - `dst` already exists
 /// - The source and destination are on different filesystems
 /// - The process lacks permissions
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(target_os = "linux"))]
 pub async fn hard_link(
     src: impl AsRef<std::path::Path>,
@@ -322,7 +322,7 @@ pub async fn hard_link(
 /// - `dst` already exists
 /// - The process lacks permissions to create the symlink
 /// - The platform does not support symbolic links
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(windows)]
 pub async fn symlink_dir(
     src: impl AsRef<std::path::Path>,
@@ -351,7 +351,7 @@ pub async fn symlink_dir(
 /// - `dst` already exists
 /// - The process lacks permissions to create the symlink
 /// - The platform does not support symbolic links
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(target_os = "linux")]
 pub async fn symlink_dir(
     src: impl AsRef<std::path::Path>,
@@ -401,7 +401,7 @@ pub async fn symlink_dir(
 /// - `dst` already exists
 /// - The process lacks permissions to create the symlink
 /// - The platform does not support symbolic links
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(any(windows, target_os = "linux")))]
 pub async fn symlink_dir(
     src: impl AsRef<std::path::Path>,
@@ -432,7 +432,7 @@ pub async fn symlink_dir(
 /// - `dst` already exists
 /// - The process lacks permissions to create the symlink
 /// - The platform does not support symbolic links
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(windows)]
 pub async fn symlink_file(
     src: impl AsRef<std::path::Path>,
@@ -461,7 +461,7 @@ pub async fn symlink_file(
 /// - `dst` already exists
 /// - The process lacks permissions to create the symlink
 /// - The platform does not support symbolic links
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(target_os = "linux")]
 pub async fn symlink_file(
     src: impl AsRef<std::path::Path>,
@@ -511,7 +511,7 @@ pub async fn symlink_file(
 /// - `dst` already exists
 /// - The process lacks permissions to create the symlink
 /// - The platform does not support symbolic links
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(any(windows, target_os = "linux")))]
 pub async fn symlink_file(
     src: impl AsRef<std::path::Path>,
@@ -537,7 +537,7 @@ pub async fn symlink_file(
 /// # Errors
 ///
 /// See [`symlink_file`] for error conditions.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn symlink(
     src: impl AsRef<std::path::Path>,
     dst: impl AsRef<std::path::Path>,
@@ -562,7 +562,7 @@ pub async fn symlink(
 /// - `to` already exists and is not overwritable
 /// - The source and destination are on different filesystems
 /// - The process lacks permissions
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(target_os = "linux")]
 pub async fn rename(
     from: impl AsRef<std::path::Path>,
@@ -611,7 +611,7 @@ pub async fn rename(
 /// - `to` already exists and is not overwritable
 /// - The source and destination are on different filesystems
 /// - The process lacks permissions
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(target_os = "linux"))]
 pub async fn rename(
     from: impl AsRef<std::path::Path>,
@@ -639,7 +639,7 @@ pub async fn rename(
 /// - `path` is not a directory
 /// - The directory is not empty
 /// - The process lacks permissions
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(target_os = "linux")]
 pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let path = path.as_ref();
@@ -677,7 +677,7 @@ pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 /// - `path` is not a directory
 /// - The directory is not empty
 /// - The process lacks permissions
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(target_os = "linux"))]
 pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let path = path.as_ref().to_owned();
@@ -699,7 +699,7 @@ pub async fn remove_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 /// This function will return an error in the following situations:
 /// - `path` does not exist
 /// - The process lacks permissions
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(target_os = "linux")]
 pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let path = path.as_ref();
@@ -735,7 +735,7 @@ pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<(
 /// This function will return an error in the following situations:
 /// - `path` does not exist
 /// - The process lacks permissions
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(target_os = "linux"))]
 pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let path = path.as_ref().to_owned();
@@ -759,7 +759,7 @@ pub async fn remove_file(path: impl AsRef<std::path::Path>) -> std::io::Result<(
 /// - A component in the path is not a directory
 /// - The process lacks permissions
 /// - The directory already exists
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(target_os = "linux")]
 pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let path = path.as_ref();
@@ -798,7 +798,7 @@ pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 /// - A component in the path is not a directory
 /// - The process lacks permissions
 /// - The directory already exists
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(target_os = "linux"))]
 pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let path = path.as_ref().to_owned();
@@ -821,7 +821,7 @@ pub async fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()
 /// - A component in the path cannot be created
 /// - A component in the path is not a directory
 /// - The process lacks permissions
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn create_dir_all(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
     let path = path.as_ref();
     let mut stack = Vec::new();
@@ -888,7 +888,7 @@ pub async fn create_dir_all(path: impl AsRef<std::path::Path>) -> std::io::Resul
 /// This function will return an error in the following situations:
 /// - `path` does not exist
 /// - The process lacks permissions to access the path
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3)))]
 pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Metadata> {
     let path = path.as_ref();
@@ -933,7 +933,7 @@ pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Meta
 /// This function will return an error in the following situations:
 /// - `path` does not exist
 /// - The process lacks permissions to access the path
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3))))]
 pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Metadata> {
     let path = path.as_ref().to_owned();
@@ -959,7 +959,7 @@ pub async fn metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Meta
 /// This function will return an error in the following situations:
 /// - `path` does not exist
 /// - The process lacks permissions to access the path
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3)))]
 pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Metadata> {
     let path = path.as_ref();
@@ -1005,7 +1005,7 @@ pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Res
 /// This function will return an error in the following situations:
 /// - `path` does not exist
 /// - The process lacks permissions to access the path
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(all(target_os = "linux", any(target_env = "gnu", musl_v1_2_3))))]
 pub async fn symlink_metadata(path: impl AsRef<std::path::Path>) -> std::io::Result<Metadata> {
     let path = path.as_ref().to_owned();

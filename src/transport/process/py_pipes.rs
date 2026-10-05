@@ -17,7 +17,7 @@ use super::{PyProcessPipeTransport, PyProcessStdinProtocol};
 #[pymethods]
 impl PyProcessPipeTransport {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessPipeTransport")
     )]
     fn close(&self) {
@@ -25,7 +25,7 @@ impl PyProcessPipeTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessPipeTransport")
     )]
     fn is_closing(&self) -> bool {
@@ -33,7 +33,7 @@ impl PyProcessPipeTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessPipeTransport")
     )]
     fn get_extra_info(&self, py: Python<'_>, _name: &str, default: Option<Py<PyAny>>) -> Py<PyAny> {
@@ -41,19 +41,19 @@ impl PyProcessPipeTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessPipeTransport")
     )]
     fn pause_reading(&self) {}
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessPipeTransport")
     )]
     fn resume_reading(&self) {}
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessPipeTransport")
     )]
     fn __repr__(&self) -> String {
@@ -68,25 +68,25 @@ impl PyProcessPipeTransport {
 #[pymethods]
 impl PyProcessStdinProtocol {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessStdinProtocol")
     )]
     fn connection_made(&self, _transport: Py<PyAny>) {}
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessStdinProtocol")
     )]
     fn pause_writing(&self) {}
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessStdinProtocol")
     )]
     fn resume_writing(&self) {}
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyProcessStdinProtocol")
     )]
     #[pyo3(signature=(_exc=None))]

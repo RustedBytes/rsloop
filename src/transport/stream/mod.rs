@@ -159,7 +159,7 @@ struct StreamWriteBufferState {
 
 impl Default for StreamWriteBufferState {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<StreamWriteBufferState as Default>")
     )]
     fn default() -> Self {
@@ -250,7 +250,7 @@ pub struct ServerAcceptTaskGuard {
 
 impl ServerAcceptTaskGuard {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerAcceptTaskGuard")
     )]
     fn new(server: &Arc<ServerCore>) -> Self {
@@ -263,7 +263,7 @@ impl ServerAcceptTaskGuard {
 
 impl Drop for ServerAcceptTaskGuard {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<ServerAcceptTaskGuard as Drop>")
     )]
     fn drop(&mut self) {
@@ -282,7 +282,7 @@ struct PendingTlsHandshake {
 
 impl Drop for PendingTlsHandshake {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PendingTlsHandshake as Drop>")
     )]
     fn drop(&mut self) {

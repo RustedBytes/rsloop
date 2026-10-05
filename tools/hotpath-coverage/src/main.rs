@@ -106,7 +106,7 @@ impl Audit {
             };
             self.insertions.push((
                 line,
-                format!("#[cfg_attr(feature = \"hotpath-profile\", hotpath::measure{args})]"),
+                format!("#[cfg_attr(feature = \"profile\", hotpath::measure{args})]"),
             ));
             "missing"
         };
@@ -332,9 +332,9 @@ mod tests {
     fn rejects_hooks_on_signal_safe_helpers_and_missing_future_tracking() {
         let a = audit(
             r#"
-            #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+            #[cfg_attr(feature = "profile", hotpath::measure)]
             fn write_signal_notification() {}
-            #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+            #[cfg_attr(feature = "profile", hotpath::measure)]
             async fn receive() {}
         "#,
             "src/vibeio/signal/unix.rs",

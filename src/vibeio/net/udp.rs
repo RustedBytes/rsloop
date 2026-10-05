@@ -41,7 +41,7 @@ use crate::vibeio::{
     op::{ReadinessOp, RecvOp, RecvfromOp, SendOp, SendtoOp},
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(unix)]
 #[inline]
 async fn connect_one(handle: &InnerRawHandle, address: SocketAddr) -> Result<(), io::Error> {
@@ -87,7 +87,7 @@ impl UdpSocket {
     /// - The address is already in use
     /// - The process lacks permissions to bind to the address
     /// - The runtime is not active
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn bind(address: impl ToSocketAddrs) -> Result<Self, io::Error> {
         let inner = StdUdpSocket::bind(address)?;
@@ -100,7 +100,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if registration with the async driver
     /// fails.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn from_std(inner: StdUdpSocket) -> Result<Self, io::Error> {
         Self::from_std_with_mode(inner, RegistrationMode::Completion)
@@ -108,7 +108,7 @@ impl UdpSocket {
 
     /// Creates a new `UdpSocket` from a standard library `UdpSocket` with a
     /// specific registration mode.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub(crate) fn from_std_with_mode(
         inner: StdUdpSocket,
@@ -134,7 +134,7 @@ impl UdpSocket {
     /// Converts this socket into a poll-only variant.
     ///
     /// The returned `PollUdpSocket` will always use readiness-based I/O.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn into_poll(self) -> Result<PollUdpSocket, io::Error> {
         let mut socket = self;
@@ -150,7 +150,7 @@ impl UdpSocket {
     }
 
     /// Converts this `UdpSocket` into the standard library `UdpSocket`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn into_std(self) -> StdUdpSocket {
         let Self { handle, inner } = self;
@@ -164,7 +164,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket is not
     /// bound.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()
@@ -176,7 +176,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket is not
     /// connected.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.peer_addr()
@@ -193,7 +193,7 @@ impl UdpSocket {
     /// - Connection fails
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UdpSocket", future = true)
     )]
     #[inline]
@@ -228,7 +228,7 @@ impl UdpSocket {
     /// - The socket is not bound
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UdpSocket", future = true)
     )]
     #[inline]
@@ -249,7 +249,7 @@ impl UdpSocket {
     /// - The socket is not bound
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UdpSocket", future = true)
     )]
     #[inline]
@@ -273,7 +273,7 @@ impl UdpSocket {
     /// - The socket is not connected
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UdpSocket", future = true)
     )]
     #[inline]
@@ -295,7 +295,7 @@ impl UdpSocket {
     /// - The send operation fails
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UdpSocket", future = true)
     )]
     #[inline]
@@ -339,7 +339,7 @@ impl UdpSocket {
     /// - The socket is not bound
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UdpSocket", future = true)
     )]
     #[inline]
@@ -361,7 +361,7 @@ impl UdpSocket {
     /// - The socket is not bound
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UdpSocket", future = true)
     )]
     #[inline]
@@ -382,7 +382,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// cloned.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn try_clone(&self) -> Result<Self, io::Error> {
         Self::from_std(self.inner.try_clone()?)
@@ -396,7 +396,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_broadcast(&self, broadcast: bool) -> Result<(), io::Error> {
         self.inner.set_broadcast(broadcast)
@@ -408,7 +408,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn broadcast(&self) -> Result<bool, io::Error> {
         self.inner.broadcast()
@@ -423,7 +423,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_ttl(&self, ttl: u32) -> Result<(), io::Error> {
         self.inner.set_ttl(ttl)
@@ -435,7 +435,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn ttl(&self) -> Result<u32, io::Error> {
         self.inner.ttl()
@@ -449,7 +449,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_multicast_loop_v4(&self, multicast_loop_v4: bool) -> Result<(), io::Error> {
         self.inner.set_multicast_loop_v4(multicast_loop_v4)
@@ -461,7 +461,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn multicast_loop_v4(&self) -> Result<bool, io::Error> {
         self.inner.multicast_loop_v4()
@@ -475,7 +475,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_multicast_ttl_v4(&self, multicast_ttl_v4: u32) -> Result<(), io::Error> {
         self.inner.set_multicast_ttl_v4(multicast_ttl_v4)
@@ -487,7 +487,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn multicast_ttl_v4(&self) -> Result<u32, io::Error> {
         self.inner.multicast_ttl_v4()
@@ -501,7 +501,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_multicast_loop_v6(&self, multicast_loop_v6: bool) -> Result<(), io::Error> {
         self.inner.set_multicast_loop_v6(multicast_loop_v6)
@@ -513,7 +513,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn multicast_loop_v6(&self) -> Result<bool, io::Error> {
         self.inner.multicast_loop_v6()
@@ -525,7 +525,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn join_multicast_v4(
         &self,
@@ -541,7 +541,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> Result<(), io::Error> {
         self.inner.join_multicast_v6(multiaddr, interface)
@@ -553,7 +553,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn leave_multicast_v4(
         &self,
@@ -569,7 +569,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn leave_multicast_v6(
         &self,
@@ -585,7 +585,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn take_error(&self) -> Result<Option<io::Error>, io::Error> {
         self.inner.take_error()
@@ -597,7 +597,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_read_timeout(&self, dur: Option<Duration>) -> Result<(), io::Error> {
         self.inner.set_read_timeout(dur)
@@ -609,7 +609,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_write_timeout(&self, dur: Option<Duration>) -> Result<(), io::Error> {
         self.inner.set_write_timeout(dur)
@@ -621,7 +621,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn read_timeout(&self) -> Result<Option<Duration>, io::Error> {
         self.inner.read_timeout()
@@ -633,7 +633,7 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn write_timeout(&self) -> Result<Option<Duration>, io::Error> {
         self.inner.write_timeout()
@@ -643,7 +643,7 @@ impl UdpSocket {
 #[cfg(unix)]
 impl AsRawFd for UdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UdpSocket as AsRawFd>")
     )]
     #[inline]
@@ -655,7 +655,7 @@ impl AsRawFd for UdpSocket {
 #[cfg(unix)]
 impl IntoRawFd for UdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UdpSocket as IntoRawFd>")
     )]
     #[inline]
@@ -667,7 +667,7 @@ impl IntoRawFd for UdpSocket {
 #[cfg(windows)]
 impl AsRawSocket for UdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UdpSocket as AsRawSocket>")
     )]
     #[inline]
@@ -679,7 +679,7 @@ impl AsRawSocket for UdpSocket {
 #[cfg(windows)]
 impl IntoRawSocket for UdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UdpSocket as IntoRawSocket>")
     )]
     #[inline]
@@ -690,7 +690,7 @@ impl IntoRawSocket for UdpSocket {
 
 impl<'a> AsInnerRawHandle<'a> for UdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UdpSocket as AsInnerRawHandle < 'a >>")
     )]
     #[inline]
@@ -729,7 +729,7 @@ impl PollUdpSocket {
     /// - The process lacks permissions to bind to the address
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -745,7 +745,7 @@ impl PollUdpSocket {
     /// This function will return an error if registration with the async driver
     /// fails.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -759,7 +759,7 @@ impl PollUdpSocket {
 
     /// Converts this poll socket into an adaptive `UdpSocket`.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -774,7 +774,7 @@ impl PollUdpSocket {
     /// This function will return an error if the runtime does not support
     /// completion-based I/O.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -796,7 +796,7 @@ impl PollUdpSocket {
     /// - Connection fails
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
     #[inline]
@@ -811,7 +811,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket is not
     /// bound.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -826,7 +826,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket is not
     /// connected.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -838,7 +838,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based version of [`UdpSocket::recv`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
     #[inline]
@@ -850,7 +850,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based version of [`UdpSocket::recv_from`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
     #[inline]
@@ -865,7 +865,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based version of [`UdpSocket::send`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
     #[inline]
@@ -877,7 +877,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based version of [`UdpSocket::send_to`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
     #[inline]
@@ -893,7 +893,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based version of [`UdpSocket::peek`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
     #[inline]
@@ -906,7 +906,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based version of [`UdpSocket::peek_from`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
     #[inline]
@@ -925,7 +925,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// cloned.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -946,7 +946,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -961,7 +961,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// queried.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -979,7 +979,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -994,7 +994,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// queried.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1011,7 +1011,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1026,7 +1026,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// queried.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1043,7 +1043,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1058,7 +1058,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// queried.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1075,7 +1075,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1090,7 +1090,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// queried.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1105,7 +1105,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1124,7 +1124,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1139,7 +1139,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1158,7 +1158,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1177,7 +1177,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// queried.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1192,7 +1192,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1207,7 +1207,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// modified.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1222,7 +1222,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// queried.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1237,7 +1237,7 @@ impl PollUdpSocket {
     /// This function will return an error if the underlying socket cannot be
     /// queried.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1249,7 +1249,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based counterpart to [`UdpSocket::recv`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1272,7 +1272,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based counterpart to [`UdpSocket::recv_from`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1294,7 +1294,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based counterpart to [`UdpSocket::send`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1316,7 +1316,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based counterpart to [`UdpSocket::send_to`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1340,7 +1340,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based counterpart to [`UdpSocket::peek`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1363,7 +1363,7 @@ impl PollUdpSocket {
     ///
     /// This is the poll-based counterpart to [`UdpSocket::peek_from`].
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1385,7 +1385,7 @@ impl PollUdpSocket {
     /// Tries to perform an I/O operation on the socket, returning an error if
     /// it is not ready.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1399,7 +1399,7 @@ impl PollUdpSocket {
     /// Tries to perform an I/O operation on the socket, returning an error if
     /// it is not ready.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
     #[inline]
@@ -1413,7 +1413,7 @@ impl PollUdpSocket {
 
 impl AsyncReadPoll for PollUdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUdpSocket as AsyncReadPoll>")
     )]
     #[inline]
@@ -1432,7 +1432,7 @@ impl AsyncReadPoll for PollUdpSocket {
 
 impl AsyncWritePoll for PollUdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUdpSocket as AsyncWritePoll>")
     )]
     #[inline]
@@ -1451,7 +1451,7 @@ impl AsyncWritePoll for PollUdpSocket {
 
 impl<'a> AsInnerRawHandle<'a> for PollUdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUdpSocket as AsInnerRawHandle < 'a >>")
     )]
     #[inline]
@@ -1463,7 +1463,7 @@ impl<'a> AsInnerRawHandle<'a> for PollUdpSocket {
 #[cfg(unix)]
 impl AsRawFd for PollUdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUdpSocket as AsRawFd>")
     )]
     #[inline]
@@ -1475,7 +1475,7 @@ impl AsRawFd for PollUdpSocket {
 #[cfg(unix)]
 impl IntoRawFd for PollUdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUdpSocket as IntoRawFd>")
     )]
     #[inline]
@@ -1487,7 +1487,7 @@ impl IntoRawFd for PollUdpSocket {
 #[cfg(windows)]
 impl AsRawSocket for PollUdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUdpSocket as AsRawSocket>")
     )]
     #[inline]
@@ -1499,7 +1499,7 @@ impl AsRawSocket for PollUdpSocket {
 #[cfg(windows)]
 impl IntoRawSocket for PollUdpSocket {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUdpSocket as IntoRawSocket>")
     )]
     #[inline]

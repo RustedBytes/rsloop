@@ -23,7 +23,7 @@ use super::{
 
 impl PyStreamTransport {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     pub(crate) fn write_data(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -67,7 +67,7 @@ impl PyStreamTransport {
 #[pymethods]
 impl PyStreamTransport {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn write(&self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -75,7 +75,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     pub(super) fn writelines(&self, py: Python<'_>, seq: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -119,7 +119,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn close(&self) -> PyResult<()> {
@@ -155,7 +155,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn abort(&self) -> PyResult<()> {
@@ -180,7 +180,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn is_closing(&self) -> bool {
@@ -188,7 +188,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn can_write_eof(&self) -> bool {
@@ -196,7 +196,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn write_eof(&self) -> PyResult<()> {
@@ -233,7 +233,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     #[pyo3(signature=(name, default=None))]
@@ -244,7 +244,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn get_protocol(&self, py: Python<'_>) -> Py<PyAny> {
@@ -252,7 +252,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn set_protocol(&self, py: Python<'_>, protocol: Py<PyAny>) {
@@ -262,7 +262,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn pause_reading(&self) {
@@ -270,7 +270,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn resume_reading(&self) {
@@ -278,7 +278,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn is_reading(&self) -> bool {
@@ -286,7 +286,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn get_write_buffer_size(&self) -> usize {
@@ -294,7 +294,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn get_write_buffer_limits(&self) -> (usize, usize) {
@@ -302,7 +302,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     #[pyo3(signature=(high=None, low=None))]
@@ -311,7 +311,7 @@ impl PyStreamTransport {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyStreamTransport")
     )]
     fn __repr__(&self) -> String {

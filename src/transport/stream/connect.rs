@@ -21,7 +21,7 @@ use crate::{
 /// dup; the connecting socket stays owned by its Python object. The dup shares
 /// the same underlying socket, so its POLLOUT readiness reflects the connect
 /// completing.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub(crate) async fn run_connect_watch_task(
     core: Arc<LoopCore>,
     fd: fd_ops::RawFd,

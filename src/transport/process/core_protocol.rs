@@ -21,12 +21,12 @@ enum ProcessExitDecision {
     First { should_finish: bool },
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn process_connection_lost_eligible(exited: bool, open_pipes_empty: bool) -> bool {
     exited && open_pipes_empty
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn record_process_exit(
     exited: &mut bool,
     returncode: &mut Option<i32>,
@@ -45,7 +45,7 @@ fn record_process_exit(
 
 impl ProcessTransportCore {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn connection_made(&self, transport: Py<PyProcessTransport>) -> PyResult<()> {
@@ -56,7 +56,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn pipe_data_received_with_py(
@@ -90,7 +90,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn pipe_data_received(self: &Arc<Self>, fd: i32, data: &[u8]) -> PyResult<()> {
@@ -106,7 +106,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn pipe_connection_lost_value_with_py(
@@ -126,7 +126,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn pipe_connection_lost_message(
@@ -175,7 +175,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn pipe_connection_lost(
@@ -188,7 +188,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn process_exited_with_py(&self, py: Python<'_>, returncode: i32) -> PyResult<()> {
@@ -198,7 +198,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn process_exited(self: &Arc<Self>, returncode: i32) -> PyResult<()> {
@@ -239,7 +239,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn connection_lost_with_py(
@@ -255,7 +255,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn connection_lost_message(self: &Arc<Self>, exc: Option<String>) -> PyResult<()> {
@@ -279,7 +279,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn connection_lost(self: &Arc<Self>, exc: Option<PyErr>) -> PyResult<()> {

@@ -29,7 +29,7 @@ struct TlsValidationInputs {
     has_shutdown_timeout: bool,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn tls_validation_error(inputs: TlsValidationInputs) -> Option<TlsValidationError> {
     if inputs.has_ssl {
         None
@@ -54,7 +54,7 @@ pub(super) struct TlsParams {
 
 impl TlsParams {
     /// Options for a method that has no `server_hostname` parameter.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TlsParams"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsParams"))]
     pub(super) fn without_hostname(
         ssl: Option<Py<PyAny>>,
         handshake_timeout: Option<f64>,
@@ -68,7 +68,7 @@ impl TlsParams {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TlsParams"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsParams"))]
     pub(super) fn is_enabled(&self) -> bool {
         self.ssl.is_some()
     }
@@ -76,7 +76,7 @@ impl TlsParams {
     /// Rejects TLS-only keywords passed without `ssl`. The check order matches
     /// what the individual methods used to do, so the reported error for a call
     /// that misuses several keywords at once does not change.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TlsParams"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsParams"))]
     pub(super) fn validate(&self) -> PyResult<()> {
         let error = tls_validation_error(TlsValidationInputs {
             has_ssl: self.ssl.is_some(),
@@ -99,7 +99,7 @@ impl TlsParams {
     }
 
     /// Client-side settings, or `None` when the caller passed no `ssl`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TlsParams"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsParams"))]
     pub(super) fn client_settings(&self, py: Python<'_>) -> PyResult<Option<ClientTlsSettings>> {
         let Some(ssl) = self.ssl.as_ref() else {
             return Ok(None);
@@ -115,7 +115,7 @@ impl TlsParams {
     }
 
     /// Server-side settings, or `None` when the caller passed no `ssl`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TlsParams"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsParams"))]
     pub(super) fn server_settings(&self, py: Python<'_>) -> PyResult<Option<ServerTlsSettings>> {
         let Some(ssl) = self.ssl.as_ref() else {
             return Ok(None);
@@ -130,7 +130,7 @@ impl TlsParams {
     }
 
     /// Server settings shared with the accept tasks that outlive this call.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "TlsParams"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsParams"))]
     pub(super) fn shared_server_settings(
         &self,
         py: Python<'_>,

@@ -15,13 +15,13 @@ use crate::{
 pub type CallbackId = u64;
 
 #[inline]
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn call_callback_noargs(py: Python<'_>, callback: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     Ok(callback.bind(py).call0()?.unbind())
 }
 
 #[inline]
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn call_callback_onearg(
     py: Python<'_>,
     callback: &Py<PyAny>,
@@ -81,7 +81,7 @@ impl ReadyCallback {
     ///
     /// `context_needs_run` records whether invocation must enter `context`.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     pub fn new(
@@ -109,7 +109,7 @@ impl ReadyCallback {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     pub(crate) fn from_args(
@@ -143,7 +143,7 @@ impl ReadyCallback {
     #[inline]
     /// Returns the loop-unique identifier assigned to this callback.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     pub fn id(&self) -> CallbackId {
@@ -153,7 +153,7 @@ impl ReadyCallback {
     #[inline]
     /// Returns the scheduling source used for diagnostics and re-arming I/O.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     pub fn kind(&self) -> CallbackKind {
@@ -171,7 +171,7 @@ impl ReadyCallback {
     #[inline]
     /// Borrows the underlying Python callable.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     pub fn callback(&self) -> &Py<PyAny> {
@@ -181,7 +181,7 @@ impl ReadyCallback {
     #[inline]
     /// Borrows the captured Python `contextvars.Context`.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     pub fn context(&self) -> &Py<PyAny> {
@@ -191,7 +191,7 @@ impl ReadyCallback {
     #[inline]
     /// Reports whether invocation needs to enter the captured context.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     pub fn context_needs_run(&self) -> bool {
@@ -203,7 +203,7 @@ impl ReadyCallback {
     /// A nested-context error falls back to direct invocation because that
     /// means the desired context is already active on this thread.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     pub fn invoke(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -229,7 +229,7 @@ impl ReadyCallback {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     fn invoke_direct(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -243,7 +243,7 @@ impl ReadyCallback {
     #[inline]
     /// Reports whether this callback has been cancelled.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     pub fn cancelled(&self) -> bool {
@@ -256,7 +256,7 @@ impl ReadyCallback {
     /// Cancellation is idempotent and does not remove an already queued value;
     /// the loop skips it when draining the ready queue.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
     pub fn cancel(&self) {
@@ -279,14 +279,14 @@ pub struct PyHandle {
 impl PyHandle {
     #[inline]
     /// Wraps a callback in a Python-visible handle.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyHandle"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyHandle"))]
     pub fn new(callback: ReadyCallback) -> Self {
         Self { callback }
     }
 
     #[inline]
     /// Borrows the callback controlled by this handle.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyHandle"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyHandle"))]
     pub fn ready(&self) -> &ReadyCallback {
         &self.callback
     }
@@ -294,18 +294,18 @@ impl PyHandle {
 
 #[pymethods]
 impl PyHandle {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyHandle"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyHandle"))]
     fn cancel(&self) -> PyResult<()> {
         self.callback.cancel();
         Ok(())
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyHandle"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyHandle"))]
     fn cancelled(&self) -> bool {
         self.callback.cancelled()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyHandle"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyHandle"))]
     fn __repr__(&self) -> String {
         format!(
             "<Handle id={} cancelled={}>",
@@ -337,7 +337,7 @@ impl PyTimerHandle {
     #[inline]
     /// Creates a timer handle for a callback scheduled at loop time `when`.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyTimerHandle")
     )]
     pub fn new(callback_id: CallbackId, when: f64, callback: &Arc<ReadyCallback>) -> Self {
@@ -526,7 +526,7 @@ mod tests {
 #[pymethods]
 impl PyTimerHandle {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyTimerHandle")
     )]
     fn cancel(&self) -> PyResult<()> {
@@ -538,7 +538,7 @@ impl PyTimerHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyTimerHandle")
     )]
     fn cancelled(&self) -> bool {
@@ -546,7 +546,7 @@ impl PyTimerHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyTimerHandle")
     )]
     fn when(&self) -> f64 {
@@ -554,7 +554,7 @@ impl PyTimerHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PyTimerHandle")
     )]
     fn __repr__(&self) -> String {

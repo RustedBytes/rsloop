@@ -8,7 +8,7 @@ use super::{
 };
 use crate::transport::stream::{spawn_read_pipe_transport, spawn_write_pipe_transport};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn connect_read_pipe<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -28,7 +28,7 @@ pub(super) fn connect_read_pipe<'py>(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn connect_write_pipe<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,

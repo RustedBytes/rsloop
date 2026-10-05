@@ -29,7 +29,7 @@ use super::{ProcessCommand, ProcessTransportCore, params::BoxedProcessReader};
 const PROCESS_READER_BUFFER_SIZE: usize = 65_536;
 const PROCESS_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn report_process_result(
     core: &Arc<ProcessTransportCore>,
     result: PyResult<()>,
@@ -40,7 +40,7 @@ pub(super) fn report_process_result(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub(super) fn report_process_io_error(
     core: &Arc<ProcessTransportCore>,
@@ -50,7 +50,7 @@ pub(super) fn report_process_io_error(
     core.report_error(PyRuntimeError::new_err(err.to_string()), message);
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn send_process_signal(child: &Child, signal: i32) -> std::io::Result<()> {
     let pid = i32::try_from(child.id()).map_err(|_| {
@@ -67,14 +67,14 @@ pub(super) fn send_process_signal(child: &Child, signal: i32) -> std::io::Result
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 fn process_exit_code_parts(code: Option<i32>, signal: Option<i32>) -> i32 {
     code.or_else(|| signal.and_then(i32::checked_neg))
         .unwrap_or(-1)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn process_exit_code(status: std::process::ExitStatus) -> i32 {
     #[cfg(unix)]
     {
@@ -86,7 +86,7 @@ pub(super) fn process_exit_code(status: std::process::ExitStatus) -> i32 {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn handle_process_exit(core: &Arc<ProcessTransportCore>, code: i32) {
     if core
         .state
@@ -108,7 +108,7 @@ pub(super) fn handle_process_exit(core: &Arc<ProcessTransportCore>, code: i32) {
     );
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn kill_process_child(
     core: &Arc<ProcessTransportCore>,
     child: &mut Child,
@@ -119,7 +119,7 @@ pub(super) fn kill_process_child(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn handle_process_command(
     core: &Arc<ProcessTransportCore>,
     child: &mut Child,
@@ -153,7 +153,7 @@ pub(super) fn handle_process_command(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn run_process_reader(
     core: Arc<ProcessTransportCore>,
     fd: i32,
@@ -193,7 +193,7 @@ pub(super) fn run_process_reader(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn run_process_waiter(
     core: Arc<ProcessTransportCore>,
     mut child: Child,
@@ -229,7 +229,7 @@ pub(super) fn run_process_waiter(
 mod verification {
     use super::process_exit_code_parts;
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+    #[cfg_attr(feature = "profile", hotpath::measure)]
     #[kani::proof]
     fn merge_process_exit_code_prefers_status_then_negated_signal() {
         let code: Option<i32> = kani::any();

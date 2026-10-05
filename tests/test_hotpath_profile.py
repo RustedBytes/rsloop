@@ -9,7 +9,7 @@ import pytest
 from rsloop import _loop
 
 pytestmark = pytest.mark.skipif(
-    not hasattr(_loop, "hotpath_start"), reason="requires a hotpath-profile build"
+    not hasattr(_loop, "hotpath_start"), reason="requires a profile build"
 )
 
 

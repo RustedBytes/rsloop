@@ -48,14 +48,14 @@ impl Sleep {
     /// Create a new Sleep instance for the provided `duration`.
     /// Deadlines beyond the platform's Instant range saturate at its upper
     /// limit.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Sleep"))]
     #[inline]
     pub fn new(duration: Duration) -> Self {
         Self::sleep_until(super::deadline_after(Instant::now(), duration))
     }
 
     /// Create a Sleep with custom behavior for zero-length waits.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Sleep"))]
     #[inline]
     pub fn new_with_zero_behavior(duration: Duration, zero_behavior: ZeroBehavior) -> Self {
         Self::sleep_until_with_zero_behavior(
@@ -67,13 +67,13 @@ impl Sleep {
     /// Create a Sleep that completes at the specified absolute `deadline`.
     ///
     /// Preserves the absolute deadline without converting through a duration.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Sleep"))]
     #[inline]
     pub fn sleep_until(deadline: Instant) -> Self {
         Self::sleep_until_with_zero_behavior(deadline, ZeroBehavior::Immediate)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Sleep"))]
     #[inline]
     pub(crate) fn sleep_until_with_zero_behavior(
         deadline: Instant,
@@ -95,7 +95,7 @@ impl Sleep {
     /// rescheduled on the next `poll`. This allows reusing a `Sleep` value
     /// to implement steady intervals or dynamic timeout adjustments using
     /// absolute deadlines instead of relative durations.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Sleep"))]
     #[inline]
     pub fn reset(&mut self, deadline: Instant) {
         // Compute relative duration until deadline and update state.
@@ -117,7 +117,7 @@ impl Future for Sleep {
     type Output = ();
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Sleep as Future>")
     )]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -216,7 +216,7 @@ impl Future for Sleep {
 
 impl Drop for Sleep {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Sleep as Drop>")
     )]
     fn drop(&mut self) {

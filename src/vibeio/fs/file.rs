@@ -68,7 +68,7 @@ impl File {
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
     #[inline]
@@ -98,7 +98,7 @@ impl File {
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
     #[inline]
@@ -114,7 +114,7 @@ impl File {
     /// Returns a new `OpenOptions` builder.
     ///
     /// This is a convenience method equivalent to `OpenOptions::new()`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "File"))]
     #[inline]
     pub fn options() -> OpenOptions {
         OpenOptions::new()
@@ -124,7 +124,7 @@ impl File {
     ///
     /// This is a convenience method equivalent to
     /// `File::from_std_with_cursor(inner, 0)`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "File"))]
     #[inline]
     pub fn from_std(inner: std::fs::File) -> io::Result<Self> {
         Self::from_std_with_cursor(inner, 0)
@@ -135,7 +135,7 @@ impl File {
     ///
     /// This is an internal method used to create a `File` with a custom cursor
     /// position.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "File"))]
     #[inline]
     pub(crate) fn from_std_with_cursor(inner: std::fs::File, cursor: u64) -> io::Result<Self> {
         let io = if let Some(driver) = current_driver() {
@@ -165,7 +165,7 @@ impl File {
     }
 
     /// Converts the `File` back into a standard library `std::fs::File`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "File"))]
     #[inline]
     pub fn into_std(self) -> std::fs::File {
         let Self { io, inner, .. } = self;
@@ -174,7 +174,7 @@ impl File {
     }
 
     /// Returns the completion handle if this file is using io_uring completion.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "File"))]
     #[inline]
     fn completion_handle(&self) -> Option<&InnerRawHandle> {
         match &self.io {
@@ -206,7 +206,7 @@ impl File {
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
     #[inline]
@@ -257,7 +257,7 @@ impl File {
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
     #[inline]
@@ -291,7 +291,7 @@ impl File {
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
     #[inline]
@@ -344,7 +344,7 @@ impl File {
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
     #[inline]
@@ -376,7 +376,7 @@ impl File {
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
     #[inline]
@@ -420,7 +420,7 @@ impl File {
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
     #[inline]
@@ -464,7 +464,7 @@ impl File {
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "File", future = true)
     )]
     #[inline]
@@ -600,7 +600,7 @@ mod exact_at_tests {
 }
 
 impl ExactAt {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ExactAt"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ExactAt"))]
     fn remaining(&self, buf: &impl IoBuf) -> usize {
         match self {
             Self::Read => buf.buf_capacity(),
@@ -609,7 +609,7 @@ impl ExactAt {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 async fn exact_at<B, F, Fut>(
     buf: B,
     mut offset: u64,
@@ -667,7 +667,7 @@ where
     (Ok(()), buf.into_inner())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 fn read_at_blocking(file: &std::fs::File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
@@ -675,7 +675,7 @@ fn read_at_blocking(file: &std::fs::File, buf: &mut [u8], offset: u64) -> io::Re
     file.read_at(buf, offset)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn read_at_blocking(file: &std::fs::File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
@@ -683,7 +683,7 @@ fn read_at_blocking(file: &std::fs::File, buf: &mut [u8], offset: u64) -> io::Re
     file.seek_read(buf, offset)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 fn write_at_blocking(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Result<usize> {
@@ -691,7 +691,7 @@ fn write_at_blocking(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Resul
     file.write_at(buf, offset)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn write_at_blocking(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Result<usize> {
@@ -699,31 +699,31 @@ fn write_at_blocking(file: &std::fs::File, buf: &[u8], offset: u64) -> io::Resul
     file.seek_write(buf, offset)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn sync_all_blocking(file: &std::fs::File) -> io::Result<()> {
     file.sync_all()
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn sync_data_blocking(file: &std::fs::File) -> io::Result<()> {
     file.sync_data()
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn metadata_blocking(file: &std::fs::File) -> io::Result<Metadata> {
     Ok(Metadata::from_std(file.metadata()?))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub(crate) fn blocking_pool_io_error() -> io::Error {
     io::Error::other("can't spawn blocking task for file I/O")
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 async fn read_at_in_blocking_pool<B: IoBufMut>(
     file: &std::fs::File,
@@ -744,7 +744,7 @@ async fn read_at_in_blocking_pool<B: IoBufMut>(
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 async fn write_at_in_blocking_pool<B: IoBuf>(
     file: &std::fs::File,
@@ -765,7 +765,7 @@ async fn write_at_in_blocking_pool<B: IoBuf>(
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 async fn sync_all_in_blocking_pool(file: &std::fs::File) -> io::Result<()> {
     let file = file.try_clone()?;
@@ -774,7 +774,7 @@ async fn sync_all_in_blocking_pool(file: &std::fs::File) -> io::Result<()> {
         .map_err(|_| blocking_pool_io_error())?
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 async fn sync_data_in_blocking_pool(file: &std::fs::File) -> io::Result<()> {
     let file = file.try_clone()?;
@@ -783,7 +783,7 @@ async fn sync_data_in_blocking_pool(file: &std::fs::File) -> io::Result<()> {
         .map_err(|_| blocking_pool_io_error())?
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[inline]
 async fn metadata_in_blocking_pool(file: &std::fs::File) -> io::Result<Metadata> {
     let file = file.try_clone()?;
@@ -794,7 +794,7 @@ async fn metadata_in_blocking_pool(file: &std::fs::File) -> io::Result<Metadata>
 
 impl AsyncRead for File {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<File as AsyncRead>", future = true)
     )]
     #[inline]
@@ -809,7 +809,7 @@ impl AsyncRead for File {
 
 impl AsyncWrite for File {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<File as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -822,7 +822,7 @@ impl AsyncWrite for File {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<File as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -834,7 +834,7 @@ impl AsyncWrite for File {
 #[cfg(unix)]
 impl AsRawFd for File {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<File as AsRawFd>")
     )]
     #[inline]
@@ -846,7 +846,7 @@ impl AsRawFd for File {
 #[cfg(unix)]
 impl IntoRawFd for File {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<File as IntoRawFd>")
     )]
     #[inline]
@@ -858,7 +858,7 @@ impl IntoRawFd for File {
 #[cfg(windows)]
 impl AsRawHandle for File {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<File as AsRawHandle>")
     )]
     #[inline]
@@ -870,7 +870,7 @@ impl AsRawHandle for File {
 #[cfg(windows)]
 impl IntoRawHandle for File {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<File as IntoRawHandle>")
     )]
     #[inline]

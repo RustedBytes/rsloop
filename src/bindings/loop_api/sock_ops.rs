@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 
 use super::{PyLoop, socket_connect::connect_socket_to_address};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn sock_recv<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -23,7 +23,7 @@ pub(super) fn sock_recv<'py>(
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn sock_recv_into<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -38,7 +38,7 @@ pub(super) fn sock_recv_into<'py>(
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn sock_sendall<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -66,7 +66,7 @@ pub(super) fn sock_sendall<'py>(
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn sock_accept<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -75,7 +75,7 @@ pub(super) fn sock_accept<'py>(
     super::socket_operation::start(slf, py, sock, super::socket_operation::SocketAction::Accept)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn sock_connect<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -96,7 +96,7 @@ pub(super) fn sock_connect<'py>(
 /// concurrent connections drain in one loop iteration instead of paying a
 /// per-connection async-runtime handoff. Non-Unix and non-INET sockets fall
 /// back to the general `sock_connect` path.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn sock_connect_fast<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,

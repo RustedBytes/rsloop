@@ -49,7 +49,7 @@ pub enum CompletionIoResult {
 struct RetainedCompletionData(Vec<Box<dyn std::any::Any>>);
 
 /// Preserve stable payload allocations without building a recursive drop chain.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(any(target_os = "linux", windows, test))]
 fn retain_completion_data(
     retained: &mut Option<Box<dyn std::any::Any>>,
@@ -108,7 +108,7 @@ mod retained_completion_tests {
 }
 
 /// Follow provider handles without looping forever on a cyclic fallback chain.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 fn resolve_base_socket_with(
     mut socket: usize,
@@ -212,7 +212,7 @@ mod base_socket_tests {
 }
 
 /// Encode only errors representable by the driver's negative i32 result.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 fn encode_completion_error(code: u32) -> Option<i32> {
     i32::try_from(code)
@@ -239,7 +239,7 @@ mod completion_encoding_tests {
 }
 
 /// Reserve Windows INFINITE for an explicitly unbounded wait.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 fn iocp_timeout_ms(timeout: Option<Duration>) -> u32 {
     match timeout {
@@ -268,7 +268,7 @@ mod iocp_timeout_tests {
 }
 
 /// Decode the driver's negative error representation without signed overflow.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn completion_error(result: i32) -> io::Error {
     match result.checked_neg().filter(|code| *code > 0) {
         Some(code) => io::Error::from_raw_os_error(code),
@@ -279,7 +279,7 @@ pub(crate) fn completion_error(result: i32) -> io::Error {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(any(target_vendor = "apple", target_os = "linux", test))]
 #[inline]
 fn send_wake_notification(mut send: impl FnMut() -> io::Result<usize>) -> io::Result<()> {
@@ -295,7 +295,7 @@ fn send_wake_notification(mut send: impl FnMut() -> io::Result<usize>) -> io::Re
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn unsupported_completion_error() -> io::Error {
     io::Error::new(
@@ -304,7 +304,7 @@ fn unsupported_completion_error() -> io::Error {
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn unsupported_poll_error() -> io::Error {
     io::Error::new(
@@ -332,7 +332,7 @@ pub enum AnyInterruptor {
 
 impl AnyInterruptor {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AnyInterruptor")
     )]
     pub(crate) fn interrupt(&self) {
@@ -354,13 +354,13 @@ pub trait Driver {
     type Interruptor: Interruptor;
 
     /// Flushes the driver's I/O.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn flush(&self) {}
 
     /// Returns whether the executor should call `flush` after polling a task
     /// batch.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn should_flush(&self) -> bool {
         true
@@ -377,7 +377,7 @@ pub trait Driver {
     ) -> Result<Token, std::io::Error>;
 
     /// Registers an I/O source with the requested mode.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     fn register_handle_with_mode(
         &self,
         handle: &InnerRawHandle,
@@ -398,14 +398,14 @@ pub trait Driver {
     fn deregister_handle(&self, handle: &InnerRawHandle) -> Result<(), std::io::Error>;
 
     /// Returns whether the driver supports completion-based I/O operations.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn supports_completion(&self) -> bool {
         false
     }
 
     /// Submits a completion-based I/O operation.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn submit_completion<O>(&self, _op: &mut O, _waker: Waker) -> CompletionIoResult
     where
@@ -415,7 +415,7 @@ pub trait Driver {
     }
 
     /// Re-registers interest and submits a waker for poll-based I/O.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn submit_poll(
         &self,
@@ -427,14 +427,14 @@ pub trait Driver {
     }
 
     /// Obtains the result for a completion-based I/O operation.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn get_completion_result(&self, _token: usize) -> Option<i32> {
         None
     }
 
     /// Polls a Linux multishot accept stream.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn poll_multishot_accept(
@@ -449,18 +449,18 @@ pub trait Driver {
     }
 
     /// Sets the waker for a completion-based I/O operation.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn set_completion_waker(&self, _token: usize, _waker: Waker) {}
 
     /// Cancels a completion-based I/O operation.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn ignore_completion(&self, _token: usize, _data: Box<dyn std::any::Any>) {}
 
     /// Cancels a Windows completion operation while retaining its owned data
     /// until the completion packet is observed.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Driver"))]
     #[cfg(windows)]
     #[inline]
     fn cancel_completion(
@@ -493,41 +493,41 @@ pub enum AnyDriver {
 }
 
 impl AnyDriver {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[cfg(unix)]
     #[inline]
     pub(crate) fn new_mio() -> Result<Self, std::io::Error> {
         Ok(AnyDriver::Mio(MioDriver::new()?))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[cfg(target_vendor = "apple")]
     #[inline]
     pub(crate) fn new_kqueue() -> Result<Self, io::Error> {
         Ok(AnyDriver::Kqueue(KqueueDriver::new()?))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn new_mock() -> Self {
         AnyDriver::Mock(MockDriver::new())
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[cfg(windows)]
     #[inline]
     pub(crate) fn new_iocp() -> Result<Self, io::Error> {
         Ok(AnyDriver::Iocp(IocpDriver::new()?))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[cfg(target_os = "linux")]
     #[inline]
     pub(crate) fn new_uring_custom(builder: io_uring::Builder) -> Result<Self, io::Error> {
         Ok(AnyDriver::IoUring(UringDriver::new(1024, builder)?))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[cfg(target_os = "linux")]
     #[inline]
     pub(crate) fn new_uring() -> Result<Self, io::Error> {
@@ -545,7 +545,7 @@ impl AnyDriver {
             .or_else(|_| Self::new_uring_custom(io_uring::IoUring::builder()))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn new_best() -> Result<Self, io::Error> {
         #[cfg(target_os = "linux")]
@@ -570,7 +570,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn flush(&self) {
         match self {
@@ -586,7 +586,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn should_flush(&self) -> bool {
         match self {
@@ -602,7 +602,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn wait(&self, timeout: Option<Duration>) {
         match self {
@@ -618,7 +618,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[allow(dead_code)]
     #[inline]
     pub(crate) fn register_handle(
@@ -639,7 +639,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn register_handle_with_mode(
         &self,
@@ -660,7 +660,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn reregister_handle(
         &self,
@@ -680,7 +680,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn deregister_handle(&self, handle: &InnerRawHandle) -> Result<(), std::io::Error> {
         match self {
@@ -696,7 +696,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn supports_completion(&self) -> bool {
         match self {
@@ -712,7 +712,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn submit_completion<O>(&self, op: &mut O, waker: Waker) -> CompletionIoResult
     where
@@ -731,7 +731,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn submit_poll(
         &self,
@@ -752,7 +752,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn get_completion_result(&self, token: usize) -> Option<i32> {
         match self {
@@ -768,7 +768,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[cfg(target_os = "linux")]
     #[inline]
     pub(crate) fn poll_multishot_accept(
@@ -783,7 +783,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn set_completion_waker(&self, token: usize, waker: Waker) {
         match self {
@@ -799,7 +799,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[cfg(not(windows))]
     #[inline]
     pub(crate) fn ignore_completion(&self, token: usize, data: Box<dyn std::any::Any>) {
@@ -814,7 +814,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[cfg(windows)]
     #[inline]
     pub(crate) fn cancel_completion(
@@ -829,7 +829,7 @@ impl AnyDriver {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AnyDriver"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[inline]
     pub(crate) fn get_interruptor(&self) -> AnyInterruptor {
         match self {

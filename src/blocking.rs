@@ -6,7 +6,7 @@ use futures::channel::oneshot;
 
 /// Runs one blocking closure on a named worker and returns its result
 /// asynchronously.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn run<T, F>(name: impl Into<String>, task: F) -> Result<T, String>
 where
     F: FnOnce() -> T + Send + 'static,

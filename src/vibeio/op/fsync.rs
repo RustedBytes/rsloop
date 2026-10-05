@@ -16,7 +16,7 @@ pub struct FsyncOp<'a> {
 }
 
 impl<'a> FsyncOp<'a> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "FsyncOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "FsyncOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, data_only: bool) -> Self {
         Self {
@@ -31,7 +31,7 @@ impl Op for FsyncOp<'_> {
     type Output = ();
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<FsyncOp as Op>")
     )]
     #[inline]
@@ -70,7 +70,7 @@ impl Op for FsyncOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<FsyncOp as Op>")
     )]
     #[inline]
@@ -92,7 +92,7 @@ impl Op for FsyncOp<'_> {
 
 impl Drop for FsyncOp<'_> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<FsyncOp as Drop>")
     )]
     #[inline]

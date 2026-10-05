@@ -73,7 +73,7 @@ impl UnixListener {
     /// - The process lacks permissions
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixListener")
     )]
     #[inline]
@@ -98,7 +98,7 @@ impl UnixListener {
     /// This function will return an error if registration with the async driver
     /// fails.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixListener")
     )]
     #[inline]
@@ -115,7 +115,7 @@ impl UnixListener {
     /// This function will return an error if the underlying socket is not
     /// bound.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixListener")
     )]
     #[inline]
@@ -134,7 +134,7 @@ impl UnixListener {
     /// - The listener is not bound to an address
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixListener", future = true)
     )]
     #[inline]
@@ -150,7 +150,7 @@ impl UnixListener {
 
 impl AsRawFd for UnixListener {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnixListener as AsRawFd>")
     )]
     #[inline]
@@ -161,7 +161,7 @@ impl AsRawFd for UnixListener {
 
 impl IntoRawFd for UnixListener {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnixListener as IntoRawFd>")
     )]
     #[inline]

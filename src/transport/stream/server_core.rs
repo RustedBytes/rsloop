@@ -41,7 +41,7 @@ use crate::{
     engine::{LoopCommand, LoopIoCommand},
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn reserve_tls_slot(current: usize, limit: usize, closed: bool) -> Option<usize> {
     (!closed && current < limit).then_some(current + 1)
 }
@@ -51,7 +51,7 @@ fn release_tls_slot(current: usize) -> Option<usize> {
     current.checked_sub(1)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn close_server_flags(closed: &mut bool, serving: &mut bool) -> bool {
     if *closed {
         return false;
@@ -63,7 +63,7 @@ fn close_server_flags(closed: &mut bool, serving: &mut bool) -> bool {
 
 impl ServerCore {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     pub(super) fn close_python_sockets(&self) {
@@ -76,7 +76,7 @@ impl ServerCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     pub(crate) fn report_error(&self, err: PyErr, message: &str) {
@@ -93,7 +93,7 @@ impl ServerCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     pub(super) fn create_protocol_with_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -104,7 +104,7 @@ impl ServerCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     #[inline]
@@ -113,7 +113,7 @@ impl ServerCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     #[inline]
@@ -122,7 +122,7 @@ impl ServerCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     pub(super) fn is_serving(&self) -> bool {
@@ -131,7 +131,7 @@ impl ServerCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     #[inline]
@@ -140,7 +140,7 @@ impl ServerCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     #[inline]
@@ -150,7 +150,7 @@ impl ServerCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     pub(super) fn reserve_tls_handshake(self: &Arc<Self>) -> Option<PendingTlsHandshake> {
@@ -176,7 +176,7 @@ impl ServerCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     pub(super) fn close(&self) {
@@ -244,7 +244,7 @@ impl ServerCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCore")
     )]
     pub fn spawn_accept_tasks(self: &Arc<Self>) {

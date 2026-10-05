@@ -48,7 +48,7 @@ pub struct CtrlC {
 
 impl CtrlC {
     /// Create a new Ctrl-C listener.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "CtrlC"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CtrlC"))]
     #[cfg(windows)]
     pub fn new() -> io::Result<Self> {
         let state = ctrl_c_state()?.clone();
@@ -61,7 +61,7 @@ impl CtrlC {
         })
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "CtrlC"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CtrlC"))]
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let mut replacement = None;
         loop {
@@ -98,7 +98,7 @@ impl CtrlC {
 
 impl Drop for CtrlC {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<CtrlC as Drop>")
     )]
     fn drop(&mut self) {
@@ -115,7 +115,7 @@ impl Future for CtrlC {
     type Output = io::Result<()>;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<CtrlC as Future>")
     )]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -126,14 +126,14 @@ impl Future for CtrlC {
 /// Cross-platform Ctrl-C support.
 ///
 /// Returns a future that resolves when Ctrl-C is received.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 #[cfg(windows)]
 pub fn ctrl_c() -> io::Result<CtrlC> {
     CtrlC::new()
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn dispatch_ctrl_c(state: &CtrlCState) {
     let wakers = {
         let mut wakers = state.wakers.lock().unwrap();
@@ -148,7 +148,7 @@ fn dispatch_ctrl_c(state: &CtrlCState) {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn ctrl_c_state() -> io::Result<&'static Arc<CtrlCState>> {
     initialize_ctrl_c_state(&CTRL_C_STATE, &CTRL_C_HANDLER_INSTALLED, || {
@@ -163,7 +163,7 @@ fn ctrl_c_state() -> io::Result<&'static Arc<CtrlCState>> {
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn initialize_ctrl_c_state<'a>(
     state_cell: &'a OnceCell<Arc<CtrlCState>>,
     installed: &OnceCell<()>,

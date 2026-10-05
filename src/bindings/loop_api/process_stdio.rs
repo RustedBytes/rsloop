@@ -46,7 +46,7 @@ enum ProcessStdioPlanError {
     StdoutRedirect,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn process_stdio_plan(
     stdin: ProcessStdioSpec,
     stdout: ProcessStdioSpec,
@@ -70,7 +70,7 @@ fn process_stdio_plan(
 
 impl ProcessStdioSpecs {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessStdioSpecs")
     )]
     pub(super) fn parse(
@@ -93,7 +93,7 @@ static PIPE_CELL: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 /// matching `CPython`'s loop methods. An explicit `None` arrives as
 /// `Option::None` instead and is honored as "inherit the parent's fd" by
 /// `parse_process_stdio`.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn default_stdio_pipe() -> Py<PyAny> {
     Python::attach(|py| {
         PIPE_CELL
@@ -107,7 +107,7 @@ pub(super) fn default_stdio_pipe() -> Py<PyAny> {
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn parse_process_stdio(
     py: Python<'_>,
     value: &Py<PyAny>,
@@ -123,7 +123,7 @@ fn parse_process_stdio(
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn parse_subprocess_stdio_marker(
     py: Python<'_>,
     value: &Bound<'_, PyAny>,
@@ -144,12 +144,12 @@ fn parse_subprocess_stdio_marker(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn stdio_from_fd(fd: fd_ops::RawFd) -> PyResult<std::process::Stdio> {
     process_handles::file_from_fd(fd).map(std::process::Stdio::from)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn apply_stdio(
     command: &mut Command,
     specs: ProcessStdioSpecs,
@@ -187,7 +187,7 @@ pub(super) fn apply_stdio(
     Ok((stdout_override, stderr_override))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn output_stdio(spec: ProcessStdioSpec) -> PyResult<std::process::Stdio> {
     use std::process::Stdio;
 
@@ -202,7 +202,7 @@ fn output_stdio(spec: ProcessStdioSpec) -> PyResult<std::process::Stdio> {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn stderr_stdio(
     stderr: ProcessStdioSpec,
     stdout: ProcessStdioSpec,
@@ -213,7 +213,7 @@ fn stderr_stdio(
     output_stdio(stderr)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn stderr_stdout_stdio(stdout: ProcessStdioSpec) -> PyResult<std::process::Stdio> {
     use std::process::Stdio;
 

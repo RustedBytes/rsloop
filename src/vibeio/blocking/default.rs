@@ -9,7 +9,7 @@ impl DefaultBlockingThreadPool {
     /// Creates a new `DefaultBlockingThreadPool` with the default maximum
     /// number of threads.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DefaultBlockingThreadPool")
     )]
     #[inline]
@@ -24,7 +24,7 @@ impl DefaultBlockingThreadPool {
     ///
     /// Panics if the maximum is zero or exceeds the pool's supported size.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "DefaultBlockingThreadPool")
     )]
     #[inline]
@@ -47,7 +47,7 @@ impl DefaultBlockingThreadPool {
 
 impl BlockingThreadPool for DefaultBlockingThreadPool {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<DefaultBlockingThreadPool as BlockingThreadPool>")
     )]
     #[inline]
@@ -60,7 +60,7 @@ impl BlockingThreadPool for DefaultBlockingThreadPool {
 
 impl Default for DefaultBlockingThreadPool {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<DefaultBlockingThreadPool as Default>")
     )]
     fn default() -> Self {

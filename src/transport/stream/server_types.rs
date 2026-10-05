@@ -35,7 +35,7 @@ pub struct TransportSpawnContext {
 
 impl TransportSpawnContext {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TransportSpawnContext")
     )]
     pub fn new(
@@ -71,7 +71,7 @@ pub struct ServerCreateParams {
 
 impl ServerCreateParams {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCreateParams")
     )]
     pub fn new(
@@ -101,7 +101,7 @@ impl ServerCreateParams {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCreateParams")
     )]
     #[cfg(unix)]
@@ -111,7 +111,7 @@ impl ServerCreateParams {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ServerCreateParams")
     )]
     pub fn with_tls(mut self, tls: Option<Arc<ServerTlsSettings>>) -> Self {

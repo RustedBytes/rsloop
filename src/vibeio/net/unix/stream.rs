@@ -49,7 +49,7 @@ use crate::vibeio::{
     op::{ConnectOp, ReadOp, ReadinessOp, ReadvOp, WriteOp, WritevOp},
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn socket_addr_to_raw(path: &Path) -> Result<(libc::sockaddr_un, libc::socklen_t), io::Error> {
     let bytes = path.as_os_str().as_bytes();
@@ -102,7 +102,7 @@ fn socket_addr_to_raw(path: &Path) -> Result<(libc::sockaddr_un, libc::socklen_t
     Ok((sockaddr, addr_len))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn new_socket(
     path: &Path,
@@ -169,7 +169,7 @@ impl UnixStream {
     /// - Connection refused
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixStream", future = true)
     )]
     #[inline]
@@ -191,7 +191,7 @@ impl UnixStream {
     /// This function will return an error if the underlying socket is not
     /// connected.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixStream")
     )]
     #[inline]
@@ -206,7 +206,7 @@ impl UnixStream {
     /// This function will return an error if the underlying socket is not
     /// connected.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixStream")
     )]
     #[inline]
@@ -216,7 +216,7 @@ impl UnixStream {
 
     /// Shuts down the connection.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixStream")
     )]
     #[inline]
@@ -235,7 +235,7 @@ impl UnixStream {
     /// This function will return an error if registration with the async driver
     /// fails.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixStream")
     )]
     #[inline]
@@ -246,7 +246,7 @@ impl UnixStream {
     /// Creates a new `UnixStream` from a standard library `UnixStream` with a
     /// specific registration mode.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixStream")
     )]
     #[inline]
@@ -267,7 +267,7 @@ impl UnixStream {
     ///
     /// The returned `PollUnixStream` will always use readiness-based I/O.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixStream")
     )]
     #[inline]
@@ -288,7 +288,7 @@ impl UnixStream {
 impl PollUnixStream {
     /// Connects to the specified Unix domain socket path using poll-based I/O.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUnixStream", future = true)
     )]
     #[inline]
@@ -305,7 +305,7 @@ impl PollUnixStream {
 
     /// Creates a new `PollUnixStream` from a standard library `UnixStream`.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUnixStream")
     )]
     #[inline]
@@ -319,7 +319,7 @@ impl PollUnixStream {
 
     /// Converts this poll stream into an adaptive `UnixStream`.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUnixStream")
     )]
     #[inline]
@@ -329,7 +329,7 @@ impl PollUnixStream {
 
     /// Converts this poll stream into a completion-based `UnixStream`.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUnixStream")
     )]
     #[inline]
@@ -344,7 +344,7 @@ impl PollUnixStream {
 
     /// Returns the local address of this connection.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUnixStream")
     )]
     #[inline]
@@ -354,7 +354,7 @@ impl PollUnixStream {
 
     /// Returns the remote address of this connection.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUnixStream")
     )]
     #[inline]
@@ -364,7 +364,7 @@ impl PollUnixStream {
 
     /// Shuts down the connection.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUnixStream")
     )]
     #[inline]
@@ -375,7 +375,7 @@ impl PollUnixStream {
     /// Tries to perform an I/O operation on the socket, returning an error if
     /// it is not ready.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUnixStream")
     )]
     #[inline]
@@ -389,7 +389,7 @@ impl PollUnixStream {
     /// Tries to perform an I/O operation on the socket, returning an error if
     /// it is not ready.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PollUnixStream")
     )]
     #[inline]
@@ -403,7 +403,7 @@ impl PollUnixStream {
 
 impl AsRawFd for PollUnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as AsRawFd>")
     )]
     #[inline]
@@ -414,7 +414,7 @@ impl AsRawFd for PollUnixStream {
 
 impl IntoRawFd for PollUnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as IntoRawFd>")
     )]
     #[inline]
@@ -425,7 +425,7 @@ impl IntoRawFd for PollUnixStream {
 
 impl TokioAsyncRead for PollUnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as TokioAsyncRead>")
     )]
     #[inline]
@@ -463,7 +463,7 @@ impl TokioAsyncRead for PollUnixStream {
 
 impl TokioAsyncWrite for PollUnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as TokioAsyncWrite>")
     )]
     #[inline]
@@ -482,7 +482,7 @@ impl TokioAsyncWrite for PollUnixStream {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as TokioAsyncWrite>")
     )]
     #[inline]
@@ -504,7 +504,7 @@ impl TokioAsyncWrite for PollUnixStream {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as TokioAsyncWrite>")
     )]
     #[inline]
@@ -513,7 +513,7 @@ impl TokioAsyncWrite for PollUnixStream {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as TokioAsyncWrite>")
     )]
     #[inline]
@@ -522,7 +522,7 @@ impl TokioAsyncWrite for PollUnixStream {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as TokioAsyncWrite>")
     )]
     #[inline]
@@ -538,7 +538,7 @@ impl UnixStream {
     /// This is useful when you want to create a Unix stream that uses
     /// poll-based I/O.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "UnixStream")
     )]
     #[inline]
@@ -553,7 +553,7 @@ impl UnixStream {
 
 impl AsRawFd for UnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnixStream as AsRawFd>")
     )]
     #[inline]
@@ -564,7 +564,7 @@ impl AsRawFd for UnixStream {
 
 impl<'a> AsInnerRawHandle<'a> for UnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnixStream as AsInnerRawHandle < 'a >>")
     )]
     #[inline]
@@ -575,7 +575,7 @@ impl<'a> AsInnerRawHandle<'a> for UnixStream {
 
 impl<'a> AsInnerRawHandle<'a> for PollUnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as AsInnerRawHandle < 'a >>")
     )]
     #[inline]
@@ -586,7 +586,7 @@ impl<'a> AsInnerRawHandle<'a> for PollUnixStream {
 
 impl IntoRawFd for UnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnixStream as IntoRawFd>")
     )]
     #[inline]
@@ -599,7 +599,7 @@ impl IntoRawFd for UnixStream {
 
 impl AsyncRead for UnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnixStream as AsyncRead>", future = true)
     )]
     #[inline]
@@ -611,7 +611,7 @@ impl AsyncRead for UnixStream {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnixStream as AsyncRead>", future = true)
     )]
     #[inline]
@@ -631,7 +631,7 @@ impl AsyncRead for UnixStream {
 
 impl AsyncWrite for UnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnixStream as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -643,7 +643,7 @@ impl AsyncWrite for UnixStream {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnixStream as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -652,7 +652,7 @@ impl AsyncWrite for UnixStream {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnixStream as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -669,7 +669,7 @@ impl AsyncWrite for UnixStream {
 
 impl AsyncReadPoll for PollUnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as AsyncReadPoll>")
     )]
     #[inline]
@@ -688,7 +688,7 @@ impl AsyncReadPoll for PollUnixStream {
 
 impl AsyncWritePoll for PollUnixStream {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollUnixStream as AsyncWritePoll>")
     )]
     #[inline]

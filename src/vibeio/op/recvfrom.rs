@@ -27,7 +27,7 @@ use crate::vibeio::{
     op::{Op, io_util::CompletionBuffer, socket_addr::sockaddr_storage_to_socketaddr},
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn socket_recvfrom(
@@ -110,7 +110,7 @@ pub struct RecvfromOp<'a, B: IoBufMut> {
 
 impl<'a, B: IoBufMut> RecvfromOp<'a, B> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RecvfromOp")
     )]
     #[inline]
@@ -128,7 +128,7 @@ impl<'a, B: IoBufMut> RecvfromOp<'a, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RecvfromOp")
     )]
     #[inline]
@@ -146,7 +146,7 @@ impl<'a, B: IoBufMut> RecvfromOp<'a, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RecvfromOp")
     )]
     #[inline]
@@ -163,7 +163,7 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
     type Output = (usize, SocketAddr);
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RecvfromOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -231,7 +231,7 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RecvfromOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -315,7 +315,7 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RecvfromOp as Op>")
     )]
     #[cfg(windows)]
@@ -386,7 +386,7 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RecvfromOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -442,7 +442,7 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
 
 impl<B: IoBufMut> Drop for RecvfromOp<'_, B> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RecvfromOp as Drop>")
     )]
     #[inline]

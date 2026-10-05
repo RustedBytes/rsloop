@@ -36,7 +36,7 @@ mod native {
     // never inspected. Cell operations cannot unwind or invoke user code.
     unsafe impl Allocator for BatchAllocator {
         #[cfg_attr(
-            feature = "hotpath-profile",
+            feature = "profile",
             hotpath::measure(impl_type = "<BatchAllocator as Allocator>")
         )]
         #[inline]
@@ -54,7 +54,7 @@ mod native {
         }
 
         #[cfg_attr(
-            feature = "hotpath-profile",
+            feature = "profile",
             hotpath::measure(impl_type = "<BatchAllocator as Allocator>")
         )]
         #[inline]
@@ -71,7 +71,7 @@ mod native {
 
     impl Drop for BatchAllocator {
         #[cfg_attr(
-            feature = "hotpath-profile",
+            feature = "profile",
             hotpath::measure(impl_type = "<BatchAllocator as Drop>")
         )]
         fn drop(&mut self) {
@@ -85,7 +85,7 @@ mod native {
 
     pub(crate) type Batch<'a, T> = Vec<T, &'a BatchAllocator>;
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+    #[cfg_attr(feature = "profile", hotpath::measure)]
     #[inline]
     pub(crate) fn batch<T>(allocator: &BatchAllocator, capacity: usize) -> Batch<'_, T> {
         Vec::with_capacity_in(capacity, allocator)
@@ -308,7 +308,7 @@ mod draining {
         remaining: &'a mut [T],
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+    #[cfg_attr(feature = "profile", hotpath::measure)]
     pub(crate) fn drain_batch<'a, T>(batch: &'a mut Batch<'_, T>) -> BatchDrain<'a, T> {
         let len = batch.len();
         // SAFETY: the old len elements are initialized. Setting len to zero transfers
@@ -326,7 +326,7 @@ mod draining {
         type Item = T;
 
         #[cfg_attr(
-            feature = "hotpath-profile",
+            feature = "profile",
             hotpath::measure(impl_type = "<BatchDrain as Iterator>")
         )]
         #[inline]
@@ -339,7 +339,7 @@ mod draining {
         }
 
         #[cfg_attr(
-            feature = "hotpath-profile",
+            feature = "profile",
             hotpath::measure(impl_type = "<BatchDrain as Iterator>")
         )]
         fn size_hint(&self) -> (usize, Option<usize>) {
@@ -351,7 +351,7 @@ mod draining {
 
     impl<T> Drop for BatchDrain<'_, T> {
         #[cfg_attr(
-            feature = "hotpath-profile",
+            feature = "profile",
             hotpath::measure(impl_type = "<BatchDrain as Drop>")
         )]
         fn drop(&mut self) {
@@ -369,12 +369,12 @@ mod ordinary {
     #[derive(Default)]
     pub(crate) struct BatchAllocator {}
     pub(crate) type Batch<'a, T> = Vec<T>;
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+    #[cfg_attr(feature = "profile", hotpath::measure)]
     #[inline]
     pub(crate) fn batch<T>(_: &BatchAllocator, capacity: usize) -> Batch<'_, T> {
         Vec::with_capacity(capacity)
     }
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+    #[cfg_attr(feature = "profile", hotpath::measure)]
     #[inline]
     pub(crate) fn drain_batch<'a, T>(batch: &'a mut Batch<'_, T>) -> std::vec::Drain<'a, T> {
         batch.drain(..)

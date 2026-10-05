@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use super::sleep::Sleep;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn duration_remainder(duration: Duration, divisor: Duration) -> Duration {
     let remainder = duration.as_nanos() % divisor.as_nanos();
@@ -41,7 +41,7 @@ pub struct Interval {
 }
 
 impl Interval {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Interval"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Interval"))]
     #[inline]
     pub fn new(period: Duration) -> Self {
         Self {
@@ -52,7 +52,7 @@ impl Interval {
     }
 
     /// Configure how missed ticks are handled.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Interval"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Interval"))]
     #[inline]
     pub fn set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
         self.missed_tick_behavior = behavior;
@@ -61,7 +61,7 @@ impl Interval {
     /// Reset the interval schedule so the next tick is computed relative to
     /// the time when `tick()` is next called (useful when you want to restart
     /// the cadence).
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Interval"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Interval"))]
     #[inline]
     pub fn reset(&mut self) {
         self.next_deadline = None;
@@ -74,7 +74,7 @@ impl Interval {
     ///   were missed.
     /// A zero period yields once and returns one tick in either mode.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "Interval", future = true)
     )]
     pub async fn tick(&mut self) -> u64 {
@@ -84,7 +84,7 @@ impl Interval {
     // Keep the scheduling clock explicit so catch-up boundaries can be tested
     // without scheduler latency changing the expected number of missed ticks.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "Interval", future = true)
     )]
     async fn tick_at(&mut self, now: Instant) -> u64 {

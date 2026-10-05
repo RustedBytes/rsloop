@@ -33,7 +33,7 @@ pub(super) struct CreateUnixConnectionParams {
     pub(super) tls: TlsParams,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn create_connection<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -73,7 +73,7 @@ pub(super) fn create_connection<'py>(
 
 /// Walks the resolved addresses in order, returning the first socket that
 /// connects and reporting the last failure when none do.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 async fn connect_first_reachable_address(
     host: Option<Py<PyAny>>,
     port: Option<Py<PyAny>>,
@@ -117,7 +117,7 @@ async fn connect_first_reachable_address(
 /// Wraps a connected socket in a transport and returns the `(transport,
 /// protocol)` pair. The TLS handshake runs on a blocking worker because it can
 /// block on peer I/O.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 async fn finish_client_connection(
     env: &LoopSpawnEnv,
     protocol: &Py<PyAny>,
@@ -142,7 +142,7 @@ async fn finish_client_connection(
     Python::attach(|py| transport_protocol_pair(py, transport.into_any(), protocol))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn create_connection_transport(
     slf: Py<PyLoop>,
     py: Python<'_>,
@@ -165,7 +165,7 @@ pub(super) fn create_connection_transport(
     transport_protocol_pair(py, transport.into_any(), &protocol)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn create_unix_connection<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -211,7 +211,7 @@ pub(super) fn create_unix_connection<'py>(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn connect_accepted_socket<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -246,7 +246,7 @@ pub(super) fn connect_accepted_socket<'py>(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn start_tls<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,

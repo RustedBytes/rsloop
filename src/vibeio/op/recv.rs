@@ -26,7 +26,7 @@ use crate::vibeio::{
     },
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn socket_recv(socket: SOCKET, buf: &mut impl IoBufMut, peek: bool) -> io::Result<usize> {
@@ -80,7 +80,7 @@ pub struct RecvOp<'a, B: IoBufMut> {
 }
 
 impl<'a, B: IoBufMut> RecvOp<'a, B> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "RecvOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RecvOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B) -> Self {
         Self {
@@ -91,7 +91,7 @@ impl<'a, B: IoBufMut> RecvOp<'a, B> {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "RecvOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RecvOp"))]
     pub fn new_peek(handle: &'a InnerRawHandle, buf: B) -> Self {
         Self {
             handle,
@@ -101,7 +101,7 @@ impl<'a, B: IoBufMut> RecvOp<'a, B> {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "RecvOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RecvOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -116,7 +116,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
     type Output = usize;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RecvOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -168,7 +168,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RecvOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -214,7 +214,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RecvOp as Op>")
     )]
     #[cfg(windows)]
@@ -271,7 +271,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RecvOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -299,7 +299,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
 
 impl<B: IoBufMut> Drop for RecvOp<'_, B> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RecvOp as Drop>")
     )]
     #[inline]

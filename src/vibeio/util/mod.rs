@@ -24,7 +24,7 @@ use crate::vibeio::current_driver;
 ///
 /// This function returns `true` when the runtime is using a driver that can
 /// handle completion-based operations (e.g., io_uring with completion queues).
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub fn supports_completion() -> bool {
     current_driver().is_some_and(|driver| driver.supports_completion())
@@ -38,7 +38,7 @@ pub fn supports_completion() -> bool {
 /// `false`.
 ///
 /// The result is cached for the lifetime of the program.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub fn supports_io_uring() -> bool {
     #[cfg(target_os = "linux")]
@@ -53,7 +53,7 @@ pub fn supports_io_uring() -> bool {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(target_os = "linux")]
 fn detect_io_uring_support() -> bool {
     use io_uring::opcode;
@@ -104,7 +104,7 @@ fn detect_io_uring_support() -> bool {
     required_ops.iter().all(|op| probe.is_supported(*op))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(target_os = "linux")]
 fn build_probe_ring() -> std::io::Result<io_uring::IoUring> {
     let mut builder = io_uring::IoUring::builder();

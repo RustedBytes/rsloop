@@ -107,7 +107,7 @@ pub struct WaitPidOp {
 
 impl WaitPidOp {
     /// Create a new `WaitPidOp` for the given child PID.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WaitPidOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WaitPidOp"))]
     #[inline]
     pub fn new(pid: u32) -> Self {
         Self {
@@ -118,7 +118,7 @@ impl WaitPidOp {
     }
 
     /// Open a pidfd for `pid` via the `pidfd_open` syscall (Linux 5.3+).
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WaitPidOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WaitPidOp"))]
     #[inline]
     fn open_pidfd(pid: libc::pid_t) -> io::Result<OwnedFd> {
         // SAFETY: pidfd_open takes integer arguments and returns a new descriptor.
@@ -133,7 +133,7 @@ impl WaitPidOp {
     }
 
     /// Check for exit and reap without blocking, before arming pidfd readiness.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WaitPidOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WaitPidOp"))]
     #[inline]
     fn reap(pid: libc::pid_t) -> io::Result<i32> {
         let mut status: libc::c_int = 0;
@@ -162,7 +162,7 @@ impl Op for WaitPidOp {
     type Output = i32;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WaitPidOp as Op>")
     )]
     fn poll_poll(
@@ -210,7 +210,7 @@ impl Op for WaitPidOp {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WaitPidOp as Op>")
     )]
     fn poll_completion(

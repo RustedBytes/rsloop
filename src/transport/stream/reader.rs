@@ -40,7 +40,7 @@ use crate::{
     fd_ops,
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn spawn_reader_worker(
     core: Arc<StreamTransportCore>,
     reader: ReaderTarget,
@@ -53,7 +53,7 @@ pub(super) fn spawn_reader_worker(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn spawn_tls_reader_worker(
     core: Arc<StreamTransportCore>,
     tls_state: SharedTlsIoState,
@@ -67,7 +67,7 @@ pub(super) fn spawn_tls_reader_worker(
     core.register_worker(worker);
     Ok(())
 }
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn run_stream_reader(
     core: Arc<StreamTransportCore>,
     mut reader: ReaderTarget,
@@ -144,7 +144,7 @@ pub(super) fn run_stream_reader(
 /// Retry non-blocking reads for a bounded window after a successful read.
 /// Returns `false` when the connection terminated (event already enqueued)
 /// and the reader loop must exit.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn spin_read_stream(
     core: &Arc<StreamTransportCore>,
     reader: &mut ReaderTarget,
@@ -206,7 +206,7 @@ pub(super) fn spin_read_stream(
 /// retain the coordination-thread path. Both stop
 /// helpers check loop-thread task ownership before sending a dispatcher
 /// command, so `start_tls` drops a local reader before reclaiming its socket.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn spawn_socket_reader(
     fd: fd_ops::RawFd,
     core: Arc<StreamTransportCore>,
@@ -222,7 +222,7 @@ pub(super) fn spawn_socket_reader(
 
 /// Stops a local reader immediately, or waits for coordination-thread
 /// cancellation.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) -> io::Result<()> {
     if core.loop_core.stop_io_task(fd) {
         return Ok(());
@@ -247,7 +247,7 @@ pub(super) fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) 
 /// the socket, so waiting for the acknowledgement only adds teardown latency.
 /// TLS upgrade continues to use `stop_socket_reader`, where exclusive access to
 /// the underlying stream is required before handshake bytes can be consumed.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn stop_socket_reader_nowait(
     core: &StreamTransportCore,
     fd: fd_ops::RawFd,
@@ -263,7 +263,7 @@ pub(super) fn stop_socket_reader_nowait(
         }))
         .map_err(io::Error::other)
 }
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn run_socket_reader_blocking(
     core: Arc<StreamTransportCore>,
     reader: ReaderTarget,
@@ -272,7 +272,7 @@ pub(crate) fn run_socket_reader_blocking(
     run_stream_reader(core, reader, stop)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn run_tls_reader(
     core: Arc<StreamTransportCore>,
     tls_state: SharedTlsIoState,

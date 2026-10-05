@@ -18,7 +18,7 @@ pub struct RenameOp {
 }
 
 impl RenameOp {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "RenameOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RenameOp"))]
     #[inline]
     pub fn new(driver: Rc<AnyDriver>, old_path: CString, new_path: CString) -> Self {
         Self {
@@ -34,7 +34,7 @@ impl Op for RenameOp {
     type Output = ();
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RenameOp as Op>")
     )]
     #[inline]
@@ -79,7 +79,7 @@ impl Op for RenameOp {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RenameOp as Op>")
     )]
     #[inline]
@@ -110,7 +110,7 @@ impl Op for RenameOp {
 
 impl Drop for RenameOp {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<RenameOp as Drop>")
     )]
     fn drop(&mut self) {

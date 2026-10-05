@@ -8,7 +8,7 @@ use pyo3::{
 
 use crate::engine::LoopCore;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn handle_callback_error(
     py: Python<'_>,
     loop_core: &LoopCore,

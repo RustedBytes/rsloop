@@ -48,7 +48,7 @@ use crate::vibeio::{
     task::{RemoteWakeContext, Task, TaskWake},
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn enqueue_local_wake(wake: &Arc<TaskWake>, remote: &Arc<RemoteWakeContext>) -> bool {
     CURRENT_RUNTIME.with(|current| {
         let Ok(current) = current.try_borrow() else {
@@ -117,7 +117,7 @@ where
     type Output = ();
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<SpawnFuture as Future>")
     )]
     #[inline]
@@ -171,7 +171,7 @@ pub struct JoinHandle<T> {
 impl<T> JoinHandle<T> {
     /// Creates a new `JoinHandle` with the given state.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "JoinHandle")
     )]
     #[inline]
@@ -185,7 +185,7 @@ impl<T> JoinHandle<T> {
     /// If called from inside the task's own poll, its future is released when
     /// that poll returns; otherwise its pending future is released immediately.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "JoinHandle")
     )]
     #[inline]
@@ -212,7 +212,7 @@ impl<T> Future for JoinHandle<T> {
     type Output = T;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<JoinHandle as Future>")
     )]
     #[inline]
@@ -256,7 +256,7 @@ struct BlockOnNotify {
 
 impl BlockOnNotify {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "BlockOnNotify")
     )]
     #[inline]
@@ -275,7 +275,7 @@ impl BlockOnNotify {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "BlockOnNotify")
     )]
     #[inline]
@@ -284,7 +284,7 @@ impl BlockOnNotify {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "BlockOnNotify")
     )]
     #[inline]
@@ -293,7 +293,7 @@ impl BlockOnNotify {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "BlockOnNotify")
     )]
     #[cfg(any(target_vendor = "apple", windows))]
@@ -303,7 +303,7 @@ impl BlockOnNotify {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "BlockOnNotify")
     )]
     #[inline]
@@ -319,7 +319,7 @@ impl BlockOnNotify {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "BlockOnNotify")
     )]
     #[inline]
@@ -330,7 +330,7 @@ impl BlockOnNotify {
 
 impl Wake for BlockOnNotify {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<BlockOnNotify as Wake>")
     )]
     #[inline]
@@ -339,7 +339,7 @@ impl Wake for BlockOnNotify {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<BlockOnNotify as Wake>")
     )]
     #[inline]
@@ -355,7 +355,7 @@ impl CurrentRuntimeGuard {
     ///
     /// Panics if called while already inside a runtime.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "CurrentRuntimeGuard")
     )]
     #[inline]
@@ -376,7 +376,7 @@ impl CurrentRuntimeGuard {
 impl Drop for CurrentRuntimeGuard {
     /// Exit the runtime, clearing the current runtime reference.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<CurrentRuntimeGuard as Drop>")
     )]
     #[inline]
@@ -391,7 +391,7 @@ impl Drop for CurrentRuntimeGuard {
 /// Get the I/O driver for the current runtime.
 ///
 /// Returns `None` if called outside a runtime context.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn current_driver() -> Option<Rc<AnyDriver>> {
     CURRENT_RUNTIME.with(|runtime| {
         let runtime = runtime.borrow();
@@ -405,7 +405,7 @@ pub(crate) fn current_driver() -> Option<Rc<AnyDriver>> {
 ///
 /// Returns `None` if called outside a runtime context or if timers are not
 /// enabled.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn current_timer() -> Option<Rc<Timer>> {
     CURRENT_RUNTIME.with(|runtime| {
         let runtime = runtime.borrow();
@@ -419,7 +419,7 @@ pub(crate) fn current_timer() -> Option<Rc<Timer>> {
 ///
 /// Returns `None` if called outside a runtime context or if process support is
 /// not enabled.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(feature = "process")]
 pub(crate) async fn current_zombie_reaper() -> Option<async_channel::Sender<ZombieReaperMessage>> {
     let runtime = CURRENT_RUNTIME.with(|runtime| {
@@ -443,7 +443,7 @@ pub(crate) async fn current_zombie_reaper() -> Option<async_channel::Sender<Zomb
 ///
 /// # Examples
 /// See "Spawning and joining tasks" in `tools/vibeio-check/EXAMPLES.md`.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn spawn<T>(future: impl Future<Output = T> + 'static) -> JoinHandle<T>
 where
     T: 'static,
@@ -473,7 +473,7 @@ where
 /// See "Blocking work with an explicit pool" in
 /// `tools/vibeio-check/EXAMPLES.md` for a checked result and pool
 /// configuration.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub async fn spawn_blocking<T, F>(f: F) -> Result<T, SpawnBlockingError>
 where
     T: Send + 'static,
@@ -490,7 +490,7 @@ where
 ///
 /// Returns `true` if runtime-specific fs offload is enabled and we're inside a
 /// runtime.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(feature = "fs")]
 #[inline]
 pub(crate) fn offload_fs() -> bool {
@@ -538,7 +538,7 @@ pub struct Runtime {
 impl RuntimeInner {
     /// Spawn a task on this runtime.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeInner")
     )]
     #[inline]
@@ -578,7 +578,7 @@ impl RuntimeInner {
 
     /// Spawn a blocking task on this runtime's thread pool.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeInner", future = true)
     )]
     #[inline]
@@ -593,7 +593,7 @@ impl RuntimeInner {
 
     /// Enqueue a task for polling.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeInner")
     )]
     #[inline]
@@ -603,7 +603,7 @@ impl RuntimeInner {
 
     /// Drain ready tasks into the given batch.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeInner")
     )]
     #[inline]
@@ -637,7 +637,7 @@ impl RuntimeInner {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeInner")
     )]
     #[inline]
@@ -649,7 +649,7 @@ impl RuntimeInner {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeInner")
     )]
     #[inline]
@@ -663,7 +663,7 @@ impl RuntimeInner {
 
     /// Take the next task to run, if any.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "RuntimeInner")
     )]
     #[inline]
@@ -680,7 +680,7 @@ impl Runtime {
     /// Create a new runtime with the given driver.
     ///
     /// By default, this enables the timer and file I/O offload.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Runtime"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Runtime"))]
     #[allow(dead_code)]
     #[inline]
     pub(crate) fn new(driver: AnyDriver) -> Self {
@@ -693,7 +693,7 @@ impl Runtime {
     }
 
     /// Create a new runtime with the given driver and options.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Runtime"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Runtime"))]
     #[inline]
     pub(crate) fn with_options(
         driver: AnyDriver,
@@ -745,7 +745,7 @@ impl Runtime {
     /// Spawn a task on this runtime.
     ///
     /// Returns a `JoinHandle` that can be awaited to get the task's output.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Runtime"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Runtime"))]
     #[inline]
     pub fn spawn<T>(&self, future: impl Future<Output = T> + 'static) -> JoinHandle<T>
     where
@@ -759,7 +759,7 @@ impl Runtime {
 
     /// Spawn a blocking task on this runtime's thread pool.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "Runtime", future = true)
     )]
     #[inline]
@@ -778,7 +778,7 @@ impl Runtime {
         dead_code,
         reason = "Used by the Python embedding, not the standalone public-API harness"
     )]
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Runtime"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Runtime"))]
     pub(crate) fn poll_once(&self) {
         let inner = self.inner.as_ref().expect("runtime has been dropped");
         inner.driver.wait(Some(std::time::Duration::ZERO));
@@ -801,7 +801,7 @@ impl Runtime {
     ///
     /// This method blocks the current thread and drives the runtime until
     /// the provided future completes.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Runtime"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Runtime"))]
     #[inline]
     pub fn block_on<T>(&self, future: impl Future<Output = T> + 'static) -> T
     where
@@ -936,7 +936,7 @@ impl Runtime {
 
 impl Drop for Runtime {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Runtime as Drop>")
     )]
     fn drop(&mut self) {

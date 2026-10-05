@@ -35,7 +35,7 @@ use crate::vibeio::net::PollUnixStream as VibePollUnixStream;
 #[cfg(windows)]
 use crate::vibeio::net::TcpStream as VibeTcpStream;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(windows))]
 pub(crate) async fn run_tcp_socket_reader_task(
     core: Arc<StreamTransportCore>,
@@ -97,7 +97,7 @@ pub(crate) async fn run_tcp_socket_reader_task(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(windows)]
 pub(crate) async fn run_tcp_socket_reader_task(
     core: Arc<StreamTransportCore>,
@@ -266,7 +266,7 @@ pub(crate) async fn run_tcp_socket_reader_task(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(windows)]
 pub(super) async fn run_windows_poll_tcp_reader(
     core: Arc<StreamTransportCore>,
@@ -310,7 +310,7 @@ pub(super) async fn run_windows_poll_tcp_reader(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(unix)]
 pub(crate) async fn run_unix_socket_reader_task(
     core: Arc<StreamTransportCore>,
@@ -368,12 +368,12 @@ pub(crate) async fn run_unix_socket_reader_task(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn next_read_capacity(buf: &Vec<u8>) -> usize {
     next_read_capacity_for(buf.len(), buf.capacity())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn next_read_capacity_for(len: usize, allocated_capacity: usize) -> usize {
     let capacity = allocated_capacity.max(STREAM_READ_BUFFER_SIZE);
     if len == capacity && capacity < MAX_STREAM_READ_BUFFER_SIZE {

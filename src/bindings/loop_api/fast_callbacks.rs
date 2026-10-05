@@ -8,7 +8,7 @@ use pyo3::{exceptions::PyTypeError, ffi, get_trampoline_function, prelude::*, ty
 use super::PyLoop;
 use crate::engine::{CallbackArgs, CallbackKind};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 unsafe fn schedule(
     py: Python<'_>,
     slf: *mut ffi::PyObject,
@@ -129,7 +129,7 @@ unsafe fn schedule(
     Ok(handle.into_ptr())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 unsafe fn soon(
     py: Python<'_>,
     slf: *mut ffi::PyObject,
@@ -141,7 +141,7 @@ unsafe fn soon(
     unsafe { schedule(py, slf, args, nargs, names, CallbackKind::Soon) }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 unsafe fn threadsafe(
     py: Python<'_>,
     slf: *mut ffi::PyObject,
@@ -153,7 +153,7 @@ unsafe fn threadsafe(
     unsafe { schedule(py, slf, args, nargs, names, CallbackKind::Threadsafe) }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn install_fast_callbacks(py: Python<'_>) -> PyResult<()> {
     // Descriptors borrow their method definition forever. These contain only
     // static strings/function pointers, no interpreter-owned objects. Allocate

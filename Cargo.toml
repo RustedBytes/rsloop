@@ -60,9 +60,9 @@ windows-sys = { version = "0.61", features = ["Wdk_Foundation", "Wdk_Storage_Fil
 
 [features]
 default = []
-hotpath-profile = ["dep:hotpath", "hotpath/hotpath"]
+profile = ["dep:hotpath", "hotpath/hotpath"]
 # Separate diagnostic build: Rust allocations, not CPython's allocator.
-hotpath-alloc-profile = ["hotpath-profile", "hotpath/hotpath-alloc"]
+hotpath-alloc-profile = ["profile", "hotpath/hotpath-alloc"]
 # Opt-in: faster scheduler turns, but measured TCP workloads can regress.
 scheduler-batch-cache = []
 blocking-default = ["dep:rusty_pool"]

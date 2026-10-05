@@ -39,13 +39,13 @@ use crate::{
     fd_ops,
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn is_write_batch_candidate(len: usize) -> bool {
     len > SMALL_WRITE_COALESCE_MIN_BYTES && len <= SMALL_WRITE_COALESCE_MAX_BYTES
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn stage_owned_buffer(pending: &mut Option<OwnedWriteBuffer>, data: OwnedWriteBuffer) {
     if let Some(buffer) = pending {
         buffer.extend_from_slice(data.remaining());
@@ -61,7 +61,7 @@ pub(super) enum WriteBufferSignal {
     Resume,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn enqueue_write_buffer(
     state: &mut super::StreamWriteBufferState,
     len: usize,
@@ -82,7 +82,7 @@ fn enqueue_write_buffer(
     Ok(WriteBufferSignal::None)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn drain_write_buffer(state: &mut super::StreamWriteBufferState, len: usize) -> WriteBufferSignal {
     state.size = state.size.saturating_sub(len);
     if state.protocol_paused && state.size <= state.low_water {
@@ -93,7 +93,7 @@ fn drain_write_buffer(state: &mut super::StreamWriteBufferState, len: usize) -> 
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn clear_write_buffer_state(
     state: &mut super::StreamWriteBufferState,
     resume_protocol: bool,
@@ -108,7 +108,7 @@ fn clear_write_buffer_state(
     signal
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn reconcile_write_buffer_limits(
     state: &mut super::StreamWriteBufferState,
     low_water: usize,
@@ -129,7 +129,7 @@ pub(super) fn reconcile_write_buffer_limits(
 
 impl StreamTransportCore {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[inline]
@@ -141,7 +141,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[inline]
@@ -153,7 +153,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn close_on_write_eof(&self) -> bool {
@@ -164,7 +164,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn try_direct_tasked_write(&self, data: &[u8]) -> io::Result<usize> {
@@ -201,7 +201,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn fail_write(self: &Arc<Self>, err: Option<io::Error>) {
@@ -226,7 +226,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn queue_write(self: &Arc<Self>, data: OwnedWriteBuffer) -> io::Result<()> {
@@ -244,7 +244,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn queue_recorded_write(self: &Arc<Self>, data: OwnedWriteBuffer) {
@@ -256,7 +256,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn stage_direct_write(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
@@ -282,7 +282,7 @@ impl StreamTransportCore {
     /// Retain an already-owned write allocation instead of copying it into a
     /// second pool slot. Only joining an existing batch requires a copy.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     fn stage_direct_write_buffer(self: &Arc<Self>, data: OwnedWriteBuffer) -> io::Result<()> {
@@ -305,7 +305,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     fn finish_staged_write(self: &Arc<Self>, should_pause: bool) {
@@ -327,7 +327,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(crate) fn flush_pending_direct_write(self: &Arc<Self>) {
@@ -378,7 +378,7 @@ impl StreamTransportCore {
     /// close/write_eof must not bypass those bytes via the lazy-writer
     /// shortcut.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     #[cfg(any(windows, test))]
@@ -398,7 +398,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn discard_pending_direct_write(self: &Arc<Self>) {
@@ -414,7 +414,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn try_write_bytes(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
@@ -473,7 +473,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn new_pooled_write_buffer(&self, capacity: usize) -> OwnedWriteBuffer {
@@ -481,7 +481,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn try_write_buffer(self: &Arc<Self>, mut data: OwnedWriteBuffer) -> io::Result<()> {
@@ -530,7 +530,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore", future = true)
     )]
     pub async fn wait_readable(self: &Arc<Self>) -> io::Result<()> {
@@ -540,7 +540,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore", future = true)
     )]
     pub async fn wait_writable(self: &Arc<Self>) -> io::Result<()> {
@@ -550,19 +550,19 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub fn handle_read_ready_with_py(self: &Arc<Self>, _py: Python<'_>) {}
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub fn handle_write_ready_with_py(self: &Arc<Self>, _py: Python<'_>) {}
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn upgrade_stream(
@@ -628,7 +628,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn pause_writing_with_py(&self, py: Python<'_>) -> PyResult<()> {
@@ -648,7 +648,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn resume_writing_with_py(&self, py: Python<'_>) -> PyResult<()> {
@@ -668,7 +668,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn notify_pause_writing(self: &Arc<Self>) {
@@ -681,7 +681,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn notify_resume_writing(self: &Arc<Self>) {
@@ -694,7 +694,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn record_write_buffer_enqueued(&self, len: usize) -> io::Result<bool> {
@@ -714,7 +714,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn record_write_buffer_drained(self: &Arc<Self>, len: usize) {
@@ -733,7 +733,7 @@ impl StreamTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
     pub(super) fn clear_write_buffer(self: &Arc<Self>, resume_protocol: bool) {

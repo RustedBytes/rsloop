@@ -25,7 +25,7 @@ impl AsyncgenHooksGuard {
     // Install loop-specific async-generator hooks temporarily; `Drop` restores
     // the process-wide hooks even when `run_forever` exits with an error.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AsyncgenHooksGuard")
     )]
     pub(super) fn install(
@@ -68,7 +68,7 @@ impl AsyncgenHooksGuard {
 
 impl Drop for AsyncgenHooksGuard {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AsyncgenHooksGuard as Drop>")
     )]
     fn drop(&mut self) {
@@ -85,7 +85,7 @@ impl Drop for AsyncgenHooksGuard {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn new_asyncgens_set(py: Python<'_>) -> PyResult<Py<PySet>> {
     // A strong set retains every completed async context manager until loop
     // shutdown and prevents abandoned generators from reaching their finalizer.
@@ -94,7 +94,7 @@ fn new_asyncgens_set(py: Python<'_>) -> PyResult<Py<PySet>> {
     Ok(PySet::empty(py)?.unbind())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn active_asyncgens_set(py: Python<'_>, core: &Arc<LoopCore>) -> PyResult<Py<PySet>> {
     let mut state = core.state.lock().expect("poisoned loop state");
     if let Some(active) = state.active_asyncgens.as_ref() {
@@ -105,7 +105,7 @@ fn active_asyncgens_set(py: Python<'_>, core: &Arc<LoopCore>) -> PyResult<Py<PyS
     Ok(active)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn shutdown_asyncgens<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,
@@ -173,7 +173,7 @@ pub(super) fn shutdown_asyncgens<'py>(
 /// This implements the first-iteration half of Python's asynchronous-generator
 /// hooks and emits a `ResourceWarning` if iteration begins after
 /// `loop.shutdown_asyncgens()`.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn asyncgen_firstiter_hook(
     py: Python<'_>,
     loop_obj: &Bound<'_, PyAny>,
@@ -217,7 +217,7 @@ pub fn asyncgen_firstiter_hook(
 ///
 /// If the loop is still open, the generator's `aclose()` awaitable is submitted
 /// with `call_soon_threadsafe`; closed loops simply discard the registration.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn asyncgen_finalizer_hook(
     py: Python<'_>,
     loop_obj: &Bound<'_, PyAny>,

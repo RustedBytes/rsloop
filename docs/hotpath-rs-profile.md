@@ -1,6 +1,6 @@
 # Profiling rsloop with hotpath-rs
 
-The opt-in `hotpath-profile` feature instruments rsloop's Rust function bodies
+The opt-in `profile` feature instruments rsloop's Rust function bodies
 across the Python bindings, callback/context/timer machinery, dispatcher,
 transports, TLS, subprocesses, socket operations, and embedded vibeio runtime.
 This includes the platform drivers and optional runtime modules. Normal builds
@@ -20,7 +20,7 @@ run tests, or run another benchmark while collecting profiles.
 
 ```bash
 .venv/bin/python scripts/generate_test_tls_certs.py tests/fixtures/tls
-.venv/bin/maturin develop --release --features hotpath-profile
+.venv/bin/maturin develop --release --features profile
 .venv/bin/python scripts/profile_with_hotpath.py all --output target/hotpath-rs/timing
 ```
 

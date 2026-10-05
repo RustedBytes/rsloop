@@ -45,7 +45,7 @@ type OwnedAcceptSocket = OwnedFd;
 #[cfg(windows)]
 type OwnedAcceptSocket = OwnedSocket;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn load_accept_ex(socket: SOCKET) -> Result<WinSock::LPFN_ACCEPTEX, io::Error> {
     let mut bytes_returned: u32 = 0;
@@ -82,7 +82,7 @@ fn load_accept_ex(socket: SOCKET) -> Result<WinSock::LPFN_ACCEPTEX, io::Error> {
     Ok(accept_ex)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn load_get_accept_ex_sockaddrs(
     socket: SOCKET,
@@ -121,7 +121,7 @@ fn load_get_accept_ex_sockaddrs(
     Ok(get_accept_ex_sockaddrs)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn listener_socket_family(listener_socket: SOCKET) -> Result<i32, io::Error> {
     let mut addr = SOCKADDR_STORAGE::default();
@@ -144,7 +144,7 @@ fn listener_socket_family(listener_socket: SOCKET) -> Result<i32, io::Error> {
     Ok(if address.is_ipv4() { AF_INET } else { AF_INET6 } as i32)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn create_accept_socket(listener_socket: SOCKET) -> Result<OwnedSocket, io::Error> {
     let family = listener_socket_family(listener_socket)?;
@@ -158,7 +158,7 @@ fn create_accept_socket(listener_socket: SOCKET) -> Result<OwnedSocket, io::Erro
     Ok(socket.into())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn set_accept_context(listener_socket: SOCKET, accepted_socket: SOCKET) -> Result<(), io::Error> {
     // SAFETY: the option value points to a live SOCKET of the exact supplied
@@ -183,7 +183,7 @@ const ACCEPTEX_ADDR_LEN: usize = std::mem::size_of::<SOCKADDR_STORAGE>() + 16;
 #[cfg(windows)]
 const ACCEPTEX_OUTPUT_BUFFER_LEN: usize = ACCEPTEX_ADDR_LEN * 2;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 fn finish_unix_accept(
     owned: OwnedFd,
@@ -212,7 +212,7 @@ fn finish_unix_accept(
     Ok((owned, address))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn finish_windows_accept(owned: OwnedSocket) -> io::Result<(OwnedAcceptSocket, SocketAddr)> {
     let mut peer = SOCKADDR_STORAGE::default();
@@ -233,7 +233,7 @@ fn finish_windows_accept(owned: OwnedSocket) -> io::Result<(OwnedAcceptSocket, S
     Ok((owned, address))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn last_socket_error() -> io::Error {
     // SAFETY: reads this thread's Winsock error state without pointer arguments.
@@ -256,7 +256,7 @@ pub struct AcceptOp<'a> {
 }
 
 impl<'a> AcceptOp<'a> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AcceptOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AcceptOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle) -> Self {
         Self {
@@ -280,7 +280,7 @@ impl Op for AcceptOp<'_> {
     type Output = (OwnedAcceptSocket, SocketAddr);
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -289,7 +289,7 @@ impl Op for AcceptOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -374,7 +374,7 @@ impl Op for AcceptOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -502,7 +502,7 @@ impl Op for AcceptOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptOp as Op>")
     )]
     #[cfg(windows)]
@@ -577,7 +577,7 @@ impl Op for AcceptOp<'_> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -603,7 +603,7 @@ impl Op for AcceptOp<'_> {
 
 impl Drop for AcceptOp<'_> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<AcceptOp as Drop>")
     )]
     #[inline]

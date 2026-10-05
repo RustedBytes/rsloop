@@ -52,7 +52,7 @@ use crate::{
     vibeio::net::TcpListener as VibeTcpListener,
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn configure_accepted_tcp_stream(
     server: &Arc<ServerCore>,
     stream: &StdTcpStream,
@@ -69,7 +69,7 @@ pub(super) fn configure_accepted_tcp_stream(
     true
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn configure_accepted_unix_stream(
     server: &Arc<ServerCore>,
@@ -83,7 +83,7 @@ pub(super) fn configure_accepted_unix_stream(
     true
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn report_server_io_error(server: &ServerCore, err: io::Error, message: &str) {
     if !server.is_closed() {
         server.report_error(PyRuntimeError::new_err(err.to_string()), message);
@@ -98,7 +98,7 @@ pub(crate) struct BlockingAcceptLoop<L> {
 
 impl<L> BlockingAcceptLoop<L> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "BlockingAcceptLoop")
     )]
     pub(crate) fn new(server: Arc<ServerCore>, listener: L, stop: Arc<AtomicBool>) -> Self {
@@ -110,7 +110,7 @@ impl<L> BlockingAcceptLoop<L> {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn server_spawn_context(
     py: Python<'_>,
     server: &Arc<ServerCore>,
@@ -126,7 +126,7 @@ pub(super) fn server_spawn_context(
     )
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn server_tls_settings(py: Python<'_>, tls: &ServerTlsSettings) -> ServerTlsSettings {
     ServerTlsSettings {
         config: Arc::clone(&tls.config),
@@ -136,7 +136,7 @@ pub(super) fn server_tls_settings(py: Python<'_>, tls: &ServerTlsSettings) -> Se
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn spawn_accepted_tcp_transport(
     py: Python<'_>,
     server: &Arc<ServerCore>,
@@ -159,7 +159,7 @@ pub(super) fn spawn_accepted_tcp_transport(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn spawn_accepted_unix_transport(
     py: Python<'_>,
@@ -183,7 +183,7 @@ pub(super) fn spawn_accepted_unix_transport(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn spawn_accepted_transport_with_py(
     py: Python<'_>,
     server: &Arc<ServerCore>,
@@ -196,7 +196,7 @@ pub(crate) fn spawn_accepted_transport_with_py(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn schedule_accepted_transport(
     server: &Arc<ServerCore>,
     stream: AcceptedStream,
@@ -243,7 +243,7 @@ pub(super) fn schedule_accepted_transport(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
     let BlockingAcceptLoop {
         server,
@@ -293,7 +293,7 @@ pub(super) fn run_tcp_accept_loop(params: BlockingAcceptLoop<StdTcpListener>) {
         }
     }
 }
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub(crate) async fn run_server_accept_task(
     server: Arc<ServerCore>,
     listener: ServerListener,
@@ -307,7 +307,7 @@ pub(crate) async fn run_server_accept_task(
     drop(task_guard);
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 pub(super) async fn run_tcp_accept_task(server: Arc<ServerCore>, listener: StdTcpListener) {
     #[cfg(windows)]
     {
@@ -324,7 +324,7 @@ pub(super) struct WindowsAcceptPool(Vec<crate::vibeio::JoinHandle<()>>);
 #[cfg(windows)]
 impl Drop for WindowsAcceptPool {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WindowsAcceptPool as Drop>")
     )]
     fn drop(&mut self) {
@@ -334,7 +334,7 @@ impl Drop for WindowsAcceptPool {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(windows)]
 pub(super) async fn run_windows_tcp_accept_pool(server: Arc<ServerCore>, listener: StdTcpListener) {
     let lane_count = std::thread::available_parallelism()
@@ -360,7 +360,7 @@ pub(super) async fn run_windows_tcp_accept_pool(server: Arc<ServerCore>, listene
     std::future::pending::<()>().await;
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(windows)]
 pub(super) async fn run_windows_tcp_accept_lane(
     server: Arc<ServerCore>,
@@ -396,7 +396,7 @@ pub(super) async fn run_windows_tcp_accept_lane(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(not(windows))]
 pub(super) async fn run_tcp_accept_lane(server: Arc<ServerCore>, listener: StdTcpListener) {
     let listener = match VibeTcpListener::from_std(listener) {
@@ -437,7 +437,7 @@ pub(super) async fn run_tcp_accept_lane(server: Arc<ServerCore>, listener: StdTc
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn run_unix_accept_loop(params: BlockingAcceptLoop<StdUnixListener>) {
     let BlockingAcceptLoop {
@@ -489,7 +489,7 @@ pub(super) fn run_unix_accept_loop(params: BlockingAcceptLoop<StdUnixListener>) 
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 #[cfg(unix)]
 pub(super) async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdUnixListener) {
     let listener = match VibeUnixListener::from_std(listener) {

@@ -35,7 +35,7 @@ pub struct InnerRawHandle {
 const UNREGISTERED: Token = Token(usize::MAX);
 
 /// Set the descriptor's blocking mode without changing unrelated status flags.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(all(
     unix,
     any(
@@ -47,7 +47,7 @@ const UNREGISTERED: Token = Token(usize::MAX);
     )
 ))]
 pub(crate) fn set_nonblocking(fd: RawOsHandle, nonblocking: bool) -> io::Result<()> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+    #[cfg_attr(feature = "profile", hotpath::measure)]
     fn fcntl(fd: RawOsHandle, command: libc::c_int, value: libc::c_int) -> io::Result<libc::c_int> {
         loop {
             // SAFETY: F_GETFL and F_SETFL take integer arguments, not pointers.
@@ -92,7 +92,7 @@ impl InnerRawHandle {
 
     /// Share ownership with operations using this registration's driver.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[cfg(all(target_os = "linux", any(feature = "fs", feature = "splice")))]
@@ -102,7 +102,7 @@ impl InnerRawHandle {
 
     /// Retain operation storage on the registration's owner until completion.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[inline]
@@ -114,7 +114,7 @@ impl InnerRawHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[inline]
@@ -132,7 +132,7 @@ impl InnerRawHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[inline]
@@ -151,7 +151,7 @@ impl InnerRawHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[inline]
@@ -180,7 +180,7 @@ impl InnerRawHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[cfg(unix)]
@@ -190,7 +190,7 @@ impl InnerRawHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[allow(dead_code)]
@@ -200,7 +200,7 @@ impl InnerRawHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[inline]
@@ -209,7 +209,7 @@ impl InnerRawHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[inline]
@@ -218,7 +218,7 @@ impl InnerRawHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[allow(dead_code)]
@@ -232,7 +232,7 @@ impl InnerRawHandle {
     /// fails, the handle is unregistered: callers must drop it or retry
     /// before doing I/O.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[inline]
@@ -264,7 +264,7 @@ impl InnerRawHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[inline]
@@ -284,7 +284,7 @@ impl InnerRawHandle {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
     #[inline]
@@ -308,7 +308,7 @@ impl InnerRawHandle {
 
 impl Drop for InnerRawHandle {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<InnerRawHandle as Drop>")
     )]
     #[inline]

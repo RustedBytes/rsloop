@@ -29,7 +29,7 @@ use mio::Interest;
 
 use crate::vibeio::{fd_inner::InnerRawHandle, net::TcpStream, op::AcceptOp};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn bind_one(address: SocketAddr) -> Result<StdTcpListener, io::Error> {
     let socket = socket2::Socket::new(
         socket2::Domain::for_address(address),
@@ -93,7 +93,7 @@ impl TcpListener {
     /// - The process lacks permissions to bind to the address
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TcpListener")
     )]
     #[inline]
@@ -118,7 +118,7 @@ impl TcpListener {
     /// This function will return an error if registration with the async driver
     /// fails.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TcpListener")
     )]
     #[inline]
@@ -144,7 +144,7 @@ impl TcpListener {
     /// This function will return an error if registration with the async driver
     /// fails.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TcpListener")
     )]
     #[cfg(windows)]
@@ -166,7 +166,7 @@ impl TcpListener {
     /// This function will return an error if the underlying socket is not
     /// bound.
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TcpListener")
     )]
     #[inline]
@@ -184,7 +184,7 @@ impl TcpListener {
     /// - The listener is not bound to an address
     /// - The runtime is not active
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "TcpListener", future = true)
     )]
     #[inline]
@@ -199,7 +199,7 @@ impl TcpListener {
 #[cfg(unix)]
 impl AsRawFd for TcpListener {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<TcpListener as AsRawFd>")
     )]
     #[inline]
@@ -211,7 +211,7 @@ impl AsRawFd for TcpListener {
 #[cfg(unix)]
 impl IntoRawFd for TcpListener {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<TcpListener as IntoRawFd>")
     )]
     #[inline]
@@ -225,7 +225,7 @@ impl IntoRawFd for TcpListener {
 #[cfg(windows)]
 impl AsRawSocket for TcpListener {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<TcpListener as AsRawSocket>")
     )]
     #[inline]
@@ -237,7 +237,7 @@ impl AsRawSocket for TcpListener {
 #[cfg(windows)]
 impl IntoRawSocket for TcpListener {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<TcpListener as IntoRawSocket>")
     )]
     #[inline]

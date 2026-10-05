@@ -35,7 +35,7 @@ pub(super) struct OwnedReadBuffer {
 
 impl OwnedReadBuffer {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OwnedReadBuffer")
     )]
     pub(super) fn with_capacity(capacity: usize) -> Self {
@@ -46,7 +46,7 @@ impl OwnedReadBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OwnedReadBuffer")
     )]
     pub(super) fn from_pooled(bytes: Vec<u8>, pool: &Arc<ReadBufferPool>) -> Self {
@@ -66,7 +66,7 @@ impl Deref for OwnedReadBuffer {
     type Target = Vec<u8>;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<OwnedReadBuffer as Deref>")
     )]
     fn deref(&self) -> &Self::Target {
@@ -76,7 +76,7 @@ impl Deref for OwnedReadBuffer {
 
 impl DerefMut for OwnedReadBuffer {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<OwnedReadBuffer as DerefMut>")
     )]
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -86,7 +86,7 @@ impl DerefMut for OwnedReadBuffer {
 
 impl Drop for OwnedReadBuffer {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<OwnedReadBuffer as Drop>")
     )]
     fn drop(&mut self) {
@@ -104,7 +104,7 @@ pub(super) struct PendingReadBuffer<'a> {
 
 impl<'a> PendingReadBuffer<'a> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PendingReadBuffer")
     )]
     pub(super) fn from_pooled(
@@ -120,7 +120,7 @@ impl<'a> PendingReadBuffer<'a> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PendingReadBuffer")
     )]
     #[inline]
@@ -129,7 +129,7 @@ impl<'a> PendingReadBuffer<'a> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PendingReadBuffer")
     )]
     #[inline]
@@ -138,7 +138,7 @@ impl<'a> PendingReadBuffer<'a> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "PendingReadBuffer")
     )]
     pub(super) fn extend(&mut self, data: &[u8]) {
@@ -157,7 +157,7 @@ impl<'a> PendingReadBuffer<'a> {
 
 impl Drop for PendingReadBuffer<'_> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PendingReadBuffer as Drop>")
     )]
     fn drop(&mut self) {
@@ -186,7 +186,7 @@ impl OwnedWriteBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OwnedWriteBuffer")
     )]
     pub(super) fn from_pooled_slice(data: &[u8], pool: &Arc<WriteBufferPool>) -> Self {
@@ -200,7 +200,7 @@ impl OwnedWriteBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OwnedWriteBuffer")
     )]
     pub(super) fn with_pooled_capacity(capacity: usize, pool: &Arc<WriteBufferPool>) -> Self {
@@ -213,7 +213,7 @@ impl OwnedWriteBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OwnedWriteBuffer")
     )]
     pub(super) fn extend_from_slice(&mut self, data: &[u8]) {
@@ -221,7 +221,7 @@ impl OwnedWriteBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OwnedWriteBuffer")
     )]
     pub(super) fn try_append(&mut self, data: &[u8]) -> bool {
@@ -243,7 +243,7 @@ impl OwnedWriteBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OwnedWriteBuffer")
     )]
     #[inline]
@@ -252,7 +252,7 @@ impl OwnedWriteBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OwnedWriteBuffer")
     )]
     #[inline]
@@ -261,7 +261,7 @@ impl OwnedWriteBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OwnedWriteBuffer")
     )]
     #[inline]
@@ -270,7 +270,7 @@ impl OwnedWriteBuffer {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "OwnedWriteBuffer")
     )]
     #[inline]
@@ -279,7 +279,7 @@ impl OwnedWriteBuffer {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn can_append(offset: usize, current_len: usize, incoming_len: usize) -> bool {
     offset == 0
@@ -288,13 +288,13 @@ fn can_append(offset: usize, current_len: usize, incoming_len: usize) -> bool {
             <= super::tuning::DEFAULT_WRITE_BUFFER_HIGH_WATER.saturating_sub(current_len)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn retain_write_buffer(capacity: usize) -> bool {
     capacity <= super::tuning::DEFAULT_WRITE_BUFFER_HIGH_WATER
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 fn retain_read_buffer(capacity: usize) -> bool {
     capacity <= MAX_STREAM_READ_BUFFER_SIZE
@@ -314,7 +314,7 @@ enum PoolRelease {
     Discard,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn pool_acquire(
     available: usize,
     allocated: usize,
@@ -332,7 +332,7 @@ fn pool_acquire(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn pool_release(retain: bool, available: usize, limit: usize) -> PoolRelease {
     if retain && available < limit {
         PoolRelease::Store
@@ -343,7 +343,7 @@ fn pool_release(retain: bool, available: usize, limit: usize) -> PoolRelease {
 
 impl Drop for OwnedWriteBuffer {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<OwnedWriteBuffer as Drop>")
     )]
     fn drop(&mut self) {
@@ -369,7 +369,7 @@ struct WriteBufferPoolState {
 
 impl WriteBufferPoolState {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriteBufferPoolState")
     )]
     fn new() -> Self {
@@ -380,7 +380,7 @@ impl WriteBufferPoolState {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriteBufferPoolState")
     )]
     fn acquire(&mut self, capacity: usize) -> (Vec<u8>, bool, usize, bool) {
@@ -417,7 +417,7 @@ impl WriteBufferPoolState {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriteBufferPoolState")
     )]
     fn release(&mut self, mut buffer: Vec<u8>) {
@@ -439,7 +439,7 @@ impl WriteBufferPoolState {
 
 impl WriteBufferPool {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriteBufferPool")
     )]
     pub(super) fn new() -> Self {
@@ -453,7 +453,7 @@ impl WriteBufferPool {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriteBufferPool")
     )]
     fn acquire(&self, capacity: usize) -> (Vec<u8>, bool) {
@@ -472,7 +472,7 @@ impl WriteBufferPool {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "WriteBufferPool")
     )]
     pub(super) fn release(&self, buffer: Vec<u8>) {
@@ -500,7 +500,7 @@ struct ReadBufferPoolState {
 
 impl ReadBufferPoolState {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPoolState")
     )]
     fn new() -> Self {
@@ -511,7 +511,7 @@ impl ReadBufferPoolState {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPoolState")
     )]
     fn try_acquire(&mut self, capacity: usize) -> (Option<Vec<u8>>, usize) {
@@ -538,7 +538,7 @@ impl ReadBufferPoolState {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPoolState")
     )]
     fn release(&mut self, mut buffer: Vec<u8>) {
@@ -560,7 +560,7 @@ impl ReadBufferPoolState {
 
 impl ReadBufferPool {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPool")
     )]
     pub(super) fn new() -> Self {
@@ -575,7 +575,7 @@ impl ReadBufferPool {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPool")
     )]
     pub(super) fn try_acquire(&self, capacity: usize) -> Option<Vec<u8>> {
@@ -591,7 +591,7 @@ impl ReadBufferPool {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPool")
     )]
     fn has_available(&self) -> bool {
@@ -600,7 +600,7 @@ impl ReadBufferPool {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPool", future = true)
     )]
     pub(super) async fn wait_async(&self) {
@@ -619,7 +619,7 @@ impl ReadBufferPool {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPool")
     )]
     pub(super) fn wait_timeout(&self, timeout: Duration) {
@@ -633,7 +633,7 @@ impl ReadBufferPool {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPool")
     )]
     pub(super) fn notify_all(&self) {
@@ -642,7 +642,7 @@ impl ReadBufferPool {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPool")
     )]
     pub(super) fn close(&self) {
@@ -651,7 +651,7 @@ impl ReadBufferPool {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ReadBufferPool")
     )]
     pub(super) fn release(&self, buffer: Vec<u8>) {

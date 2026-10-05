@@ -100,14 +100,14 @@ pub trait Op {
 
     /// Whether a successful Linux completion transfers ownership of a new fd.
     /// The driver must close an unclaimed result after cancellation.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Op"))]
     #[cfg(target_os = "linux")]
     fn completion_returns_fd(&self) -> bool {
         false
     }
 
     /// Polls the operation for readiness (poll-based I/O).
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Op"))]
     #[inline]
     fn poll_poll(
         &mut self,
@@ -121,7 +121,7 @@ pub trait Op {
     }
 
     /// Polls the operation for readiness (completion-based I/O).
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Op"))]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -135,7 +135,7 @@ pub trait Op {
     }
 
     /// Polls the operation for readiness (automatically determined I/O).
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Op"))]
     #[cfg(any(feature = "fs", feature = "process"))]
     #[allow(dead_code)]
     #[inline]
@@ -149,7 +149,7 @@ pub trait Op {
 
     /// Builds an io_uring submission entry for this operation. Returns the
     /// constructed SQE.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Op"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -163,7 +163,7 @@ pub trait Op {
     }
 
     /// Submits a Windows overlapped I/O operation for this operation.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Op"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Op"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(

@@ -18,7 +18,7 @@ pub struct UnlinkOp {
 }
 
 impl UnlinkOp {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UnlinkOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnlinkOp"))]
     #[inline]
     pub fn new(driver: Rc<AnyDriver>, path: CString, is_dir: bool) -> Self {
         Self {
@@ -34,7 +34,7 @@ impl Op for UnlinkOp {
     type Output = ();
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnlinkOp as Op>")
     )]
     #[inline]
@@ -79,7 +79,7 @@ impl Op for UnlinkOp {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnlinkOp as Op>")
     )]
     #[inline]
@@ -104,7 +104,7 @@ impl Op for UnlinkOp {
 
 impl Drop for UnlinkOp {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<UnlinkOp as Drop>")
     )]
     fn drop(&mut self) {

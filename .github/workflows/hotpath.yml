@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        feature: [hotpath-profile, hotpath-alloc-profile]
+        feature: [profile, hotpath-alloc-profile]
     steps:
       - uses: actions/checkout@v6
         with:

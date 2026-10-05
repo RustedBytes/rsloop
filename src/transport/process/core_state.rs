@@ -10,7 +10,7 @@ use super::ProcessTransportCore;
 
 impl ProcessTransportCore {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     #[inline]
@@ -22,7 +22,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     #[inline]
@@ -31,7 +31,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn pipe_transport(&self, py: Python<'_>, fd: i32) -> Option<Py<PyAny>> {
@@ -44,7 +44,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn has_open_pipe(&self, fd: i32) -> bool {
@@ -56,7 +56,7 @@ impl ProcessTransportCore {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "ProcessTransportCore")
     )]
     pub(super) fn register_pipe_transports(&self, transports: Vec<(i32, Py<PyAny>)>) {

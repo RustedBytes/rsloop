@@ -27,7 +27,7 @@ use crate::vibeio::{
     },
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 #[inline]
 fn socket_write(socket: SOCKET, buf: &impl IoBuf) -> io::Result<usize> {
@@ -78,7 +78,7 @@ pub struct WriteOp<'a, B: IoBuf> {
 }
 
 impl<'a, B: IoBuf> WriteOp<'a, B> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WriteOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriteOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B) -> Self {
         Self {
@@ -88,7 +88,7 @@ impl<'a, B: IoBuf> WriteOp<'a, B> {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WriteOp"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriteOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -103,7 +103,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
     type Output = usize;
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -146,7 +146,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteOp as Op>")
     )]
     #[cfg(any(unix, windows))]
@@ -187,7 +187,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteOp as Op>")
     )]
     #[cfg(windows)]
@@ -274,7 +274,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteOp as Op>")
     )]
     #[cfg(target_os = "linux")]
@@ -301,7 +301,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
 
 impl<B: IoBuf> Drop for WriteOp<'_, B> {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<WriteOp as Drop>")
     )]
     #[inline]

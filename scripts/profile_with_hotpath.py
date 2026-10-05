@@ -1,6 +1,6 @@
 """Collect complete hotpath reports, one fresh process per workload.
 
-Build with ``maturin develop --release --features hotpath-profile`` first.
+Build with ``maturin develop --release --features profile`` first.
 Use ``all --output target/hotpath-rs/run`` for the coverage suite, or profile
 an application/test module with ``module --module NAME --module-args ...``.
 """
@@ -274,7 +274,7 @@ def child(args):
 
     native = cast(Any, _loop)
     if not hasattr(native, "hotpath_start"):
-        raise RuntimeError("build rsloop with --features hotpath-profile first")
+        raise RuntimeError("build rsloop with --features profile first")
     extension = Path(native.__file__).resolve()
     metadata = {
         "workload": args.workload,

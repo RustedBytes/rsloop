@@ -33,7 +33,7 @@ use crate::vibeio::{
     op::{ReadOp, ReadvOp, WriteOp, WritevOp},
 };
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 fn pipe_inner() -> std::io::Result<(OwnedFd, OwnedFd)> {
     let (reader, writer) = std::io::pipe()?;
     Ok((reader.into(), writer.into()))
@@ -227,7 +227,7 @@ mod setup_tests {
 ///
 /// Returns a tuple of `(reader, writer)` pipe endpoints.
 /// Both endpoints are close-on-exec to prevent unintended child inheritance.
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn pipe() -> std::io::Result<(Pipe, Pipe)> {
     let (read, write) = pipe_inner()?;
     Ok((
@@ -251,7 +251,7 @@ pub struct PollPipe {
 impl Pipe {
     /// Create a `Pipe` from a standard library `OwnedFd` with the given
     /// registration mode.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Pipe"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Pipe"))]
     #[inline]
     pub(crate) fn from_std_with_mode(
         inner: OwnedFd,
@@ -268,7 +268,7 @@ impl Pipe {
     }
 
     /// Convert this `Pipe` to a `PollPipe` for readiness-based operations.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Pipe"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Pipe"))]
     #[inline]
     pub fn into_poll(self) -> Result<PollPipe, io::Error> {
         let mut stream = self;
@@ -280,14 +280,14 @@ impl Pipe {
 
 impl PollPipe {
     /// Convert this `PollPipe` back to an adaptive `Pipe`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PollPipe"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollPipe"))]
     #[inline]
     pub fn into_adaptive(self) -> Pipe {
         self.stream
     }
 
     /// Convert this `PollPipe` to a completion-based `Pipe`.
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PollPipe"))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollPipe"))]
     #[inline]
     pub fn into_completion(self) -> Result<Pipe, io::Error> {
         let mut stream = self.stream;
@@ -299,7 +299,7 @@ impl PollPipe {
 
 impl AsRawFd for Pipe {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Pipe as AsRawFd>")
     )]
     #[inline]
@@ -310,7 +310,7 @@ impl AsRawFd for Pipe {
 
 impl AsRawFd for PollPipe {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollPipe as AsRawFd>")
     )]
     #[inline]
@@ -321,7 +321,7 @@ impl AsRawFd for PollPipe {
 
 impl IntoRawFd for Pipe {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Pipe as IntoRawFd>")
     )]
     #[inline]
@@ -334,7 +334,7 @@ impl IntoRawFd for Pipe {
 
 impl IntoRawFd for PollPipe {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollPipe as IntoRawFd>")
     )]
     #[inline]
@@ -345,7 +345,7 @@ impl IntoRawFd for PollPipe {
 
 impl<'a> AsInnerRawHandle<'a> for Pipe {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Pipe as AsInnerRawHandle < 'a >>")
     )]
     #[inline]
@@ -356,7 +356,7 @@ impl<'a> AsInnerRawHandle<'a> for Pipe {
 
 impl<'a> AsInnerRawHandle<'a> for PollPipe {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollPipe as AsInnerRawHandle < 'a >>")
     )]
     #[inline]
@@ -367,7 +367,7 @@ impl<'a> AsInnerRawHandle<'a> for PollPipe {
 
 impl AsyncRead for Pipe {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Pipe as AsyncRead>", future = true)
     )]
     #[inline]
@@ -379,7 +379,7 @@ impl AsyncRead for Pipe {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Pipe as AsyncRead>", future = true)
     )]
     #[inline]
@@ -399,7 +399,7 @@ impl AsyncRead for Pipe {
 
 impl TokioAsyncRead for PollPipe {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollPipe as TokioAsyncRead>")
     )]
     #[inline]
@@ -437,7 +437,7 @@ impl TokioAsyncRead for PollPipe {
 
 impl AsyncWrite for Pipe {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Pipe as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -449,7 +449,7 @@ impl AsyncWrite for Pipe {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Pipe as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -458,7 +458,7 @@ impl AsyncWrite for Pipe {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<Pipe as AsyncWrite>", future = true)
     )]
     #[inline]
@@ -475,7 +475,7 @@ impl AsyncWrite for Pipe {
 
 impl TokioAsyncWrite for PollPipe {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollPipe as TokioAsyncWrite>")
     )]
     #[inline]
@@ -494,7 +494,7 @@ impl TokioAsyncWrite for PollPipe {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollPipe as TokioAsyncWrite>")
     )]
     #[inline]
@@ -516,7 +516,7 @@ impl TokioAsyncWrite for PollPipe {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollPipe as TokioAsyncWrite>")
     )]
     #[inline]
@@ -525,7 +525,7 @@ impl TokioAsyncWrite for PollPipe {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollPipe as TokioAsyncWrite>")
     )]
     #[inline]
@@ -534,7 +534,7 @@ impl TokioAsyncWrite for PollPipe {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "<PollPipe as TokioAsyncWrite>")
     )]
     #[inline]

@@ -12,7 +12,7 @@ pub struct AsyncEvent {
 
 impl AsyncEvent {
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AsyncEvent")
     )]
     pub fn new() -> Self {
@@ -22,7 +22,7 @@ impl AsyncEvent {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AsyncEvent")
     )]
     pub fn listen(&self) -> oneshot::Receiver<()> {
@@ -35,7 +35,7 @@ impl AsyncEvent {
     }
 
     #[cfg_attr(
-        feature = "hotpath-profile",
+        feature = "profile",
         hotpath::measure(impl_type = "AsyncEvent")
     )]
     pub fn notify_all(&self) {
