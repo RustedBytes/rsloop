@@ -361,7 +361,8 @@ class __RsloopDatagramTransport:
 
     async def _flush_write_buffer(self):
         try:
-            while self._buffer and not self._closing:
+            # close() waits for this queue to drain before reporting connection_lost.
+            while self._buffer:
                 data, addr = self._buffer[0]
                 try:
                     if self._extra["peername"] is not None:
@@ -372,8 +373,10 @@ class __RsloopDatagramTransport:
                     await __wait_for_fd(self._loop, self._sock, readable=False)
                     continue
                 except OSError as exc:
+                    self._buffer.popleft()
+                    self._buffer_size -= len(data)
                     self._protocol.error_received(exc)
-                    return
+                    continue
                 self._buffer.popleft()
                 self._buffer_size -= len(data)
                 self._maybe_resume_protocol()

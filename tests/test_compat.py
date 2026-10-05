@@ -20,6 +20,7 @@ from typing import Any, cast
 
 import pytest
 import rsloop
+import rsloop._loop_compat as loop_compat
 
 EXCEPTION_GROUP = getattr(builtins, "ExceptionGroup", None)
 
@@ -1169,6 +1170,59 @@ class TestCompatibility:
                 assert write_transport.get_write_buffer_limits() == (100, 400)
             finally:
                 transport.close()
+
+        rsloop.run(main())
+
+    @pytest.mark.parametrize("send_error", [False, True])
+    def test_datagram_close_flushes_pending_send(self, send_error: bool) -> None:
+        class WouldBlockOnce:
+            def __init__(self, sock: socket.socket) -> None:
+                self.sock = sock
+                self.blocked = False
+
+            def send(self, data: bytes) -> int:
+                if not self.blocked:
+                    self.blocked = True
+                    raise BlockingIOError()
+                if send_error:
+                    raise OSError("send failed")
+                return self.sock.send(data)
+
+            def __getattr__(self, name: str) -> Any:
+                return getattr(self.sock, name)
+
+        async def main() -> None:
+            loop = asyncio.get_running_loop()
+            lost = loop.create_future()
+            errors: list[Exception] = []
+
+            class Protocol(asyncio.DatagramProtocol):
+                def error_received(self, exc: Exception) -> None:
+                    errors.append(exc)
+
+                def connection_lost(self, exc: Exception | None) -> None:
+                    lost.set_result(exc)
+
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+                peer.bind(("127.0.0.1", 0))
+                peer.setblocking(False)
+                client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                client.setblocking(False)
+                client.connect(peer.getsockname())
+                transport = getattr(loop_compat, "__RsloopDatagramTransport")(
+                    loop, WouldBlockOnce(client), Protocol(), address=peer.getsockname()
+                )
+                transport.sendto(b"queued")
+                transport.close()
+                assert await asyncio.wait_for(lost, 1) is None
+                if send_error:
+                    assert len(errors) == 1
+                    with pytest.raises(BlockingIOError):
+                        peer.recv(1024)
+                else:
+                    assert not errors
+                    data, _ = await asyncio.wait_for(loop.sock_recvfrom(peer, 1024), 1)
+                    assert data == b"queued"
 
         rsloop.run(main())
 

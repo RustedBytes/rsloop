@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 import rsloop
 
@@ -99,5 +100,55 @@ def test_process_exit_notification_follows_stdin_release() -> None:
             assert protocol.events == ["stdin closed", "process exited"]
         finally:
             transport.close()
+
+    rsloop.run(main())
+
+
+def test_unrelated_child_does_not_inherit_subprocess_stdin(tmp_path: Path) -> None:
+    gate = tmp_path / "exit"
+    code = (
+        "import pathlib, subprocess, sys, time; "
+        "subprocess.Popen([sys.executable, '-c', "
+        "'import select, sys; select.select([sys.stdin], [], [], 10)']); "
+        "print('ready', flush=True); "
+        "gate = pathlib.Path(sys.argv[1]); "
+        "\nwhile not gate.exists(): time.sleep(0.01)"
+    )
+
+    async def main() -> None:
+        first = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            code,
+            str(gate),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        second = None
+        try:
+            assert first.stdout is not None
+            assert await asyncio.wait_for(first.stdout.readline(), 5) == b"ready\n"
+            second = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-c",
+                "import time; time.sleep(8)",
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            gate.touch()
+            assert await asyncio.wait_for(first.wait(), 5) == 0
+            await asyncio.wait_for(first.stdout.read(), 3)
+        finally:
+            gate.touch()
+            if first.stdin is not None:
+                first.stdin.close()
+            if second is not None and second.returncode is None:
+                second.kill()
+                await second.wait()
+            if first.returncode is None:
+                first.kill()
+                await first.wait()
 
     rsloop.run(main())

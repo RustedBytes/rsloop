@@ -32,10 +32,10 @@ pub fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
     #[cfg(unix)]
     {
         let fd = raw_fd_to_c_int(fd)?;
-        // SAFETY: `fd` was range-checked as a C file descriptor. `dup` returns
-        // a new descriptor or `-1` with errno set and does not retain
-        // Rust references.
-        let duped = unsafe { libc::dup(fd) };
+        // SAFETY: `fd` was range-checked as a C file descriptor.
+        // F_DUPFD_CLOEXEC duplicates it atomically with close-on-exec so a
+        // concurrently spawned child cannot inherit a transport pipe.
+        let duped = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
         if duped < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -357,6 +357,25 @@ mod tests {
         assert!(!is_connect_in_progress_errno(libc::ECONNREFUSED));
         assert!(is_already_connected_errno(libc::EISCONN));
         assert!(!is_already_connected_errno(libc::EINPROGRESS));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn duplicated_fd_is_close_on_exec() {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+        let mut fds = [-1; 2];
+        // SAFETY: `fds` has room for both descriptors returned by `pipe`.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        // SAFETY: successful `pipe` returned two owned descriptors.
+        let (read_end, _write_end) =
+            unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        let duplicate = dup_raw_fd(i64::from(read_end.as_raw_fd())).expect("duplicate pipe fd");
+        // SAFETY: `dup_raw_fd` returned a newly owned descriptor.
+        let duplicate = unsafe { OwnedFd::from_raw_fd(i32::try_from(duplicate).unwrap()) };
+        // SAFETY: `F_GETFD` reads descriptor flags without retaining pointers.
+        let flags = unsafe { libc::fcntl(duplicate.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
     }
 
     #[cfg(unix)]
