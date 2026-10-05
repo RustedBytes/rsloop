@@ -1,10 +1,9 @@
 //! Scheduler entry/exit benchmark, without Python or socket traffic noise.
 //! Run the same source against both revisions, in alternating fresh processes.
 
+use std::{hint::black_box, task::Poll, time::Instant};
+
 use rsloop_vibeio_check::vibeio::RuntimeBuilder;
-use std::hint::black_box;
-use std::task::Poll;
-use std::time::Instant;
 
 fn main() {
     let mut args = std::env::args().skip(1);
