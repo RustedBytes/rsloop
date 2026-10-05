@@ -1476,6 +1476,7 @@ mod tests {
         }
         impl Future for PinnedFuture {
             type Output = ();
+
             fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
                 let this = self.as_ref().get_ref();
                 let address = this as *const Self as usize;

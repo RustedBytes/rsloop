@@ -659,9 +659,11 @@ pub(crate) mod cancellation_tests {
         fn as_buf_ptr(&self) -> *const u8 {
             self.bytes.as_ptr()
         }
+
         fn buf_len(&self) -> usize {
             self.bytes.len()
         }
+
         fn buf_capacity(&self) -> usize {
             self.bytes.len()
         }
@@ -671,6 +673,7 @@ pub(crate) mod cancellation_tests {
         fn as_buf_mut_ptr(&mut self) -> *mut u8 {
             self.bytes.as_mut_ptr()
         }
+
         unsafe fn set_buf_init(&mut self, _: usize) {}
     }
     // SAFETY: the sole vector points into the buffer's owned, stable allocation.

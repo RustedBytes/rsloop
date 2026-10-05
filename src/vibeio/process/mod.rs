@@ -1163,6 +1163,7 @@ mod tests {
                 self.0 += 1;
                 panic!("injected writer panic")
             }
+
             fn flush(&mut self) -> io::Result<()> {
                 Ok(())
             }

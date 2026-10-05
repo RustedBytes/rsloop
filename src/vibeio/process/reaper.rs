@@ -23,6 +23,7 @@ pub(crate) struct ReapChild(Option<std::process::Child>);
 
 impl std::ops::Deref for ReapChild {
     type Target = std::process::Child;
+
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "<ReapChild as std :: ops :: Deref>")

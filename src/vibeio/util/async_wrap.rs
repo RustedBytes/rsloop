@@ -692,6 +692,7 @@ mod tests {
                 .push(unsafe { *buf.as_buf_ptr() });
             (Ok(1), buf)
         }
+
         async fn flush(&mut self) -> io::Result<()> {
             self.state.lock().unwrap().flushed = true;
             Ok(())

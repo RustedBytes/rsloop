@@ -87,6 +87,7 @@ impl InnerRawHandle {
             driver,
         }
     }
+
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "InnerRawHandle")

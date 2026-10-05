@@ -33,6 +33,8 @@ impl<'a> AcceptUnixOp<'a> {
 }
 
 impl Op for AcceptUnixOp<'_> {
+    type Output = OwnedFd;
+
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "<AcceptUnixOp as Op>")
@@ -41,7 +43,6 @@ impl Op for AcceptUnixOp<'_> {
     fn completion_returns_fd(&self) -> bool {
         true
     }
-    type Output = OwnedFd;
 
     #[cfg_attr(
         feature = "hotpath-profile",

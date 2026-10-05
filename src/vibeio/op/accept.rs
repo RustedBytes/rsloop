@@ -275,6 +275,8 @@ impl<'a> AcceptOp<'a> {
 }
 
 impl Op for AcceptOp<'_> {
+    type Output = (OwnedAcceptSocket, SocketAddr);
+
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "<AcceptOp as Op>")
@@ -283,7 +285,6 @@ impl Op for AcceptOp<'_> {
     fn completion_returns_fd(&self) -> bool {
         true
     }
-    type Output = (OwnedAcceptSocket, SocketAddr);
 
     #[cfg_attr(
         feature = "hotpath-profile",

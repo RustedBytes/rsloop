@@ -242,6 +242,7 @@ impl<R: AsyncRead + ?Sized> AsyncRead for Box<R> {
     ) -> (io::Result<usize>, B) {
         (**self).read_vectored(bufs).await
     }
+
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "<Box as AsyncRead>", future = true)
@@ -267,6 +268,7 @@ impl<R: AsyncRead + ?Sized> AsyncRead for &mut R {
     ) -> (io::Result<usize>, B) {
         (**self).read_vectored(bufs).await
     }
+
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "<& mut R as AsyncRead>", future = true)
@@ -292,6 +294,7 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for Box<W> {
     ) -> (io::Result<usize>, B) {
         (**self).write_vectored(bufs).await
     }
+
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "<Box as AsyncWrite>", future = true)
@@ -326,6 +329,7 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
     ) -> (io::Result<usize>, B) {
         (**self).write_vectored(bufs).await
     }
+
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "<& mut W as AsyncWrite>", future = true)
@@ -408,6 +412,7 @@ mod copy_tests {
             self.data.push(unsafe { *buf.as_buf_ptr() });
             (Ok(1), buf)
         }
+
         async fn flush(&mut self) -> io::Result<()> {
             self.flushes += 1;
             Ok(())
@@ -452,6 +457,7 @@ mod copy_tests {
                 }
                 self.inner.write(buf).await
             }
+
             async fn flush(&mut self) -> io::Result<()> {
                 self.flushes += 1;
                 if self.flushes == 1 {
@@ -521,6 +527,7 @@ mod forwarding_tests {
         async fn read<B: IoBufMut>(&mut self, _: B) -> (io::Result<usize>, B) {
             panic!("scalar fallback must not replace vectored I/O")
         }
+
         async fn read_vectored<B: IoVectoredBufMut>(&mut self, buf: B) -> (io::Result<usize>, B) {
             (Err(io::ErrorKind::PermissionDenied.into()), buf)
         }
@@ -529,6 +536,7 @@ mod forwarding_tests {
         async fn write<B: IoBuf>(&mut self, _: B) -> (io::Result<usize>, B) {
             panic!("scalar fallback must not replace vectored I/O")
         }
+
         async fn write_vectored<B: IoVectoredBuf>(&mut self, buf: B) -> (io::Result<usize>, B) {
             (Ok(buf.as_iovecs().iter().map(|v| v.len).sum()), buf)
         }
@@ -629,12 +637,14 @@ mod duplex_tests {
         ) -> std::task::Poll<io::Result<usize>> {
             std::task::Poll::Pending
         }
+
         fn poll_flush(
             self: std::pin::Pin<&mut Self>,
             _: &mut std::task::Context<'_>,
         ) -> std::task::Poll<io::Result<()>> {
             std::task::Poll::Pending
         }
+
         fn poll_shutdown(
             self: std::pin::Pin<&mut Self>,
             _: &mut std::task::Context<'_>,
