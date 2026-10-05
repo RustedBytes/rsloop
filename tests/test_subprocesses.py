@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -128,7 +129,9 @@ def test_unrelated_child_does_not_inherit_subprocess_stdin(tmp_path: Path) -> No
         second = None
         try:
             assert first.stdout is not None
-            assert await asyncio.wait_for(first.stdout.readline(), 5) == b"ready\n"
+            assert await asyncio.wait_for(first.stdout.readline(), 5) == (
+                b"ready" + os.linesep.encode()
+            )
             second = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-c",
