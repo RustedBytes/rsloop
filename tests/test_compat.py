@@ -1175,14 +1175,14 @@ class TestCompatibility:
 
     @pytest.mark.parametrize("send_error", [False, True])
     def test_datagram_close_flushes_pending_send(self, send_error: bool) -> None:
-        class WouldBlockOnce:
+        class WouldBlockTwice:
             def __init__(self, sock: socket.socket) -> None:
                 self.sock = sock
-                self.blocked = False
+                self.attempts = 0
 
             def send(self, data: bytes) -> int:
-                if not self.blocked:
-                    self.blocked = True
+                self.attempts += 1
+                if self.attempts <= 2:
                     raise BlockingIOError()
                 if send_error:
                     raise OSError("send failed")
@@ -1210,7 +1210,10 @@ class TestCompatibility:
                 client.setblocking(False)
                 client.connect(peer.getsockname())
                 transport = getattr(loop_compat, "__RsloopDatagramTransport")(
-                    loop, WouldBlockOnce(client), Protocol(), address=peer.getsockname()
+                    loop,
+                    WouldBlockTwice(client),
+                    Protocol(),
+                    address=peer.getsockname(),
                 )
                 transport.sendto(b"queued")
                 transport.close()

@@ -370,7 +370,7 @@ class __RsloopDatagramTransport:
                     else:
                         self._sock.sendto(data, addr)
                 except (BlockingIOError, InterruptedError):
-                    await __wait_for_fd(self._loop, self._sock, readable=False)
+                    await _wait_for_fd(self._loop, self._sock, readable=False)
                     continue
                 except OSError as exc:
                     self._buffer.popleft()
@@ -411,7 +411,7 @@ class __RsloopDatagramTransport:
             self._sock.close()
 
 
-async def __wait_for_fd(loop: Loop, sock, *, readable: bool) -> None:
+async def _wait_for_fd(loop: Loop, sock, *, readable: bool) -> None:
     fut = loop.create_future()
     callback = loop.add_reader if readable else loop.add_writer
     remove = loop.remove_reader if readable else loop.remove_writer
@@ -432,7 +432,7 @@ async def __loop_sock_recvfrom(self, sock, bufsize):
         try:
             return sock.recvfrom(bufsize)
         except (BlockingIOError, InterruptedError):
-            await __wait_for_fd(self, sock, readable=True)
+            await _wait_for_fd(self, sock, readable=True)
 
 
 async def __loop_sock_recvfrom_into(self, sock, buf, nbytes=0):
@@ -442,7 +442,7 @@ async def __loop_sock_recvfrom_into(self, sock, buf, nbytes=0):
                 return sock.recvfrom_into(buf, nbytes)
             return sock.recvfrom_into(buf)
         except (BlockingIOError, InterruptedError):
-            await __wait_for_fd(self, sock, readable=True)
+            await _wait_for_fd(self, sock, readable=True)
 
 
 async def __loop_sock_sendto(self, sock, data, address):
@@ -450,7 +450,7 @@ async def __loop_sock_sendto(self, sock, data, address):
         try:
             return sock.sendto(data, address)
         except (BlockingIOError, InterruptedError):
-            await __wait_for_fd(self, sock, readable=False)
+            await _wait_for_fd(self, sock, readable=False)
 
 
 async def __loop_sendfile(
