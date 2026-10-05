@@ -44,7 +44,7 @@ jobs:
       - name: Collect every workload in fresh processes
         run: >-
           uv run --no-sync python scripts/profile_with_hotpath.py all
-          --output target/hotpath-ci
+          --output "${RUNNER_TEMP}/hotpath-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           --callbacks 1000 --tasks 200 --task-batch-size 50
           --tcp-roundtrips 30 --timers 200 --timer-batch-size 50
           --connections 5 --probe-iterations 3 --concurrency 2
@@ -54,5 +54,5 @@ jobs:
         if: always()
         with:
           name: ${{ matrix.feature }}-${{ github.run_attempt }}
-          path: target/hotpath-ci/
+          path: ${{ runner.temp }}/hotpath-ci-${{ github.run_id }}-${{ github.run_attempt }}/
           retention-days: 14
