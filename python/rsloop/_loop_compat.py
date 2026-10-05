@@ -299,9 +299,7 @@ class __RsloopDatagramTransport:
         if low is None:
             low = high // 4
         if not high >= low >= 0:
-            raise ValueError(
-                f"high ({high!r}) must be >= low ({low!r}) must be >= 0"
-            )
+            raise ValueError(f"high ({high!r}) must be >= low ({low!r}) must be >= 0")
         self._high_water = high
         self._low_water = low
         self._maybe_pause_protocol()
@@ -399,7 +397,9 @@ class __RsloopDatagramTransport:
         if self._conn_lost:
             return
         if not self._reader_task.done():
-            self._reader_task.add_done_callback(lambda _: self._call_connection_lost(exc))
+            self._reader_task.add_done_callback(
+                lambda _: self._call_connection_lost(exc)
+            )
             return
         self._conn_lost += 1
         try:

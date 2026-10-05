@@ -1154,15 +1154,19 @@ class TestCompatibility:
                 remote_addr=("127.0.0.1", 9),
             )
             try:
+                write_transport = cast(asyncio.WriteTransport, transport)
                 assert transport.get_extra_info("sockname")[0] == "127.0.0.1"
-                assert transport.get_write_buffer_limits() == (16 * 1024, 64 * 1024)
-                transport.set_write_buffer_limits(0)
-                assert transport.get_write_buffer_limits() == (0, 0)
-                transport.set_write_buffer_limits(low=100)
-                assert transport.get_write_buffer_limits() == (100, 400)
+                assert write_transport.get_write_buffer_limits() == (
+                    16 * 1024,
+                    64 * 1024,
+                )
+                write_transport.set_write_buffer_limits(0)
+                assert write_transport.get_write_buffer_limits() == (0, 0)
+                write_transport.set_write_buffer_limits(low=100)
+                assert write_transport.get_write_buffer_limits() == (100, 400)
                 with pytest.raises(ValueError):
-                    transport.set_write_buffer_limits(high=1, low=2)
-                assert transport.get_write_buffer_limits() == (100, 400)
+                    write_transport.set_write_buffer_limits(high=1, low=2)
+                assert write_transport.get_write_buffer_limits() == (100, 400)
             finally:
                 transport.close()
 
@@ -1185,8 +1189,8 @@ class TestCompatibility:
                         lost = loop.create_future()
 
                         class Protocol(asyncio.DatagramProtocol):
-                            def connection_lost(self, exc):
-                                lost.set_result(exc)
+                            def connection_lost(self, exc, result=lost):
+                                result.set_result(exc)
 
                         transport, _ = await loop.create_datagram_endpoint(
                             Protocol, sock=sock
