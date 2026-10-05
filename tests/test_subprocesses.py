@@ -67,3 +67,37 @@ def test_exited_process_releases_stdin_for_inherited_pipe_reader() -> None:
         await asyncio.wait_for(proc.stderr.read(), 3)
 
     rsloop.run(main())
+
+
+def test_process_exit_notification_follows_stdin_release() -> None:
+    class Protocol(asyncio.SubprocessProtocol):
+        def __init__(self) -> None:
+            self.events: list[str] = []
+            self.exited = asyncio.Event()
+
+        def pipe_connection_lost(self, fd: int, exc: Exception | None) -> None:
+            if fd == 0:
+                self.events.append("stdin closed")
+
+        def process_exited(self) -> None:
+            self.events.append("process exited")
+            self.exited.set()
+
+    async def main() -> None:
+        loop = asyncio.get_running_loop()
+        transport, protocol = await loop.subprocess_exec(
+            Protocol,
+            sys.executable,
+            "-c",
+            "pass",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(protocol.exited.wait(), 5)
+            assert protocol.events == ["stdin closed", "process exited"]
+        finally:
+            transport.close()
+
+    rsloop.run(main())

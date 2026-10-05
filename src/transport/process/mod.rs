@@ -61,6 +61,8 @@ struct ProcessState {
     returncode: Option<i32>,
     closing: bool,
     exited: bool,
+    // Publish process_exited only after the stdin writer releases its fd.
+    pending_exit_code: Option<i32>,
     connection_lost_called: bool,
     open_pipes: HashSet<i32>,
     pipe_transports: HashMap<i32, Py<PyAny>>,

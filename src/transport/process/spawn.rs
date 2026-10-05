@@ -266,6 +266,7 @@ pub fn spawn_process_transport(
             returncode: None,
             closing: false,
             exited: false,
+            pending_exit_code: None,
             connection_lost_called: false,
             open_pipes: pipes.open_pipes(),
             pipe_transports: HashMap::with_capacity(3),

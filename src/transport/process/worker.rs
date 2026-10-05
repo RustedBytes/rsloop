@@ -7,8 +7,8 @@
 //!
 //! The waiter's poll interval doubles as the control-channel receive timeout,
 //! so a `kill()` is acted on promptly without a second wakeup source. On exit
-//! it closes stdin's transport; the pipe bookkeeping is updated after the
-//! writer has released its descriptor.
+//! it closes stdin's transport. The exit notification follows the writer's
+//! descriptor release so a grandchild reading inherited stdin can observe EOF.
 
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -106,11 +106,22 @@ pub(super) fn handle_process_exit(core: &Arc<ProcessTransportCore>, code: i32) {
             "subprocess stdin close failed",
         );
     }
-    report_process_result(
-        core,
-        core.process_exited(code),
-        "subprocess process_exited failed",
-    );
+    let stdin_still_open = {
+        let mut state = core.state.lock().expect("poisoned process state");
+        if state.open_pipes.contains(&0) {
+            state.pending_exit_code = Some(code);
+            true
+        } else {
+            false
+        }
+    };
+    if !stdin_still_open {
+        report_process_result(
+            core,
+            core.process_exited(code),
+            "subprocess process_exited failed",
+        );
+    }
 }
 
 #[cfg_attr(feature = "profile", hotpath::measure)]

@@ -134,22 +134,26 @@ impl ProcessTransportCore {
         fd: i32,
         exc: Option<String>,
     ) -> PyResult<()> {
-        let maybe_finish = {
+        let (exc, should_finish, pending_exit_code) = {
             let mut state = self.state.lock().expect("poisoned process state");
             if !state.open_pipes.remove(&fd) {
                 return Ok(());
             }
             let should_finish =
                 process_connection_lost_eligible(state.exited, state.open_pipes.is_empty());
-            (exc, should_finish)
+            let pending_exit_code = if fd == 0 {
+                state.pending_exit_code.take()
+            } else {
+                None
+            };
+            (exc, should_finish, pending_exit_code)
         };
 
         if !self.loop_core.on_runtime_thread() {
-            self.enqueue_pending_event(PendingProcessEvent::PipeConnectionLost {
-                fd,
-                exc: maybe_finish.0,
-            });
-            if maybe_finish.1 {
+            self.enqueue_pending_event(PendingProcessEvent::PipeConnectionLost { fd, exc });
+            if let Some(code) = pending_exit_code {
+                self.process_exited(code)?;
+            } else if should_finish {
                 self.enqueue_pending_event(PendingProcessEvent::ConnectionLost { exc: None });
             }
             return Ok(());
@@ -159,7 +163,7 @@ impl ProcessTransportCore {
             self.pipe_connection_lost_value_with_py(
                 py,
                 fd,
-                maybe_finish.0.clone().map(PyRuntimeError::new_err),
+                exc.clone().map(PyRuntimeError::new_err),
             )
         }) {
             self.report_error(err, "subprocess pipe_connection_lost failed");
@@ -168,7 +172,9 @@ impl ProcessTransportCore {
             ));
         }
 
-        if maybe_finish.1 {
+        if let Some(code) = pending_exit_code {
+            self.process_exited(code)?;
+        } else if should_finish {
             self.connection_lost_message(None)?;
         }
         Ok(())
