@@ -317,8 +317,8 @@ pub(super) fn build_unix_server_socket(
     Ok(sock.unbind())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Builds the unnamed `AF_UNIX` socket used to dial a Unix server.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn build_unix_client_socket(py: Python<'_>) -> PyResult<Py<PyAny>> {
     let socket_mod = py.import("socket")?;

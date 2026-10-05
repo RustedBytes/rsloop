@@ -23,9 +23,9 @@ use super::{
 };
 use crate::fd_ops;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Resolve asyncio's optional write-buffer limits without overflowing when a
 /// caller supplies a very large low-water mark.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn normalize_write_buffer_limits(
     high: Option<usize>,
     low: Option<usize>,

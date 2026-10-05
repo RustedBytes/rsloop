@@ -208,11 +208,11 @@ pub struct ChildStderr {
 }
 
 impl ChildStdin {
+    /// Create a new `ChildStdin` from a standard library `ChildStdin`.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ChildStdin")
     )]
-    /// Create a new `ChildStdin` from a standard library `ChildStdin`.
     #[inline]
     pub(crate) fn from_std(inner: std::process::ChildStdin) -> io::Result<Self> {
         #[cfg(unix)]
@@ -226,12 +226,12 @@ impl ChildStdin {
         })
     }
 
+    /// Consume this `ChildStdin` and return the underlying
+    /// `std::process::ChildStdin`.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ChildStdin")
     )]
-    /// Consume this `ChildStdin` and return the underlying
-    /// `std::process::ChildStdin`.
     #[inline]
     pub fn into_std(mut self) -> std::process::ChildStdin {
         self.inner.take().expect("child stdin is already taken")
@@ -250,11 +250,11 @@ impl ChildStdin {
 }
 
 impl ChildStdout {
+    /// Create a new `ChildStdout` from a standard library `ChildStdout`.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ChildStdout")
     )]
-    /// Create a new `ChildStdout` from a standard library `ChildStdout`.
     #[inline]
     pub(crate) fn from_std(inner: std::process::ChildStdout) -> io::Result<Self> {
         #[cfg(unix)]
@@ -268,12 +268,12 @@ impl ChildStdout {
         })
     }
 
+    /// Consume this `ChildStdout` and return the underlying
+    /// `std::process::ChildStdout`.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ChildStdout")
     )]
-    /// Consume this `ChildStdout` and return the underlying
-    /// `std::process::ChildStdout`.
     #[inline]
     pub fn into_std(mut self) -> std::process::ChildStdout {
         self.inner.take().expect("child stdout is already taken")
@@ -292,11 +292,11 @@ impl ChildStdout {
 }
 
 impl ChildStderr {
+    /// Create a new `ChildStderr` from a standard library `ChildStderr`.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ChildStderr")
     )]
-    /// Create a new `ChildStderr` from a standard library `ChildStderr`.
     #[inline]
     pub(crate) fn from_std(inner: std::process::ChildStderr) -> io::Result<Self> {
         #[cfg(unix)]
@@ -310,12 +310,12 @@ impl ChildStderr {
         })
     }
 
+    /// Consume this `ChildStderr` and return the underlying
+    /// `std::process::ChildStderr`.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ChildStderr")
     )]
-    /// Consume this `ChildStderr` and return the underlying
-    /// `std::process::ChildStderr`.
     #[inline]
     pub fn into_std(mut self) -> std::process::ChildStderr {
         self.inner.take().expect("child stderr is already taken")
@@ -688,8 +688,8 @@ pub struct Child {
 }
 
 impl Child {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Child"))]
     /// Create a new `Child` from a standard library `Child`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Child"))]
     #[inline]
     pub(crate) fn from_std(child: std::process::Child) -> io::Result<Self> {
         let id = child.id();
@@ -724,8 +724,8 @@ impl Child {
         Ok(wrapped)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Child"))]
     /// Returns the OS-assigned process identifier.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Child"))]
     #[inline]
     pub fn id(&self) -> u32 {
         self.id
@@ -743,21 +743,21 @@ impl Child {
         self.inner.take().ok_or_else(child_consumed_error)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Child"))]
     /// Force kill the process.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Child"))]
     #[inline]
     pub fn kill(&mut self) -> io::Result<()> {
         self.inner_mut()?.kill()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "Child", future = true)
-    )]
     /// Asynchronously wait for the process to exit.
     ///
     /// This method returns a future that resolves to the process's exit status.
     /// The future completes when the process has fully exited and been reaped.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "Child", future = true)
+    )]
     #[inline]
     pub async fn wait(&mut self) -> io::Result<ExitStatus> {
         let _ = self.stdin.take(); // Similarly to std::process::Child::wait
@@ -765,11 +765,11 @@ impl Child {
         self.reaper.wait(child).await
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Child"))]
     /// Check if the process has exited without blocking.
     ///
     /// Returns `Ok(Some(status))` if the process has exited, `Ok(None)` if it
     /// is still running, or an error if checking the status fails.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Child"))]
     #[inline]
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         self.inner_mut()?.try_wait()
@@ -807,8 +807,8 @@ pub struct Command {
 }
 
 impl Command {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Create a new `Command` for the given program.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn new(program: impl AsRef<OsStr>) -> Self {
         Self {
@@ -822,16 +822,16 @@ impl Command {
         self.inner.as_mut().expect("command has been consumed")
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Add an argument to pass to the program.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
         self.inner_mut().arg(arg);
         self
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Add multiple arguments to pass to the program.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn args<I, S>(&mut self, args: I) -> &mut Self
     where
@@ -842,8 +842,8 @@ impl Command {
         self
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Set an environment variable for the process.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn env<K, V>(&mut self, key: K, val: V) -> &mut Self
     where
@@ -854,8 +854,8 @@ impl Command {
         self
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Set multiple environment variables for the process.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
     where
@@ -867,56 +867,56 @@ impl Command {
         self
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Remove an environment variable for the process.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn env_remove<K: AsRef<OsStr>>(&mut self, key: K) -> &mut Self {
         self.inner_mut().env_remove(key);
         self
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Clear all environment variables for the process.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn env_clear(&mut self) -> &mut Self {
         self.inner_mut().env_clear();
         self
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Set the working directory for the process.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn current_dir(&mut self, dir: impl AsRef<std::path::Path>) -> &mut Self {
         self.inner_mut().current_dir(dir);
         self
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Configure the standard input for the process.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn stdin(&mut self, cfg: Stdio) -> &mut Self {
         self.inner_mut().stdin(cfg);
         self
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Configure the standard output for the process.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn stdout(&mut self, cfg: Stdio) -> &mut Self {
         self.inner_mut().stdout(cfg);
         self
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Configure the standard error for the process.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn stderr(&mut self, cfg: Stdio) -> &mut Self {
         self.inner_mut().stderr(cfg);
         self
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Spawn the process and return a `Child` handle.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn spawn(&mut self) -> io::Result<Child> {
         let child = self
@@ -927,16 +927,16 @@ impl Command {
         Child::from_std(child)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "Command", future = true)
-    )]
     /// Run the process to completion and return its exit status.
     ///
     /// This is an async version of `std::process::Command::status`.
     /// Inside a runtime it requires a blocking pool; outside one it blocks when
     /// polled. Canceling a pending offload leaves this command consumed and
     /// does not stop the worker. See the module's cancellation notes.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "Command", future = true)
+    )]
     #[inline]
     pub async fn status(&mut self) -> io::Result<ExitStatus> {
         if current_driver().is_some() {
@@ -950,16 +950,16 @@ impl Command {
         }
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "Command", future = true)
-    )]
     /// Run the process to completion and return its output.
     ///
     /// This is an async version of `std::process::Command::output`.
     /// Inside a runtime it requires a blocking pool; outside one it blocks when
     /// polled. Canceling a pending offload leaves this command consumed and
     /// does not stop the worker. See the module's cancellation notes.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "Command", future = true)
+    )]
     #[inline]
     pub async fn output(&mut self) -> io::Result<Output> {
         if current_driver().is_some() {
@@ -973,16 +973,16 @@ impl Command {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Get a mutable reference to the underlying `std::process::Command`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn as_std(&mut self) -> &mut std::process::Command {
         self.inner_mut()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     /// Consume this `Command` and return the underlying
     /// `std::process::Command`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Command"))]
     #[inline]
     pub fn into_std(mut self) -> std::process::Command {
         self.inner.take().expect("command has been consumed")

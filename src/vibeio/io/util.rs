@@ -21,13 +21,13 @@ use super::{AsyncRead, AsyncWrite};
 use crate::vibeio::io::IoBufMut;
 use crate::vibeio::io::{IoBuf, IoBufWithCursor};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Copy data from a reader to a writer.
 ///
 /// This function reads from `reader` and writes to `writer` until EOF is
 /// reached. Returns the number of bytes copied.
 /// Interrupted reads, writes and the final flush are retried; other errors
 /// terminate the copy. Already-written bytes are not rolled back on error.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 pub async fn copy<R, W>(reader: &mut R, writer: &mut W) -> Result<u64, io::Error>
 where
     R: AsyncRead + ?Sized,
@@ -115,7 +115,6 @@ pub struct WriteHalf<T> {
     inner: Arc<AsyncMutex<T>>,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Split an object implementing both `AsyncRead` and `AsyncWrite` into two
 /// independently usable halves.
 ///
@@ -130,6 +129,7 @@ pub struct WriteHalf<T> {
 /// helper for full-duplex protocols that need a write to unblock a pending
 /// read; use poll-based streams with `tokio::io::split` or `copy_bidirectional`
 /// instead.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn split<T>(io: T) -> (ReadHalf<T>, WriteHalf<T>)
 where
     T: AsyncRead + AsyncWrite + 'static,
@@ -147,8 +147,8 @@ impl<T> ReadHalf<T>
 where
     T: AsyncRead + AsyncWrite + 'static,
 {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadHalf"))]
     /// Consume the half and return the shared inner `Arc<AsyncMutex<T>>`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ReadHalf"))]
     pub fn into_inner(self) -> Arc<AsyncMutex<T>> {
         self.inner
     }
@@ -158,8 +158,8 @@ impl<T> WriteHalf<T>
 where
     T: AsyncRead + AsyncWrite + 'static,
 {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WriteHalf"))]
     /// Consume the half and return the shared inner `Arc<AsyncMutex<T>>`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "WriteHalf"))]
     pub fn into_inner(self) -> Arc<AsyncMutex<T>> {
         self.inner
     }
@@ -353,7 +353,6 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Copy bytes concurrently in both directions, shutting down each destination's
 /// write half when its source reaches EOF.
 ///
@@ -364,6 +363,7 @@ impl<W: AsyncWrite + ?Sized> AsyncWrite for &mut W {
 ///
 /// Returns (a_to_b, b_to_a). An error in either direction ends the copy
 /// promptly.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 pub async fn copy_bidirectional<A, B>(mut a: A, mut b: B) -> Result<(u64, u64), io::Error>
 where
     A: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,

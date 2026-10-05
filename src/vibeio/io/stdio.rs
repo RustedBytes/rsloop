@@ -40,22 +40,22 @@ pub struct Stderr {
     _private: (),
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Get an async-aware stdin reader.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn stdin() -> Stdin {
     Stdin { _private: () }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Get an async-aware stdout writer.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn stdout() -> Stdout {
     Stdout { _private: () }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Get an async-aware stderr writer.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn stderr() -> Stderr {
     Stderr { _private: () }

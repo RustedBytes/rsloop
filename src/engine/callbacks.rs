@@ -75,15 +75,15 @@ pub struct ReadyCallback {
 }
 
 impl ReadyCallback {
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "ReadyCallback")
-    )]
     #[inline]
     /// Builds a ready callback and selects a zero-, one-, or many-argument fast
     /// path.
     ///
     /// `context_needs_run` records whether invocation must enter `context`.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadyCallback")
+    )]
     pub fn new(
         py: Python<'_>,
         id: CallbackId,
@@ -140,22 +140,22 @@ impl ReadyCallback {
         }
     }
 
+    #[inline]
+    /// Returns the loop-unique identifier assigned to this callback.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
-    #[inline]
-    /// Returns the loop-unique identifier assigned to this callback.
     pub fn id(&self) -> CallbackId {
         self.id
     }
 
+    #[inline]
+    /// Returns the scheduling source used for diagnostics and re-arming I/O.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
-    #[inline]
-    /// Returns the scheduling source used for diagnostics and re-arming I/O.
     pub fn kind(&self) -> CallbackKind {
         match self.source {
             CallbackSource::Soon => CallbackKind::Soon,
@@ -168,32 +168,32 @@ impl ReadyCallback {
         }
     }
 
+    #[inline]
+    /// Borrows the underlying Python callable.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
-    #[inline]
-    /// Borrows the underlying Python callable.
     pub fn callback(&self) -> &Py<PyAny> {
         &self.callback
     }
 
+    #[inline]
+    /// Borrows the captured Python `contextvars.Context`.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
-    #[inline]
-    /// Borrows the captured Python `contextvars.Context`.
     pub fn context(&self) -> &Py<PyAny> {
         &self.context
     }
 
+    #[inline]
+    /// Reports whether invocation needs to enter the captured context.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
-    #[inline]
-    /// Reports whether invocation needs to enter the captured context.
     pub fn context_needs_run(&self) -> bool {
         self.context_needs_run
     }
@@ -240,25 +240,25 @@ impl ReadyCallback {
         }
     }
 
+    #[inline]
+    /// Reports whether this callback has been cancelled.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ReadyCallback")
     )]
-    #[inline]
-    /// Reports whether this callback has been cancelled.
     pub fn cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "ReadyCallback")
-    )]
     #[inline]
     /// Marks the callback as cancelled.
     ///
     /// Cancellation is idempotent and does not remove an already queued value;
     /// the loop skips it when draining the ready queue.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "ReadyCallback")
+    )]
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
@@ -277,16 +277,16 @@ pub struct PyHandle {
 }
 
 impl PyHandle {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyHandle"))]
     #[inline]
     /// Wraps a callback in a Python-visible handle.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyHandle"))]
     pub fn new(callback: ReadyCallback) -> Self {
         Self { callback }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyHandle"))]
     #[inline]
     /// Borrows the callback controlled by this handle.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PyHandle"))]
     pub fn ready(&self) -> &ReadyCallback {
         &self.callback
     }
@@ -334,12 +334,12 @@ pub struct PyTimerHandle {
 }
 
 impl PyTimerHandle {
+    #[inline]
+    /// Creates a timer handle for a callback scheduled at loop time `when`.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PyTimerHandle")
     )]
-    #[inline]
-    /// Creates a timer handle for a callback scheduled at loop time `when`.
     pub fn new(callback_id: CallbackId, when: f64, callback: &Arc<ReadyCallback>) -> Self {
         Self {
             callback_id,

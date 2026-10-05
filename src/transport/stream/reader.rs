@@ -141,10 +141,10 @@ pub(super) fn run_stream_reader(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Retry non-blocking reads for a bounded window after a successful read.
 /// Returns `false` when the connection terminated (event already enqueued)
 /// and the reader loop must exit.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spin_read_stream(
     core: &Arc<StreamTransportCore>,
     reader: &mut ReaderTarget,
@@ -199,7 +199,6 @@ pub(super) fn spin_read_stream(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Starts the socket reader for a stream transport.
 ///
 /// Active Unix loops route generic-protocol TCP readers to their loop-thread
@@ -207,6 +206,7 @@ pub(super) fn spin_read_stream(
 /// retain the coordination-thread path. Both stop
 /// helpers check loop-thread task ownership before sending a dispatcher
 /// command, so `start_tls` drops a local reader before reclaiming its socket.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_socket_reader(
     fd: fd_ops::RawFd,
     core: Arc<StreamTransportCore>,
@@ -220,9 +220,9 @@ pub(super) fn spawn_socket_reader(
     }))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Stops a local reader immediately, or waits for coordination-thread
 /// cancellation.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) -> io::Result<()> {
     if core.loop_core.stop_io_task(fd) {
         return Ok(());
@@ -242,12 +242,12 @@ pub(super) fn stop_socket_reader(core: &StreamTransportCore, fd: fd_ops::RawFd) 
         .map_err(|err| io::Error::new(io::ErrorKind::TimedOut, err))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Requests reader cancellation without synchronously crossing to the runtime
 /// thread. Normal close/abort already mark the transport closing and shut down
 /// the socket, so waiting for the acknowledgement only adds teardown latency.
 /// TLS upgrade continues to use `stop_socket_reader`, where exclusive access to
 /// the underlying stream is required before handshake bytes can be consumed.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn stop_socket_reader_nowait(
     core: &StreamTransportCore,
     fd: fd_ops::RawFd,

@@ -89,7 +89,6 @@ pub(super) fn sock_connect<'py>(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Connects an INET/INET6 stream socket, returning a loop-native Future
 /// (not a coroutine — awaited directly, never `create_task`ed). On Unix the
 /// writability wait runs on the vibeio reactor and its completion is
@@ -97,6 +96,7 @@ pub(super) fn sock_connect<'py>(
 /// concurrent connections drain in one loop iteration instead of paying a
 /// per-connection async-runtime handoff. Non-Unix and non-INET sockets fall
 /// back to the general `sock_connect` path.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn sock_connect_fast<'py>(
     slf: Py<PyLoop>,
     py: Python<'py>,

@@ -25,8 +25,8 @@ mod completion_error_tests {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Normalize EOF reported either during submission or by a completed read.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn read_error_result(error: io::Error) -> io::Result<i32> {
     // Overlapped ReadFile can report EOF immediately or through its completion.
     // https://learn.microsoft.com/en-us/windows/win32/fileio/testing-for-the-end-of-a-file

@@ -80,10 +80,6 @@ pub struct TcpListener {
 }
 
 impl TcpListener {
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "TcpListener")
-    )]
     /// Creates a new `TcpListener` which will be bound to the specified
     /// address.
     ///
@@ -96,6 +92,10 @@ impl TcpListener {
     /// - The address is already in use
     /// - The process lacks permissions to bind to the address
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpListener")
+    )]
     #[inline]
     pub fn bind(address: impl ToSocketAddrs) -> Result<Self, io::Error> {
         let addresses = address.to_socket_addrs()?;
@@ -111,16 +111,16 @@ impl TcpListener {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no addresses")))
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "TcpListener")
-    )]
     /// Creates a new `TcpListener` from a standard library `TcpListener`.
     ///
     /// # Errors
     ///
     /// This function will return an error if registration with the async driver
     /// fails.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpListener")
+    )]
     #[inline]
     pub fn from_std(inner: std::net::TcpListener) -> Result<Self, io::Error> {
         #[cfg(unix)]
@@ -134,10 +134,6 @@ impl TcpListener {
         Ok(Self { inner, handle })
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "TcpListener")
-    )]
     /// Creates a new `TcpListener` from a standard library `TcpListener` in
     /// poll mode.
     ///
@@ -147,6 +143,10 @@ impl TcpListener {
     ///
     /// This function will return an error if registration with the async driver
     /// fails.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpListener")
+    )]
     #[cfg(windows)]
     #[inline]
     pub fn from_std_poll(inner: std::net::TcpListener) -> Result<Self, io::Error> {
@@ -159,25 +159,21 @@ impl TcpListener {
         Ok(Self { inner, handle })
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "TcpListener")
-    )]
     /// Returns the local address of this listener.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket is not
     /// bound.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpListener")
+    )]
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "TcpListener", future = true)
-    )]
     /// Accepts a new incoming connection from this listener.
     ///
     /// This is the async version of [`std::net::TcpListener::accept`].
@@ -187,6 +183,10 @@ impl TcpListener {
     /// This function will return an error in the following situations:
     /// - The listener is not bound to an address
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "TcpListener", future = true)
+    )]
     #[inline]
     pub async fn accept(&self) -> Result<(TcpStream, SocketAddr), io::Error> {
         let mut op = AcceptOp::new(&self.handle);

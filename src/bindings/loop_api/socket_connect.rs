@@ -66,10 +66,10 @@ pub(super) async fn connect_socket_to_address(sock: Py<PyAny>, address: Py<PyAny
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Reads `SO_ERROR` for a connecting socket. On Unix this uses a direct
 /// `getsockopt` so the hot connect-completion path never re-acquires the GIL
 /// (or re-imports the `socket` module); Windows keeps the Python fallback.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn connect_so_error(fd: fd_ops::RawFd, sock: &Py<PyAny>) -> PyResult<i32> {
     #[cfg(unix)]
     {
@@ -153,13 +153,13 @@ fn is_connect_in_progress_errno(errno: i32) -> bool {
     errno == libc::EINPROGRESS || errno == libc::EALREADY || errno == libc::EWOULDBLOCK
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Attempts to initiate the connect via a direct `libc::connect` for a numeric
 /// address, skipping Python's `socket.connect` (its dispatch, address parsing,
 /// and — the expensive part — raising a `BlockingIOError` for EINPROGRESS on
 /// every non-blocking connect). Returns `Some(errno)` when the libc path ran
 /// (0 = connected immediately), or `None` when the address is not a plain
 /// numeric literal and the caller must fall back to `socket.connect`.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 fn libc_connect_numeric(fd: fd_ops::RawFd, address: &Bound<'_, PyAny>) -> PyResult<Option<i32>> {
     let Ok(host_obj) = address.get_item(0) else {
@@ -191,10 +191,10 @@ fn libc_connect_numeric(fd: fd_ops::RawFd, address: &Bound<'_, PyAny>) -> PyResu
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Initiates a non-blocking connect on the loop thread and, when it does not
 /// complete synchronously, hands the writability wait to the vibeio reactor on
 /// this loop's own runtime. Returns the loop Future the caller awaits.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn fast_sock_connect<'py>(
     slf: &Py<PyLoop>,

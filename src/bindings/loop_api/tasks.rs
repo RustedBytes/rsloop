@@ -63,11 +63,11 @@ fn create_asyncio_future_for_running_loop(py: Python<'_>) -> PyResult<Py<PyAny>>
     call_callable_noargs(py, asyncio_future_cls(py)?)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Fast-path future creation for internal callers that hold a loop object:
 /// when `loop_obj` is exactly a `PyLoop` running on this thread, skip the
 /// Python-level `create_future` method dispatch. Returns `Ok(None)` when the
 /// caller must fall back to calling `loop.create_future()`.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(crate) fn try_fast_create_future(
     py: Python<'_>,
     loop_obj: &Py<PyAny>,

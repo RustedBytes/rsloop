@@ -47,8 +47,8 @@ pub struct PreparedTlsTransport {
     stream: StreamKind,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Retires plaintext I/O before a TLS handshake is allowed to touch the socket.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn prepare_start_tls_transport(
     py: Python<'_>,
     transport: Py<PyStreamTransport>,

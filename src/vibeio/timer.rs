@@ -235,9 +235,9 @@ impl Timer {
         drop(waker);
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
     /// Replace a live registration's waiter without changing its heap position.
     /// Returns false if the handle has expired, been cancelled, or been reused.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
     pub(crate) fn update_waker(&self, handle: TimerHandle, waker: &Waker) -> bool {
         {
             let deadlines = self.deadlines.borrow();
@@ -271,10 +271,10 @@ impl Timer {
         updated
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
     /// Wakes every expired timer and returns the exact duration until the next
     /// deadline. Unlike the old millisecond wheel this never discards partial
     /// elapsed time, so frequent scheduler spins cannot freeze timer progress.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Timer"))]
     #[inline]
     pub fn spin_and_get_deadline(&self) -> (Option<Duration>, bool) {
         let now = self.now();

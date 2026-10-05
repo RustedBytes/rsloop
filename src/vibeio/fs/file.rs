@@ -46,10 +46,6 @@ pub struct File {
 }
 
 impl File {
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "File", future = true)
-    )]
     /// Opens a file for reading.
     ///
     /// This is the async version of [`std::fs::File::open`].
@@ -71,15 +67,15 @@ impl File {
     ///
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     #[inline]
     pub async fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         OpenOptions::new().read(true).open(path).await
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "File", future = true)
-    )]
     /// Opens a file for writing, creating it if it does not exist.
     ///
     /// This is the async version of [`std::fs::File::create`].
@@ -101,6 +97,10 @@ impl File {
     ///
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     #[inline]
     pub async fn create(path: impl AsRef<Path>) -> io::Result<Self> {
         OpenOptions::new()
@@ -111,31 +111,31 @@ impl File {
             .await
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Returns a new `OpenOptions` builder.
     ///
     /// This is a convenience method equivalent to `OpenOptions::new()`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     #[inline]
     pub fn options() -> OpenOptions {
         OpenOptions::new()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Creates a new `File` from a standard library file.
     ///
     /// This is a convenience method equivalent to
     /// `File::from_std_with_cursor(inner, 0)`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     #[inline]
     pub fn from_std(inner: std::fs::File) -> io::Result<Self> {
         Self::from_std_with_cursor(inner, 0)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Creates a new `File` from a standard library file with a specified
     /// cursor position.
     ///
     /// This is an internal method used to create a `File` with a custom cursor
     /// position.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     #[inline]
     pub(crate) fn from_std_with_cursor(inner: std::fs::File, cursor: u64) -> io::Result<Self> {
         let io = if let Some(driver) = current_driver() {
@@ -164,8 +164,8 @@ impl File {
         Ok(Self { inner, io, cursor })
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Converts the `File` back into a standard library `std::fs::File`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     #[inline]
     pub fn into_std(self) -> std::fs::File {
         let Self { io, inner, .. } = self;
@@ -173,8 +173,8 @@ impl File {
         inner
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     /// Returns the completion handle if this file is using io_uring completion.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "File"))]
     #[inline]
     fn completion_handle(&self) -> Option<&InnerRawHandle> {
         match &self.io {
@@ -183,10 +183,6 @@ impl File {
         }
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "File", future = true)
-    )]
     /// Reads bytes from the file at a specific offset.
     ///
     /// This method reads into the provided buffer starting at the given offset.
@@ -209,6 +205,10 @@ impl File {
     ///
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     #[inline]
     pub async fn read_at<B: IoBufMut>(&self, mut buf: B, offset: u64) -> (io::Result<usize>, B) {
         if buf.buf_capacity() == 0 {
@@ -229,10 +229,6 @@ impl File {
         }
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "File", future = true)
-    )]
     /// Reads bytes from the file at a specific offset, filling the entire
     /// buffer.
     ///
@@ -260,6 +256,10 @@ impl File {
     ///
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     #[inline]
     pub async fn read_exact_at<B: IoBufMut>(&self, buf: B, offset: u64) -> (io::Result<()>, B) {
         exact_at(buf, offset, ExactAt::Read, |buf, offset| {
@@ -268,10 +268,6 @@ impl File {
         .await
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "File", future = true)
-    )]
     /// Writes bytes to the file at a specific offset.
     ///
     /// This method writes from the provided buffer starting at the given
@@ -294,6 +290,10 @@ impl File {
     ///
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     #[inline]
     pub async fn write_at<B: IoBuf>(&self, buf: B, offset: u64) -> (io::Result<usize>, B) {
         if buf.buf_len() == 0 {
@@ -317,10 +317,6 @@ impl File {
         }
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "File", future = true)
-    )]
     /// Writes bytes to the file at a specific offset, writing the entire
     /// buffer.
     ///
@@ -347,6 +343,10 @@ impl File {
     ///
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     #[inline]
     pub async fn write_exact_at<B: IoBuf>(&self, buf: B, offset: u64) -> (io::Result<()>, B) {
         exact_at(buf, offset, ExactAt::Write, |buf, offset| {
@@ -355,10 +355,6 @@ impl File {
         .await
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "File", future = true)
-    )]
     /// Synchronizes all data and metadata to disk.
     ///
     /// This is the async version of [`std::fs::File::sync_all`].
@@ -379,6 +375,10 @@ impl File {
     ///
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     #[inline]
     pub async fn sync_all(&self) -> io::Result<()> {
         if let Some(handle) = self.completion_handle() {
@@ -399,10 +399,6 @@ impl File {
         }
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "File", future = true)
-    )]
     /// Synchronizes file data to disk without necessarily syncing metadata.
     ///
     /// This is the async version of [`std::fs::File::sync_data`].
@@ -423,6 +419,10 @@ impl File {
     ///
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     #[inline]
     pub async fn sync_data(&self) -> io::Result<()> {
         if let Some(handle) = self.completion_handle() {
@@ -443,10 +443,6 @@ impl File {
         }
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "File", future = true)
-    )]
     /// Returns the metadata for this file.
     ///
     /// This is the async version of [`std::fs::File::metadata`].
@@ -467,6 +463,10 @@ impl File {
     ///
     /// See the executable "Filesystem offload" example in
     /// `tools/vibeio-check/EXAMPLES.md` for checked results and owned buffers.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "File", future = true)
+    )]
     #[inline]
     pub async fn metadata(&self) -> io::Result<Metadata> {
         if let Some(handle) = self.completion_handle() {

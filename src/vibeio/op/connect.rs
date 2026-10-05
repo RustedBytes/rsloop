@@ -274,9 +274,9 @@ pub struct ConnectOp<'a> {
 }
 
 impl<'a> ConnectOp<'a> {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
     /// Own aligned address storage; callers cannot submit a dangling raw
     /// pointer.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "ConnectOp"))]
     pub fn new(
         handle: &'a InnerRawHandle,
         addr: NativeAddress,

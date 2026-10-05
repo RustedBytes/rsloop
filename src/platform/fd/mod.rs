@@ -196,25 +196,25 @@ fn raw_fd_to_c_int(fd: RawFd) -> io::Result<libc::c_int> {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// A `connect()` attempt that is still completing in the background.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 pub fn is_connect_in_progress_errno(errno: i32) -> bool {
     errno == libc::EINPROGRESS || errno == libc::EALREADY || errno == libc::EWOULDBLOCK
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// The socket is already connected (a benign outcome for `connect()`).
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 pub fn is_already_connected_errno(errno: i32) -> bool {
     errno == libc::EISCONN
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Reads the pending `SO_ERROR` for a socket via a direct `getsockopt`, so the
 /// connect-completion path resolves without acquiring the GIL.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(unix)]
 #[inline]
 pub fn socket_so_error(fd: RawFd) -> io::Result<i32> {

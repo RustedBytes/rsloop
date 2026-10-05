@@ -119,11 +119,11 @@ pub(super) fn getaddrinfo<'py>(
         .map(|awaitable| awaitable.into_bound(py))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Construct the single unambiguous TCP/UDP result for an IP literal and an
 /// integer port. Leave resolver flags, services, scoped addresses, unspecified
 /// socket types and invalid combinations to the system resolver. Custom loop
 /// and executor behavior, including shutdown errors, keeps its existing path.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn numeric_addrinfo<'py>(
     slf: &Py<PyLoop>,
     py: Python<'py>,
@@ -257,9 +257,9 @@ pub(super) fn shutdown_default_executor<'py>(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Shuts the executor down on a helper thread so the wait can time out; on
 /// timeout it warns and falls back to a non-waiting `shutdown(False)`.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 async fn shutdown_executor_with_timeout(
     executor: Py<PyAny>,
     executor_nowait: Option<Py<PyAny>>,

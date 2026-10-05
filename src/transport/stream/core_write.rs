@@ -279,12 +279,12 @@ impl StreamTransportCore {
         Ok(())
     }
 
+    /// Retain an already-owned write allocation instead of copying it into a
+    /// second pool slot. Only joining an existing batch requires a copy.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
-    /// Retain an already-owned write allocation instead of copying it into a
-    /// second pool slot. Only joining an existing batch requires a copy.
     fn stage_direct_write_buffer(self: &Arc<Self>, data: OwnedWriteBuffer) -> io::Result<()> {
         if data.is_empty() {
             return Ok(());
@@ -373,14 +373,14 @@ impl StreamTransportCore {
         }
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "StreamTransportCore")
-    )]
     /// Hand staged bytes to the writer before a graceful shutdown. On Windows
     /// a normal flush can defer while the completion reader is being rebound;
     /// close/write_eof must not bypass those bytes via the lazy-writer
     /// shortcut.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     #[cfg(any(windows, test))]
     pub(super) fn queue_pending_direct_write(self: &Arc<Self>) {
         self.direct_write_scheduled.store(false, Ordering::Release);

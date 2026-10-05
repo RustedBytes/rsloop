@@ -21,8 +21,8 @@ mod interval;
 mod sleep;
 mod timeout;
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Add a duration, saturating at the platform's last representable Instant.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub(crate) fn deadline_after(
     base: std::time::Instant,
@@ -70,40 +70,40 @@ pub use sleep::{Sleep, ZeroBehavior};
 #[allow(unused_imports)]
 pub use timeout::{Timeout, TimeoutError, timeout};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder: returns a `Sleep` future.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn sleep(duration: std::time::Duration) -> Sleep {
     Sleep::new(duration)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder allowing zero-behavior control for tiny durations.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn sleep_with_zero_behavior(duration: std::time::Duration, behavior: ZeroBehavior) -> Sleep {
     Sleep::new_with_zero_behavior(duration, behavior)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder: returns an `Interval`.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn interval(period: std::time::Duration) -> Interval {
     Interval::new(period)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder: returns a `Sleep` that completes at the provided
 /// absolute `Instant`.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn sleep_until(deadline: std::time::Instant) -> Sleep {
     Sleep::sleep_until(deadline)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Convenience async function that awaits `future` but returns an error if it
 /// does not complete before the absolute `deadline` Instant.
 /// The inner future is polled first; an immediately ready result wins even if
 /// the deadline has already elapsed.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[inline]
 pub async fn timeout_at<T>(
     deadline: std::time::Instant,
@@ -112,9 +112,9 @@ pub async fn timeout_at<T>(
     Timeout::new_at(future, deadline).await
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder: returns an `Interval` with the first tick scheduled to
 /// complete at `first_tick_instant` and subsequent ticks every `period`.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn interval_at(
     first_tick_instant: std::time::Instant,

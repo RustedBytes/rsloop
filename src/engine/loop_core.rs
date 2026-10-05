@@ -88,9 +88,9 @@ impl LoopWake {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopWake"))]
     /// Marks the ready queue non-empty and wakes the parked loop thread. Cheap
     /// and idempotent while a wake is already pending.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopWake"))]
     #[inline]
     pub fn signal(&self) {
         if !self.ready_pending.swap(true, Ordering::AcqRel) {
@@ -128,12 +128,12 @@ impl WaitForWake {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Bounded busy-wait before parking in `block_on`. Cross-thread wakeups (reader
 /// worker threads, the transitional runtime thread) otherwise pay the full
 /// `driver.wait` park + interrupt round-trip, which dominates request/response
 /// ping-pong latency and inflates its variance. Env-tunable via
 /// `RSLOOP_WAKE_SPIN_US` (0 disables).
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn wake_spin_window() -> Duration {
     static WINDOW: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
     *WINDOW.get_or_init(|| {
@@ -399,11 +399,11 @@ pub struct LoopCore {
 }
 
 impl LoopCore {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Creates a loop core and starts its command-dispatcher thread.
     ///
     /// Python callbacks are not run on that thread; the dispatcher only
     /// coordinates runtime work and forwards ready items to the loop thread.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn new() -> Arc<Self> {
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
         let core = Arc::new(Self {
@@ -434,12 +434,12 @@ impl LoopCore {
         core
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Submits a control command to the loop dispatcher.
     ///
     /// Commands originating on the active loop thread may be handled locally to
     /// avoid a channel round trip. `LoopCoreError::ChannelClosed` means the
     /// dispatcher has already terminated.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn send_command(&self, command: LoopCommand) -> Result<(), LoopCoreError> {
         let command = match self.try_handle_local_command(command) {
             Ok(()) => return Ok(()),
@@ -489,55 +489,55 @@ impl LoopCore {
         self.send_remote_command(LoopCommand::ScheduleReadyHandle(handle))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Reports whether a run session is currently active.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn is_running(&self) -> bool {
         self.state.lock().expect("poisoned loop state").running
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Reports whether this loop has been permanently closed.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn is_closed(&self) -> bool {
         self.state.lock().expect("poisoned loop state").closed
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Enables or disables asyncio debug diagnostics.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn set_debug(&self, enabled: bool) {
         self.debug_enabled.store(enabled, Ordering::SeqCst);
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Returns whether asyncio debug diagnostics are enabled.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn get_debug(&self) -> bool {
         self.debug_enabled.load(Ordering::SeqCst)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     #[inline]
     /// Reports whether a custom Python task factory is installed.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn has_task_factory(&self) -> bool {
         self.task_factory_installed.load(Ordering::Relaxed)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     #[inline]
     /// Updates the fast-path flag for custom task-factory installation.
     ///
     /// The Python object itself remains protected by [`LoopCore::state`].
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn set_task_factory_installed(&self, installed: bool) {
         self.task_factory_installed
             .store(installed, Ordering::Relaxed);
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Allocates a loop-unique callback identifier.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn next_callback_id(&self) -> CallbackId {
         self.next_callback_id.fetch_add(1, Ordering::Relaxed)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Returns elapsed monotonic seconds on this loop's clock.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn time(&self) -> f64 {
         self.start.elapsed().as_secs_f64()
     }
@@ -600,12 +600,12 @@ impl LoopCore {
         Ok(handle)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Captures context and schedules a callback after `delay`.
     ///
     /// Returns the shared callback and its absolute value on
     /// [`LoopCore::time`], which the Python `TimerHandle` exposes as
     /// `when()`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn schedule_timer(
         self: &Arc<Self>,
         py: Python<'_>,
@@ -662,7 +662,6 @@ impl LoopCore {
         Ok((ready, when))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Runs callbacks and I/O until [`LoopCore::schedule_stop`] is processed.
     ///
     /// The caller is the Python loop thread. While parked, the GIL is released
@@ -670,6 +669,7 @@ impl LoopCore {
     /// attach to Python again before invoking user code.
     ///
     /// Returns an error if the loop is closed or already running.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn run_forever(self: &Arc<Self>, py: Python<'_>, loop_obj: Py<PyAny>) -> PyResult<()> {
         {
             let mut state = self.state.lock().expect("poisoned loop state");
@@ -1070,21 +1070,21 @@ impl LoopCore {
         state.stopping = false;
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Requests a graceful stop of the active run session.
     ///
     /// Already-ready callbacks are still processed according to asyncio's
     /// stop semantics before `run_forever` returns.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn schedule_stop(&self) -> Result<(), LoopCoreError> {
         self.send_command(LoopCommand::RequestStop)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Permanently closes the loop and joins its dispatcher thread.
     ///
     /// Closing is idempotent, but an actively running loop returns
     /// `LoopCoreError::Running`. Tracked I/O tasks are cancelled before the
     /// on-thread runtime is dropped.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn close(&self) -> Result<(), LoopCoreError> {
         {
             let mut state = self.state.lock().expect("poisoned loop state");
@@ -1139,12 +1139,12 @@ impl LoopCore {
 }
 
 impl LoopCore {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Dispatches an asyncio error-context dictionary to the configured
     /// handler.
     ///
     /// Falls back to [`LoopCore::default_exception_handler`] when no custom
     /// handler is installed.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn call_exception_handler(
         &self,
         py: Python<'_>,
@@ -1171,9 +1171,9 @@ impl LoopCore {
         self.default_exception_handler(py, context)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Writes an unhandled callback error and traceback to Python's
     /// `sys.stderr`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn default_exception_handler(&self, py: Python<'_>, context: Py<PyAny>) -> PyResult<()> {
         let sys = py.import("sys")?;
         let stderr = sys.getattr("stderr")?;
@@ -1280,22 +1280,22 @@ impl LoopCore {
         *self.runtime_waker.lock().expect("poisoned runtime waker") = waker;
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Marks the ready queue non-empty and wakes the parked loop thread. Used
     /// by cross-thread ready producers (the transitional runtime thread,
     /// signal and transport workers).
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     #[inline]
     pub(crate) fn signal_ready(&self) {
         self.wake.signal();
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Spawns a detached I/O task on this loop's on-thread vibeio runtime. Must
     /// be called on the loop thread (asyncio contract). The task begins running
     /// the next time the loop parks in `block_on`; its completions push ready
     /// items and wake the loop **on the same thread**, with no cross-thread
     /// hop. Returns `false` if the loop has no runtime yet (spawned before
     /// first run).
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub(crate) fn spawn_io<F>(&self, future: F) -> bool
     where
         F: Future<Output = ()> + 'static,
@@ -1314,11 +1314,11 @@ impl LoopCore {
         })
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Spawns a cancellable I/O task (accept loop / socket reader) on this
     /// loop's runtime, tracked by `fd` so `stop_io_task` can cancel it. Any
     /// existing task registered for `fd` is cancelled first. Must run on
     /// the loop thread. Returns `false` if the loop has no runtime yet.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub(crate) fn spawn_io_tracked<F>(&self, fd: RawFd, future: F) -> bool
     where
         F: Future<Output = ()> + 'static,
@@ -1344,13 +1344,13 @@ impl LoopCore {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Cancels the tracked I/O task registered for `fd`, if any. Must run on
     /// the loop thread.
     ///
     /// Returns whether a task was actually found and cancelled. `IO_TASKS` is a
     /// thread-local, so a task handed to the runtime thread instead is simply
     /// not here, and the caller has to cancel it through the command channel.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     pub(crate) fn stop_io_task(&self, fd: RawFd) -> bool {
         let key = self as *const LoopCore as usize;
         IO_TASKS.with(|tasks| {
@@ -1394,11 +1394,11 @@ impl LoopCore {
         ACTIVE_LOOP_TLS.with(|tls| std::ptr::eq(tls.core.get(), self))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Resolves a TCP connect whose writability wait finished on the vibeio
     /// reactor. Runs on the loop thread so the `SO_ERROR` check and the
     /// `set_result` / `set_exception` happen with the GIL already held for the
     /// whole ready batch — no per-completion GIL handoff.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "LoopCore"))]
     #[cfg(unix)]
     fn resolve_connect_completed(
         &self,

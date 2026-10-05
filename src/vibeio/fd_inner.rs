@@ -34,8 +34,8 @@ pub struct InnerRawHandle {
 // only after registration succeeds, and relinquishes it before re-registering.
 const UNREGISTERED: Token = Token(usize::MAX);
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Set the descriptor's blocking mode without changing unrelated status flags.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(all(
     unix,
     any(
@@ -90,21 +90,21 @@ impl InnerRawHandle {
         }
     }
 
+    /// Share ownership with operations using this registration's driver.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
-    /// Share ownership with operations using this registration's driver.
     #[cfg(all(target_os = "linux", any(feature = "fs", feature = "splice")))]
     pub(crate) fn driver_owner(&self) -> Rc<AnyDriver> {
         self.driver.clone()
     }
 
+    /// Retain operation storage on the registration's owner until completion.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "InnerRawHandle")
     )]
-    /// Retain operation storage on the registration's owner until completion.
     #[inline]
     pub(crate) fn cancel_completion(&self, token: usize, data: Box<dyn std::any::Any>) {
         #[cfg(windows)]
@@ -227,14 +227,14 @@ impl InnerRawHandle {
         self.mode
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
     /// Replace the registration. If deregistration fails, return its error
     /// without attempting a replacement. If acquiring the new registration
     /// fails, the handle is unregistered: callers must drop it or retry
     /// before doing I/O.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "InnerRawHandle")
+    )]
     #[inline]
     pub(crate) fn rebind_mode(
         &mut self,

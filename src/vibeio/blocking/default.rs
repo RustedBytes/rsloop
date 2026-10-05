@@ -6,27 +6,27 @@ pub struct DefaultBlockingThreadPool {
 }
 
 impl DefaultBlockingThreadPool {
+    /// Creates a new `DefaultBlockingThreadPool` with the default maximum
+    /// number of threads.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "DefaultBlockingThreadPool")
     )]
-    /// Creates a new `DefaultBlockingThreadPool` with the default maximum
-    /// number of threads.
     #[inline]
     pub fn new() -> Self {
         Self::with_max_threads(512)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "DefaultBlockingThreadPool")
-    )]
     /// Creates a new `DefaultBlockingThreadPool` with the specified maximum
     /// number of threads.
     ///
     /// # Panics
     ///
     /// Panics if the maximum is zero or exceeds the pool's supported size.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "DefaultBlockingThreadPool")
+    )]
     #[inline]
     pub fn with_max_threads(num_threads: usize) -> Self {
         Self {

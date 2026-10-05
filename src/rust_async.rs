@@ -5,17 +5,17 @@ use std::future::Future;
 use pyo3::prelude::*;
 pub use pyo3_async_runtimes::{TaskLocals, into_future_with_locals};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Capture the current Python event loop and contextvars so a Rust future can
 /// be attached to the active `rsloop` task.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn get_current_locals(py: Python<'_>) -> PyResult<TaskLocals> {
     pyo3_async_runtimes::async_std::get_current_locals(py)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convert a `Send` Rust future into a Python awaitable bound to the currently
 /// running Python loop.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn future_into_py<F, T>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
 where
     F: Future<Output = PyResult<T>> + Send + 'static,
@@ -24,9 +24,9 @@ where
     future_into_py_with_locals(py, get_current_locals(py)?, fut)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convert a `Send` Rust future into a Python awaitable using explicit task
 /// locals captured earlier.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn future_into_py_with_locals<F, T>(
     py: Python<'_>,
     locals: TaskLocals,
@@ -39,9 +39,9 @@ where
     pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, fut)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convert a `!Send` Rust future into a Python awaitable bound to the current
 /// Python loop.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn local_future_into_py<F, T>(py: Python<'_>, fut: F) -> PyResult<Bound<'_, PyAny>>
 where
     F: Future<Output = PyResult<T>> + 'static,
@@ -50,9 +50,9 @@ where
     local_future_into_py_with_locals(py, get_current_locals(py)?, fut)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convert a `!Send` Rust future into a Python awaitable using explicit task
 /// locals captured earlier.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[allow(deprecated)]
 pub fn local_future_into_py_with_locals<F, T>(
     py: Python<'_>,

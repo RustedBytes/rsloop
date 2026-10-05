@@ -128,10 +128,10 @@ pub(super) struct SubprocessParams {
     pub(super) api_name: &'static str,
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Shared tail of both subprocess methods: build the protocol, spawn the child,
 /// and wrap it in a transport. Only the `Command` construction differs, so it
 /// arrives as a closure that runs under the GIL on the spawning thread.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn spawn_subprocess<'py, F>(
     slf: &Py<PyLoop>,
     py: Python<'py>,
@@ -189,8 +189,8 @@ where
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// `/bin/sh -c <cmd>` on Unix, `%COMSPEC% /c "<cmd>"` on Windows.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn shell_command(py: Python<'_>, cmd: &Py<PyAny>) -> PyResult<Command> {
     let shell_cmd = cmd.bind(py).extract::<String>()?;
     #[cfg(unix)]
@@ -318,13 +318,13 @@ fn apply_process_basic_kw(
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// `Popen` keywords that are platform-specific or already implied by the way
 /// rsloop spawns. Wrappers around `loop.subprocess_exec()` — `AnyIO` is the one
 /// that caught this — forward every one of them unconditionally at its
 /// documented default, so accepting the default has to be a no-op. A
 /// non-default value gets the same error `Popen` raises, or an explicit refusal
 /// where rsloop cannot honour it, rather than being silently dropped.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn apply_platform_process_kw(
     command: &mut Command,
     key: &str,

@@ -51,32 +51,32 @@ impl Interval {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Interval"))]
     /// Configure how missed ticks are handled.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Interval"))]
     #[inline]
     pub fn set_missed_tick_behavior(&mut self, behavior: MissedTickBehavior) {
         self.missed_tick_behavior = behavior;
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Interval"))]
     /// Reset the interval schedule so the next tick is computed relative to
     /// the time when `tick()` is next called (useful when you want to restart
     /// the cadence).
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Interval"))]
     #[inline]
     pub fn reset(&mut self) {
         self.next_deadline = None;
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "Interval", future = true)
-    )]
     /// Await the next tick. Returns the number of ticks that should be
     /// processed:
     /// - For `MissedTickBehavior::Skip` this will be `1`.
     /// - For `MissedTickBehavior::CatchUp` this may be `> 1` if several periods
     ///   were missed.
     /// A zero period yields once and returns one tick in either mode.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "Interval", future = true)
+    )]
     pub async fn tick(&mut self) -> u64 {
         self.tick_at(Instant::now()).await
     }

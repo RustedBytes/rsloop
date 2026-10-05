@@ -22,7 +22,6 @@ use mio::Interest;
 
 use crate::vibeio::{fd_inner::InnerRawHandle, io::AsInnerRawHandle, op::SpliceOp};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Transfer data from one file descriptor to another using `splice`.
 ///
 /// This function uses the kernel's `splice` system call to transfer data
@@ -42,6 +41,7 @@ use crate::vibeio::{fd_inner::InnerRawHandle, io::AsInnerRawHandle, op::SpliceOp
 /// Completion-based transfers retain owned duplicates of both descriptors until
 /// the kernel finishes. Dropping the future does not roll back bytes already
 /// transferred or guarantee that a queued transfer will not run.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 pub async fn splice<'a, 'b>(
     from: &'a impl AsRawFd,
     to: &'b impl AsInnerRawHandle<'b>,
@@ -54,13 +54,13 @@ pub async fn splice<'a, 'b>(
     result
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Transfer exactly `len` bytes from one file descriptor to another using
 /// `splice`.
 ///
 /// This function calls `splice()` repeatedly until `len` bytes have been
 /// transferred or EOF is reached. Interrupted calls are retried without
 /// resetting progress.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 pub async fn splice_exact<'a, 'b>(
     from: &'a impl AsRawFd,
     to: &'b impl AsInnerRawHandle<'b>,
@@ -79,7 +79,6 @@ pub async fn splice_exact<'a, 'b>(
     Ok(total)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Transfer data from a file to a socket using `sendfile` semantics.
 ///
 /// This function implements `sendfile`-like behavior using `splice` with an
@@ -88,6 +87,7 @@ pub async fn splice_exact<'a, 'b>(
 /// Returns the transferred count if the source reaches EOF before `len` bytes.
 /// Reports `WriteZero` if draining a nonempty staging pipe makes no progress.
 /// Interrupted fills and drains are retried without discarding staged bytes.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 pub async fn sendfile_exact<'a, 'b>(
     from: &'a impl AsRawFd,
     to: &'b impl AsInnerRawHandle<'b>,

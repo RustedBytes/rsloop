@@ -327,21 +327,21 @@ pub(crate) struct IoBufWithCursor<I: IoBuf> {
 }
 
 impl<I: IoBuf> IoBufWithCursor<I> {
+    /// Create a new `IoBufWithCursor` with the given buffer.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "IoBufWithCursor")
     )]
-    /// Create a new `IoBufWithCursor` with the given buffer.
     #[inline]
     pub(crate) fn new(buf: I) -> Self {
         IoBufWithCursor { buf, cursor: 0 }
     }
 
+    /// Advance the cursor by `n` bytes.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "IoBufWithCursor")
     )]
-    /// Advance the cursor by `n` bytes.
     #[inline]
     pub(crate) fn advance(&mut self, n: usize) {
         assert!(
@@ -351,11 +351,11 @@ impl<I: IoBuf> IoBufWithCursor<I> {
         self.cursor += n;
     }
 
+    /// Consume the wrapper and return the inner buffer.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "IoBufWithCursor")
     )]
-    /// Consume the wrapper and return the inner buffer.
     #[inline]
     pub(crate) fn into_inner(self) -> I {
         self.buf
@@ -427,10 +427,6 @@ pub(crate) struct IoBufTemporaryPoll {
 }
 
 impl IoBufTemporaryPoll {
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "IoBufTemporaryPoll")
-    )]
     /// Create a new `IoBufTemporaryPoll` with the given pointer and length.
     ///
     /// # Safety
@@ -439,6 +435,10 @@ impl IoBufTemporaryPoll {
     /// Read operations additionally require exclusive writable access. The
     /// wrapper must not escape the backing borrow, be sent to another thread,
     /// or be submitted to an operation that retains the pointer after polling.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IoBufTemporaryPoll")
+    )]
     #[inline]
     pub(crate) unsafe fn new(ptr: *mut u8, len: usize) -> Self {
         Self {
@@ -448,16 +448,16 @@ impl IoBufTemporaryPoll {
         }
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "IoBufTemporaryPoll")
-    )]
     /// Wrap writable storage without claiming that any bytes are initialized.
     ///
     /// # Safety
     ///
     /// `ptr` must be non-null, aligned, and exclusively writable for `capacity`
     /// bytes. The same lifetime and poll-only restrictions as `new` apply.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IoBufTemporaryPoll")
+    )]
     #[inline]
     pub(crate) unsafe fn new_uninit(ptr: *mut u8, capacity: usize) -> Self {
         Self {
@@ -549,16 +549,16 @@ pub unsafe trait IoVectoredBuf: 'static {
     /// Returns owned descriptors for this value's readable memory regions.
     fn as_iovecs(&self) -> Box<[IoVec]>;
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "IoVectoredBuf")
-    )]
     /// Returns `true` if there are no vector descriptors.
     ///
     /// This does not test the total initialized byte count. Input operations
     /// also use this check, and an implementation may expose zero readable
     /// bytes while its writable descriptors provide spare capacity. Collections
     /// containing empty segments are therefore not necessarily empty here.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IoVectoredBuf")
+    )]
     #[inline]
     fn is_empty(&self) -> bool {
         self.as_iovecs().is_empty()
@@ -634,10 +634,6 @@ pub(crate) struct IoVectoredBufTemporaryPoll {
 }
 
 impl IoVectoredBufTemporaryPoll {
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "IoVectoredBufTemporaryPoll")
-    )]
     /// Create a new `IoVectoredBufTemporaryPoll` from immutable slices.
     ///
     /// # Safety
@@ -646,6 +642,10 @@ impl IoVectoredBufTemporaryPoll {
     /// pointers. Use only for synchronous write polling, never completion
     /// submission or mutable I/O. No pointer may be retained after the poll
     /// returns.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IoVectoredBufTemporaryPoll")
+    )]
     #[inline]
     pub(crate) unsafe fn new(iovecs: &[IoSlice<'_>]) -> Self {
         let iovecs = iovecs
@@ -655,16 +655,16 @@ impl IoVectoredBufTemporaryPoll {
         Self { iovecs }
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "IoVectoredBufTemporaryPoll")
-    )]
     /// Create a new `IoVectoredBufTemporaryPoll` from mutable slices.
     ///
     /// # Safety
     ///
     /// All backing exclusive borrows must outlive this wrapper and any pointer
     /// use. Use only for synchronous polling, never completion submission.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "IoVectoredBufTemporaryPoll")
+    )]
     #[allow(dead_code)]
     #[inline]
     pub(crate) unsafe fn new_mut(iovecs: &mut [IoSliceMut<'_>]) -> Self {

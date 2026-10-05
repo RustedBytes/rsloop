@@ -47,8 +47,8 @@ pub struct CtrlC {
 }
 
 impl CtrlC {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "CtrlC"))]
     /// Create a new Ctrl-C listener.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "CtrlC"))]
     #[cfg(windows)]
     pub fn new() -> io::Result<Self> {
         let state = ctrl_c_state()?.clone();
@@ -123,10 +123,10 @@ impl Future for CtrlC {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Cross-platform Ctrl-C support.
 ///
 /// Returns a future that resolves when Ctrl-C is received.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 #[cfg(windows)]
 pub fn ctrl_c() -> io::Result<CtrlC> {

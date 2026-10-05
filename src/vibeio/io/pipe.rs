@@ -223,11 +223,11 @@ mod setup_tests {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Create a new async-aware pipe.
 ///
 /// Returns a tuple of `(reader, writer)` pipe endpoints.
 /// Both endpoints are close-on-exec to prevent unintended child inheritance.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn pipe() -> std::io::Result<(Pipe, Pipe)> {
     let (read, write) = pipe_inner()?;
     Ok((
@@ -249,9 +249,9 @@ pub struct PollPipe {
 }
 
 impl Pipe {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Pipe"))]
     /// Create a `Pipe` from a standard library `OwnedFd` with the given
     /// registration mode.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Pipe"))]
     #[inline]
     pub(crate) fn from_std_with_mode(
         inner: OwnedFd,
@@ -267,8 +267,8 @@ impl Pipe {
         Ok(Self { inner, handle })
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Pipe"))]
     /// Convert this `Pipe` to a `PollPipe` for readiness-based operations.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Pipe"))]
     #[inline]
     pub fn into_poll(self) -> Result<PollPipe, io::Error> {
         let mut stream = self;
@@ -279,15 +279,15 @@ impl Pipe {
 }
 
 impl PollPipe {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PollPipe"))]
     /// Convert this `PollPipe` back to an adaptive `Pipe`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PollPipe"))]
     #[inline]
     pub fn into_adaptive(self) -> Pipe {
         self.stream
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PollPipe"))]
     /// Convert this `PollPipe` to a completion-based `Pipe`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "PollPipe"))]
     #[inline]
     pub fn into_completion(self) -> Result<Pipe, io::Error> {
         let mut stream = self.stream;

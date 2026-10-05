@@ -76,7 +76,6 @@ pub struct UdpSocket {
 }
 
 impl UdpSocket {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Creates a new `UdpSocket` which will be bound to the specified address.
     ///
     /// This is the async version of [`std::net::UdpSocket::bind`].
@@ -88,27 +87,28 @@ impl UdpSocket {
     /// - The address is already in use
     /// - The process lacks permissions to bind to the address
     /// - The runtime is not active
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn bind(address: impl ToSocketAddrs) -> Result<Self, io::Error> {
         let inner = StdUdpSocket::bind(address)?;
         Self::from_std(inner)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Creates a new `UdpSocket` from a standard library `UdpSocket`.
     ///
     /// # Errors
     ///
     /// This function will return an error if registration with the async driver
     /// fails.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn from_std(inner: StdUdpSocket) -> Result<Self, io::Error> {
         Self::from_std_with_mode(inner, RegistrationMode::Completion)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Creates a new `UdpSocket` from a standard library `UdpSocket` with a
     /// specific registration mode.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub(crate) fn from_std_with_mode(
         inner: StdUdpSocket,
@@ -131,10 +131,10 @@ impl UdpSocket {
         Ok(Self { inner, handle })
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Converts this socket into a poll-only variant.
     ///
     /// The returned `PollUdpSocket` will always use readiness-based I/O.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn into_poll(self) -> Result<PollUdpSocket, io::Error> {
         let mut socket = self;
@@ -149,8 +149,8 @@ impl UdpSocket {
         })
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Converts this `UdpSocket` into the standard library `UdpSocket`.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn into_std(self) -> StdUdpSocket {
         let Self { handle, inner } = self;
@@ -158,34 +158,30 @@ impl UdpSocket {
         inner
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the local address of this socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket is not
     /// bound.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the remote address of this socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket is not
     /// connected.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.peer_addr()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UdpSocket", future = true)
-    )]
     /// Connects this UDP socket to a remote address.
     ///
     /// This is the async version of [`std::net::UdpSocket::connect`].
@@ -196,6 +192,10 @@ impl UdpSocket {
     /// - DNS resolution fails
     /// - Connection fails
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     #[inline]
     pub async fn connect(&mut self, address: impl ToSocketAddrs) -> Result<(), io::Error> {
         let addresses = address.to_socket_addrs()?;
@@ -218,10 +218,6 @@ impl UdpSocket {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no addresses")))
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UdpSocket", future = true)
-    )]
     /// Receives a single datagram message.
     ///
     /// This is the async version of [`std::net::UdpSocket::recv`].
@@ -231,6 +227,10 @@ impl UdpSocket {
     /// This function will return an error in the following situations:
     /// - The socket is not bound
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     #[inline]
     pub async fn recv<B: IoBufMut>(&self, buf: B) -> (Result<usize, io::Error>, B) {
         let handle = &self.handle;
@@ -239,10 +239,6 @@ impl UdpSocket {
         (result, op.take_bufs())
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UdpSocket", future = true)
-    )]
     /// Receives a single datagram message, returning the sender's address.
     ///
     /// This is the async version of [`std::net::UdpSocket::recv_from`].
@@ -252,6 +248,10 @@ impl UdpSocket {
     /// This function will return an error in the following situations:
     /// - The socket is not bound
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     #[inline]
     pub async fn recv_from<B: IoBufMut>(
         &self,
@@ -263,10 +263,6 @@ impl UdpSocket {
         (result, op.take_bufs())
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UdpSocket", future = true)
-    )]
     /// Sends data on a connected socket.
     ///
     /// This is the async version of [`std::net::UdpSocket::send`].
@@ -276,6 +272,10 @@ impl UdpSocket {
     /// This function will return an error in the following situations:
     /// - The socket is not connected
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     #[inline]
     pub async fn send<B: IoBuf>(&self, buf: B) -> (Result<usize, io::Error>, B) {
         let handle = &self.handle;
@@ -284,10 +284,6 @@ impl UdpSocket {
         (result, op.take_bufs())
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UdpSocket", future = true)
-    )]
     /// Sends data to the specified address.
     ///
     /// This is the async version of [`std::net::UdpSocket::send_to`].
@@ -298,6 +294,10 @@ impl UdpSocket {
     /// - DNS resolution fails
     /// - The send operation fails
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     #[inline]
     pub async fn send_to<B: IoBuf>(
         &self,
@@ -329,10 +329,6 @@ impl UdpSocket {
         )
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UdpSocket", future = true)
-    )]
     /// Receives data without removing it from the socket's receive queue.
     ///
     /// This is the async version of [`std::net::UdpSocket::peek`].
@@ -342,6 +338,10 @@ impl UdpSocket {
     /// This function will return an error in the following situations:
     /// - The socket is not bound
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     #[inline]
     pub async fn peek<B: IoBufMut>(&self, buf: B) -> (Result<usize, io::Error>, B) {
         let handle = &self.handle;
@@ -350,10 +350,6 @@ impl UdpSocket {
         (result, op.take_bufs())
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UdpSocket", future = true)
-    )]
     /// Receives data without removing it from the socket's receive queue,
     /// returning the sender's address.
     ///
@@ -364,6 +360,10 @@ impl UdpSocket {
     /// This function will return an error in the following situations:
     /// - The socket is not bound
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UdpSocket", future = true)
+    )]
     #[inline]
     pub async fn peek_from<B: IoBufMut>(
         &self,
@@ -375,7 +375,6 @@ impl UdpSocket {
         (result, op.take_bufs())
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns a new `UdpSocket` that shares the same underlying file
     /// descriptor.
     ///
@@ -383,12 +382,12 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// cloned.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn try_clone(&self) -> Result<Self, io::Error> {
         Self::from_std(self.inner.try_clone()?)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the broadcast flag.
     ///
     /// When set, the socket can send broadcast packets.
@@ -397,24 +396,24 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_broadcast(&self, broadcast: bool) -> Result<(), io::Error> {
         self.inner.set_broadcast(broadcast)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the current value of the broadcast flag.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn broadcast(&self) -> Result<bool, io::Error> {
         self.inner.broadcast()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the time-to-live (TTL) value.
     ///
     /// This controls how many hops a packet can traverse before being
@@ -424,24 +423,24 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_ttl(&self, ttl: u32) -> Result<(), io::Error> {
         self.inner.set_ttl(ttl)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the current TTL value.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn ttl(&self) -> Result<u32, io::Error> {
         self.inner.ttl()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the multicast loop flag for IPv4.
     ///
     /// When set, multicast packets are looped back to the local socket.
@@ -450,24 +449,24 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_multicast_loop_v4(&self, multicast_loop_v4: bool) -> Result<(), io::Error> {
         self.inner.set_multicast_loop_v4(multicast_loop_v4)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the current IPv4 multicast loop flag.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn multicast_loop_v4(&self) -> Result<bool, io::Error> {
         self.inner.multicast_loop_v4()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the multicast TTL for IPv4.
     ///
     /// This controls how many hops multicast packets can traverse.
@@ -476,24 +475,24 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_multicast_ttl_v4(&self, multicast_ttl_v4: u32) -> Result<(), io::Error> {
         self.inner.set_multicast_ttl_v4(multicast_ttl_v4)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the current IPv4 multicast TTL.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn multicast_ttl_v4(&self) -> Result<u32, io::Error> {
         self.inner.multicast_ttl_v4()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the multicast loop flag for IPv6.
     ///
     /// When set, multicast packets are looped back to the local socket.
@@ -502,30 +501,31 @@ impl UdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_multicast_loop_v6(&self, multicast_loop_v6: bool) -> Result<(), io::Error> {
         self.inner.set_multicast_loop_v6(multicast_loop_v6)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the current IPv6 multicast loop flag.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn multicast_loop_v6(&self) -> Result<bool, io::Error> {
         self.inner.multicast_loop_v6()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Joins a multicast group for IPv4.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn join_multicast_v4(
         &self,
@@ -535,25 +535,25 @@ impl UdpSocket {
         self.inner.join_multicast_v4(multiaddr, interface)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Joins a multicast group for IPv6.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> Result<(), io::Error> {
         self.inner.join_multicast_v6(multiaddr, interface)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Leaves a multicast group for IPv4.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn leave_multicast_v4(
         &self,
@@ -563,13 +563,13 @@ impl UdpSocket {
         self.inner.leave_multicast_v4(multiaddr, interface)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Leaves a multicast group for IPv6.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn leave_multicast_v6(
         &self,
@@ -579,61 +579,61 @@ impl UdpSocket {
         self.inner.leave_multicast_v6(multiaddr, interface)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Takes the pending error from the socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn take_error(&self) -> Result<Option<io::Error>, io::Error> {
         self.inner.take_error()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the read timeout for the socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_read_timeout(&self, dur: Option<Duration>) -> Result<(), io::Error> {
         self.inner.set_read_timeout(dur)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Sets the write timeout for the socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn set_write_timeout(&self, dur: Option<Duration>) -> Result<(), io::Error> {
         self.inner.set_write_timeout(dur)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the read timeout for the socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn read_timeout(&self) -> Result<Option<Duration>, io::Error> {
         self.inner.read_timeout()
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     /// Returns the write timeout for the socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "UdpSocket"))]
     #[inline]
     pub fn write_timeout(&self) -> Result<Option<Duration>, io::Error> {
         self.inner.write_timeout()
@@ -719,10 +719,6 @@ pub struct PollUdpSocket {
 }
 
 impl PollUdpSocket {
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Creates a new `PollUdpSocket` bound to the specified address.
     ///
     /// # Errors
@@ -732,22 +728,26 @@ impl PollUdpSocket {
     /// - The address is already in use
     /// - The process lacks permissions to bind to the address
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn bind(address: impl ToSocketAddrs) -> Result<Self, io::Error> {
         let inner = StdUdpSocket::bind(address)?;
         Self::from_std(inner)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Creates a new `PollUdpSocket` from a standard library `UdpSocket`.
     ///
     /// # Errors
     ///
     /// This function will return an error if registration with the async driver
     /// fails.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn from_std(inner: StdUdpSocket) -> Result<Self, io::Error> {
         Ok(Self {
@@ -757,26 +757,26 @@ impl PollUdpSocket {
         })
     }
 
+    /// Converts this poll socket into an adaptive `UdpSocket`.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Converts this poll socket into an adaptive `UdpSocket`.
     #[inline]
     pub fn into_adaptive(self) -> UdpSocket {
         self.socket
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Converts this poll socket into a completion-based `UdpSocket`.
     ///
     /// # Errors
     ///
     /// This function will return an error if the runtime does not support
     /// completion-based I/O.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn into_completion(self) -> Result<UdpSocket, io::Error> {
         let mut socket = self.socket;
@@ -787,10 +787,6 @@ impl PollUdpSocket {
         Ok(socket)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket", future = true)
-    )]
     /// Connects this UDP socket to a remote address.
     ///
     /// # Errors
@@ -799,60 +795,64 @@ impl PollUdpSocket {
     /// - DNS resolution fails
     /// - Connection fails
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket", future = true)
+    )]
     #[inline]
     pub async fn connect(&mut self, address: impl ToSocketAddrs) -> Result<(), io::Error> {
         self.socket.connect(address).await
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Returns the local address of this socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket is not
     /// bound.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.socket.local_addr()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Returns the remote address of this socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket is not
     /// connected.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.socket.peer_addr()
     }
 
+    /// Receives a single datagram message.
+    ///
+    /// This is the poll-based version of [`UdpSocket::recv`].
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
-    /// Receives a single datagram message.
-    ///
-    /// This is the poll-based version of [`UdpSocket::recv`].
     #[inline]
     pub async fn recv<B: IoBufMut>(&self, buf: B) -> (Result<usize, io::Error>, B) {
         self.socket.recv(buf).await
     }
 
+    /// Receives a single datagram message, returning the sender's address.
+    ///
+    /// This is the poll-based version of [`UdpSocket::recv_from`].
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
-    /// Receives a single datagram message, returning the sender's address.
-    ///
-    /// This is the poll-based version of [`UdpSocket::recv_from`].
     #[inline]
     pub async fn recv_from<B: IoBufMut>(
         &self,
@@ -861,25 +861,25 @@ impl PollUdpSocket {
         self.socket.recv_from(buf).await
     }
 
+    /// Sends data on a connected socket.
+    ///
+    /// This is the poll-based version of [`UdpSocket::send`].
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
-    /// Sends data on a connected socket.
-    ///
-    /// This is the poll-based version of [`UdpSocket::send`].
     #[inline]
     pub async fn send<B: IoBuf>(&self, buf: B) -> (Result<usize, io::Error>, B) {
         self.socket.send(buf).await
     }
 
+    /// Sends data to the specified address.
+    ///
+    /// This is the poll-based version of [`UdpSocket::send_to`].
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
-    /// Sends data to the specified address.
-    ///
-    /// This is the poll-based version of [`UdpSocket::send_to`].
     #[inline]
     pub async fn send_to<B: IoBuf>(
         &self,
@@ -889,26 +889,26 @@ impl PollUdpSocket {
         self.socket.send_to(buf, address).await
     }
 
+    /// Receives data without removing it from the socket's receive queue.
+    ///
+    /// This is the poll-based version of [`UdpSocket::peek`].
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket", future = true)
     )]
-    /// Receives data without removing it from the socket's receive queue.
-    ///
-    /// This is the poll-based version of [`UdpSocket::peek`].
     #[inline]
     pub async fn peek<B: IoBufMut>(&self, buf: B) -> (Result<usize, io::Error>, B) {
         self.socket.peek(buf).await
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket", future = true)
-    )]
     /// Receives data without removing it from the socket's receive queue,
     /// returning the sender's address.
     ///
     /// This is the poll-based version of [`UdpSocket::peek_from`].
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket", future = true)
+    )]
     #[inline]
     pub async fn peek_from<B: IoBufMut>(
         &self,
@@ -917,10 +917,6 @@ impl PollUdpSocket {
         self.socket.peek_from(buf).await
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Returns a new `PollUdpSocket` that shares the same underlying file
     /// descriptor.
     ///
@@ -928,6 +924,10 @@ impl PollUdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// cloned.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn try_clone(&self) -> Result<Self, io::Error> {
         Ok(Self {
@@ -937,10 +937,6 @@ impl PollUdpSocket {
         })
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Sets the broadcast flag.
     ///
     /// When set, the socket can send broadcast packets.
@@ -949,30 +945,30 @@ impl PollUdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn set_broadcast(&self, broadcast: bool) -> Result<(), io::Error> {
         self.socket.set_broadcast(broadcast)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Returns the current value of the broadcast flag.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn broadcast(&self) -> Result<bool, io::Error> {
         self.socket.broadcast()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Sets the time-to-live (TTL) value.
     ///
     /// This controls how many hops a packet can traverse before being
@@ -982,30 +978,30 @@ impl PollUdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn set_ttl(&self, ttl: u32) -> Result<(), io::Error> {
         self.socket.set_ttl(ttl)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Returns the current TTL value.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn ttl(&self) -> Result<u32, io::Error> {
         self.socket.ttl()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Sets the multicast loop flag for IPv4.
     ///
     /// When set, multicast packets are looped back to the local socket.
@@ -1014,30 +1010,30 @@ impl PollUdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn set_multicast_loop_v4(&self, multicast_loop_v4: bool) -> Result<(), io::Error> {
         self.socket.set_multicast_loop_v4(multicast_loop_v4)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Returns the current IPv4 multicast loop flag.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn multicast_loop_v4(&self) -> Result<bool, io::Error> {
         self.socket.multicast_loop_v4()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Sets the multicast TTL for IPv4.
     ///
     /// This controls how many hops multicast packets can traverse.
@@ -1046,30 +1042,30 @@ impl PollUdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn set_multicast_ttl_v4(&self, multicast_ttl_v4: u32) -> Result<(), io::Error> {
         self.socket.set_multicast_ttl_v4(multicast_ttl_v4)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Returns the current IPv4 multicast TTL.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn multicast_ttl_v4(&self) -> Result<u32, io::Error> {
         self.socket.multicast_ttl_v4()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Sets the multicast loop flag for IPv6.
     ///
     /// When set, multicast packets are looped back to the local socket.
@@ -1078,36 +1074,40 @@ impl PollUdpSocket {
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn set_multicast_loop_v6(&self, multicast_loop_v6: bool) -> Result<(), io::Error> {
         self.socket.set_multicast_loop_v6(multicast_loop_v6)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Returns the current IPv6 multicast loop flag.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn multicast_loop_v6(&self) -> Result<bool, io::Error> {
         self.socket.multicast_loop_v6()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Joins a multicast group for IPv4.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn join_multicast_v4(
         &self,
@@ -1117,31 +1117,31 @@ impl PollUdpSocket {
         self.socket.join_multicast_v4(multiaddr, interface)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Joins a multicast group for IPv6.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn join_multicast_v6(&self, multiaddr: &Ipv6Addr, interface: u32) -> Result<(), io::Error> {
         self.socket.join_multicast_v6(multiaddr, interface)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Leaves a multicast group for IPv4.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn leave_multicast_v4(
         &self,
@@ -1151,16 +1151,16 @@ impl PollUdpSocket {
         self.socket.leave_multicast_v4(multiaddr, interface)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Leaves a multicast group for IPv6.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn leave_multicast_v6(
         &self,
@@ -1170,88 +1170,88 @@ impl PollUdpSocket {
         self.socket.leave_multicast_v6(multiaddr, interface)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Takes the pending error from the socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn take_error(&self) -> Result<Option<io::Error>, io::Error> {
         self.socket.take_error()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Sets the read timeout for the socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn set_read_timeout(&self, dur: Option<Duration>) -> Result<(), io::Error> {
         self.socket.set_read_timeout(dur)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Sets the write timeout for the socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// modified.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn set_write_timeout(&self, dur: Option<Duration>) -> Result<(), io::Error> {
         self.socket.set_write_timeout(dur)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Returns the read timeout for the socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn read_timeout(&self) -> Result<Option<Duration>, io::Error> {
         self.socket.read_timeout()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Returns the write timeout for the socket.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket cannot be
     /// queried.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn write_timeout(&self) -> Result<Option<Duration>, io::Error> {
         self.socket.write_timeout()
     }
 
+    /// Polls to receive a single datagram message from the socket.
+    ///
+    /// This is the poll-based counterpart to [`UdpSocket::recv`].
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Polls to receive a single datagram message from the socket.
-    ///
-    /// This is the poll-based counterpart to [`UdpSocket::recv`].
     #[inline]
     pub fn poll_recv(
         self: Pin<&mut Self>,
@@ -1267,14 +1267,14 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Polls to receive a single datagram message, returning the sender's
     /// address.
     ///
     /// This is the poll-based counterpart to [`UdpSocket::recv_from`].
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn poll_recv_from(
         self: Pin<&mut Self>,
@@ -1290,13 +1290,13 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
+    /// Polls to send data on a connected socket.
+    ///
+    /// This is the poll-based counterpart to [`UdpSocket::send`].
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Polls to send data on a connected socket.
-    ///
-    /// This is the poll-based counterpart to [`UdpSocket::send`].
     #[inline]
     pub fn poll_send(
         self: Pin<&mut Self>,
@@ -1312,13 +1312,13 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
+    /// Polls to send data to the specified address.
+    ///
+    /// This is the poll-based counterpart to [`UdpSocket::send_to`].
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Polls to send data to the specified address.
-    ///
-    /// This is the poll-based counterpart to [`UdpSocket::send_to`].
     #[inline]
     pub fn poll_send_to(
         self: Pin<&mut Self>,
@@ -1336,13 +1336,13 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
+    /// Polls to peek at data from the socket without removing it.
+    ///
+    /// This is the poll-based counterpart to [`UdpSocket::peek`].
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Polls to peek at data from the socket without removing it.
-    ///
-    /// This is the poll-based counterpart to [`UdpSocket::peek`].
     #[inline]
     pub fn poll_peek(
         self: Pin<&mut Self>,
@@ -1358,14 +1358,14 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "PollUdpSocket")
-    )]
     /// Polls to peek at data from the socket without removing it,
     /// returning the sender's address.
     ///
     /// This is the poll-based counterpart to [`UdpSocket::peek_from`].
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "PollUdpSocket")
+    )]
     #[inline]
     pub fn poll_peek_from(
         self: Pin<&mut Self>,
@@ -1382,12 +1382,12 @@ impl PollUdpSocket {
         handle.poll_op_poll(cx, &mut op)
     }
 
+    /// Tries to perform an I/O operation on the socket, returning an error if
+    /// it is not ready.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Tries to perform an I/O operation on the socket, returning an error if
-    /// it is not ready.
     #[inline]
     pub fn try_io_readable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -1396,12 +1396,12 @@ impl PollUdpSocket {
         crate::vibeio::net::try_io_ready(&self.read_ready, "read not ready", io)
     }
 
+    /// Tries to perform an I/O operation on the socket, returning an error if
+    /// it is not ready.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PollUdpSocket")
     )]
-    /// Tries to perform an I/O operation on the socket, returning an error if
-    /// it is not ready.
     #[inline]
     pub fn try_io_writable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where

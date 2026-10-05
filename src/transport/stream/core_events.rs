@@ -242,14 +242,14 @@ impl StreamTransportCore {
         }
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "StreamTransportCore")
-    )]
     /// Whether a socket can still close directly without bypassing a writer
     /// worker. Once the lazy target has been taken, all close/EOF commands
     /// must follow queued data through that worker; `writer_registered` is a
     /// transient fast-path hint and can race an enqueue.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
     pub(super) fn writer_is_still_lazy(&self) -> bool {
         self.lazy_writer
             .lock()

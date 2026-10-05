@@ -195,11 +195,11 @@ pub struct Signal {
 }
 
 impl Signal {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Signal"))]
     /// Register for a Unix signal.
     ///
     /// Creates a new signal listener for the given signal kind. If this is the
     /// first listener for this signal, the signal handler will be installed.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Signal"))]
     pub fn new(kind: SignalKind) -> io::Result<Self> {
         let state = register_signal(kind)?;
         let last_seen = state.counter.load(Ordering::Acquire);
@@ -212,23 +212,23 @@ impl Signal {
         })
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Signal"))]
     /// Returns the signal kind being listened to.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Signal"))]
     #[inline]
     pub fn kind(&self) -> SignalKind {
         self.kind
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "Signal", future = true)
-    )]
     /// Wait for the next occurrence of the signal.
     ///
     /// This method returns a future that resolves when the signal is received.
     /// Multiple listeners for the same signal will all be woken on each signal.
     /// Repeated occurrences may coalesce before dispatch; this API does not
     /// preserve exact counts or ordering, including for real-time signal kinds.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "Signal", future = true)
+    )]
     pub async fn recv(&mut self) -> io::Result<()> {
         poll_fn(|cx| self.poll_recv(cx)).await
     }
@@ -286,10 +286,10 @@ impl Drop for Signal {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convenience builder for Unix signals.
 ///
 /// This is a wrapper around `Signal::new()` that provides a more ergonomic API.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn signal(kind: SignalKind) -> io::Result<Signal> {
     Signal::new(kind)
@@ -304,8 +304,8 @@ pub struct CtrlC {
 }
 
 impl CtrlC {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "CtrlC"))]
     /// Create a new Ctrl-C listener.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "CtrlC"))]
     pub fn new() -> io::Result<Self> {
         Ok(Self {
             signal: Signal::new(SignalKind::interrupt())?,
@@ -326,10 +326,10 @@ impl Future for CtrlC {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Cross-platform Ctrl-C support.
 ///
 /// Returns a future that resolves when Ctrl-C is received.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 pub fn ctrl_c() -> io::Result<CtrlC> {
     CtrlC::new()
@@ -531,10 +531,10 @@ fn install_handler(signum: libc::c_int) -> io::Result<libc::sigaction> {
     Ok(prev)
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// # Safety
 /// `prev` must be the action saved for this signal, with any handler it refers
 /// to still valid for subsequent signal delivery.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 unsafe fn restore_handler(signum: libc::c_int, prev: &libc::sigaction) -> io::Result<()> {
     // SAFETY: the caller supplies the previous action returned by sigaction;
     // its handler and flags are restored unchanged. No old-action output is

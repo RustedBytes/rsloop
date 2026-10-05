@@ -167,13 +167,13 @@ pub(super) fn shutdown_asyncgens<'py>(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[pyfunction]
 /// Registers an asynchronous generator with its owning loop on first iteration.
 ///
 /// This implements the first-iteration half of Python's asynchronous-generator
 /// hooks and emits a `ResourceWarning` if iteration begins after
 /// `loop.shutdown_asyncgens()`.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn asyncgen_firstiter_hook(
     py: Python<'_>,
     loop_obj: &Bound<'_, PyAny>,
@@ -212,12 +212,12 @@ pub fn asyncgen_firstiter_hook(
     Ok(())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[pyfunction]
 /// Unregisters and schedules finalization of an asynchronous generator.
 ///
 /// If the loop is still open, the generator's `aclose()` awaitable is submitted
 /// with `call_soon_threadsafe`; closed loops simply discard the registration.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn asyncgen_finalizer_hook(
     py: Python<'_>,
     loop_obj: &Bound<'_, PyAny>,

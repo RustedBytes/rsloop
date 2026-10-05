@@ -55,10 +55,6 @@ pub struct UnixListener {
 }
 
 impl UnixListener {
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UnixListener")
-    )]
     /// Creates a new `UnixListener` which will be bound to the specified path.
     ///
     /// Binding is synchronous; the returned listener supports async accepts.
@@ -76,6 +72,10 @@ impl UnixListener {
     /// - The path is already in use
     /// - The process lacks permissions
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UnixListener")
+    )]
     #[inline]
     pub fn bind(path: impl AsRef<Path>) -> Result<Self, io::Error> {
         // Reject this known setup failure before bind mutates the filesystem.
@@ -91,16 +91,16 @@ impl UnixListener {
         Self::from_std(inner)
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UnixListener")
-    )]
     /// Creates a new `UnixListener` from a standard library `UnixListener`.
     ///
     /// # Errors
     ///
     /// This function will return an error if registration with the async driver
     /// fails.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UnixListener")
+    )]
     #[inline]
     pub fn from_std(inner: StdUnixListener) -> Result<Self, io::Error> {
         let handle = InnerRawHandle::new(inner.as_raw_fd(), Interest::READABLE)?;
@@ -108,25 +108,21 @@ impl UnixListener {
         Ok(Self { inner, handle })
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UnixListener")
-    )]
     /// Returns the local address of this listener.
     ///
     /// # Errors
     ///
     /// This function will return an error if the underlying socket is not
     /// bound.
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UnixListener")
+    )]
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()
     }
 
-    #[cfg_attr(
-        feature = "hotpath-profile",
-        hotpath::measure(impl_type = "UnixListener", future = true)
-    )]
     /// Accepts a new incoming connection from this listener.
     ///
     /// This is the async version of
@@ -137,6 +133,10 @@ impl UnixListener {
     /// This function will return an error in the following situations:
     /// - The listener is not bound to an address
     /// - The runtime is not active
+    #[cfg_attr(
+        feature = "hotpath-profile",
+        hotpath::measure(impl_type = "UnixListener", future = true)
+    )]
     #[inline]
     pub async fn accept(&self) -> Result<(UnixStream, SocketAddr), io::Error> {
         let mut op = AcceptUnixOp::new(&self.handle);

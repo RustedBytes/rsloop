@@ -92,10 +92,10 @@ pub(super) fn run_until_complete(
     Ok(wrapped.call_method0("result")?.unbind())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// `add_done_callback` target installed by `run_until_complete`: stop the loop
 /// once the awaited future finishes, but let `SystemExit` and
 /// `KeyboardInterrupt` propagate out of `run_forever` instead.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[pyfunction]
 pub fn future_done_stop(loop_obj: &Bound<'_, PyAny>, future: &Bound<'_, PyAny>) -> PyResult<()> {
     if !future.call_method0("cancelled")?.extract::<bool>()? {

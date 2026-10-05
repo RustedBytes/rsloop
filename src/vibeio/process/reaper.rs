@@ -92,21 +92,21 @@ fn reap_with_worker(
 
 /// Zombie reaper process that waits on child processes asynchronously.
 impl ZombieReaper {
+    /// Creates a new zombie reaper instance.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ZombieReaper")
     )]
-    /// Creates a new zombie reaper instance.
     #[inline]
     pub(crate) fn new() -> Self {
         Self
     }
 
+    /// Waits on a child process asynchronously.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ZombieReaper", future = true)
     )]
-    /// Waits on a child process asynchronously.
     #[inline]
     pub(crate) async fn wait(&self, child: std::process::Child) -> io::Result<ExitStatus> {
         let child = ReapChild(Some(child));
@@ -124,11 +124,11 @@ impl ZombieReaper {
             .map_err(|_| io::Error::other("zombie reaper error"))?
     }
 
+    /// Reaps a child process on drop, waiting asynchronously if possible.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "ZombieReaper")
     )]
-    /// Reaps a child process on drop, waiting asynchronously if possible.
     #[inline]
     pub(crate) fn reap_on_drop(&self, mut child: std::process::Child) {
         if let Ok(Some(_)) = child.try_wait() {
@@ -538,8 +538,8 @@ async fn zombie_reaper_fn(rx: async_channel::Receiver<ZombieReaperMessage>) {
 // Linux pidfd-based reaper (kernel ≥ 5.3)
 // ---------------------------------------------------------------------------
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Probe whether `pidfd_open` is supported on this kernel.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(target_os = "linux")]
 #[inline]
 fn pidfd_available() -> bool {
@@ -564,8 +564,8 @@ fn pidfd_available() -> bool {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Convert a raw `waitpid` status into a `std::process::ExitStatus`.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(target_os = "linux")]
 #[inline]
 fn exit_status_from_raw(raw: i32) -> ExitStatus {

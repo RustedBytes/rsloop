@@ -45,17 +45,17 @@ pub struct Sleep {
 }
 
 impl Sleep {
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     /// Create a new Sleep instance for the provided `duration`.
     /// Deadlines beyond the platform's Instant range saturate at its upper
     /// limit.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     #[inline]
     pub fn new(duration: Duration) -> Self {
         Self::sleep_until(super::deadline_after(Instant::now(), duration))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     /// Create a Sleep with custom behavior for zero-length waits.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     #[inline]
     pub fn new_with_zero_behavior(duration: Duration, zero_behavior: ZeroBehavior) -> Self {
         Self::sleep_until_with_zero_behavior(
@@ -64,10 +64,10 @@ impl Sleep {
         )
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     /// Create a Sleep that completes at the specified absolute `deadline`.
     ///
     /// Preserves the absolute deadline without converting through a duration.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     #[inline]
     pub fn sleep_until(deadline: Instant) -> Self {
         Self::sleep_until_with_zero_behavior(deadline, ZeroBehavior::Immediate)
@@ -89,13 +89,13 @@ impl Sleep {
         }
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     /// Reset the sleep to a new absolute `deadline` (`Instant`).
     ///
     /// If a timer was previously scheduled, cancel it. The timer will be
     /// rescheduled on the next `poll`. This allows reusing a `Sleep` value
     /// to implement steady intervals or dynamic timeout adjustments using
     /// absolute deadlines instead of relative durations.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Sleep"))]
     #[inline]
     pub fn reset(&mut self, deadline: Instant) {
         // Compute relative duration until deadline and update state.

@@ -110,8 +110,8 @@ impl<T> AsyncWrap<T> {
         Poll::Ready(result)
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AsyncWrap"))]
     /// Create a new `AsyncWrap` wrapping the given inner value.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "AsyncWrap"))]
     #[inline]
     pub fn new(inner: T) -> Self {
         Self {

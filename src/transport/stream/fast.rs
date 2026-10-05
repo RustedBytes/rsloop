@@ -65,9 +65,9 @@ fn asyncio_iscoroutine(py: Python<'_>) -> PyResult<&Bound<'_, PyAny>> {
         .bind(py))
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Create a future on `loop_obj`, skipping the Python-level method dispatch
 /// when the loop is a native rsloop instance running on this thread.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn loop_create_future(py: Python<'_>, loop_obj: &Py<PyAny>) -> PyResult<Py<PyAny>> {
     if let Some(future) = crate::bindings::try_fast_create_future(py, loop_obj)? {
         return Ok(future);
@@ -360,8 +360,8 @@ mod read_buffer_tests {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// `bytes.find(needle, from)` over a slice.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[inline]
 fn find_from(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     if from > haystack.len() {
@@ -444,13 +444,13 @@ impl Separators {
         Self::Heap(list)
     }
 
+    /// Order shortest-first, matching `sorted(separator, key=len)`. The sort
+    /// has to stay stable so equal-length separators keep their given
+    /// order.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "Separators")
     )]
-    /// Order shortest-first, matching `sorted(separator, key=len)`. The sort
-    /// has to stay stable so equal-length separators keep their given
-    /// order.
     fn sort_by_length(&mut self) {
         if let Self::Heap(list) = self {
             list.sort_by_key(Vec::len);
@@ -529,11 +529,11 @@ impl UntilReadState {
         })
     }
 
+    /// One iteration of asyncio's `readuntil` scan loop.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "UntilReadState")
     )]
-    /// One iteration of asyncio's `readuntil` scan loop.
     fn scan(&mut self, buffer: &[u8], limit: usize) -> UntilScan {
         let buflen = buffer.len();
         if buflen.saturating_sub(self.offset) < self.min_seplen {
@@ -1146,8 +1146,8 @@ enum UntilOutcome {
     Exception(Py<PyAny>),
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Collect the separator argument, accepting the tuple form Python 3.13+ takes.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn extract_separators(separator: &Bound<'_, PyAny>) -> PyResult<Separators> {
     if let Ok(tuple) = separator.cast::<PyTuple>() {
         let mut list = Vec::with_capacity(tuple.len());
@@ -1751,12 +1751,12 @@ impl PyFastStreamReader {
             .unbind())
     }
 
+    /// `IncompleteReadError` with an undefined expected size, which is what
+    /// `readuntil()` raises: the caller never said how many bytes it wanted.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
-    /// `IncompleteReadError` with an undefined expected size, which is what
-    /// `readuntil()` raises: the caller never said how many bytes it wanted.
     fn incomplete_until_error(py: Python<'_>, partial: Py<PyAny>) -> PyResult<Py<PyAny>> {
         let asyncio = py.import("asyncio")?;
         Ok(asyncio
@@ -1799,13 +1799,13 @@ impl PyFastStreamReader {
         ))
     }
 
+    /// Turn a finished scan into the value or exception the awaitable carries.
+    /// Only called once `UntilScan::is_pending` has ruled out waiting, so
+    /// `NeedMore` here always means EOF arrived first.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
-    /// Turn a finished scan into the value or exception the awaitable carries.
-    /// Only called once `UntilScan::is_pending` has ruled out waiting, so
-    /// `NeedMore` here always means EOF arrived first.
     fn resolve_until_scan(
         &mut self,
         py: Python<'_>,
@@ -2756,7 +2756,6 @@ fn fast_open_connection_result(py: Python<'_>, created: Py<PyAny>) -> PyResult<P
     Ok(output.unbind().into_any())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Returns an awaitable that opens a stream connection.
 ///
 /// With a running [`PyLoop`](crate::PyLoop), the awaitable
@@ -2765,6 +2764,7 @@ fn fast_open_connection_result(py: Python<'_>, created: Py<PyAny>) -> PyResult<P
 /// A running rsloop event loop is required.
 ///
 /// Extra keyword arguments are forwarded to the loop connection factory.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[pyfunction(signature = (host=None, port=None, *, limit=DEFAULT_STREAM_LIMIT, **kwargs))]
 pub fn open_connection(
     py: Python<'_>,
@@ -2794,7 +2794,6 @@ pub fn open_connection(
     .unbind())
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Returns an awaitable that starts a stream server.
 ///
 /// With a running [`PyLoop`](crate::PyLoop), accepted
@@ -2804,6 +2803,7 @@ pub fn open_connection(
 ///
 /// `limit` controls each reader's buffer limit; extra keyword arguments are
 /// forwarded to the loop server factory.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[pyfunction(signature = (client_connected_cb, host=None, port=None, *, limit=DEFAULT_STREAM_LIMIT, **kwargs))]
 pub fn start_server(
     py: Python<'_>,

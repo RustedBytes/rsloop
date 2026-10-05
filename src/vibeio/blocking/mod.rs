@@ -28,11 +28,11 @@ impl fmt::Display for SpawnBlockingError {
 
 impl std::error::Error for SpawnBlockingError {}
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Offload a borrowed operation while retaining ownership through worker
 /// unwind. Cancellation drops the caller's share; a queued/running worker
 /// retains its share until it stops using the buffer. Partial mutations are not
 /// rolled back.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[cfg(any(feature = "fs", feature = "stdio", feature = "process"))]
 pub(crate) async fn with_buffer<B, R>(
     buf: B,
@@ -135,10 +135,10 @@ pub trait BlockingThreadPool: 'static {
     fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>);
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Spawns a blocking task onto a blocking thread pool.
 ///
 /// This function is a convenience wrapper around a blocking thread pool.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 #[inline]
 pub(crate) async fn spawn_blocking<T, F>(
     pool: &dyn BlockingThreadPool,

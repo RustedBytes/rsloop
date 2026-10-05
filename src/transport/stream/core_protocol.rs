@@ -23,10 +23,10 @@ use super::{
 };
 use crate::context::{run_in_context_noargs, run_in_context_onearg};
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Copy raw bytes into a writable C-contiguous export, regardless of its
 /// element format. The export is released before calling buffer_updated, which
 /// is allowed to resize or replace the protocol's buffer.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 fn copy_to_protocol_buffer(buffer: &Bound<'_, PyAny>, source: &[u8]) -> PyResult<usize> {
     pyo3::sync::critical_section::with_critical_section(buffer, || {
         copy_to_protocol_buffer_locked(buffer, source)

@@ -89,11 +89,11 @@ impl ProcessStdioSpecs {
 
 static PIPE_CELL: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Default for an omitted `stdin`/`stdout`/`stderr`: `subprocess.PIPE` (== -1),
 /// matching `CPython`'s loop methods. An explicit `None` arrives as
 /// `Option::None` instead and is honored as "inherit the parent's fd" by
 /// `parse_process_stdio`.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(super) fn default_stdio_pipe() -> Py<PyAny> {
     Python::attach(|py| {
         PIPE_CELL

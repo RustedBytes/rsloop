@@ -48,8 +48,8 @@ pub enum CompletionIoResult {
 #[cfg(any(target_os = "linux", windows, test))]
 struct RetainedCompletionData(Vec<Box<dyn std::any::Any>>);
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Preserve stable payload allocations without building a recursive drop chain.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(target_os = "linux", windows, test))]
 fn retain_completion_data(
     retained: &mut Option<Box<dyn std::any::Any>>,
@@ -107,8 +107,8 @@ mod retained_completion_tests {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Follow provider handles without looping forever on a cyclic fallback chain.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 fn resolve_base_socket_with(
     mut socket: usize,
@@ -211,8 +211,8 @@ mod base_socket_tests {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Encode only errors representable by the driver's negative i32 result.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 fn encode_completion_error(code: u32) -> Option<i32> {
     i32::try_from(code)
@@ -238,8 +238,8 @@ mod completion_encoding_tests {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Reserve Windows INFINITE for an explicitly unbounded wait.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 fn iocp_timeout_ms(timeout: Option<Duration>) -> u32 {
     match timeout {
@@ -267,8 +267,8 @@ mod iocp_timeout_tests {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Decode the driver's negative error representation without signed overflow.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub(crate) fn completion_error(result: i32) -> io::Error {
     match result.checked_neg().filter(|code| *code > 0) {
         Some(code) => io::Error::from_raw_os_error(code),
@@ -353,14 +353,14 @@ impl AnyInterruptor {
 pub trait Driver {
     type Interruptor: Interruptor;
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Flushes the driver's I/O.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn flush(&self) {}
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Returns whether the executor should call `flush` after polling a task
     /// batch.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn should_flush(&self) -> bool {
         true
@@ -376,8 +376,8 @@ pub trait Driver {
         interest: Interest,
     ) -> Result<Token, std::io::Error>;
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Registers an I/O source with the requested mode.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     fn register_handle_with_mode(
         &self,
         handle: &InnerRawHandle,
@@ -397,15 +397,15 @@ pub trait Driver {
     /// Removes an I/O source from the poller.
     fn deregister_handle(&self, handle: &InnerRawHandle) -> Result<(), std::io::Error>;
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Returns whether the driver supports completion-based I/O operations.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn supports_completion(&self) -> bool {
         false
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Submits a completion-based I/O operation.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn submit_completion<O>(&self, _op: &mut O, _waker: Waker) -> CompletionIoResult
     where
@@ -414,8 +414,8 @@ pub trait Driver {
         CompletionIoResult::SubmitErr(unsupported_completion_error())
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Re-registers interest and submits a waker for poll-based I/O.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn submit_poll(
         &self,
@@ -426,15 +426,15 @@ pub trait Driver {
         Err(unsupported_poll_error())
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Obtains the result for a completion-based I/O operation.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn get_completion_result(&self, _token: usize) -> Option<i32> {
         None
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Polls a Linux multishot accept stream.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn poll_multishot_accept(
@@ -448,19 +448,19 @@ pub trait Driver {
         )))
     }
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Sets the waker for a completion-based I/O operation.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn set_completion_waker(&self, _token: usize, _waker: Waker) {}
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Cancels a completion-based I/O operation.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     #[inline]
     fn ignore_completion(&self, _token: usize, _data: Box<dyn std::any::Any>) {}
 
-    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     /// Cancels a Windows completion operation while retaining its owned data
     /// until the completion packet is observed.
+    #[cfg_attr(feature = "hotpath-profile", hotpath::measure(impl_type = "Driver"))]
     #[cfg(windows)]
     #[inline]
     fn cancel_completion(

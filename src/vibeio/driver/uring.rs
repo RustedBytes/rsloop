@@ -235,11 +235,11 @@ impl Drop for UringDriver {
 }
 
 impl UringDriver {
+    /// Stop all submitted work before retained operation storage is released.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
-    /// Stop all submitted work before retained operation storage is released.
     fn quiesce(&mut self) -> io::Result<()> {
         let ring = self.ring.get_mut();
         let state = self.state.get_mut();
@@ -553,11 +553,11 @@ impl UringDriver {
         Ok(())
     }
 
+    /// Drain the completion queue, deferring user callbacks until borrows end.
     #[cfg_attr(
         feature = "hotpath-profile",
         hotpath::measure(impl_type = "UringDriver")
     )]
-    /// Drain the completion queue, deferring user callbacks until borrows end.
     #[inline]
     fn drain_cq(ring: &mut IoUring, state: &mut DriverState) -> CompletionBatch {
         let mut interrupt = false;

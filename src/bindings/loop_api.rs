@@ -101,12 +101,12 @@ impl PyLoop {
     }
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[pyfunction]
 /// Creates a new Python-visible rsloop event loop.
 ///
 /// The returned loop is not installed as the current event loop and does not
 /// start running until Python calls `run_forever()` or `run_until_complete()`.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 pub fn new_event_loop(py: Python<'_>) -> PyResult<Py<PyLoop>> {
     Py::new(py, PyLoop::new())
 }

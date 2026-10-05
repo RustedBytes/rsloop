@@ -11,8 +11,8 @@ const REACTOR: &str = "kqueue";
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 const REACTOR: &str = "mio";
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 /// Return stable diagnostics that help identify the installed native build.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure)]
 #[pyfunction]
 pub(crate) fn build_info(py: Python<'_>) -> PyResult<Py<PyDict>> {
     let info = PyDict::new(py);

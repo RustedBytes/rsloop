@@ -71,9 +71,9 @@ pub(super) fn create_connection<'py>(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Walks the resolved addresses in order, returning the first socket that
 /// connects and reporting the last failure when none do.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 async fn connect_first_reachable_address(
     host: Option<Py<PyAny>>,
     port: Option<Py<PyAny>>,
@@ -114,10 +114,10 @@ async fn connect_first_reachable_address(
     })
 }
 
-#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 /// Wraps a connected socket in a transport and returns the `(transport,
 /// protocol)` pair. The TLS handshake runs on a blocking worker because it can
 /// block on peer I/O.
+#[cfg_attr(feature = "hotpath-profile", hotpath::measure(future = true))]
 async fn finish_client_connection(
     env: &LoopSpawnEnv,
     protocol: &Py<PyAny>,
