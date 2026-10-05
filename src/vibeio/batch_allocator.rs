@@ -265,8 +265,9 @@ mod native {
             assert_eq!(allocator.cached.get().unwrap().ptr, block);
             let zeroed = allocator.allocate_zeroed(layout).unwrap().cast::<u8>();
             assert_eq!(zeroed, block);
-            // SAFETY: both blocks remain live with the respective exact layouts;
-            // allocate_zeroed initialized every byte read below.
+            // SAFETY: both blocks remain live with the respective exact
+            // layouts; allocate_zeroed initialized every byte read
+            // below.
             unsafe {
                 assert!(
                     std::slice::from_raw_parts(zeroed.as_ptr(), 32)
@@ -311,9 +312,10 @@ mod draining {
     #[cfg_attr(feature = "profile", hotpath::measure)]
     pub(crate) fn drain_batch<'a, T>(batch: &'a mut Batch<'_, T>) -> BatchDrain<'a, T> {
         let len = batch.len();
-        // SAFETY: the old len elements are initialized. Setting len to zero transfers
-        // their drop responsibility to the iterator, whose borrow prevents the Vec
-        // from moving/freeing its buffer until the iterator is dropped or forgotten.
+        // SAFETY: the old len elements are initialized. Setting len to zero
+        // transfers their drop responsibility to the iterator, whose
+        // borrow prevents the Vec from moving/freeing its buffer until
+        // the iterator is dropped or forgotten.
         unsafe {
             batch.set_len(0);
             BatchDrain {
@@ -333,8 +335,9 @@ mod draining {
         fn next(&mut self) -> Option<T> {
             let (first, remaining) = std::mem::take(&mut self.remaining).split_first_mut()?;
             self.remaining = remaining;
-            // SAFETY: first is initialized and has been removed from the iterator's
-            // remaining slice. Neither the iterator nor Vec will drop it again.
+            // SAFETY: first is initialized and has been removed from the
+            // iterator's remaining slice. Neither the iterator nor
+            // Vec will drop it again.
             Some(unsafe { std::ptr::read(first) })
         }
 
@@ -355,8 +358,9 @@ mod draining {
             hotpath::measure(impl_type = "<BatchDrain as Drop>")
         )]
         fn drop(&mut self) {
-            // SAFETY: only initialized, unyielded elements remain. Slice drop glue
-            // also drops later elements if one destructor panics.
+            // SAFETY: only initialized, unyielded elements remain. Slice drop
+            // glue also drops later elements if one destructor
+            // panics.
             unsafe { std::ptr::drop_in_place(self.remaining) };
         }
     }

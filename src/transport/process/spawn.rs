@@ -54,10 +54,7 @@ fn open_pipe_mask(has_stdin: bool, has_stdout: bool, has_stderr: bool) -> u8 {
 }
 
 impl ProcessPipes {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ProcessPipes")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ProcessPipes"))]
     pub(super) fn take_from(
         child: &mut Child,
         stdout_override: Option<BoxedProcessReader>,
@@ -80,10 +77,7 @@ impl ProcessPipes {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ProcessPipes")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ProcessPipes"))]
     pub(super) fn open_pipes(&self) -> HashSet<i32> {
         let mask = open_pipe_mask(
             self.stdin.is_some(),

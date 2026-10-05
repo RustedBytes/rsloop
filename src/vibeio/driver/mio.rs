@@ -57,27 +57,18 @@ struct DriverWaker(MioWaker);
 
 #[cfg(not(target_vendor = "apple"))]
 impl DriverWaker {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "DriverWaker")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "DriverWaker"))]
     fn new(registry: &Registry) -> io::Result<Self> {
         MioWaker::new(registry, WAKE_TOKEN).map(Self)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "DriverWaker")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "DriverWaker"))]
     #[inline]
     fn wake(&self) -> io::Result<()> {
         self.0.wake()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "DriverWaker")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "DriverWaker"))]
     #[inline]
     fn acknowledge(&self) {}
 }
@@ -93,10 +84,7 @@ struct DriverWaker {
 
 #[cfg(target_vendor = "apple")]
 impl DriverWaker {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "DriverWaker")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "DriverWaker"))]
     fn new(registry: &Registry) -> io::Result<Self> {
         let (sender, receiver) = UnixDatagram::pair()?;
         sender.set_nonblocking(true)?;
@@ -110,19 +98,13 @@ impl DriverWaker {
         Ok(Self { sender, receiver })
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "DriverWaker")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "DriverWaker"))]
     #[inline]
     fn wake(&self) -> io::Result<()> {
         super::send_wake_notification(|| self.sender.send(&[1]))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "DriverWaker")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "DriverWaker"))]
     fn acknowledge(&self) {
         let mut buffer = [0_u8; 256];
         loop {

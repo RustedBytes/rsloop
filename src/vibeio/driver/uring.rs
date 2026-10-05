@@ -159,10 +159,7 @@ struct CompletionBatch {
 }
 
 impl CompletionBatch {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "CompletionBatch")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CompletionBatch"))]
     fn dispatch(self) {
         // Arbitrary payload destructors and wakers must run outside ring/state
         // borrows; either can reenter the driver or submit another operation.
@@ -177,10 +174,7 @@ impl CompletionBatch {
 }
 
 impl DriverState {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "DriverState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "DriverState"))]
     fn ignore_completion(
         &mut self,
         token: usize,
@@ -188,7 +182,8 @@ impl DriverState {
     ) -> Option<Completion> {
         let Some(completion) = self.completions.get_mut(token) else {
             // Even an unknown token may carry a destructor that reenters the
-            // driver. Return its storage for retirement outside the state borrow.
+            // driver. Return its storage for retirement outside the state
+            // borrow.
             return Some(Completion {
                 waiter: None,
                 completed: None,
@@ -224,7 +219,8 @@ impl Drop for UringDriver {
         if self.quiesce().is_err() {
             // Ring close can defer cancellation. If the kernel cannot confirm
             // quiescence, retain all potentially kernel-visible allocations.
-            // This exceptional-path leak is preferable to freeing live pointers.
+            // This exceptional-path leak is preferable to freeing live
+            // pointers.
             let state = self.state.get_mut();
             std::mem::forget(std::mem::take(&mut state.completions));
             std::mem::forget(std::mem::take(&mut state.registrations));
@@ -236,10 +232,7 @@ impl Drop for UringDriver {
 
 impl UringDriver {
     /// Stop all submitted work before retained operation storage is released.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     fn quiesce(&mut self) -> io::Result<()> {
         let ring = self.ring.get_mut();
         let state = self.state.get_mut();
@@ -281,10 +274,7 @@ impl UringDriver {
         Ok(())
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     fn drain_shutdown_cq(ring: &mut IoUring, state: &mut DriverState) {
         for cqe in ring.completion() {
             let key = cqe.user_data();
@@ -293,7 +283,8 @@ impl UringDriver {
             }
             match Self::decode_key_kind(key) {
                 ACCEPT_KEY_KIND if cqe.result() >= 0 => {
-                    // SAFETY: an unconsumed successful accept CQE owns a fresh fd.
+                    // SAFETY: an unconsumed successful accept CQE owns a fresh
+                    // fd.
                     unsafe { libc::close(cqe.result()) };
                 }
                 COMPLETION_KEY_KIND => {
@@ -306,10 +297,7 @@ impl UringDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     pub(crate) fn new(entries: u32, builder: io_uring::Builder) -> Result<Self, io::Error> {
         // Ring teardown is deferred by the kernel. Rapid runtime churn can
@@ -350,10 +338,7 @@ impl UringDriver {
         Ok(driver)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) -> Option<Waker> {
         if !waiter_slot
@@ -366,19 +351,13 @@ impl UringDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn encode_completion_key(token: usize) -> u64 {
         ((token as u64) << KEY_KIND_BITS) | COMPLETION_KEY_KIND as u64
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn encode_poll_key(token: Token, generation: u32) -> u64 {
         ((u64::from(generation) & 0x3fff_ffff) << 34)
@@ -386,28 +365,19 @@ impl UringDriver {
             | POLL_KEY_KIND as u64
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn decode_token(key: u64) -> Token {
         Token(((key >> KEY_KIND_BITS) & u64::from(u32::MAX)) as usize)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn decode_poll_generation(key: u64) -> u32 {
         (key >> 34) as u32
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn encode_accept_key(token: Token, generation: u32) -> u64 {
         ((u64::from(generation) & 0x3fff_ffff) << 34)
@@ -415,19 +385,13 @@ impl UringDriver {
             | ACCEPT_KEY_KIND as u64
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn decode_key_kind(key: u64) -> u8 {
         (key & KEY_KIND_MASK) as u8
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn interest_to_poll_mask(interest: Interest) -> u32 {
         let mut mask = 0;
@@ -440,10 +404,7 @@ impl UringDriver {
         mask
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn submitter_call_result(result: Result<usize, io::Error>) -> Result<(), io::Error> {
         match result {
@@ -454,10 +415,7 @@ impl UringDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn push_entry(&self, entry: squeue::Entry) -> Result<(), io::Error> {
         let mut ring = self.ring.borrow_mut();
@@ -471,7 +429,8 @@ impl UringDriver {
         // state or an operation whose storage is retained through completion.
         // Dropped operations transfer their kernel-visible allocations into
         // completion retention; shutdown quiesces or retains them on failure.
-        // push copies the entry, so the local SQE itself need not outlive this call.
+        // push copies the entry, so the local SQE itself need not outlive this
+        // call.
         unsafe {
             sq.push(&entry)
                 .map_err(|_| io::Error::other("io_uring submission queue is full"))?;
@@ -482,10 +441,7 @@ impl UringDriver {
         Ok(())
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn push_poll_add(
         &self,
@@ -501,10 +457,7 @@ impl UringDriver {
         self.push_entry(entry)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn collect_completions(
         &self,
@@ -554,10 +507,7 @@ impl UringDriver {
     }
 
     /// Drain the completion queue, deferring user callbacks until borrows end.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn drain_cq(ring: &mut IoUring, state: &mut DriverState) -> CompletionBatch {
         let mut interrupt = false;
@@ -611,8 +561,9 @@ impl UringDriver {
                 if key_kind == ACCEPT_KEY_KIND {
                     let generation = Self::decode_poll_generation(key);
                     let mut accepted = Some(if result >= 0 {
-                        // SAFETY: a successful accept CQE transfers ownership of
-                        // one new descriptor. Queue ownership or this local's
+                        // SAFETY: a successful accept CQE transfers ownership
+                        // of one new descriptor. Queue
+                        // ownership or this local's
                         // drop closes it unless it is returned to a caller.
                         Ok(unsafe { OwnedFd::from_raw_fd(result) })
                     } else {
@@ -672,10 +623,7 @@ impl UringDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UringDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     #[inline]
     fn submit_interrupt(&self) {
         use io_uring::{opcode, types};
@@ -690,7 +638,8 @@ impl UringDriver {
         .user_data(u64::MAX);
 
         // We use push_entry here. It handles submission if full.
-        // We panic if it fails because we cannot recover (we won't be able to wake up).
+        // We panic if it fails because we cannot recover (we won't be able to
+        // wake up).
         if let Err(err) = self.push_entry(entry) {
             panic!("io_uring: failed to submit interrupt task: {}", err);
         }
@@ -719,7 +668,8 @@ mod memory_fallback_tests {
         };
         assert!(driver.ring.get_mut().params().is_feature_nodrop());
         // Three open results exceed this deliberately tiny CQ without consuming
-        // completions. The initial eventfd read may remain internally poll-armed.
+        // completions. The initial eventfd read may remain internally
+        // poll-armed.
         driver.ring.get_mut().submit().unwrap();
         let mut tokens = Vec::new();
         for _ in 0..3 {
@@ -841,7 +791,8 @@ mod memory_fallback_tests {
         drop(owner);
         interruptor.interrupt();
         let mut count = 0u64;
-        // SAFETY: in_flight owns the fd and count is an eight-byte writable value.
+        // SAFETY: in_flight owns the fd and count is an eight-byte writable
+        // value.
         let read = unsafe {
             libc::read(
                 in_flight.as_raw_fd(),
@@ -1149,8 +1100,8 @@ impl Driver for UringDriver {
             Err(err) => return CompletionIoResult::SubmitErr(err),
         };
 
-        // Push the SQE into the submission queue. If this fails, undo the inflight
-        // flag and clear waiters on the registration.
+        // Push the SQE into the submission queue. If this fails, undo the
+        // inflight flag and clear waiters on the registration.
         if let Err(err) = self.push_entry(entry) {
             return CompletionIoResult::SubmitErr(err);
         }

@@ -354,10 +354,7 @@ impl PollTcpStream {
     }
 
     /// Creates a new `PollTcpStream` from a standard library `TcpStream`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn from_std(inner: std::net::TcpStream) -> Result<Self, io::Error> {
         Ok(Self {
@@ -368,10 +365,7 @@ impl PollTcpStream {
     }
 
     /// Creates a poll stream that shares ownership of a standard TCP stream.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn from_shared(inner: Arc<std::net::TcpStream>) -> Result<Self, io::Error> {
         Ok(Self {
@@ -382,20 +376,14 @@ impl PollTcpStream {
     }
 
     /// Converts this poll stream into an adaptive `TcpStream`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn into_adaptive(self) -> TcpStream {
         self.stream
     }
 
     /// Converts this poll stream into a completion-based `TcpStream`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn into_completion(self) -> Result<TcpStream, io::Error> {
         let mut stream = self.stream;
@@ -407,50 +395,35 @@ impl PollTcpStream {
     }
 
     /// Returns the local address of this connection.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.stream.local_addr()
     }
 
     /// Returns the remote address of this connection.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.stream.peer_addr()
     }
 
     /// Returns the current state of the TCP_NODELAY option for this socket.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn nodelay(&self) -> Result<bool, io::Error> {
         self.stream.nodelay()
     }
 
     /// Sets the value of the TCP_NODELAY option for this socket.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn set_nodelay(&self, nodelay: bool) -> Result<(), io::Error> {
         self.stream.set_nodelay(nodelay)
     }
 
     /// Shuts down the connection.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn shutdown(&self, how: Shutdown) -> Result<(), io::Error> {
         self.stream.shutdown(how)
@@ -479,10 +452,7 @@ impl PollTcpStream {
 
     /// Tries to perform an I/O operation on the socket, returning an error if
     /// it is not ready.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn try_io_readable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -493,10 +463,7 @@ impl PollTcpStream {
 
     /// Tries to perform an I/O operation on the socket, returning an error if
     /// it is not ready.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollTcpStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollTcpStream"))]
     #[inline]
     pub fn try_io_writable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -762,7 +729,8 @@ impl TokioAsyncWrite for PollTcpStream {
         let this = self.get_mut();
         // SAFETY: the source remains initialized and borrowed for this call.
         // WriteOp only reads it; poll_op_poll rejects completion submission and
-        // the local operation cannot retain the pointer after returning Pending.
+        // the local operation cannot retain the pointer after returning
+        // Pending.
         let buf = unsafe { IoBufTemporaryPoll::new(buf.as_ptr() as *mut u8, buf.len()) };
         let mut op = WriteOp::new(&this.stream.handle, buf);
         this.stream.handle.poll_op_poll(cx, &mut op)
@@ -783,8 +751,9 @@ impl TokioAsyncWrite for PollTcpStream {
         }
         let this = self.get_mut();
         // SAFETY: these initialized IoSlice regions remain borrowed throughout
-        // the synchronous WritevOp poll. Metadata is copied, and the local op is
-        // dropped before this call returns; no completion I/O can retain it.
+        // the synchronous WritevOp poll. Metadata is copied, and the local op
+        // is dropped before this call returns; no completion I/O can
+        // retain it.
         let bufs = unsafe { IoVectoredBufTemporaryPoll::new(bufs) };
         let mut op = WritevOp::new(&this.stream.handle, bufs);
         this.stream.handle.poll_op_poll(cx, &mut op)
@@ -907,7 +876,8 @@ mod socket_creation_tests {
         let socket = new_socket("127.0.0.1:0".parse().unwrap()).unwrap().0;
         #[cfg(unix)]
         {
-            // SAFETY: socket owns the live descriptor; F_GETFD has no pointer arguments.
+            // SAFETY: socket owns the live descriptor; F_GETFD has no pointer
+            // arguments.
             let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFD) };
             assert_ne!(flags, -1);
             assert_ne!(flags & libc::FD_CLOEXEC, 0);

@@ -72,7 +72,8 @@ fn socket_recvfrom(
         )
     };
     if recv_result == SOCKET_ERROR {
-        // SAFETY: retrieves the calling thread's Winsock error; takes no pointers.
+        // SAFETY: retrieves the calling thread's Winsock error; takes no
+        // pointers.
         return Err(io::Error::from_raw_os_error(unsafe {
             WinSock::WSAGetLastError()
         }));
@@ -109,10 +110,7 @@ pub struct RecvfromOp<'a, B: IoBufMut> {
 }
 
 impl<'a, B: IoBufMut> RecvfromOp<'a, B> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RecvfromOp")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RecvfromOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle, buf: B) -> Self {
         Self {
@@ -127,10 +125,7 @@ impl<'a, B: IoBufMut> RecvfromOp<'a, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RecvfromOp")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RecvfromOp"))]
     #[inline]
     pub fn new_peek(handle: &'a InnerRawHandle, buf: B) -> Self {
         Self {
@@ -145,10 +140,7 @@ impl<'a, B: IoBufMut> RecvfromOp<'a, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RecvfromOp")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RecvfromOp"))]
     #[inline]
     pub fn take_bufs(mut self) -> B {
         assert!(
@@ -181,7 +173,8 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
             let mut addr_len = std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
             // SAFETY: IoBufMut provides exclusive writable capacity, and addr
             // and addr_len are live output storage of the supplied sizes. This
-            // synchronous call retains no pointers and does not request MSG_TRUNC.
+            // synchronous call retains no pointers and does not request
+            // MSG_TRUNC.
             let read = unsafe {
                 libc::recvfrom(
                     self.handle.handle,
@@ -279,7 +272,8 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
                 });
             let buf = self.buf.as_mut().unwrap().as_mut();
             // SAFETY: the successful CQE acknowledges initialization of this
-            // many bytes in the retained stable buffer. No MSG_TRUNC was requested.
+            // many bytes in the retained stable buffer. No MSG_TRUNC was
+            // requested.
             unsafe { buf.set_buf_init(read) };
             Poll::Ready(address.map(|address| (read, address)))
         }
@@ -308,7 +302,8 @@ impl<B: IoBufMut> Op for RecvfromOp<'_, B> {
                 });
             let buf = self.buf.as_mut().unwrap().as_mut();
             // SAFETY: the successful overlapped completion reports initialized
-            // bytes within the WSABUF capacity retained through its acknowledgement.
+            // bytes within the WSABUF capacity retained through its
+            // acknowledgement.
             unsafe { buf.set_buf_init(read) };
             Poll::Ready(address.map(|address| (read, address)))
         }

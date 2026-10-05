@@ -849,7 +849,8 @@ mod verification {
                     kani::cover!(signal == WriteBufferSignal::Resume);
                 }
                 _ => {
-                    // Connection loss clears accounting without invoking resume_writing.
+                    // Connection loss clears accounting without invoking
+                    // resume_writing.
                     let signal = clear_write_buffer_state(&mut state, false);
                     assert_eq!(signal, WriteBufferSignal::None);
                     assert_eq!(state.size, 0);

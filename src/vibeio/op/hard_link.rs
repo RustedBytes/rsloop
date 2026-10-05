@@ -18,10 +18,7 @@ pub struct HardLinkOp {
 }
 
 impl HardLinkOp {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "HardLinkOp")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "HardLinkOp"))]
     #[inline]
     pub fn new(driver: Rc<AnyDriver>, old_path: CString, new_path: CString) -> Self {
         Self {
@@ -118,8 +115,9 @@ impl Drop for HardLinkOp {
     )]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
-            // Paths and result storage remain owned until the kernel acknowledges
-            // completion, even if cancellation runs outside the submitting runtime.
+            // Paths and result storage remain owned until the kernel
+            // acknowledges completion, even if cancellation runs
+            // outside the submitting runtime.
             self.driver.ignore_completion(
                 token,
                 Box::new((self.old_path.take(), self.new_path.take())),

@@ -48,10 +48,7 @@ impl StatxOp {
 impl Op for StatxOp {
     type Output = libc::statx;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<StatxOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<StatxOp as Op>"))]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -90,18 +87,16 @@ impl Op for StatxOp {
             Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)))
         } else {
             let statxbuf = self.statxbuf.take().expect("statxbuf is None");
-            // SAFETY: the successful statx completion initialized this submitted
-            // allocation. The operation retained its stable box until the CQE;
-            // errors return above without reading it and the token is cleared.
+            // SAFETY: the successful statx completion initialized this
+            // submitted allocation. The operation retained its
+            // stable box until the CQE; errors return above without
+            // reading it and the token is cleared.
             let st = unsafe { *statxbuf.assume_init() };
             Poll::Ready(Ok(st))
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<StatxOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<StatxOp as Op>"))]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -135,14 +130,12 @@ impl Op for StatxOp {
 }
 
 impl Drop for StatxOp {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<StatxOp as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<StatxOp as Drop>"))]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
-            // Paths and result storage remain owned until the kernel acknowledges
-            // completion, even if cancellation runs outside the submitting runtime.
+            // Paths and result storage remain owned until the kernel
+            // acknowledges completion, even if cancellation runs
+            // outside the submitting runtime.
             self.driver.ignore_completion(
                 token,
                 Box::new((self.pathname.take(), self.statxbuf.take())),

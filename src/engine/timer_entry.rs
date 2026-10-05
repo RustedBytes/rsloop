@@ -38,26 +38,17 @@ pub(super) struct TimerQueue {
 }
 
 impl TimerQueue {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TimerQueue")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TimerQueue"))]
     pub(super) fn new() -> Self {
         Self::default()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TimerQueue")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TimerQueue"))]
     pub(super) fn is_empty(&self) -> bool {
         self.ordered.is_empty() && self.unordered.is_empty()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TimerQueue")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TimerQueue"))]
     pub(super) fn push(&mut self, entry: TimerEntry, immediate: bool) {
         // TimerEntry's comparison is reversed for the min-deadline heap.
         // Remote scheduling/merging can reorder even zero-delay timers.
@@ -68,10 +59,7 @@ impl TimerQueue {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TimerQueue")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TimerQueue"))]
     pub(super) fn peek(&self) -> Option<&TimerEntry> {
         match (self.ordered.front(), self.unordered.peek()) {
             (Some(front), Some(top)) if top > front => Some(top),
@@ -80,10 +68,7 @@ impl TimerQueue {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TimerQueue")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TimerQueue"))]
     pub(super) fn pop(&mut self) -> Option<TimerEntry> {
         match (self.ordered.front(), self.unordered.peek()) {
             (Some(front), Some(top)) if top > front => self.unordered.pop(),
@@ -92,18 +77,12 @@ impl TimerQueue {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TimerQueue")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TimerQueue"))]
     pub(super) fn append_heap(&mut self, other: &mut BinaryHeap<TimerEntry>) {
         self.unordered.append(other);
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TimerQueue")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TimerQueue"))]
     pub(super) fn drain_into(&mut self, other: &mut BinaryHeap<TimerEntry>) {
         other.append(&mut self.unordered);
         other.extend(self.ordered.drain(..));

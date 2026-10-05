@@ -331,10 +331,7 @@ pub enum AnyInterruptor {
 }
 
 impl AnyInterruptor {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "AnyInterruptor")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyInterruptor"))]
     pub(crate) fn interrupt(&self) {
         match self {
             AnyInterruptor::Mock(interruptor) => interruptor.interrupt(),

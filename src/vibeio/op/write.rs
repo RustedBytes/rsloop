@@ -102,10 +102,7 @@ impl<'a, B: IoBuf> WriteOp<'a, B> {
 impl<B: IoBuf> Op for WriteOp<'_, B> {
     type Output = usize;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WriteOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WriteOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -118,7 +115,8 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
         #[cfg(unix)]
         let result = {
             // SAFETY: the borrowed descriptor is live and IoBuf owns the
-            // initialized prefix. The synchronous call does not retain pointers.
+            // initialized prefix. The synchronous call does not retain
+            // pointers.
             let written = unsafe {
                 libc::write(
                     self.handle.handle,
@@ -145,10 +143,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
         poll_result_or_wait(result, self.handle, cx, driver, Interest::WRITABLE)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WriteOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WriteOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -186,10 +181,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
         Poll::Ready(Ok(result as usize))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WriteOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WriteOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -211,8 +203,8 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
 
                 // SAFETY: Winsock captures WSABUF metadata before returning.
                 // CompletionBuffer retains the initialized payload, including
-                // on cancellation; the driver retains OVERLAPPED until completion.
-                // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsasend
+                // on cancellation; the driver retains OVERLAPPED until
+                // completion. https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsasend
                 let send_result = unsafe {
                     WinSock::WSASend(
                         socket as SOCKET,
@@ -229,7 +221,8 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
                     return Ok(());
                 }
 
-                // SAFETY: reads the calling thread's Winsock error, no pointers.
+                // SAFETY: reads the calling thread's Winsock error, no
+                // pointers.
                 let err = unsafe { WinSock::WSAGetLastError() };
                 if err == WSA_IO_PENDING {
                     Ok(())
@@ -248,7 +241,8 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
 
                 // SAFETY: the borrowed file handle and initialized payload are
                 // live; write_len was checked. CompletionBuffer and the driver
-                // retain payload and OVERLAPPED through completion/cancellation.
+                // retain payload and OVERLAPPED through
+                // completion/cancellation.
                 let write_result = unsafe {
                     WriteFile(
                         handle as HANDLE,
@@ -273,10 +267,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WriteOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WriteOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -300,10 +291,7 @@ impl<B: IoBuf> Op for WriteOp<'_, B> {
 }
 
 impl<B: IoBuf> Drop for WriteOp<'_, B> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WriteOp as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WriteOp as Drop>"))]
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {

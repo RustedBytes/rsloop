@@ -23,6 +23,3 @@ group_imports = "StdExternalCrate"
 # Tidies up structures and parameters
 use_field_init_shorthand = true
 condense_wildcard_suffixes = true
-
-# Upgrades standard internal formatting strategies
-version = "Two"

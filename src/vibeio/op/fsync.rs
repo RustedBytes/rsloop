@@ -30,10 +30,7 @@ impl<'a> FsyncOp<'a> {
 impl Op for FsyncOp<'_> {
     type Output = ();
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<FsyncOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<FsyncOp as Op>"))]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -69,10 +66,7 @@ impl Op for FsyncOp<'_> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<FsyncOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<FsyncOp as Op>"))]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -91,10 +85,7 @@ impl Op for FsyncOp<'_> {
 }
 
 impl Drop for FsyncOp<'_> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<FsyncOp as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<FsyncOp as Drop>"))]
     #[inline]
     fn drop(&mut self) {
         if let Some(completion_token) = self.completion_token {

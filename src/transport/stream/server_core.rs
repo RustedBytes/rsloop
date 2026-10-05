@@ -62,10 +62,7 @@ fn close_server_flags(closed: &mut bool, serving: &mut bool) -> bool {
 }
 
 impl ServerCore {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     pub(super) fn close_python_sockets(&self) {
         let _ = Python::try_attach(|py| -> PyResult<()> {
             for socket in &self.sockets {
@@ -75,10 +72,7 @@ impl ServerCore {
         });
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     pub(crate) fn report_error(&self, err: PyErr, message: &str) {
         let _ = Python::try_attach(|py| -> PyResult<()> {
             let context = PyDict::new(py);
@@ -92,10 +86,7 @@ impl ServerCore {
         });
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     pub(super) fn create_protocol_with_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         ensure_running_loop(py, &self.loop_obj)?;
         let callback = self.protocol_factory.bind(py).clone().unbind();
@@ -103,56 +94,38 @@ impl ServerCore {
         run_in_context(py, &self.context, self.context_needs_run, &callback, &args)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     #[inline]
     pub(super) fn locals(&self, py: Python<'_>) -> PyResult<TaskLocals> {
         task_locals_for_loop(py, &self.loop_obj)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     #[inline]
     pub(super) fn is_closed(&self) -> bool {
         self.state.lock().expect("poisoned server state").closed
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     pub(super) fn is_serving(&self) -> bool {
         let state = self.state.lock().expect("poisoned server state");
         state.serving && !state.closed
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     #[inline]
     pub(super) fn connection_opened(&self) {
         self.active_connections.fetch_add(1, Ordering::SeqCst);
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     #[inline]
     pub(super) fn connection_lost(&self) {
         self.active_connections.fetch_sub(1, Ordering::SeqCst);
         self.closed_notify.notify_all();
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     pub(super) fn reserve_tls_handshake(self: &Arc<Self>) -> Option<PendingTlsHandshake> {
         if self.is_closed() {
             return None;
@@ -175,10 +148,7 @@ impl ServerCore {
         })
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     pub(super) fn close(&self) {
         {
             let mut state = self.state.lock().expect("poisoned server state");
@@ -191,10 +161,11 @@ impl ServerCore {
             state.listeners.clear();
         }
 
-        // Blocking TLS accept workers are woken by connecting to their listening
-        // address.  Keep the exposed Python socket alive until after that wake:
-        // on Windows duplicated sockets share listener state, so closing the
-        // Python handle first makes the wake connect pay the TCP failure timeout.
+        // Blocking TLS accept workers are woken by connecting to their
+        // listening address.  Keep the exposed Python socket alive
+        // until after that wake: on Windows duplicated sockets share
+        // listener state, so closing the Python handle first makes the
+        // wake connect pay the TCP failure timeout.
         for task in self
             .accept_tasks
             .lock()
@@ -211,11 +182,12 @@ impl ServerCore {
         {
             // The accept task owns its listener, so failing to cancel it leaks
             // that descriptor for as long as the loop lives. It may sit in
-            // either of two registries -- the loop thread's `IO_TASKS` if it was
-            // spawned from the loop thread, or the runtime thread's dispatcher
-            // map if it went through `StartServerAccept` -- and those are
-            // thread-locals of different threads. `spawn_accept_tasks` picks
-            // between them by where it happens to run, and `create_server`
+            // either of two registries -- the loop thread's `IO_TASKS` if it
+            // was spawned from the loop thread, or the runtime
+            // thread's dispatcher map if it went through
+            // `StartServerAccept` -- and those are thread-locals of
+            // different threads. `spawn_accept_tasks` picks between
+            // them by where it happens to run, and `create_server`
             // runs its body on an executor thread while `close()` is called
             // from Python on the loop thread, so the two decisions routinely
             // disagree. Try the local registry, then fall back to the command
@@ -243,10 +215,7 @@ impl ServerCore {
         self.closed_notify.notify_all();
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ServerCore")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ServerCore"))]
     pub fn spawn_accept_tasks(self: &Arc<Self>) {
         let listeners = {
             let mut state = self.state.lock().expect("poisoned server state");
@@ -323,8 +292,8 @@ impl ServerCore {
             let task_guard = ServerAcceptTaskGuard::new(&server);
             // On the loop thread, host the accept loop directly on the loop's
             // own runtime so accepted connections are delivered without a
-            // cross-thread hop. Off-thread callers fall back to the transitional
-            // runtime-thread command path.
+            // cross-thread hop. Off-thread callers fall back to the
+            // transitional runtime-thread command path.
             if self.loop_core.on_runtime_thread() {
                 self.loop_core
                     .spawn_io_tracked(fd, run_server_accept_task(server, listener, task_guard));

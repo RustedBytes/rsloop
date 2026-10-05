@@ -100,10 +100,7 @@ impl<'a, B: IoBuf> SendOp<'a, B> {
 impl<B: IoBuf> Op for SendOp<'_, B> {
     type Output = usize;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SendOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SendOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -115,8 +112,9 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
 
         #[cfg(unix)]
         let result = {
-            // SAFETY: the borrowed socket is live and IoBuf owns the initialized
-            // prefix for this synchronous send. The kernel retains no pointer.
+            // SAFETY: the borrowed socket is live and IoBuf owns the
+            // initialized prefix for this synchronous send. The
+            // kernel retains no pointer.
             let written = unsafe {
                 libc::send(
                     self.handle.handle,
@@ -144,10 +142,7 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
         poll_result_or_wait(result, self.handle, cx, driver, Interest::WRITABLE)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SendOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SendOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -183,10 +178,7 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
         Poll::Ready(Ok(written))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SendOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SendOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -213,9 +205,9 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
 
         // SAFETY: Winsock captures WSABUF metadata before returning, allowing
         // stack descriptors. The payload remains owned by CompletionBuffer and
-        // is retained on cancellation; the driver owns the live OVERLAPPED until
-        // completion acknowledgement. Neither payload nor OVERLAPPED is local.
-        // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsasend
+        // is retained on cancellation; the driver owns the live OVERLAPPED
+        // until completion acknowledgement. Neither payload nor
+        // OVERLAPPED is local. https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsasend
         let send_result = unsafe {
             WinSock::WSASend(
                 socket as SOCKET,
@@ -241,10 +233,7 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SendOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SendOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -268,10 +257,7 @@ impl<B: IoBuf> Op for SendOp<'_, B> {
 }
 
 impl<B: IoBuf> Drop for SendOp<'_, B> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SendOp as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SendOp as Drop>"))]
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {

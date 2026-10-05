@@ -86,10 +86,7 @@ pub enum ReaderTarget {
 }
 
 impl ReaderTarget {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReaderTarget")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReaderTarget"))]
     pub(super) fn fd(&self) -> fd_ops::RawFd {
         match self {
             Self::File(file) => file_raw_fd(file),
@@ -99,19 +96,13 @@ impl ReaderTarget {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReaderTarget")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReaderTarget"))]
     #[cfg(windows)]
     pub(super) fn pollable(&self) -> bool {
         !matches!(self, Self::File(_))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReaderTarget")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReaderTarget"))]
     #[cfg(not(windows))]
     pub(super) fn pollable(&self) -> bool {
         true
@@ -153,10 +144,7 @@ pub(super) enum LazyWriterTarget {
 }
 
 impl LazyWriterTarget {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "LazyWriterTarget")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LazyWriterTarget"))]
     pub(super) fn materialize(self) -> PyResult<WriterTarget> {
         match self {
             Self::Tcp(fd) => duplicate_configured_tcp_stream(fd).map(WriterTarget::Tcp),
@@ -167,10 +155,7 @@ impl LazyWriterTarget {
 }
 
 impl WriterTarget {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "WriterTarget")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriterTarget"))]
     pub(super) fn fd(&self) -> Option<fd_ops::RawFd> {
         match self {
             Self::File(file) => Some(file_raw_fd(file)),
@@ -181,28 +166,19 @@ impl WriterTarget {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "WriterTarget")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriterTarget"))]
     #[cfg(windows)]
     pub(super) fn pollable(&self) -> bool {
         !matches!(self, Self::File(_))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "WriterTarget")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriterTarget"))]
     #[cfg(not(windows))]
     pub(super) fn pollable(&self) -> bool {
         true
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "WriterTarget")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriterTarget"))]
     pub(super) fn shutdown_write(&self) -> io::Result<()> {
         match self {
             Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Write),
@@ -212,10 +188,7 @@ impl WriterTarget {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "WriterTarget")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriterTarget"))]
     pub(super) fn shutdown_close(&self) -> io::Result<()> {
         match self {
             Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Both),
@@ -233,10 +206,7 @@ pub(super) enum StreamKind {
 }
 
 impl StreamKind {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "StreamKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "StreamKind"))]
     pub(super) fn fd(&self) -> fd_ops::RawFd {
         match self {
             Self::Tcp(stream) => tcp_stream_raw_fd(stream),
@@ -245,28 +215,19 @@ impl StreamKind {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "StreamKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "StreamKind"))]
     #[cfg(windows)]
     pub(super) fn pollable(&self) -> bool {
         true
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "StreamKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "StreamKind"))]
     #[cfg(not(windows))]
     pub(super) fn pollable(&self) -> bool {
         true
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "StreamKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "StreamKind"))]
     pub(super) fn shutdown_close(&self) -> io::Result<()> {
         match self {
             Self::Tcp(stream) => shutdown_tcp_stream(stream, Shutdown::Both),

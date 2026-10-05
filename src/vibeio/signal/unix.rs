@@ -160,17 +160,15 @@ impl PendingSignals {
 
     fn notify(&self, fd: RawFd, signum: libc::c_int) {
         if let Some(slot) = self.0.get(signum as usize) {
-            // Publish before writing. If the pipe is full, a queued wake already
-            // ensures the dispatcher will scan this pending notification.
+            // Publish before writing. If the pipe is full, a queued wake
+            // already ensures the dispatcher will scan this pending
+            // notification.
             slot.store(true, Ordering::SeqCst);
             write_signal_notification(fd, signum);
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PendingSignals")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PendingSignals"))]
     fn take(&self, signum: usize) -> bool {
         self.0[signum].swap(false, Ordering::SeqCst)
     }
@@ -235,8 +233,9 @@ impl Signal {
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Signal"))]
     fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // Serialize checking the counter and registering with dispatcher wakeup.
-        // Each listener owns one slot so its drop can release its waker.
+        // Serialize checking the counter and registering with dispatcher
+        // wakeup. Each listener owns one slot so its drop can release
+        // its waker.
         let mut replacement = None;
         loop {
             let mut wakers = self.state.wakers.lock().unwrap();
@@ -261,9 +260,10 @@ impl Signal {
                 drop(retired);
                 return Poll::Pending;
             }
-            // RawWaker clone callbacks are user code and may reenter this state.
-            // Recheck the counter after reacquiring the lock: a signal may arrive
-            // while cloning, before this listener has installed its new waker.
+            // RawWaker clone callbacks are user code and may reenter this
+            // state. Recheck the counter after reacquiring the
+            // lock: a signal may arrive while cloning, before this
+            // listener has installed its new waker.
             drop(wakers);
             replacement = Some(cx.waker().clone());
         }
@@ -271,10 +271,7 @@ impl Signal {
 }
 
 impl Drop for Signal {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Signal as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Signal as Drop>"))]
     fn drop(&mut self) {
         // Synchronously retire this slot under the dispatcher lock. Deferring
         // removal could retain a cancelled task's waker indefinitely. User
@@ -316,10 +313,7 @@ impl CtrlC {
 impl Future for CtrlC {
     type Output = io::Result<()>;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<CtrlC as Future>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<CtrlC as Future>"))]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         this.signal.poll_recv(cx)
@@ -437,7 +431,8 @@ fn dispatch_loop(registry: Arc<Registry>) {
     let mut buf = [0u8; 128];
     loop {
         // SAFETY: the registry owns read_fd and buf is writable for buf.len().
-        // Only this dedicated thread blocks; the handler's write end is nonblocking.
+        // Only this dedicated thread blocks; the handler's write end is
+        // nonblocking.
         let n = unsafe { libc::read(read_fd, buf.as_mut_ptr().cast::<libc::c_void>(), buf.len()) };
         if n == 0 {
             return;
@@ -451,7 +446,8 @@ fn dispatch_loop(registry: Arc<Registry>) {
         }
 
         // Pipe data is only a wakeup; authoritative state lives in atomics.
-        // Repeated occurrences may coalesce, as they do for standard Unix signals.
+        // Repeated occurrences may coalesce, as they do for standard Unix
+        // signals.
         for signum in 1..SIGNAL_SLOTS {
             if PENDING_SIGNALS.take(signum) {
                 dispatch_signal(&registry, signum as libc::c_int);
@@ -497,8 +493,9 @@ fn write_signal_notification(fd: RawFd, signum: libc::c_int) {
     let saved_errno = errno::errno();
     let bytes = signum.to_ne_bytes();
     loop {
-        // SAFETY: bytes is initialized for its full length. write is async-signal-safe;
-        // the registry owns the nonblocking descriptor for the process lifetime.
+        // SAFETY: bytes is initialized for its full length. write is
+        // async-signal-safe; the registry owns the nonblocking
+        // descriptor for the process lifetime.
         let result = unsafe { libc::write(fd, bytes.as_ptr().cast::<libc::c_void>(), bytes.len()) };
         if result >= 0 || errno::errno().0 != libc::EINTR {
             break;
@@ -521,9 +518,10 @@ fn install_handler(signum: libc::c_int) -> io::Result<libc::sigaction> {
 
     // SAFETY: sigaction admits zero initialization; the OS fills this output.
     let mut prev: libc::sigaction = unsafe { std::mem::zeroed() };
-    // SAFETY: action contains our process-lifetime C ABI handler and initialized
-    // mask. Both structures are valid for the call; invalid signal numbers are
-    // reported by the OS rather than used as memory addresses.
+    // SAFETY: action contains our process-lifetime C ABI handler and
+    // initialized mask. Both structures are valid for the call; invalid
+    // signal numbers are reported by the OS rather than used as memory
+    // addresses.
     let rc = unsafe { libc::sigaction(signum, &action, &mut prev) };
     if rc == -1 {
         return Err(io::Error::last_os_error());
@@ -829,7 +827,8 @@ mod tests {
     ) -> io::Result<()> {
         let pid = std::process::id() as libc::pid_t;
         crate::vibeio::test_support::notify_after_pending(future, move || {
-            // SAFETY: the listener is installed in this isolated, live test process.
+            // SAFETY: the listener is installed in this isolated, live test
+            // process.
             assert_eq!(unsafe { libc::kill(pid, signum) }, 0);
         })
         .await

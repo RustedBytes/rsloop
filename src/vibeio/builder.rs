@@ -20,8 +20,9 @@ fn ensure_rsloop_platform() -> Result<(), std::io::Error> {
     let name = c"kern.osproductversion";
     let mut buffer = [0_u8; 64];
     let mut length = buffer.len();
-    // SAFETY: the name is NUL-terminated, buffer/length are exclusively borrowed
-    // writable storage, and null newp with zero length requests only a read.
+    // SAFETY: the name is NUL-terminated, buffer/length are exclusively
+    // borrowed writable storage, and null newp with zero length requests
+    // only a read.
     if unsafe {
         libc::sysctlbyname(
             name.as_ptr(),
@@ -136,10 +137,7 @@ pub enum DriverKind {
 
 impl DriverKind {
     /// Creates a new runtime I/O driver from this kind.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "DriverKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "DriverKind"))]
     #[inline]
     pub(crate) fn into_driver(self) -> Result<AnyDriver, std::io::Error> {
         match self {
@@ -178,10 +176,7 @@ impl RuntimeBuilder {
     ///
     /// By default, the builder will select the best available driver for the
     /// platform.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeBuilder")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeBuilder"))]
     pub fn new() -> Self {
         Self {
             driver_kind: None,
@@ -198,10 +193,7 @@ impl RuntimeBuilder {
     /// batches so Python callbacks, kernel completions, and deadlines cannot
     /// starve one another. It is intentionally an explicit opt-in because the
     /// vendored crate is also built by its own tests and examples.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeBuilder")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeBuilder"))]
     #[inline]
     pub fn rsloop_profile(mut self) -> Self {
         self.rsloop_profile = true;
@@ -209,10 +201,7 @@ impl RuntimeBuilder {
     }
 
     /// Sets the I/O driver for the runtime.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeBuilder")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeBuilder"))]
     pub fn driver(mut self, driver_kind: DriverKind) -> Self {
         self.driver_kind = Some(driver_kind);
         self
@@ -221,10 +210,7 @@ impl RuntimeBuilder {
     /// Enables or disables the timer for the runtime.
     ///
     /// By default, the timer is disabled.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeBuilder")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeBuilder"))]
     pub fn enable_timer(mut self, enable: bool) -> Self {
         self.enable_timer = enable;
         self
@@ -236,20 +222,14 @@ impl RuntimeBuilder {
     /// When disabled (the default), filesystem path operations use the shared
     /// `async-std` blocking pool. They never run blocking filesystem calls on
     /// the async executor thread.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeBuilder")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeBuilder"))]
     pub fn enable_fs_offload(mut self, enable: bool) -> Self {
         self.enable_fs_offload = enable;
         self
     }
 
     /// Sets the blocking thread pool for the runtime.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeBuilder")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeBuilder"))]
     pub fn blocking_pool(mut self, blocking_pool: Box<dyn BlockingThreadPool>) -> Self {
         self.blocking_pool = Some(blocking_pool);
         self
@@ -257,10 +237,7 @@ impl RuntimeBuilder {
 
     /// Sets the default blocking thread pool for the runtime with specified
     /// maximum number of threads.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeBuilder")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeBuilder"))]
     #[cfg(feature = "blocking-default")]
     pub fn default_blocking_pool(mut self, max_threads: usize) -> Self {
         self.blocking_pool = Some(Box::new(DefaultBlockingThreadPool::with_max_threads(
@@ -273,10 +250,7 @@ impl RuntimeBuilder {
     ///
     /// If no driver was explicitly set, selects the best available driver for
     /// the platform.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeBuilder")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeBuilder"))]
     pub fn build(self) -> Result<crate::vibeio::executor::Runtime, std::io::Error> {
         if self.rsloop_profile {
             ensure_rsloop_platform()?;

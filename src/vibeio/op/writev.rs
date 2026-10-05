@@ -65,7 +65,8 @@ fn socket_write_vectored<B: IoVectoredBuf>(socket: SOCKET, bufs: &B) -> io::Resu
         )
     };
     if send_result == SOCKET_ERROR {
-        // SAFETY: reads the calling thread's Winsock error without pointer access.
+        // SAFETY: reads the calling thread's Winsock error without pointer
+        // access.
         return Err(io::Error::from_raw_os_error(unsafe {
             WinSock::WSAGetLastError()
         }));
@@ -113,10 +114,7 @@ impl<'a, B: IoVectoredBuf> WritevOp<'a, B> {
 impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
     type Output = usize;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WritevOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WritevOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -158,10 +156,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
         poll_result_or_wait(result, self.handle, cx, driver, Interest::WRITABLE)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WritevOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WritevOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -209,10 +204,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
         Poll::Ready(Ok(result as usize))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WritevOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WritevOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -238,8 +230,9 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
                     });
                 }
 
-                // SAFETY: Winsock captures the WSABUF descriptors before return.
-                // Their Vec need only survive this call; payloads remain owned
+                // SAFETY: Winsock captures the WSABUF descriptors before
+                // return. Their Vec need only survive this
+                // call; payloads remain owned
                 // through completion/cancellation, and the driver retains the
                 // OVERLAPPED until acknowledgement.
                 // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsasend
@@ -260,7 +253,8 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
                     return Ok(());
                 }
 
-                // SAFETY: reads thread-local Winsock error after failed submission.
+                // SAFETY: reads thread-local Winsock error after failed
+                // submission.
                 let err = unsafe { WinSock::WSAGetLastError() };
                 if err == WSA_IO_PENDING {
                     self.completion_staging = None;
@@ -327,10 +321,7 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WritevOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WritevOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -356,8 +347,8 @@ impl<B: IoVectoredBuf> Op for WritevOp<'_, B> {
         .build()
         .user_data(user_data);
 
-        // Store the iovec array for the completion, because it needs to be kept alive
-        // until the completion is ready.
+        // Store the iovec array for the completion, because it needs to be kept
+        // alive until the completion is ready.
         self.completion_system_iovecs = Some(iovecs);
 
         Ok(entry)

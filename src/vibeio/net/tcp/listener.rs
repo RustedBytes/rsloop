@@ -92,10 +92,7 @@ impl TcpListener {
     /// - The address is already in use
     /// - The process lacks permissions to bind to the address
     /// - The runtime is not active
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TcpListener")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TcpListener"))]
     #[inline]
     pub fn bind(address: impl ToSocketAddrs) -> Result<Self, io::Error> {
         let addresses = address.to_socket_addrs()?;
@@ -117,10 +114,7 @@ impl TcpListener {
     ///
     /// This function will return an error if registration with the async driver
     /// fails.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TcpListener")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TcpListener"))]
     #[inline]
     pub fn from_std(inner: std::net::TcpListener) -> Result<Self, io::Error> {
         #[cfg(unix)]
@@ -143,10 +137,7 @@ impl TcpListener {
     ///
     /// This function will return an error if registration with the async driver
     /// fails.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TcpListener")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TcpListener"))]
     #[cfg(windows)]
     #[inline]
     pub fn from_std_poll(inner: std::net::TcpListener) -> Result<Self, io::Error> {
@@ -165,10 +156,7 @@ impl TcpListener {
     ///
     /// This function will return an error if the underlying socket is not
     /// bound.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TcpListener")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TcpListener"))]
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()
@@ -289,7 +277,8 @@ mod socket_creation_tests {
         let socket = bind_one("127.0.0.1:0".parse().unwrap()).unwrap();
         #[cfg(unix)]
         {
-            // SAFETY: socket owns the live descriptor; F_GETFD has no pointer arguments.
+            // SAFETY: socket owns the live descriptor; F_GETFD has no pointer
+            // arguments.
             let flags = unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_GETFD) };
             assert_ne!(flags, -1);
             assert_ne!(flags & libc::FD_CLOEXEC, 0);

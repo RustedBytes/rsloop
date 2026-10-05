@@ -28,10 +28,7 @@ pub(super) struct LoopSpawnEnv {
 impl LoopSpawnEnv {
     /// Snapshots the loop and the caller's context. Must run on the calling
     /// thread, before the transport future is constructed.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "LoopSpawnEnv")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopSpawnEnv"))]
     pub(super) fn capture(py: Python<'_>, slf: &Py<PyLoop>) -> PyResult<Self> {
         let loop_obj = PyLoop::as_py_any(py, slf);
         let core = slf.borrow(py).core.clone();
@@ -47,10 +44,7 @@ impl LoopSpawnEnv {
     /// Builds the spawn context handed to the transport constructors.
     /// `protocol` is the protocol instance, or the protocol factory for
     /// server creation.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "LoopSpawnEnv")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopSpawnEnv"))]
     pub(super) fn spawn_context(
         &self,
         py: Python<'_>,
@@ -68,10 +62,7 @@ impl LoopSpawnEnv {
 
     /// Instantiates the protocol in the caller's context, rejecting the call if
     /// the loop is no longer running.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "LoopSpawnEnv")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopSpawnEnv"))]
     pub(super) fn call_protocol_factory(
         &self,
         py: Python<'_>,

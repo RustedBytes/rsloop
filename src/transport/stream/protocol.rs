@@ -142,20 +142,23 @@ impl StreamReaderFastPath {
                     return Err(PyRuntimeError::new_err("feed_data after feed_eof"));
                 }
 
-                // The bytearray is a Python-visible object, so the size read, the
-                // resize, and the copy have to be one atomic step: on a
-                // free-threaded interpreter another thread holding the same reader
+                // The bytearray is a Python-visible object, so the size read,
+                // the resize, and the copy have to be one
+                // atomic step: on a free-threaded interpreter
+                // another thread holding the same reader
                 // could otherwise resize between them and leave `as_bytes_mut`
                 // pointing into a freed allocation. CPython locks the same
-                // per-object mutex for `bytearray`'s own mutations, so taking the
-                // critical section here serializes against them. It compiles away
-                // to a direct call on GIL-enabled builds.
+                // per-object mutex for `bytearray`'s own mutations, so taking
+                // the critical section here serializes against
+                // them. It compiles away to a direct call on
+                // GIL-enabled builds.
                 let end = with_critical_section(buffer.as_any(), || -> PyResult<usize> {
                     let start = buffer.len();
                     let end = start + data.len();
                     buffer.resize(end)?;
-                    // SAFETY: The bytearray was just resized to `end`, so `start..end`
-                    // is in bounds, and the critical section keeps any other thread
+                    // SAFETY: The bytearray was just resized to `end`, so
+                    // `start..end` is in bounds, and the
+                    // critical section keeps any other thread
                     // from resizing it for the duration of this copy.
                     unsafe {
                         buffer.as_bytes_mut()[start..end].copy_from_slice(data);

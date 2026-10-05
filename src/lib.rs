@@ -62,10 +62,11 @@ pub(crate) fn initialize_python_for_tests() {
     static INITIALIZE: std::sync::Once = std::sync::Once::new();
     INITIALIZE.call_once(|| {
         Python::initialize();
-        // The free-threaded interpreter permits Rust tests to attach in parallel.
-        // Complete the imports shared by callback and transport fixtures before
-        // releasing the `Once`, otherwise concurrent first imports can observe
-        // a partially initialized `asyncio` package.
+        // The free-threaded interpreter permits Rust tests to attach in
+        // parallel. Complete the imports shared by callback and
+        // transport fixtures before releasing the `Once`, otherwise
+        // concurrent first imports can observe a partially initialized
+        // `asyncio` package.
         Python::attach(|py| {
             py.import("asyncio").expect("preload asyncio for tests");
             py.import("contextvars")

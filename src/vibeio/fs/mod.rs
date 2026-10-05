@@ -1581,14 +1581,15 @@ mod tests {
                 .await
                 .expect("symlink_file should succeed");
 
-            // symlink_metadata on the symlink should return info about the symlink itself
+            // symlink_metadata on the symlink should return info about the
+            // symlink itself
             let md = crate::vibeio::fs::symlink_metadata(&link)
                 .await
                 .expect("symlink_metadata should succeed");
             assert!(md.is_symlink());
 
-            // metadata on the symlink should follow the link and return info about the
-            // target
+            // metadata on the symlink should follow the link and return info
+            // about the target
             let target_md = metadata(&link).await.expect("metadata should succeed");
             assert!(target_md.is_file());
             assert!(!target_md.is_symlink());
@@ -1613,7 +1614,8 @@ mod tests {
                 .await
                 .expect("write should succeed");
 
-            // symlink_metadata on a regular file should work the same as metadata
+            // symlink_metadata on a regular file should work the same as
+            // metadata
             let md = crate::vibeio::fs::symlink_metadata(&path)
                 .await
                 .expect("symlink_metadata should succeed");

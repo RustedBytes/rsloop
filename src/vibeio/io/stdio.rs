@@ -147,8 +147,9 @@ mod tests {
 
     impl BlockingThreadPool for JoiningPool {
         fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
-            // A deterministic test pool: worker panics close the result channel.
-            // Joining here is test-only and does not model scheduling latency.
+            // A deterministic test pool: worker panics close the result
+            // channel. Joining here is test-only and does not model
+            // scheduling latency.
             let _ = std::thread::spawn(task).join();
         }
     }

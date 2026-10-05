@@ -57,10 +57,7 @@ impl<'a, B: IoBufMut> ReadAtOp<'a, B> {
 impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
     type Output = usize;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadAtOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadAtOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -102,16 +99,14 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
         let buf = self.buf.as_mut().unwrap().as_mut();
         // SAFETY: successful file-read completion initializes exactly the
         // reported prefix of the submitted writable capacity. Pending storage
-        // stays owned by CompletionBuffer; errors return before changing length.
-        // Windows EOF is normalized to a zero-byte successful completion above.
+        // stays owned by CompletionBuffer; errors return before changing
+        // length. Windows EOF is normalized to a zero-byte successful
+        // completion above.
         unsafe { buf.set_buf_init(read) };
         Poll::Ready(Ok(read))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadAtOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadAtOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -133,17 +128,19 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
 
         // SAFETY: the IOCP driver supplies its live, exclusively initialized
         // OVERLAPPED record for this submission. Both offset words are written
-        // before ReadFile can retain the record; the driver owns it to completion.
+        // before ReadFile can retain the record; the driver owns it to
+        // completion.
         unsafe {
             (*overlapped).Anonymous.Anonymous.Offset = self.offset as u32;
             (*overlapped).Anonymous.Anonymous.OffsetHigh = (self.offset >> 32) as u32;
         }
 
-        // SAFETY: handle is the borrowed file handle, kept alive by the enclosing
-        // file operation. IoBufMut supplies exclusive writable storage for
-        // read_len bytes. CompletionBuffer keeps its allocation stable while
-        // ReadFile is pending, and Drop transfers it to the owning driver on
-        // cancellation. The driver retains OVERLAPPED until acknowledgement.
+        // SAFETY: handle is the borrowed file handle, kept alive by the
+        // enclosing file operation. IoBufMut supplies exclusive
+        // writable storage for read_len bytes. CompletionBuffer keeps
+        // its allocation stable while ReadFile is pending, and Drop
+        // transfers it to the owning driver on cancellation. The driver
+        // retains OVERLAPPED until acknowledgement.
         let read_result = unsafe {
             ReadFile(
                 handle as HANDLE,
@@ -166,10 +163,7 @@ impl<B: IoBufMut> Op for ReadAtOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadAtOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadAtOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(

@@ -162,7 +162,7 @@ jobs:
 
       - name: Run repository tooling tests
         run: |
-          uv sync --group test --no-install-project
+          uv sync --group test
           uv run --no-sync python -m pytest -m tooling tests/tooling
 
   anyio-test:

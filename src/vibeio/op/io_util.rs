@@ -98,13 +98,15 @@ pub(super) fn completion_vectored_len(mut lengths: impl Iterator<Item = usize>) 
 #[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(unix)]
 pub(super) fn set_cloexec(fd: std::os::fd::RawFd) -> Result<(), io::Error> {
-    // SAFETY: F_GETFD has no pointer arguments and only queries descriptor flags.
+    // SAFETY: F_GETFD has no pointer arguments and only queries descriptor
+    // flags.
     let fdflags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     if fdflags == -1 {
         return Err(io::Error::last_os_error());
     }
     if fdflags & libc::FD_CLOEXEC == 0 {
-        // SAFETY: F_SETFD consumes an integer flag set, preserving existing flags.
+        // SAFETY: F_SETFD consumes an integer flag set, preserving existing
+        // flags.
         let result = unsafe { libc::fcntl(fd, libc::F_SETFD, fdflags | libc::FD_CLOEXEC) };
         if result == -1 {
             return Err(io::Error::last_os_error());
@@ -320,8 +322,9 @@ mod storage_tests {
             let mut signalled = false;
             let read = std::future::poll_fn(|cx| {
                 let result = handle.poll_op(cx, op);
-                // Release the sender only after submission has returned Pending,
-                // when the stack-local WSABUF and flags no longer exist.
+                // Release the sender only after submission has returned
+                // Pending, when the stack-local WSABUF and
+                // flags no longer exist.
                 if result.is_pending() && !signalled {
                     signal.send(()).unwrap();
                     signalled = true;
@@ -409,8 +412,9 @@ mod storage_tests {
             // Keep the ring local so it is closed before the caller's operation
             // and payload can be dropped, including if submission fails.
             let mut ring = io_uring::IoUring::new(2).unwrap();
-            // SAFETY: each caller below retains its operation and socket through
-            // this call; no buffer or metadata moves before CQE acknowledgement.
+            // SAFETY: each caller below retains its operation and socket
+            // through this call; no buffer or metadata moves before
+            // CQE acknowledgement.
             unsafe { ring.submission().push(&entry).unwrap() };
             let deadline = std::time::Instant::now() + crate::vibeio::test_support::WATCHDOG;
             loop {
@@ -439,8 +443,9 @@ mod storage_tests {
             result as usize
         }
 
-        // Datagram boundaries make exact CQE lengths part of the fixture contract.
-        // Stream partial-transfer behavior is covered by the stream read/recv tests.
+        // Datagram boundaries make exact CQE lengths part of the fixture
+        // contract. Stream partial-transfer behavior is covered by the
+        // stream read/recv tests.
         let (socket, peer) = UnixDatagram::pair().unwrap();
         peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
             .unwrap();
@@ -557,10 +562,7 @@ mod storage_tests {
 }
 
 impl<B> CompletionBuffer<B> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "CompletionBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CompletionBuffer"))]
     #[inline]
     pub(crate) fn new(buf: B, stable: bool) -> Self {
         if stable {
@@ -570,10 +572,7 @@ impl<B> CompletionBuffer<B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "CompletionBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CompletionBuffer"))]
     #[inline]
     pub(crate) fn as_ref(&self) -> &B {
         match self {
@@ -582,10 +581,7 @@ impl<B> CompletionBuffer<B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "CompletionBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CompletionBuffer"))]
     #[inline]
     pub(crate) fn as_mut(&mut self) -> &mut B {
         match self {
@@ -594,10 +590,7 @@ impl<B> CompletionBuffer<B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "CompletionBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CompletionBuffer"))]
     #[inline]
     pub(crate) fn into_inner(self) -> B {
         match self {
@@ -606,10 +599,7 @@ impl<B> CompletionBuffer<B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "CompletionBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CompletionBuffer"))]
     #[inline]
     pub(crate) fn into_stable_box(self) -> Box<B> {
         match self {
@@ -684,7 +674,8 @@ pub(crate) mod cancellation_tests {
 
         unsafe fn set_buf_init(&mut self, _: usize) {}
     }
-    // SAFETY: the sole vector points into the buffer's owned, stable allocation.
+    // SAFETY: the sole vector points into the buffer's owned, stable
+    // allocation.
     unsafe impl IoVectoredBuf for TrackedBuffer {
         fn as_iovecs(&self) -> Box<[IoVec]> {
             vec![IoVec {
@@ -694,7 +685,8 @@ pub(crate) mod cancellation_tests {
             .into_boxed_slice()
         }
     }
-    // SAFETY: the sole writable region is exclusively borrowed and cannot overlap.
+    // SAFETY: the sole writable region is exclusively borrowed and cannot
+    // overlap.
     unsafe impl IoVectoredBufMut for TrackedBuffer {
         fn as_iovecs_mut(&mut self) -> Box<[IoVec]> {
             vec![IoVec {

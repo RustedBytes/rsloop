@@ -8,9 +8,9 @@ use super::process_spawn::UnixPreExecConfig;
 
 #[cfg(unix)]
 pub(super) fn apply(command: &mut Command, config: UnixPreExecConfig) {
-    // SAFETY: `pre_exec` installs a closure that runs in the child process after
-    // fork and before exec. The closure only invokes async-signal-safe libc
-    // operations and returns OS errors.
+    // SAFETY: `pre_exec` installs a closure that runs in the child process
+    // after fork and before exec. The closure only invokes
+    // async-signal-safe libc operations and returns OS errors.
     unsafe {
         command.pre_exec(move || apply_in_child(&config));
     }
@@ -59,13 +59,14 @@ fn restore_child_signals(restore_signals: bool) -> std::io::Result<()> {
 #[cfg(unix)]
 fn clear_pass_fds_cloexec(pass_fds: &[i32]) -> std::io::Result<()> {
     for fd in pass_fds {
-        // SAFETY: `fd` is supplied to `pre_exec`; F_GETFD neither dereferences pointers
-        // nor allocates.
+        // SAFETY: `fd` is supplied to `pre_exec`; F_GETFD neither dereferences
+        // pointers nor allocates.
         let flags = unsafe { libc::fcntl(*fd, libc::F_GETFD) };
         if flags == -1 {
             return Err(std::io::Error::last_os_error());
         }
-        // SAFETY: `fd` and the flags returned above are valid inputs for F_SETFD.
+        // SAFETY: `fd` and the flags returned above are valid inputs for
+        // F_SETFD.
         let result = unsafe { libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) };
         if result == -1 {
             return Err(std::io::Error::last_os_error());
@@ -93,7 +94,8 @@ fn apply_child_attributes(config: &UnixPreExecConfig) -> std::io::Result<()> {
         .transpose()?;
 
     if config.start_new_session {
-        // SAFETY: called only inside the `pre_exec` child; `setsid` takes no pointers.
+        // SAFETY: called only inside the `pre_exec` child; `setsid` takes no
+        // pointers.
         let result = unsafe { libc::setsid() };
         if result == -1 {
             return Err(std::io::Error::last_os_error());
@@ -102,15 +104,16 @@ fn apply_child_attributes(config: &UnixPreExecConfig) -> std::io::Result<()> {
     if let Some(process_group) = config.process_group
         && should_set_process_group(config.start_new_session, process_group)
     {
-        // SAFETY: called only inside the `pre_exec` child with numeric process IDs.
+        // SAFETY: called only inside the `pre_exec` child with numeric process
+        // IDs.
         let result = unsafe { libc::setpgid(0, process_group) };
         if result == -1 {
             return Err(std::io::Error::last_os_error());
         }
     }
     if let Some(groups) = &config.extra_groups {
-        // SAFETY: `groups.as_ptr()` is valid for the supplied `ngroups` length during
-        // the call.
+        // SAFETY: `groups.as_ptr()` is valid for the supplied `ngroups` length
+        // during the call.
         let result =
             unsafe { libc::setgroups(ngroups.expect("extra_groups present"), groups.as_ptr()) };
         if result == -1 {
@@ -118,14 +121,16 @@ fn apply_child_attributes(config: &UnixPreExecConfig) -> std::io::Result<()> {
         }
     }
     if let Some(gid) = config.gid {
-        // SAFETY: called only inside the `pre_exec` child with a numeric group ID.
+        // SAFETY: called only inside the `pre_exec` child with a numeric group
+        // ID.
         let result = unsafe { libc::setgid(gid) };
         if result == -1 {
             return Err(std::io::Error::last_os_error());
         }
     }
     if let Some(uid) = config.uid {
-        // SAFETY: called only inside the `pre_exec` child with a numeric user ID.
+        // SAFETY: called only inside the `pre_exec` child with a numeric user
+        // ID.
         let result = unsafe { libc::setuid(uid) };
         if result == -1 {
             return Err(std::io::Error::last_os_error());
@@ -133,7 +138,8 @@ fn apply_child_attributes(config: &UnixPreExecConfig) -> std::io::Result<()> {
     }
     if let Some(umask) = config.umask {
         let umask = libc::mode_t::try_from(umask).expect("validated umask fits mode_t");
-        // SAFETY: called only inside the `pre_exec` child with a validated mode value.
+        // SAFETY: called only inside the `pre_exec` child with a validated mode
+        // value.
         unsafe { libc::umask(umask) };
     }
 
@@ -169,7 +175,8 @@ mod tests {
 
     fn pipe() -> (OwnedFd, OwnedFd) {
         let mut fds = [-1; 2];
-        // SAFETY: `fds` points to space for the two descriptors written by `pipe`.
+        // SAFETY: `fds` points to space for the two descriptors written by
+        // `pipe`.
         assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
         // SAFETY: successful `pipe` returned two newly owned descriptors.
         unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
@@ -182,7 +189,8 @@ mod tests {
         // SAFETY: `fd` is owned for the duration of the test.
         let original = unsafe { libc::fcntl(fd, libc::F_GETFD) };
         assert_ne!(original, -1);
-        // SAFETY: `fd` is valid and F_SETFD accepts the returned descriptor flags.
+        // SAFETY: `fd` is valid and F_SETFD accepts the returned descriptor
+        // flags.
         assert_ne!(
             unsafe { libc::fcntl(fd, libc::F_SETFD, original | libc::FD_CLOEXEC) },
             -1

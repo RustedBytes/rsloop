@@ -164,10 +164,7 @@ struct WriteOwnedFd {
 }
 
 impl WriteOwnedFd {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "WriteOwnedFd")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriteOwnedFd"))]
     fn new(writer: OwnedFd) -> std::io::Result<Self> {
         let handle = InnerRawHandle::new(writer.as_raw_fd(), Interest::WRITABLE)?;
         crate::vibeio::fd_inner::set_nonblocking(writer.as_raw_fd(), !handle.uses_completion())?;

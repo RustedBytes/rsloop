@@ -92,10 +92,11 @@ fn cached_client_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<Arc
         && let Ok(pointer) =
             capsule.pointer_checked(Some(c_str!("rsloop._loop.client_config_cache")))
     {
-        // SAFETY: capsules stored under CLIENT_CONFIG_CACHE_KEY are created below
-        // with a boxed CachedClientConfig and remain owned by the SSLContext for
-        // the duration of this borrow under the GIL.
-        // SAFETY: the validated named capsule owns a live `CachedClientConfig` value.
+        // SAFETY: capsules stored under CLIENT_CONFIG_CACHE_KEY are created
+        // below with a boxed CachedClientConfig and remain owned by the
+        // SSLContext for the duration of this borrow under the GIL.
+        // SAFETY: the validated named capsule owns a live `CachedClientConfig`
+        // value.
         let cached = unsafe { pointer.cast::<CachedClientConfig>().as_ref() };
         if cached.generation == generation && cached.verify_mode == verify_mode {
             return Ok(Arc::clone(&cached.config));

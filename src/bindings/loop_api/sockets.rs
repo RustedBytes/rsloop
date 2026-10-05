@@ -134,8 +134,8 @@ fn set_socket_bool_option_unix(
         .try_into()
         .expect("socklen_t can represent c_int size");
     let value_ptr = (&value as *const libc::c_int).cast();
-    // SAFETY: `fd` is range-checked as a socket descriptor, and `value` points to a
-    // live `c_int` with the correct length for boolean socket options.
+    // SAFETY: `fd` is range-checked as a socket descriptor, and `value` points
+    // to a live `c_int` with the correct length for boolean socket options.
     let result = unsafe { libc::setsockopt(fd, level, option, value_ptr, value_len) };
     if result == 0 {
         Ok(())

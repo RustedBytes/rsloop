@@ -91,20 +91,14 @@ impl InnerRawHandle {
     }
 
     /// Share ownership with operations using this registration's driver.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[cfg(all(target_os = "linux", any(feature = "fs", feature = "splice")))]
     pub(crate) fn driver_owner(&self) -> Rc<AnyDriver> {
         self.driver.clone()
     }
 
     /// Retain operation storage on the registration's owner until completion.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[inline]
     pub(crate) fn cancel_completion(&self, token: usize, data: Box<dyn std::any::Any>) {
         #[cfg(windows)]
@@ -113,10 +107,7 @@ impl InnerRawHandle {
         self.driver.ignore_completion(token, data);
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[inline]
     pub(crate) fn new(handle: RawOsHandle, interest: Interest) -> Result<Self, io::Error> {
         let default_mode = if current_driver()
@@ -131,10 +122,7 @@ impl InnerRawHandle {
         Self::new_with_mode(handle, interest, default_mode)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[inline]
     pub(crate) fn new_with_mode(
         handle: RawOsHandle,
@@ -150,10 +138,7 @@ impl InnerRawHandle {
         Self::new_with_driver_and_mode(&driver, handle, interest, mode)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[inline]
     pub(crate) fn new_with_driver_and_mode(
         driver: &Rc<AnyDriver>,
@@ -179,48 +164,33 @@ impl InnerRawHandle {
         Ok(inner)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[cfg(unix)]
     #[inline]
     pub(crate) fn token(&self) -> Token {
         self.token
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[allow(dead_code)]
     #[inline]
     pub(crate) fn reregister(&self, interest: Interest) -> Result<(), io::Error> {
         self.driver.reregister_handle(self, interest)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[inline]
     pub(crate) fn supports_completion(&self) -> bool {
         self.driver.supports_completion()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[inline]
     pub(crate) fn uses_completion(&self) -> bool {
         self.supports_completion() && matches!(self.mode, RegistrationMode::Completion)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[allow(dead_code)]
     #[inline]
     pub(crate) fn mode(&self) -> RegistrationMode {
@@ -231,10 +201,7 @@ impl InnerRawHandle {
     /// without attempting a replacement. If acquiring the new registration
     /// fails, the handle is unregistered: callers must drop it or retry
     /// before doing I/O.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[inline]
     pub(crate) fn rebind_mode(
         &mut self,
@@ -263,10 +230,7 @@ impl InnerRawHandle {
         Ok(())
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[inline]
     pub(crate) fn poll_op<O, R>(
         &self,
@@ -283,10 +247,7 @@ impl InnerRawHandle {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "InnerRawHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[inline]
     pub(crate) fn poll_op_poll<O, R>(
         &self,
@@ -455,7 +416,8 @@ mod tests {
             .unwrap();
             assert!(handle.rebind_mode(RegistrationMode::Poll).is_err());
             assert_eq!(handle.token, UNREGISTERED);
-            // Retrying even the original mode must acquire a fresh registration.
+            // Retrying even the original mode must acquire a fresh
+            // registration.
             if retry {
                 handle.rebind_mode(RegistrationMode::Completion).unwrap();
                 assert_eq!(handle.token, Token(1));

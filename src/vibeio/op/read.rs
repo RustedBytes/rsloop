@@ -104,10 +104,7 @@ impl<'a, B: IoBufMut> ReadOp<'a, B> {
 impl<B: IoBufMut> Op for ReadOp<'_, B> {
     type Output = usize;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -156,10 +153,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -202,16 +196,14 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
         };
         let read = result as usize;
         let buf = self.buf.as_mut().unwrap().as_mut();
-        // SAFETY: the successful completion acknowledges this initialized prefix
-        // within the stable buffer retained through the read operation.
+        // SAFETY: the successful completion acknowledges this initialized
+        // prefix within the stable buffer retained through the read
+        // operation.
         unsafe { buf.set_buf_init(read) };
         Poll::Ready(Ok(read))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -226,9 +218,9 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
                 };
                 let mut flags = 0;
                 // SAFETY: WSARecv captures WSABUF before returning; delayed
-                // completion does not update flags. The payload and driver-owned
-                // OVERLAPPED remain retained through acknowledgement.
-                // https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsarecv
+                // completion does not update flags. The payload and
+                // driver-owned OVERLAPPED remain retained
+                // through acknowledgement. https://learn.microsoft.com/en-us/windows/win32/api/winsock2/nf-winsock2-wsarecv
                 let recv_result = unsafe {
                     WinSock::WSARecv(
                         socket as SOCKET,
@@ -245,7 +237,8 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
                     return Ok(());
                 }
 
-                // SAFETY: reads this thread's last Winsock error without pointers.
+                // SAFETY: reads this thread's last Winsock error without
+                // pointers.
                 let err = unsafe { WinSock::WSAGetLastError() };
                 if err == WSA_IO_PENDING {
                     Ok(())
@@ -257,7 +250,8 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
                 let read_len = completion_len(buf.buf_capacity())?;
 
                 // SAFETY: IoBufMut provides writable capacity retained through
-                // completion/cancellation; the driver owns live OVERLAPPED storage.
+                // completion/cancellation; the driver owns live OVERLAPPED
+                // storage.
                 let read_result = unsafe {
                     ReadFile(
                         handle as HANDLE,
@@ -282,10 +276,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -309,10 +300,7 @@ impl<B: IoBufMut> Op for ReadOp<'_, B> {
 }
 
 impl<B: IoBufMut> Drop for ReadOp<'_, B> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadOp as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadOp as Drop>"))]
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {

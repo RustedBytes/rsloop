@@ -209,10 +209,7 @@ pub struct ChildStderr {
 
 impl ChildStdin {
     /// Create a new `ChildStdin` from a standard library `ChildStdin`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ChildStdin")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ChildStdin"))]
     #[inline]
     pub(crate) fn from_std(inner: std::process::ChildStdin) -> io::Result<Self> {
         #[cfg(unix)]
@@ -228,19 +225,13 @@ impl ChildStdin {
 
     /// Consume this `ChildStdin` and return the underlying
     /// `std::process::ChildStdin`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ChildStdin")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ChildStdin"))]
     #[inline]
     pub fn into_std(mut self) -> std::process::ChildStdin {
         self.inner.take().expect("child stdin is already taken")
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ChildStdin")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ChildStdin"))]
     #[inline]
     fn drop_handle(&mut self) {
         // Deregister before the standard stream closes its descriptor.
@@ -251,10 +242,7 @@ impl ChildStdin {
 
 impl ChildStdout {
     /// Create a new `ChildStdout` from a standard library `ChildStdout`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ChildStdout")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ChildStdout"))]
     #[inline]
     pub(crate) fn from_std(inner: std::process::ChildStdout) -> io::Result<Self> {
         #[cfg(unix)]
@@ -270,19 +258,13 @@ impl ChildStdout {
 
     /// Consume this `ChildStdout` and return the underlying
     /// `std::process::ChildStdout`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ChildStdout")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ChildStdout"))]
     #[inline]
     pub fn into_std(mut self) -> std::process::ChildStdout {
         self.inner.take().expect("child stdout is already taken")
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ChildStdout")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ChildStdout"))]
     #[inline]
     fn drop_handle(&mut self) {
         // Deregister before the standard stream closes its descriptor.
@@ -293,10 +275,7 @@ impl ChildStdout {
 
 impl ChildStderr {
     /// Create a new `ChildStderr` from a standard library `ChildStderr`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ChildStderr")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ChildStderr"))]
     #[inline]
     pub(crate) fn from_std(inner: std::process::ChildStderr) -> io::Result<Self> {
         #[cfg(unix)]
@@ -312,19 +291,13 @@ impl ChildStderr {
 
     /// Consume this `ChildStderr` and return the underlying
     /// `std::process::ChildStderr`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ChildStderr")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ChildStderr"))]
     #[inline]
     pub fn into_std(mut self) -> std::process::ChildStderr {
         self.inner.take().expect("child stderr is already taken")
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ChildStderr")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ChildStderr"))]
     #[inline]
     fn drop_handle(&mut self) {
         // Deregister before the standard stream closes its descriptor.
@@ -777,10 +750,7 @@ impl Child {
 }
 
 impl Drop for Child {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Child as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Child as Drop>"))]
     #[inline]
     fn drop(&mut self) {
         let _ = self.stdin.take(); // Similarly to std::process::Child::wait

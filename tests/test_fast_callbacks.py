@@ -15,7 +15,7 @@ import rsloop
 class TestFastCallback:
     def test_loop_shell_preserves_subclass_state_and_reentrant_calls(self):
         class SubLoop(rsloop.Loop):
-            pass
+            events: list[bool]
 
         loop = SubLoop()
         reference = weakref.ref(loop)
@@ -77,7 +77,7 @@ class TestFastCallback:
             if named:
                 assert task.get_name() == "named-task"
             if debug:
-                assert task._source_traceback
+                assert getattr(task, "_source_traceback", None)
             return task
 
         async def while_running():

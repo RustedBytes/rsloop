@@ -79,28 +79,19 @@ pub unsafe trait IoBufMut: IoBuf {
 // SAFETY: Vec owns its allocation; len describes initialized bytes and never
 // exceeds capacity. Operations do not resize it while its pointer is in use.
 unsafe impl IoBuf for Vec<u8> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Vec as IoBuf>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Vec as IoBuf>"))]
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
         self.as_ptr()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Vec as IoBuf>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Vec as IoBuf>"))]
     #[inline]
     fn buf_len(&self) -> usize {
         self.len()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Vec as IoBuf>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Vec as IoBuf>"))]
     #[inline]
     fn buf_capacity(&self) -> usize {
         self.capacity()
@@ -110,19 +101,13 @@ unsafe impl IoBuf for Vec<u8> {
 // SAFETY: &mut Vec grants exclusive access to its allocation, including spare
 // capacity. set_buf_init exposes only the prefix initialized by its caller.
 unsafe impl IoBufMut for Vec<u8> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Vec as IoBufMut>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Vec as IoBufMut>"))]
     #[inline]
     fn as_buf_mut_ptr(&mut self) -> *mut u8 {
         self.as_mut_ptr()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Vec as IoBufMut>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Vec as IoBufMut>"))]
     #[inline]
     unsafe fn set_buf_init(&mut self, len: usize) {
         // SAFETY: the IoBufMut caller guarantees initialization and capacity.
@@ -133,28 +118,19 @@ unsafe impl IoBufMut for Vec<u8> {
 // SAFETY: String owns initialized UTF-8 bytes. Only read access to its len-byte
 // prefix is exposed, so neither UTF-8 validity nor spare capacity is modified.
 unsafe impl IoBuf for String {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<String as IoBuf>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<String as IoBuf>"))]
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
         self.as_ptr()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<String as IoBuf>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<String as IoBuf>"))]
     #[inline]
     fn buf_len(&self) -> usize {
         self.len()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<String as IoBuf>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<String as IoBuf>"))]
     #[inline]
     fn buf_capacity(&self) -> usize {
         self.capacity()
@@ -273,28 +249,19 @@ unsafe impl<const N: usize> IoBufMut for [u8; N] {
 
 // SAFETY: the box owns len initialized bytes at a stable allocation address.
 unsafe impl IoBuf for Box<[u8]> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Box as IoBuf>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Box as IoBuf>"))]
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
         self.as_ptr()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Box as IoBuf>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Box as IoBuf>"))]
     #[inline]
     fn buf_len(&self) -> usize {
         self.len()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Box as IoBuf>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Box as IoBuf>"))]
     #[inline]
     fn buf_capacity(&self) -> usize {
         self.len()
@@ -304,19 +271,13 @@ unsafe impl IoBuf for Box<[u8]> {
 // SAFETY: the box exclusively owns its initialized slice; partial writes leave
 // the other bytes valid and do not change the allocation size.
 unsafe impl IoBufMut for Box<[u8]> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Box as IoBufMut>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Box as IoBufMut>"))]
     #[inline]
     fn as_buf_mut_ptr(&mut self) -> *mut u8 {
         self.as_mut_ptr()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Box as IoBufMut>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Box as IoBufMut>"))]
     unsafe fn set_buf_init(&mut self, _len: usize) {}
 }
 
@@ -328,20 +289,14 @@ pub(crate) struct IoBufWithCursor<I: IoBuf> {
 
 impl<I: IoBuf> IoBufWithCursor<I> {
     /// Create a new `IoBufWithCursor` with the given buffer.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IoBufWithCursor")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IoBufWithCursor"))]
     #[inline]
     pub(crate) fn new(buf: I) -> Self {
         IoBufWithCursor { buf, cursor: 0 }
     }
 
     /// Advance the cursor by `n` bytes.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IoBufWithCursor")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IoBufWithCursor"))]
     #[inline]
     pub(crate) fn advance(&mut self, n: usize) {
         assert!(
@@ -352,10 +307,7 @@ impl<I: IoBuf> IoBufWithCursor<I> {
     }
 
     /// Consume the wrapper and return the inner buffer.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IoBufWithCursor")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IoBufWithCursor"))]
     #[inline]
     pub(crate) fn into_inner(self) -> I {
         self.buf
@@ -555,10 +507,7 @@ pub unsafe trait IoVectoredBuf: 'static {
     /// also use this check, and an implementation may expose zero readable
     /// bytes while its writable descriptors provide spare capacity. Collections
     /// containing empty segments are therefore not necessarily empty here.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IoVectoredBuf")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IoVectoredBuf"))]
     #[inline]
     fn is_empty(&self) -> bool {
         self.as_iovecs().is_empty()
@@ -572,7 +521,9 @@ pub unsafe trait IoVectoredBuf: 'static {
 /// has no initialization-length setter: reads do not resize individual buffers
 /// or update custom initialization metadata. Implementations exposing spare
 /// capacity must use the returned byte count before exposing those bytes
-/// safely. # Safety
+/// safely.
+///
+/// # Safety
 ///
 /// Every returned vector must describe exclusively writable memory that remains
 /// valid and stable for as long as the I/O operation owns this value. Writable
@@ -967,7 +918,8 @@ mod tests {
             unsafe { IoBufTemporaryPoll::new_uninit(storage.as_mut_ptr().cast(), storage.len()) };
         assert_eq!(buf.buf_len(), 0);
         assert_eq!(buf.buf_capacity(), 8);
-        // SAFETY: write and expose only the first three bytes of this allocation.
+        // SAFETY: write and expose only the first three bytes of this
+        // allocation.
         unsafe {
             std::ptr::copy_nonoverlapping(b"abc".as_ptr(), buf.as_buf_mut_ptr(), 3);
             buf.set_buf_init(3);

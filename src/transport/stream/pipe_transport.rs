@@ -79,18 +79,12 @@ pub(super) enum PipeTransportMode {
 }
 
 impl PipeTransportMode {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PipeTransportMode")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PipeTransportMode"))]
     pub(super) fn reading(&self) -> bool {
         matches!(self, Self::Read)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PipeTransportMode")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PipeTransportMode"))]
     pub(super) fn writable(&self) -> bool {
         matches!(self, Self::Write)
     }

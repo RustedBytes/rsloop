@@ -27,8 +27,8 @@ pub(super) fn vectorcall(
     nargsf: usize,
     kwnames: *mut ffi::PyObject,
 ) -> PyResult<Py<PyAny>> {
-    // SAFETY: The callable, positional argument array, and keyword tuple are all
-    // live under the GIL for this call. PyO3 converts null returns into
+    // SAFETY: The callable, positional argument array, and keyword tuple are
+    // all live under the GIL for this call. PyO3 converts null returns into
     // `PyErr`.
     let result = unsafe {
         let ptr = ffi::PyObject_Vectorcall(callable, args, nargsf, kwnames);

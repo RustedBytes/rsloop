@@ -72,10 +72,7 @@ impl UnixListener {
     /// - The path is already in use
     /// - The process lacks permissions
     /// - The runtime is not active
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UnixListener")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnixListener"))]
     #[inline]
     pub fn bind(path: impl AsRef<Path>) -> Result<Self, io::Error> {
         // Reject this known setup failure before bind mutates the filesystem.
@@ -97,10 +94,7 @@ impl UnixListener {
     ///
     /// This function will return an error if registration with the async driver
     /// fails.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UnixListener")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnixListener"))]
     #[inline]
     pub fn from_std(inner: StdUnixListener) -> Result<Self, io::Error> {
         let handle = InnerRawHandle::new(inner.as_raw_fd(), Interest::READABLE)?;
@@ -114,10 +108,7 @@ impl UnixListener {
     ///
     /// This function will return an error if the underlying socket is not
     /// bound.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UnixListener")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnixListener"))]
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()

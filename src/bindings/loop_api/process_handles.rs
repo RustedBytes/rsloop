@@ -48,8 +48,8 @@ pub(super) fn new_pipe() -> PyResult<(File, File)> {
 fn file_from_owned_handle(handle: windows_sys::Win32::Foundation::HANDLE) -> File {
     use std::os::windows::io::FromRawHandle;
 
-    // SAFETY: Callers pass a newly owned Windows handle. `File::from_raw_handle`
-    // takes ownership and closes it exactly once.
+    // SAFETY: Callers pass a newly owned Windows handle.
+    // `File::from_raw_handle` takes ownership and closes it exactly once.
     unsafe { File::from_raw_handle(handle.cast()) }
 }
 
@@ -58,8 +58,8 @@ fn file_from_owned_handle(handle: windows_sys::Win32::Foundation::HANDLE) -> Fil
 fn file_from_owned_fd(fd: i32) -> File {
     use std::os::fd::FromRawFd;
 
-    // SAFETY: Callers pass a newly owned file descriptor. `File::from_raw_fd` takes
-    // ownership and closes it exactly once.
+    // SAFETY: Callers pass a newly owned file descriptor. `File::from_raw_fd`
+    // takes ownership and closes it exactly once.
     unsafe { File::from_raw_fd(fd) }
 }
 
@@ -88,7 +88,8 @@ fn create_pipe_handles() -> PyResult<(
 #[cfg(unix)]
 fn create_pipe_fds() -> PyResult<[i32; 2]> {
     let mut fds = [0_i32; 2];
-    // SAFETY: `fds` has room for the two descriptors that `pipe` writes on success.
+    // SAFETY: `fds` has room for the two descriptors that `pipe` writes on
+    // success.
     let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
     if rc == -1 {
         return Err(PyRuntimeError::new_err(

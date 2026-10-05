@@ -115,10 +115,7 @@ impl<'a, B: IoBufMut> RecvOp<'a, B> {
 impl<B: IoBufMut> Op for RecvOp<'_, B> {
     type Output = usize;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<RecvOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<RecvOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -167,10 +164,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<RecvOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<RecvOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -208,15 +202,13 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
         let read = result as usize;
         let buf = self.buf.as_mut().unwrap().as_mut();
         // SAFETY: completion reports the initialized prefix of the submitted
-        // writable capacity; pending storage remained owned by CompletionBuffer.
+        // writable capacity; pending storage remained owned by
+        // CompletionBuffer.
         unsafe { buf.set_buf_init(read) };
         Poll::Ready(Ok(read))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<RecvOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<RecvOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -270,10 +262,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<RecvOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<RecvOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -298,10 +287,7 @@ impl<B: IoBufMut> Op for RecvOp<'_, B> {
 }
 
 impl<B: IoBufMut> Drop for RecvOp<'_, B> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<RecvOp as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<RecvOp as Drop>"))]
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {

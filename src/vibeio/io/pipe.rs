@@ -210,7 +210,8 @@ mod setup_tests {
             // Completion requests fall back to poll mode on this driver.
             assert!(!reader.handle.uses_completion());
             for fd in [reader.as_raw_fd(), writer.as_raw_fd()] {
-                // SAFETY: both pipe endpoints are live; F_GETFL has no pointers.
+                // SAFETY: both pipe endpoints are live; F_GETFL has no
+                // pointers.
                 let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
                 assert_ne!(flags, -1);
                 assert_ne!(flags & libc::O_NONBLOCK, 0);
@@ -298,10 +299,7 @@ impl PollPipe {
 }
 
 impl AsRawFd for Pipe {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Pipe as AsRawFd>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Pipe as AsRawFd>"))]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.inner.as_raw_fd()
@@ -487,7 +485,8 @@ impl TokioAsyncWrite for PollPipe {
         let this = self.get_mut();
         // SAFETY: buf remains initialized and borrowed throughout this call.
         // WriteOp only reads it; poll_op_poll rejects completion mode, and the
-        // local operation is dropped before this borrow can end, even on Pending.
+        // local operation is dropped before this borrow can end, even on
+        // Pending.
         let buf = unsafe { IoBufTemporaryPoll::new(buf.as_ptr() as *mut u8, buf.len()) };
         let mut op = WriteOp::new(&this.stream.handle, buf);
         this.stream.handle.poll_op_poll(cx, &mut op)
@@ -508,8 +507,9 @@ impl TokioAsyncWrite for PollPipe {
         }
         let this = self.get_mut();
         // SAFETY: IoSlice data stays borrowed and initialized for this poll.
-        // Only descriptor metadata is copied; WritevOp does synchronous poll I/O
-        // through poll_op_poll and cannot retain these buffers after returning.
+        // Only descriptor metadata is copied; WritevOp does synchronous poll
+        // I/O through poll_op_poll and cannot retain these buffers
+        // after returning.
         let bufs = unsafe { IoVectoredBufTemporaryPoll::new(bufs) };
         let mut op = WritevOp::new(&this.stream.handle, bufs);
         this.stream.handle.poll_op_poll(cx, &mut op)

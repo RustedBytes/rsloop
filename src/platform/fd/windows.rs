@@ -22,8 +22,9 @@ pub(super) fn dup_raw_fd(fd: RawFd) -> io::Result<RawFd> {
         Ok(duped) => Ok(duped),
         Err(socket_err) => {
             if let Ok(fd) = raw_fd_to_c_int(fd) {
-                // SAFETY: `fd` was range-checked as a C runtime descriptor. Errors are
-                // reported via a negative return and errno.
+                // SAFETY: `fd` was range-checked as a C runtime descriptor.
+                // Errors are reported via a negative return and
+                // errno.
                 let duped = unsafe { libc::dup(fd) };
                 if duped >= 0 {
                     return Ok(RawFd::from(duped));
@@ -46,9 +47,9 @@ pub(super) fn duplicate_socket(fd: RawFd) -> io::Result<RawFd> {
 
 #[cfg_attr(feature = "profile", hotpath::measure)]
 fn socket_from_raw(socket: SOCKET) -> Socket {
-    // SAFETY: The caller provides a raw socket handle that should be temporarily
-    // owned by `Socket`; callers must prevent unintended closure when they only
-    // borrow the source handle.
+    // SAFETY: The caller provides a raw socket handle that should be
+    // temporarily owned by `Socket`; callers must prevent unintended
+    // closure when they only borrow the source handle.
     unsafe { Socket::from_raw_socket(socket as _) }
 }
 
@@ -76,8 +77,8 @@ fn duplicate_handle_raw(
 #[cfg_attr(feature = "profile", hotpath::measure)]
 pub fn raw_fd_to_handle(fd: RawFd) -> io::Result<HANDLE> {
     let fd = raw_fd_to_c_int(fd)?;
-    // SAFETY: `_get_osfhandle` only reads the C runtime fd table for this validated
-    // fd and returns `-1` on failure.
+    // SAFETY: `_get_osfhandle` only reads the C runtime fd table for this
+    // validated fd and returns `-1` on failure.
     let handle = unsafe { libc::get_osfhandle(fd) };
     if handle == -1 {
         return Err(io::Error::last_os_error());
@@ -95,8 +96,8 @@ pub fn duplicate_handle(handle: HANDLE) -> io::Result<HANDLE> {
     }
 
     let mut duplicated = 0 as HANDLE;
-    // SAFETY: `GetCurrentProcess` returns the always-valid pseudo-handle for the
-    // current process and does not require any cleanup by the caller.
+    // SAFETY: `GetCurrentProcess` returns the always-valid pseudo-handle for
+    // the current process and does not require any cleanup by the caller.
     let process = unsafe { GetCurrentProcess() };
     let ok = duplicate_handle_raw(process, handle, &mut duplicated, DUPLICATE_SAME_ACCESS);
     if ok == 0 {
@@ -124,8 +125,9 @@ pub fn poll_fd(fd: RawFd, read: bool, write: bool, timeout_ms: i32) -> io::Resul
     let mut readfds = new_fd_set(socket, read);
     let mut writefds = new_fd_set(socket, write);
     // Winsock reports a failed non-blocking connect in the exception set. Treat
-    // that as write readiness so callers can inspect SO_ERROR instead of waiting
-    // forever. Do not watch it for reads because it also represents OOB data.
+    // that as write readiness so callers can inspect SO_ERROR instead of
+    // waiting forever. Do not watch it for reads because it also represents
+    // OOB data.
     let mut exceptfds = new_fd_set(socket, write);
 
     let readfds_ptr = if read {

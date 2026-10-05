@@ -30,7 +30,8 @@ mod tests {
         let runtime = crate::vibeio::executor::Runtime::new(AnyDriver::new_mio().unwrap());
         runtime.block_on(async {
             for completion in [false, true] {
-                // The pipe, not a delay, keeps the child alive until explicitly released.
+                // The pipe, not a delay, keeps the child alive until explicitly
+                // released.
                 let mut child = ChildGuard(
                     Command::new("sh")
                         .args(["-c", "read line; exit 7"])
@@ -121,13 +122,15 @@ impl WaitPidOp {
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WaitPidOp"))]
     #[inline]
     fn open_pidfd(pid: libc::pid_t) -> io::Result<OwnedFd> {
-        // SAFETY: pidfd_open takes integer arguments and returns a new descriptor.
-        // The kernel sets CLOEXEC; no read or blocking waitid is performed here.
+        // SAFETY: pidfd_open takes integer arguments and returns a new
+        // descriptor. The kernel sets CLOEXEC; no read or blocking
+        // waitid is performed here.
         let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0 as libc::c_uint) };
         if fd < 0 {
             Err(io::Error::last_os_error())
         } else {
-            // SAFETY: the successful syscall returned a fresh, owned descriptor.
+            // SAFETY: the successful syscall returned a fresh, owned
+            // descriptor.
             Ok(unsafe { OwnedFd::from_raw_fd(fd as _) })
         }
     }
@@ -161,10 +164,7 @@ impl WaitPidOp {
 impl Op for WaitPidOp {
     type Output = i32;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WaitPidOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WaitPidOp as Op>"))]
     fn poll_poll(
         &mut self,
         cx: &mut Context<'_>,
@@ -190,7 +190,8 @@ impl Op for WaitPidOp {
                 WaitPidState::Polling { pid, handle, .. } => {
                     // A pidfd is pollable but not readable: read(pidfd) always
                     // fails with EINVAL. Check waitpid without blocking, then
-                    // arm readiness if still alive, including on spurious wakes.
+                    // arm readiness if still alive, including on spurious
+                    // wakes.
                     match Self::reap(*pid) {
                         Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                             driver.submit_poll(handle, cx.waker().clone(), Interest::READABLE)?;
@@ -209,10 +210,7 @@ impl Op for WaitPidOp {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WaitPidOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WaitPidOp as Op>"))]
     fn poll_completion(
         &mut self,
         cx: &mut Context<'_>,

@@ -191,8 +191,8 @@ mod vectored_uring_tests {
 
     #[test]
     fn io_uring_vectored_read_write_pipe() {
-        // Create a runtime with an io_uring driver and run the test inside it so
-        // current_driver() is available for InnerRawHandle::new.
+        // Create a runtime with an io_uring driver and run the test inside it
+        // so current_driver() is available for InnerRawHandle::new.
         let driver = AnyDriver::new_uring().expect("failed to create uring driver");
         let runtime = crate::vibeio::executor::Runtime::new(driver);
 
@@ -203,9 +203,10 @@ mod vectored_uring_tests {
             let rfd = reader.as_raw_fd();
             let wfd = writer.as_raw_fd();
 
-            // Register both ends with the runtime. Since the current driver supports
-            // completion and the InnerRawHandle default chooses completion mode, these
-            // handles will use the completion path (io_uring) where available.
+            // Register both ends with the runtime. Since the current driver
+            // supports completion and the InnerRawHandle default
+            // chooses completion mode, these handles will use the
+            // completion path (io_uring) where available.
             let rhandle = InnerRawHandle::new(rfd, Interest::READABLE)
                 .expect("failed to create reader InnerRawHandle");
             let whandle = InnerRawHandle::new(wfd, Interest::WRITABLE)
@@ -220,8 +221,9 @@ mod vectored_uring_tests {
             ];
             let total_len = a.len() + b.len();
 
-            // Submit vectored write. poll_writev will choose completion-path (io_uring)
-            // for this handle because the driver supports completions.
+            // Submit vectored write. poll_writev will choose completion-path
+            // (io_uring) for this handle because the driver
+            // supports completions.
             let whandle_ref = &whandle;
             let mut writev_op = WritevOp::new(whandle_ref, bufs);
             let write_res = poll_fn(move |cx| whandle_ref.poll_op(cx, &mut writev_op)).await;
@@ -237,8 +239,8 @@ mod vectored_uring_tests {
                 vec![0u8; total_len - 3].into_boxed_slice(),
             ];
 
-            // Read using vectored read. poll_readv will choose completion-path when
-            // available.
+            // Read using vectored read. poll_readv will choose completion-path
+            // when available.
             let rhandle_ref = &rhandle;
             let mut readv_op = ReadvOp::new(rhandle_ref, rd_bufs);
             let read_res = poll_fn(|cx| rhandle_ref.poll_op(cx, &mut readv_op)).await;
@@ -247,9 +249,10 @@ mod vectored_uring_tests {
             let dst1 = &received_bufs[0];
             let dst2 = &received_bufs[1];
 
-            // We expect to read at least as many bytes as were written (pipe semantics
-            // on local write -> read without closing may give the bytes).
-            // It's possible for writev to be partial; just check we read some data and
+            // We expect to read at least as many bytes as were written (pipe
+            // semantics on local write -> read without closing may
+            // give the bytes). It's possible for writev to be
+            // partial; just check we read some data and
             // that the bytes we did read match the written prefix.
             assert!(read > 0, "expected to read at least one byte");
 
@@ -261,7 +264,8 @@ mod vectored_uring_tests {
                 received.extend_from_slice(&dst2[..rem]);
             }
 
-            // The bytes we received should be a prefix of the concatenation of a+b.
+            // The bytes we received should be a prefix of the concatenation of
+            // a+b.
             let expected = [a.as_slice(), b.as_slice()].concat();
             assert_eq!(
                 received,

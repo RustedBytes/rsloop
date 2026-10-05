@@ -83,8 +83,8 @@ fn connect_so_error(fd: fd_ops::RawFd, sock: &Py<PyAny>) -> PyResult<i32> {
             .expect("socklen_t can represent c_int size");
         let value_ptr = (&mut value as *mut libc::c_int).cast();
         let result = {
-            // SAFETY: `fd` is a live socket and the out-parameters remain valid for the
-            // call.
+            // SAFETY: `fd` is a live socket and the out-parameters remain valid
+            // for the call.
             unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_ERROR, value_ptr, &mut len) }
         };
         if result == 0 {
@@ -169,7 +169,8 @@ fn libc_connect_numeric(fd: fd_ops::RawFd, address: &Bound<'_, PyAny>) -> PyResu
         return Ok(None);
     };
     let Ok(ip) = host.parse::<std::net::IpAddr>() else {
-        // Hostname, or scoped IPv6 ("fe80::1%eth0") std can't parse — fall back.
+        // Hostname, or scoped IPv6 ("fe80::1%eth0") std can't parse — fall
+        // back.
         return Ok(None);
     };
     let Ok(port) = address.get_item(1).and_then(|value| value.extract::<u16>()) else {
@@ -179,8 +180,9 @@ fn libc_connect_numeric(fd: fd_ops::RawFd, address: &Bound<'_, PyAny>) -> PyResu
         .try_into()
         .map_err(|_| PyRuntimeError::new_err("socket file descriptor out of range"))?;
     let sockaddr = socket2::SockAddr::from(std::net::SocketAddr::new(ip, port));
-    // SAFETY: `sockaddr` owns a valid `sockaddr` of the reported length; `fd` is
-    // the non-blocking socket the caller just built for this address family.
+    // SAFETY: `sockaddr` owns a valid `sockaddr` of the reported length; `fd`
+    // is the non-blocking socket the caller just built for this address
+    // family.
     let rc = unsafe { libc::connect(fd, sockaddr.as_ptr().cast(), sockaddr.len()) };
     if rc == 0 {
         Ok(Some(0))
@@ -237,7 +239,8 @@ pub(super) fn fast_sock_connect<'py>(
     }
 
     // Connect is in progress: watch for writability on this loop's own reactor
-    // (loop thread), so the completion is delivered without a cross-thread wake.
+    // (loop thread), so the completion is delivered without a cross-thread
+    // wake.
     let core = slf.borrow(py).core.clone();
     if !core.spawn_io(crate::transport::stream::run_connect_watch_task(
         Arc::clone(&core),

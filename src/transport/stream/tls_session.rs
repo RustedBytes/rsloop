@@ -29,10 +29,7 @@ pub(super) enum TlsConnectionKind {
 }
 
 impl TlsConnectionKind {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsConnectionKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsConnectionKind"))]
     pub(super) fn is_handshaking(&self) -> bool {
         match self {
             Self::Client(conn) => conn.is_handshaking(),
@@ -40,10 +37,7 @@ impl TlsConnectionKind {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsConnectionKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsConnectionKind"))]
     pub(super) fn wants_read(&self) -> bool {
         match self {
             Self::Client(conn) => conn.wants_read(),
@@ -51,10 +45,7 @@ impl TlsConnectionKind {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsConnectionKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsConnectionKind"))]
     pub(super) fn wants_write(&self) -> bool {
         match self {
             Self::Client(conn) => conn.wants_write(),
@@ -62,10 +53,7 @@ impl TlsConnectionKind {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsConnectionKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsConnectionKind"))]
     pub(super) fn read_tls(&mut self, stream: &mut StreamKind) -> io::Result<usize> {
         match self {
             Self::Client(conn) => conn.read_tls(stream),
@@ -73,10 +61,7 @@ impl TlsConnectionKind {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsConnectionKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsConnectionKind"))]
     pub(super) fn write_tls(&mut self, stream: &mut StreamKind) -> io::Result<usize> {
         match self {
             Self::Client(conn) => conn.write_tls(stream),
@@ -84,10 +69,7 @@ impl TlsConnectionKind {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsConnectionKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsConnectionKind"))]
     pub(super) fn process_new_packets(&mut self) -> Result<(), rustls::Error> {
         match self {
             Self::Client(conn) => conn.process_new_packets().map(|_| ()),
@@ -95,10 +77,7 @@ impl TlsConnectionKind {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsConnectionKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsConnectionKind"))]
     pub(super) fn reader_read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             Self::Client(conn) => conn.reader().read(buf),
@@ -106,10 +85,7 @@ impl TlsConnectionKind {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsConnectionKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsConnectionKind"))]
     fn writer_write(&mut self, data: &[u8]) -> io::Result<usize> {
         match self {
             Self::Client(conn) => conn.writer().write(data),
@@ -117,10 +93,7 @@ impl TlsConnectionKind {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsConnectionKind")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsConnectionKind"))]
     pub(super) fn send_close_notify(&mut self) {
         match self {
             Self::Client(conn) => conn.send_close_notify(),
@@ -138,10 +111,7 @@ pub(super) struct TlsIoState {
 pub(super) type SharedTlsIoState = Arc<Mutex<TlsIoState>>;
 
 impl TlsIoState {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsIoState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsIoState"))]
     pub(super) fn write_plaintext_all(&mut self, mut data: &[u8]) -> io::Result<()> {
         while !data.is_empty() {
             let written = self.connection.writer_write(data)?;
@@ -161,45 +131,30 @@ impl TlsIoState {
         Ok(())
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsIoState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsIoState"))]
     #[inline]
     pub(super) fn fd(&self) -> fd_ops::RawFd {
         self.stream.fd()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsIoState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsIoState"))]
     pub(super) fn pollable(&self) -> bool {
         self.stream.pollable()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsIoState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsIoState"))]
     #[inline]
     pub(super) fn shutdown_close(&self) -> io::Result<()> {
         self.stream.shutdown_close()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsIoState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsIoState"))]
     #[inline]
     pub(super) fn read_tls(&mut self) -> io::Result<usize> {
         self.connection.read_tls(&mut self.stream)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "TlsIoState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "TlsIoState"))]
     #[inline]
     pub(super) fn write_tls(&mut self) -> io::Result<usize> {
         self.connection.write_tls(&mut self.stream)

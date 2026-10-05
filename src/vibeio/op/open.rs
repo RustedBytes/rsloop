@@ -38,18 +38,12 @@ impl OpenOp {
 impl Op for OpenOp {
     type Output = OwnedFd;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<OpenOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<OpenOp as Op>"))]
     fn completion_returns_fd(&self) -> bool {
         true
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<OpenOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<OpenOp as Op>"))]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -87,18 +81,16 @@ impl Op for OpenOp {
         if result < 0 {
             Poll::Ready(Err(crate::vibeio::op::io_util::completion_error(result)))
         } else {
-            // SAFETY: A successful OpenAt completion returns a fresh descriptor.
-            // Taking the completion removes it from the driver's pending state;
-            // clearing our token above prevents cancellation from closing it.
-            // Ownership now transfers to the result, including if it is discarded.
+            // SAFETY: A successful OpenAt completion returns a fresh
+            // descriptor. Taking the completion removes it from the
+            // driver's pending state; clearing our token above
+            // prevents cancellation from closing it. Ownership now
+            // transfers to the result, including if it is discarded.
             Poll::Ready(Ok(unsafe { OwnedFd::from_raw_fd(result) }))
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<OpenOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<OpenOp as Op>"))]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -120,14 +112,12 @@ impl Op for OpenOp {
 }
 
 impl Drop for OpenOp {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<OpenOp as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<OpenOp as Drop>"))]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
-            // Paths and result storage remain owned until the kernel acknowledges
-            // completion, even if cancellation runs outside the submitting runtime.
+            // Paths and result storage remain owned until the kernel
+            // acknowledges completion, even if cancellation runs
+            // outside the submitting runtime.
             self.driver
                 .ignore_completion(token, Box::new((self.path.take(),)));
         }

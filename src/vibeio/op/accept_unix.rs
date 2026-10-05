@@ -23,10 +23,7 @@ pub struct AcceptUnixOp<'a> {
 }
 
 impl<'a> AcceptUnixOp<'a> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "AcceptUnixOp")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AcceptUnixOp"))]
     #[inline]
     pub fn new(handle: &'a InnerRawHandle) -> Self {
         Self {
@@ -364,7 +361,8 @@ mod tests {
         let flags = unsafe { libc::fcntl(accepted.as_raw_fd(), libc::F_GETFD) };
         assert_ne!(flags, -1);
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
-        // SAFETY: accepted still owns the fd; F_GETFL only queries integer flags.
+        // SAFETY: accepted still owns the fd; F_GETFL only queries integer
+        // flags.
         let status = unsafe { libc::fcntl(accepted.as_raw_fd(), libc::F_GETFL) };
         assert_ne!(status, -1);
         assert_eq!(

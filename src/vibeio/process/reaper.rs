@@ -69,7 +69,8 @@ type PendingChild = std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>
 
 #[cfg_attr(feature = "profile", hotpath::measure)]
 fn wait_pending_child(pending: &PendingChild) {
-    // This mutex only transfers ownership; never retain its guard while waiting.
+    // This mutex only transfers ownership; never retain its guard while
+    // waiting.
     let child = pending.lock().unwrap().take();
     if let Some(mut child) = child {
         let _ = child.wait();
@@ -93,10 +94,7 @@ fn reap_with_worker(
 /// Zombie reaper process that waits on child processes asynchronously.
 impl ZombieReaper {
     /// Creates a new zombie reaper instance.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ZombieReaper")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ZombieReaper"))]
     #[inline]
     pub(crate) fn new() -> Self {
         Self
@@ -125,10 +123,7 @@ impl ZombieReaper {
     }
 
     /// Reaps a child process on drop, waiting asynchronously if possible.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ZombieReaper")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ZombieReaper"))]
     #[inline]
     pub(crate) fn reap_on_drop(&self, mut child: std::process::Child) {
         if let Ok(Some(_)) = child.try_wait() {
@@ -138,8 +133,9 @@ impl ZombieReaper {
         if let Poll::Ready(Some(reaper_send)) =
             Box::pin(current_zombie_reaper()).poll_unpin(&mut Context::from_waker(Waker::noop()))
         {
-            // Send the child to the zombie reaper, so it can wait on it asynchronously.
-            // A rejected message drops its guard and starts fallback reaping.
+            // Send the child to the zombie reaper, so it can wait on it
+            // asynchronously. A rejected message drops its guard
+            // and starts fallback reaping.
             let _ = reaper_send.try_send((child, None));
         }
     }
@@ -304,7 +300,8 @@ mod ownership_tests {
         );
         drop(stdin);
         assert_reaped(pid);
-        // Reaping precedes delivery by a small interval, so poll under a deadline.
+        // Reaping precedes delivery by a small interval, so poll under a
+        // deadline.
         let deadline = Instant::now() + crate::vibeio::test_support::WATCHDOG;
         loop {
             if let Poll::Ready(status) = wait.as_mut().poll(&mut Context::from_waker(Waker::noop()))
@@ -376,8 +373,9 @@ impl Drop for WaitContext {
         if !handle.is_null() {
             // SAFETY: the last Arc owns this successfully registered wait.
             // There is only one callback, which has relinquished its Arc.
-            // NULL requests nonblocking deletion, safe even inside that callback.
-            // WT_EXECUTEONLYONCE does not remove the need to unregister.
+            // NULL requests nonblocking deletion, safe even inside that
+            // callback. WT_EXECUTEONLYONCE does not remove the need
+            // to unregister.
             unsafe {
                 windows_sys::Win32::System::Threading::UnregisterWaitEx(
                     handle,
@@ -421,10 +419,12 @@ fn register_process_wait(message: ZombieReaperMessage) {
     });
     let callback_ref = Arc::into_raw(ctx.clone());
     // Output storage is independent of the callback context. An early callback
-    // cannot free it, and only this thread publishes the completed registration.
+    // cannot free it, and only this thread publishes the completed
+    // registration.
     let mut wait_handle = std::ptr::null_mut();
-    // SAFETY: the process is owned by ctx; callback_ref owns a strong reference.
-    // No locks are held across registration, which may schedule an early callback.
+    // SAFETY: the process is owned by ctx; callback_ref owns a strong
+    // reference. No locks are held across registration, which may schedule
+    // an early callback.
     let ok = unsafe {
         RegisterWaitForSingleObject(
             &mut wait_handle,
@@ -438,7 +438,8 @@ fn register_process_wait(message: ZombieReaperMessage) {
     if ok != 0 {
         ctx.wait_handle.store(wait_handle, Ordering::Release);
     } else {
-        // SAFETY: failed registration cannot invoke the callback; recover its Arc.
+        // SAFETY: failed registration cannot invoke the callback; recover its
+        // Arc.
         drop(unsafe { Arc::from_raw(callback_ref) });
         let ctx = Arc::try_unwrap(ctx)
             .ok()
@@ -548,8 +549,9 @@ fn pidfd_available() -> bool {
     // Try opening a pidfd for our own PID — it will succeed on 5.3+ and fail
     // with ENOSYS on older kernels.
     let pid = std::process::id() as libc::pid_t;
-    // SAFETY: pidfd_open takes the current process's integer PID and zero flags,
-    // with no pointers. A successful result transfers a fresh descriptor.
+    // SAFETY: pidfd_open takes the current process's integer PID and zero
+    // flags, with no pointers. A successful result transfers a fresh
+    // descriptor.
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0 as libc::c_uint) };
     if fd >= 0 {
         // SAFETY: the successful syscall returned a valid, uniquely owned fd.
@@ -611,13 +613,15 @@ async fn zombie_reaper_fn_linux_pidfd(rx: async_channel::Receiver<ZombieReaperMe
         // This lets us handle many children concurrently without blocking
         // the reaper loop.
         crate::vibeio::spawn(async move {
-            // Keep ownership in this task so cancellation still reaps the child.
+            // Keep ownership in this task so cancellation still reaps the
+            // child.
             let mut child = child;
             let mut op = WaitPidOp::new(pid);
             let result = poll_fn(|cx| {
-                // The WaitPidOp uses poll-based I/O internally (pidfd registered
-                // in Poll mode), so we always go through poll_poll regardless of
-                // whether the driver supports completions.
+                // The WaitPidOp uses poll-based I/O internally (pidfd
+                // registered in Poll mode), so we always go
+                // through poll_poll regardless of whether the
+                // driver supports completions.
                 op.poll(
                     cx,
                     &crate::vibeio::executor::current_driver().expect("no driver"),
@@ -627,7 +631,8 @@ async fn zombie_reaper_fn_linux_pidfd(rx: async_channel::Receiver<ZombieReaperMe
 
             match result {
                 Ok(raw) => {
-                    // WaitPidOp already reaped it; do not wait on a recycled PID.
+                    // WaitPidOp already reaped it; do not wait on a recycled
+                    // PID.
                     child.0.take();
                     if let Some(sender) = sender {
                         let _ = sender.send(Ok(exit_status_from_raw(raw)));

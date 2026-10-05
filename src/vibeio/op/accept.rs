@@ -53,7 +53,8 @@ fn load_accept_ex(socket: SOCKET) -> Result<WinSock::LPFN_ACCEPTEX, io::Error> {
     let mut guid = WSAID_ACCEPTEX;
 
     // SAFETY: the GUID and function-pointer output have their exact supplied
-    // sizes; all outputs remain live for this synchronous (null OVERLAPPED) call.
+    // sizes; all outputs remain live for this synchronous (null OVERLAPPED)
+    // call.
     let ioctl_result = unsafe {
         WinSock::WSAIoctl(
             socket,
@@ -126,8 +127,8 @@ fn load_get_accept_ex_sockaddrs(
 fn listener_socket_family(listener_socket: SOCKET) -> Result<i32, io::Error> {
     let mut addr = SOCKADDR_STORAGE::default();
     let mut addr_len = std::mem::size_of::<SOCKADDR_STORAGE>() as i32;
-    // SAFETY: addr and addr_len are live writable output storage of the supplied
-    // size. getsockname does not retain their pointers.
+    // SAFETY: addr and addr_len are live writable output storage of the
+    // supplied size. getsockname does not retain their pointers.
     let result = unsafe {
         WinSock::getsockname(
             listener_socket,
@@ -195,7 +196,8 @@ fn finish_unix_accept(
     }
     let mut peer = MaybeUninit::<libc::sockaddr_storage>::zeroed();
     let mut peer_len = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
-    // SAFETY: peer and peer_len are valid writable storage; owned keeps fd open.
+    // SAFETY: peer and peer_len are valid writable storage; owned keeps fd
+    // open.
     let result = unsafe {
         libc::getpeername(
             fd,
@@ -236,7 +238,8 @@ fn finish_windows_accept(owned: OwnedSocket) -> io::Result<(OwnedAcceptSocket, S
 #[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(windows)]
 fn last_socket_error() -> io::Error {
-    // SAFETY: reads this thread's Winsock error state without pointer arguments.
+    // SAFETY: reads this thread's Winsock error state without pointer
+    // arguments.
     io::Error::from_raw_os_error(unsafe { WinSock::WSAGetLastError() })
 }
 
@@ -279,19 +282,13 @@ impl<'a> AcceptOp<'a> {
 impl Op for AcceptOp<'_> {
     type Output = (OwnedAcceptSocket, SocketAddr);
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<AcceptOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<AcceptOp as Op>"))]
     #[cfg(target_os = "linux")]
     fn completion_returns_fd(&self) -> bool {
         true
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<AcceptOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<AcceptOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -367,16 +364,14 @@ impl Op for AcceptOp<'_> {
                 return Poll::Ready(Err(error));
             }
 
-            // SAFETY: accept returned a new socket, checked against INVALID_SOCKET.
+            // SAFETY: accept returned a new socket, checked against
+            // INVALID_SOCKET.
             let owned = unsafe { OwnedSocket::from_raw_socket(accepted_socket as _) };
             Poll::Ready(finish_windows_accept(owned))
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<AcceptOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<AcceptOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -501,10 +496,7 @@ impl Op for AcceptOp<'_> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<AcceptOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<AcceptOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -576,10 +568,7 @@ impl Op for AcceptOp<'_> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<AcceptOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<AcceptOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -640,7 +629,8 @@ mod ownership_tests {
             assert_eq!(listener_socket_family(raw).unwrap(), family as i32);
             let accepted = create_accept_socket(raw).unwrap();
             let mut flags = 0;
-            // SAFETY: accepted owns the live socket handle and flags is writable.
+            // SAFETY: accepted owns the live socket handle and flags is
+            // writable.
             let result =
                 unsafe { GetHandleInformation(accepted.as_raw_socket() as *mut _, &mut flags) };
             assert_ne!(result, 0, "{}", io::Error::last_os_error());

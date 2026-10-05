@@ -41,10 +41,7 @@ impl OpenOptions {
     /// Creates a new `OpenOptions` with default values.
     ///
     /// By default, all options are set to `false`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[inline]
     pub fn new() -> Self {
         Self {
@@ -58,10 +55,7 @@ impl OpenOptions {
     }
 
     /// Sets whether the file should be opened for reading.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[inline]
     pub fn read(&mut self, read: bool) -> &mut Self {
         self.read = read;
@@ -69,10 +63,7 @@ impl OpenOptions {
     }
 
     /// Sets whether the file should be opened for writing.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[inline]
     pub fn write(&mut self, write: bool) -> &mut Self {
         self.write = write;
@@ -80,10 +71,7 @@ impl OpenOptions {
     }
 
     /// Sets whether the file should be opened in append mode.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[inline]
     pub fn append(&mut self, append: bool) -> &mut Self {
         self.append = append;
@@ -91,10 +79,7 @@ impl OpenOptions {
     }
 
     /// Sets whether the file should be truncated if it already exists.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[inline]
     pub fn truncate(&mut self, truncate: bool) -> &mut Self {
         self.truncate = truncate;
@@ -102,10 +87,7 @@ impl OpenOptions {
     }
 
     /// Sets whether the file should be created if it does not exist.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[inline]
     pub fn create(&mut self, create: bool) -> &mut Self {
         self.create = create;
@@ -114,10 +96,7 @@ impl OpenOptions {
 
     /// Sets whether the file should be created exclusively (fails if it already
     /// exists).
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[inline]
     pub fn create_new(&mut self, create_new: bool) -> &mut Self {
         self.create_new = create_new;
@@ -127,10 +106,7 @@ impl OpenOptions {
     /// Validates the open options.
     ///
     /// This is an internal method used to ensure the options are valid.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[inline]
     fn validate(&self) -> io::Result<()> {
         let writing = self.write || self.append;
@@ -160,10 +136,7 @@ impl OpenOptions {
     /// Returns the initial cursor position for the file.
     ///
     /// If append mode is enabled, the cursor is set to the end of the file.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[inline]
     fn initial_cursor_for_append(&self, file: &std::fs::File) -> io::Result<u64> {
         if self.append {
@@ -278,10 +251,7 @@ impl OpenOptions {
     /// Opens a file synchronously.
     ///
     /// This is an internal method used when io_uring is not available.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[inline]
     fn open_blocking(&self, path: &Path) -> io::Result<std::fs::File> {
         #[cfg(windows)]
@@ -306,10 +276,7 @@ impl OpenOptions {
     /// Builds an `OpenOp` for use with io_uring.
     ///
     /// This is an internal method used on Linux with io_uring support.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "OpenOptions")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OpenOptions"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_open_op(

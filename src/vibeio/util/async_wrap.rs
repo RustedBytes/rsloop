@@ -235,8 +235,9 @@ where
                         crate::vibeio::io::AsyncWrite::write(&mut inner, buf).await;
                     let count = match written {
                         Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
-                            // These bytes were already acknowledged to the caller.
-                            // Retain the returned buffer and retry at the same cursor.
+                            // These bytes were already acknowledged to the
+                            // caller. Retain the
+                            // returned buffer and retry at the same cursor.
                             buf = returned;
                             continue;
                         }

@@ -49,8 +49,9 @@ fn socket_sendto<B: IoBuf>(socket: SOCKET, buf: &B, addr: SocketAddr) -> io::Res
     let (raw_addr, raw_addr_len) = socket_addr_to_raw(addr);
     let mut bytes: u32 = 0;
 
-    // SAFETY: IoBuf supplies a live initialized payload; raw_addr and all output
-    // locals remain live through this synchronous, null-OVERLAPPED call.
+    // SAFETY: IoBuf supplies a live initialized payload; raw_addr and all
+    // output locals remain live through this synchronous, null-OVERLAPPED
+    // call.
     let send_result = unsafe {
         WinSock::WSASendTo(
             socket,
@@ -130,10 +131,7 @@ impl<'a, B: IoBuf> SendtoOp<'a, B> {
 impl<B: IoBuf> Op for SendtoOp<'_, B> {
     type Output = usize;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SendtoOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SendtoOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -147,7 +145,8 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
         let result = {
             let (raw_addr, raw_addr_len) = socket_addr_to_raw(self.addr);
             // SAFETY: IoBuf provides initialized readable bytes and raw_addr is
-            // live address storage of the supplied size; sendto retains no pointers.
+            // live address storage of the supplied size; sendto retains no
+            // pointers.
             let written = unsafe {
                 libc::sendto(
                     self.handle.handle,
@@ -177,10 +176,7 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
         poll_result_or_wait(result, self.handle, cx, driver, Interest::WRITABLE)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SendtoOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SendtoOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -216,10 +212,7 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
         Poll::Ready(Ok(written))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SendtoOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SendtoOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -276,7 +269,8 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
             return Ok(());
         }
 
-        // SAFETY: reads this thread's last Winsock error without pointer arguments.
+        // SAFETY: reads this thread's last Winsock error without pointer
+        // arguments.
         let err = unsafe { WinSock::WSAGetLastError() };
         if err == WSA_IO_PENDING {
             Ok(())
@@ -286,10 +280,7 @@ impl<B: IoBuf> Op for SendtoOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SendtoOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SendtoOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(

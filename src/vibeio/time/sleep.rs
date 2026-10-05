@@ -116,10 +116,7 @@ impl Sleep {
 impl Future for Sleep {
     type Output = ();
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Sleep as Future>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Sleep as Future>"))]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
 
@@ -133,7 +130,8 @@ impl Future for Sleep {
                 current_timer().expect("Sleep::poll called without a timer-enabled runtime")
             });
 
-            // The timer driver expects a task `Waker`. We clone the task waker here.
+            // The timer driver expects a task `Waker`. We clone the task waker
+            // here.
             let waker = cx.waker().clone();
             match timer_rc.submit(this.deadline, waker) {
                 Some(handle) => {
@@ -142,16 +140,19 @@ impl Future for Sleep {
                     Poll::Pending
                 }
                 None => {
-                    // Timer driver woke us immediately (duration rounded to 0 or similar).
+                    // Timer driver woke us immediately (duration rounded to 0
+                    // or similar).
                     match this.zero_behavior {
                         ZeroBehavior::Immediate => {
                             this.fired.set(true);
                             Poll::Ready(())
                         }
                         ZeroBehavior::Yield => {
-                            // If we haven't scheduled the one-shot yield yet, schedule it
-                            // by waking ourselves and return Pending. On the subsequent
-                            // poll we will observe `yield_scheduled` and complete.
+                            // If we haven't scheduled the one-shot yield yet,
+                            // schedule it by waking
+                            // ourselves and return Pending. On the subsequent
+                            // poll we will observe `yield_scheduled` and
+                            // complete.
                             if !this.yield_scheduled.replace(true) {
                                 cx.waker().wake_by_ref();
                                 Poll::Pending
@@ -200,7 +201,8 @@ impl Future for Sleep {
                                 return Poll::Pending;
                             }
                             None => {
-                                // Timer driver woke us immediately (duration rounded to 0 or
+                                // Timer driver woke us immediately (duration
+                                // rounded to 0 or
                                 // similar).
                                 this.fired.set(true);
                                 return Poll::Ready(());
@@ -215,10 +217,7 @@ impl Future for Sleep {
 }
 
 impl Drop for Sleep {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Sleep as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Sleep as Drop>"))]
     fn drop(&mut self) {
         // If we still have an outstanding timer handle, cancel it so the timer
         // won't hold onto our waker.

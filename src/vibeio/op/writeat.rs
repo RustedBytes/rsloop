@@ -71,10 +71,7 @@ impl<'a, B: IoBuf> WriteAtOp<'a, B> {
 impl<B: IoBuf> Op for WriteAtOp<'_, B> {
     type Output = usize;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WriteAtOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WriteAtOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -110,10 +107,7 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
         Poll::Ready(Ok(written))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WriteAtOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WriteAtOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -142,7 +136,8 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
         }
 
         // SAFETY: the initialized buffer is stable and retained through I/O;
-        // the driver retains OVERLAPPED, including cancellation acknowledgement.
+        // the driver retains OVERLAPPED, including cancellation
+        // acknowledgement.
         let write_result = unsafe {
             WriteFile(
                 handle as HANDLE,
@@ -165,10 +160,7 @@ impl<B: IoBuf> Op for WriteAtOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<WriteAtOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<WriteAtOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(

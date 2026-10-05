@@ -33,10 +33,7 @@ impl SymlinkOp {
 impl Op for SymlinkOp {
     type Output = ();
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SymlinkOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SymlinkOp as Op>"))]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -78,10 +75,7 @@ impl Op for SymlinkOp {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SymlinkOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SymlinkOp as Op>"))]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -114,8 +108,9 @@ impl Drop for SymlinkOp {
     )]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
-            // Paths and result storage remain owned until the kernel acknowledges
-            // completion, even if cancellation runs outside the submitting runtime.
+            // Paths and result storage remain owned until the kernel
+            // acknowledges completion, even if cancellation runs
+            // outside the submitting runtime.
             self.driver.ignore_completion(
                 token,
                 Box::new((self.old_path.take(), self.new_path.take())),

@@ -430,10 +430,7 @@ struct AfdPollInfo {
 }
 
 impl AfdPollInfo {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "AfdPollInfo")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AfdPollInfo"))]
     #[inline]
     fn new(socket: SOCKET, events: u32) -> Self {
         Self {
@@ -462,8 +459,9 @@ impl Interruptor for IocpInterruptor {
     fn interrupt(&self) {
         if let Some(port) = self.port.upgrade() {
             // SAFETY: the upgraded Arc holds a live completion port through the
-            // call. This wake packet uses a reserved key and no OVERLAPPED data;
-            // no Rust memory is passed for asynchronous access.
+            // call. This wake packet uses a reserved key and no OVERLAPPED
+            // data; no Rust memory is passed for asynchronous
+            // access.
             let _ = unsafe {
                 PostQueuedCompletionStatus(
                     port.as_raw_handle() as HANDLE,
@@ -524,10 +522,7 @@ struct DriverState {
 }
 
 impl DriverState {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "DriverState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "DriverState"))]
     fn retain_cancelled(
         &mut self,
         token: usize,
@@ -585,10 +580,7 @@ impl Drop for IocpDriver {
 }
 
 impl IocpDriver {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     fn quiesce(&mut self, timeout: Duration) -> io::Result<()> {
         let mut wakers = Vec::new();
         let state = self.state.get_mut();
@@ -610,8 +602,9 @@ impl IocpDriver {
             .map(|(token, _)| token)
             .collect::<Vec<_>>();
         // No task wakeups or rearming during teardown. Operation drops have
-        // requested cancellation of completion I/O before releasing their driver
-        // owner; outstanding driver-owned AFD polls must be cancelled here.
+        // requested cancellation of completion I/O before releasing their
+        // driver owner; outstanding driver-owned AFD polls must be
+        // cancelled here.
         drop(wakers);
         for token in poll_tokens {
             self.cancel_poll_operation(token);
@@ -639,10 +632,7 @@ impl IocpDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     pub(crate) fn new() -> Result<Self, io::Error> {
         // SAFETY: INVALID_HANDLE_VALUE plus a null existing port requests a new
@@ -668,10 +658,7 @@ impl IocpDriver {
         })
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn update_waiter(waiter_slot: &mut Option<Waker>, waker: Waker) -> Option<Waker> {
         if !waiter_slot
@@ -684,28 +671,19 @@ impl IocpDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn iocp_handle(&self) -> HANDLE {
         self.port.as_raw_handle() as HANDLE
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn status_is_success(status: NTSTATUS) -> bool {
         status >= 0
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn ntstatus_to_io_error(status: NTSTATUS) -> io::Error {
         // SAFETY: this conversion takes only an integer status, with no pointer
@@ -718,10 +696,7 @@ impl IocpDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn raw_os_handle_to_windows_handle(handle: RawOsHandle) -> HANDLE {
         match handle {
@@ -730,10 +705,7 @@ impl IocpDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn raw_os_handle_to_socket(handle: RawOsHandle) -> Result<SOCKET, io::Error> {
         match handle {
@@ -745,19 +717,13 @@ impl IocpDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn duration_to_timeout_ms(timeout: Option<Duration>) -> u32 {
         super::iocp_timeout_ms(timeout)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn completion_result_from_entry(entry: &OVERLAPPED_ENTRY) -> i32 {
         if entry.Internal == 0 {
@@ -776,10 +742,7 @@ impl IocpDriver {
         super::encode_completion_error(win32_error).unwrap_or(-(ERROR_ARITHMETIC_OVERFLOW as i32))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn interest_to_afd_events(interest: Interest) -> u32 {
         let mut events = AFD_POLL_DISCONNECT | AFD_POLL_ABORT | AFD_POLL_LOCAL_CLOSE;
@@ -798,10 +761,7 @@ impl IocpDriver {
         events
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn get_base_socket(socket: SOCKET, ioctl: u32) -> Result<SOCKET, io::Error> {
         let mut base_socket: SOCKET = INVALID_SOCKET;
@@ -824,7 +784,8 @@ impl IocpDriver {
         };
 
         if result == SOCKET_ERROR {
-            // SAFETY: reads the calling thread's last Winsock error; no pointers.
+            // SAFETY: reads the calling thread's last Winsock error; no
+            // pointers.
             let err = unsafe { WinSock::WSAGetLastError() };
             return Err(io::Error::from_raw_os_error(err));
         }
@@ -838,10 +799,7 @@ impl IocpDriver {
         Ok(base_socket)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn resolve_base_socket(socket: SOCKET) -> Result<SOCKET, io::Error> {
         super::resolve_base_socket_with(
@@ -851,10 +809,7 @@ impl IocpDriver {
         )
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn open_afd_handle() -> Result<OwnedHandle, io::Error> {
         let device_name = format!("\\Device\\Afd\\vibeio-{}", std::process::id());
@@ -878,9 +833,10 @@ impl IocpDriver {
         let mut afd_handle: HANDLE = ptr::null_mut();
         let mut create_status = IO_STATUS_BLOCK::default();
         // SAFETY: the counted UTF-16 name, UNICODE_STRING and object attributes
-        // remain live for this create/open call. Their pointers and byte lengths
-        // describe initialized storage; handle/status outputs are writable locals.
-        // Optional allocation-size and EA inputs are null with zero EA length.
+        // remain live for this create/open call. Their pointers and byte
+        // lengths describe initialized storage; handle/status outputs
+        // are writable locals. Optional allocation-size and EA inputs
+        // are null with zero EA length.
         let status = unsafe {
             NtCreateFile(
                 &mut afd_handle,
@@ -912,10 +868,7 @@ impl IocpDriver {
         Ok(unsafe { OwnedHandle::from_raw_handle(afd_handle as RawHandle) })
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn ensure_afd_handle(&self) -> Result<HANDLE, io::Error> {
         {
@@ -930,8 +883,9 @@ impl IocpDriver {
             let afd = Self::open_afd_handle()?;
             let afd_handle = afd.as_raw_handle() as HANDLE;
 
-            // SAFETY: afd and self.port keep both handles live during association.
-            // The returned port aliases self.port; it is not a second owned handle.
+            // SAFETY: afd and self.port keep both handles live during
+            // association. The returned port aliases self.port; it
+            // is not a second owned handle.
             let completion_port = unsafe {
                 CreateIoCompletionPort(afd_handle, self.iocp_handle(), AFD_POLL_COMPLETION_KEY, 0)
             };
@@ -939,9 +893,10 @@ impl IocpDriver {
                 return Err(io::Error::last_os_error());
             }
 
-            // SAFETY: afd owns the live file handle; this flag-only call retains
-            // no pointers. Only event signaling is skipped, not successful IOCP
-            // packets, which are required to retire pending operation storage.
+            // SAFETY: afd owns the live file handle; this flag-only call
+            // retains no pointers. Only event signaling is skipped,
+            // not successful IOCP packets, which are required to
+            // retire pending operation storage.
             if unsafe {
                 SetFileCompletionNotificationModes(afd_handle, FILE_SKIP_SET_EVENT_ON_HANDLE)
             } == 0
@@ -958,10 +913,7 @@ impl IocpDriver {
             .as_raw_handle() as HANDLE)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn arm_poll_operation(
         &self,
@@ -1069,10 +1021,7 @@ impl IocpDriver {
         Err(Self::ntstatus_to_io_error(status))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn cancel_poll_operation(&self, poll_token: usize) {
         let afd_handle = {
@@ -1099,10 +1048,7 @@ impl IocpDriver {
         let _ = unsafe { NtCancelIoFileEx(afd_handle, io_status_ptr, &mut cancel_status) };
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn disassociate_iocp_handle(&self, handle: &InnerRawHandle) -> io::Result<()> {
         let windows_handle = Self::raw_os_handle_to_windows_handle(handle.handle);
@@ -1111,11 +1057,12 @@ impl IocpDriver {
             Key: std::ptr::null_mut(),
         };
         let mut status = IO_STATUS_BLOCK::default();
-        // SAFETY: this synchronous information call uses a live borrowed handle,
-        // an initialized input of the exact requested type/size and writable
-        // local status storage. Nt/ZwSetInformationFile is synchronous even for
-        // asynchronous handles (see Microsoft's IoIsOperationSynchronous docs).
-        // A null Port requests detachment; no pointer in info is dereferenced.
+        // SAFETY: this synchronous information call uses a live borrowed
+        // handle, an initialized input of the exact requested type/size
+        // and writable local status storage. Nt/ZwSetInformationFile is
+        // synchronous even for asynchronous handles (see Microsoft's
+        // IoIsOperationSynchronous docs). A null Port requests
+        // detachment; no pointer in info is dereferenced.
         let result = unsafe {
             NtSetInformationFile(
                 windows_handle,
@@ -1132,10 +1079,7 @@ impl IocpDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn process_entries(&self, entries: &[OVERLAPPED_ENTRY]) {
         let mut wakers = Vec::new();
@@ -1182,8 +1126,9 @@ impl IocpDriver {
                 continue;
             }
 
-            // SAFETY: every OVERLAPPED pointer submitted by completion operations points to
-            // the first field of OverlappedCtx (repr(C), first field), and
+            // SAFETY: every OVERLAPPED pointer submitted by completion
+            // operations points to the first field of OverlappedCtx
+            // (repr(C), first field), and
             // lives in Completion::overlapped until consumed here.
             let completion_token = unsafe { (*entry.lpOverlapped.cast::<OverlappedCtx>()).token };
             if let Some(completion) = state.completions.get_mut(completion_token) {
@@ -1205,10 +1150,7 @@ impl IocpDriver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn process_batch(&self, timeout_ms: u32) -> Result<usize, io::Error> {
         // GetQueuedCompletionStatusEx initializes exactly the entries it
@@ -1220,7 +1162,8 @@ impl IocpDriver {
         // SAFETY: self retains the live port throughout this synchronous call.
         // Both output pointers refer to writable locals, with ulCount equal to
         // the array capacity. On success Windows reports at most that count;
-        // on failure no entries are inspected. Alertable callbacks are disabled.
+        // on failure no entries are inspected. Alertable callbacks are
+        // disabled.
         let success = unsafe {
             GetQueuedCompletionStatusEx(
                 self.iocp_handle(),
@@ -1266,10 +1209,7 @@ impl IocpDriver {
         Ok(entries_removed)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "IocpDriver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "IocpDriver"))]
     #[inline]
     fn process_ready_completions(&self) -> Result<(), io::Error> {
         for _ in 0..IOCP_DRAIN_BATCHES {
@@ -1635,9 +1575,10 @@ impl Driver for IocpDriver {
             // SAFETY: retain_cancelled returns a pointer only while its boxed
             // context remains in the driver. In that branch retired is None,
             // so no payload destructor can re-enter and retire it before this
-            // call. The operation's borrowed registration keeps its handle live.
-            // Neither success nor failure acknowledges completion: context and
-            // payload remain retained until the packet is dequeued.
+            // call. The operation's borrowed registration keeps its handle
+            // live. Neither success nor failure acknowledges
+            // completion: context and payload remain retained until
+            // the packet is dequeued.
             let _ =
                 unsafe { CancelIoEx(Self::raw_os_handle_to_windows_handle(handle), overlapped) };
         }

@@ -563,6 +563,7 @@ def compare(args) -> None:
     out.mkdir(parents=True, exist_ok=False)
     rng = random.Random(args.seed)
     orders = {name: balanced_orders(args.blocks, rng) for name in names}
+    get_affinity = getattr(os, "sched_getaffinity", None)
     plan = {
         "schema": SCHEMA,
         "baseline": str(baseline),
@@ -591,9 +592,7 @@ def compare(args) -> None:
         },
         "cpu_count": os.cpu_count(),
         "processor": platform.processor(),
-        "affinity": sorted(os.sched_getaffinity(0))
-        if hasattr(os, "sched_getaffinity")
-        else None,
+        "affinity": sorted(get_affinity(0)) if get_affinity is not None else None,
     }
     # Written before observing any timing: no post-hoc primary/threshold selection.
     write_json(out / "plan.json", plan)

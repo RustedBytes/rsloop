@@ -174,19 +174,13 @@ impl Future for RuntimeDispatcher {
 }
 
 impl RuntimeDispatcher {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeDispatcher")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeDispatcher"))]
     #[inline]
     fn has_ready(&self) -> bool {
         !self.ready_batch.is_empty()
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeDispatcher")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeDispatcher"))]
     fn drain_commands(&mut self) -> bool {
         loop {
             match self.command_rx.try_recv() {
@@ -201,10 +195,7 @@ impl RuntimeDispatcher {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeDispatcher")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeDispatcher"))]
     fn handle_command(&mut self, command: LoopCommand) -> bool {
         match command {
             LoopCommand::ScheduleReady(callback) => {
@@ -476,10 +467,7 @@ impl RuntimeDispatcher {
         false
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeDispatcher")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeDispatcher"))]
     fn dispatch_ready_batch(&mut self) {
         let Some(active_run) = self.active_run.as_ref() else {
             return;
@@ -500,10 +488,7 @@ impl RuntimeDispatcher {
         self.core.signal_ready();
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeDispatcher")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeDispatcher"))]
     fn finish_run(&mut self) {
         let Some(active_run) = self.active_run.take() else {
             return;
@@ -520,10 +505,7 @@ impl RuntimeDispatcher {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeDispatcher")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeDispatcher"))]
     fn cleanup_watchers(&mut self) {
         #[cfg(unix)]
         for (_, watcher) in self.signal_tasks.drain() {

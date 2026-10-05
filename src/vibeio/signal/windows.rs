@@ -97,10 +97,7 @@ impl CtrlC {
 }
 
 impl Drop for CtrlC {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<CtrlC as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<CtrlC as Drop>"))]
     fn drop(&mut self) {
         // Synchronously retire this slot under the dispatcher lock. Deferring
         // removal could retain a cancelled task's waker indefinitely. User
@@ -114,10 +111,7 @@ impl Drop for CtrlC {
 impl Future for CtrlC {
     type Output = io::Result<()>;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<CtrlC as Future>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<CtrlC as Future>"))]
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().poll_recv(cx)
     }
@@ -327,8 +321,9 @@ mod tests {
             wakers: Mutex::new(slab::Slab::new()),
         });
         let mut ctrl_c = listener(&state);
-        // SAFETY: callbacks retain/release Arc ownership and access synchronized
-        // state. Neither the state nor its callbacks have thread affinity.
+        // SAFETY: callbacks retain/release Arc ownership and access
+        // synchronized state. Neither the state nor its callbacks have
+        // thread affinity.
         let waker =
             unsafe { Waker::from_raw(RawWaker::new(Arc::into_raw(state.clone()).cast(), &VTABLE)) };
         assert!(matches!(

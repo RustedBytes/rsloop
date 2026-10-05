@@ -33,10 +33,7 @@ impl MkDirOp {
 impl Op for MkDirOp {
     type Output = ();
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<MkDirOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<MkDirOp as Op>"))]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -78,10 +75,7 @@ impl Op for MkDirOp {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<MkDirOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<MkDirOp as Op>"))]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -102,14 +96,12 @@ impl Op for MkDirOp {
 }
 
 impl Drop for MkDirOp {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<MkDirOp as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<MkDirOp as Drop>"))]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
-            // Paths and result storage remain owned until the kernel acknowledges
-            // completion, even if cancellation runs outside the submitting runtime.
+            // Paths and result storage remain owned until the kernel
+            // acknowledges completion, even if cancellation runs
+            // outside the submitting runtime.
             self.driver
                 .ignore_completion(token, Box::new((self.path.take(),)));
         }

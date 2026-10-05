@@ -11,10 +11,7 @@ pub struct ReadinessOp<'a> {
 }
 
 impl<'a> ReadinessOp<'a> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadinessOp")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadinessOp"))]
     #[inline]
     pub fn new_readable(handle: &'a InnerRawHandle) -> Self {
         Self {
@@ -23,10 +20,7 @@ impl<'a> ReadinessOp<'a> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadinessOp")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadinessOp"))]
     #[inline]
     pub fn new_writable(handle: &'a InnerRawHandle) -> Self {
         Self {

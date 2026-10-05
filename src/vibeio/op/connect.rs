@@ -66,7 +66,8 @@ fn start_nonblocking_connect(
     let connect_result = unsafe { WinSock::connect(socket as SOCKET, raw_addr, raw_addr_len) };
 
     if connect_result == WinSock::SOCKET_ERROR {
-        // SAFETY: reads the calling thread's Winsock error without pointer arguments.
+        // SAFETY: reads the calling thread's Winsock error without pointer
+        // arguments.
         let err_code = unsafe { WinSock::WSAGetLastError() };
         if !matches!(err_code, WSAEINPROGRESS | WSAEWOULDBLOCK | WSAEALREADY) {
             return Err(io::Error::from_raw_os_error(err_code));
@@ -134,7 +135,8 @@ fn ensure_connectex_bound(socket: SOCKET, address: &ConnectAddress) -> Result<()
     };
 
     if bind_result == WinSock::SOCKET_ERROR {
-        // SAFETY: reads the calling thread's Winsock error without pointer arguments.
+        // SAFETY: reads the calling thread's Winsock error without pointer
+        // arguments.
         let err_code = unsafe { WinSock::WSAGetLastError() };
         connectex_bind_error(err_code)?;
     }
@@ -166,7 +168,8 @@ fn load_connect_ex(socket: SOCKET) -> Result<WinSock::LPFN_CONNECTEX, io::Error>
     };
 
     if ioctl_result == WinSock::SOCKET_ERROR {
-        // SAFETY: reads the calling thread's Winsock error without pointer arguments.
+        // SAFETY: reads the calling thread's Winsock error without pointer
+        // arguments.
         let err_code = unsafe { WinSock::WSAGetLastError() };
         return Err(io::Error::from_raw_os_error(err_code));
     }
@@ -195,7 +198,8 @@ fn set_connect_context(socket: SOCKET) -> Result<(), io::Error> {
         )
     };
     if result == WinSock::SOCKET_ERROR {
-        // SAFETY: reads the calling thread's Winsock error without pointer arguments.
+        // SAFETY: reads the calling thread's Winsock error without pointer
+        // arguments.
         let err_code = unsafe { WinSock::WSAGetLastError() };
         return Err(io::Error::from_raw_os_error(err_code));
     }
@@ -227,10 +231,7 @@ struct ConnectAddress {
 }
 
 impl ConnectAddress {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ConnectAddress")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ConnectAddress"))]
     fn raw(&self) -> (AddressPointer, AddressLength) {
         let ptr = match &self.storage {
             AddressStorage::Inet(addr) => std::ptr::from_ref(addr.as_ref()).cast(),
@@ -240,10 +241,7 @@ impl ConnectAddress {
         (ptr, self.len)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ConnectAddress")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ConnectAddress"))]
     fn validate_len(len: AddressLength, capacity: usize) -> io::Result<()> {
         let len = usize::try_from(len).map_err(|_| {
             io::Error::new(
@@ -341,10 +339,7 @@ impl<'a> ConnectOp<'a> {
 impl Op for ConnectOp<'_> {
     type Output = ();
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ConnectOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ConnectOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -419,7 +414,8 @@ impl Op for ConnectOp<'_> {
             let mut peer = MaybeUninit::<libc::sockaddr_storage>::zeroed();
             let mut peer_len = mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
             // SAFETY: the supplied peer buffer and length are live writable
-            // outputs. Only success/failure is used; no address fields are read.
+            // outputs. Only success/failure is used; no address fields are
+            // read.
             let getpeername_result = unsafe {
                 libc::getpeername(
                     self.handle.handle,
@@ -475,7 +471,8 @@ impl Op for ConnectOp<'_> {
                 )
             };
             if getsockopt_result == SOCKET_ERROR {
-                // SAFETY: reads the calling thread's Winsock error without pointer arguments.
+                // SAFETY: reads the calling thread's Winsock error without
+                // pointer arguments.
                 let error = io::Error::from_raw_os_error(unsafe { WinSock::WSAGetLastError() });
                 if error.kind() == io::ErrorKind::WouldBlock {
                     if let Err(err) =
@@ -513,7 +510,8 @@ impl Op for ConnectOp<'_> {
             };
 
             if getpeername_result == SOCKET_ERROR {
-                // SAFETY: reads the calling thread's Winsock error without pointer arguments.
+                // SAFETY: reads the calling thread's Winsock error without
+                // pointer arguments.
                 let err_code = unsafe { WinSock::WSAGetLastError() };
                 if matches!(
                     err_code,
@@ -534,10 +532,7 @@ impl Op for ConnectOp<'_> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ConnectOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ConnectOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -590,10 +585,7 @@ impl Op for ConnectOp<'_> {
         Poll::Ready(Ok(()))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ConnectOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ConnectOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -623,7 +615,8 @@ impl Op for ConnectOp<'_> {
 
         // SAFETY: boxed address storage stays alive through completion; Drop
         // transfers it to cancellation retention if necessary. The driver owns
-        // OVERLAPPED through acknowledgement, and no initial send data is supplied.
+        // OVERLAPPED through acknowledgement, and no initial send data is
+        // supplied.
         let connect_result = unsafe {
             connect_ex_fn(
                 socket,
@@ -640,7 +633,8 @@ impl Op for ConnectOp<'_> {
             return Ok(());
         }
 
-        // SAFETY: reads the calling thread's Winsock error without pointer arguments.
+        // SAFETY: reads the calling thread's Winsock error without pointer
+        // arguments.
         let err = unsafe { WinSock::WSAGetLastError() };
         if err == WSA_IO_PENDING {
             Ok(())
@@ -649,10 +643,7 @@ impl Op for ConnectOp<'_> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ConnectOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ConnectOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -970,8 +961,9 @@ mod ownership_tests {
     fn unix_address_storage_remains_stable() {
         let owner = Rc::new(AnyDriver::new_mock());
         let handle = InnerRawHandle::for_mock_completion(owner);
-        // SAFETY: sockaddr_un is an integer-only C structure; zeroing initializes
-        // its path terminator and any platform length/padding fields.
+        // SAFETY: sockaddr_un is an integer-only C structure; zeroing
+        // initializes its path terminator and any platform
+        // length/padding fields.
         let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
         addr.sun_family = libc::AF_UNIX as _;
         addr.sun_path[0] = b'x' as _;

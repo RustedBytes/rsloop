@@ -66,7 +66,8 @@ fn socket_read_vectored<B: IoVectoredBufMut>(socket: SOCKET, bufs: &mut B) -> io
         )
     };
     if recv_result == SOCKET_ERROR {
-        // SAFETY: reads the calling thread's Winsock error without pointer access.
+        // SAFETY: reads the calling thread's Winsock error without pointer
+        // access.
         return Err(io::Error::from_raw_os_error(unsafe {
             WinSock::WSAGetLastError()
         }));
@@ -114,10 +115,7 @@ impl<'a, B: IoVectoredBufMut> ReadvOp<'a, B> {
 impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
     type Output = usize;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadvOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadvOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_poll(
@@ -158,10 +156,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
         poll_result_or_wait(result, self.handle, cx, driver, Interest::READABLE)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadvOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadvOp as Op>"))]
     #[cfg(any(unix, windows))]
     #[inline]
     fn poll_completion(
@@ -226,7 +221,8 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                     let src = &staging[src_offset..src_offset + chunk];
                     // SAFETY: IoVectoredBufMut supplies writable capacity for
                     // each destination. The separately allocated staging buffer
-                    // cannot overlap it. Do not form a u8 slice over spare capacity.
+                    // cannot overlap it. Do not form a u8 slice over spare
+                    // capacity.
                     unsafe {
                         std::ptr::copy_nonoverlapping(src.as_ptr(), dst.ptr, chunk);
                     }
@@ -239,10 +235,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
         Poll::Ready(Ok(result as usize))
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadvOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadvOp as Op>"))]
     #[cfg(windows)]
     #[inline]
     fn submit_windows(&mut self, overlapped: *mut OVERLAPPED) -> Result<(), io::Error> {
@@ -290,7 +283,8 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                     return Ok(());
                 }
 
-                // SAFETY: reads thread-local Winsock error after failed submission.
+                // SAFETY: reads thread-local Winsock error after failed
+                // submission.
                 let err = unsafe { WinSock::WSAGetLastError() };
                 if err == WSA_IO_PENDING {
                     self.completion_staging = None;
@@ -318,7 +312,8 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
                 let mut staging = vec![0u8; total_len];
                 // SAFETY: staging owns total_len writable bytes and is retained
                 // below on success or pending submission. The driver retains
-                // OVERLAPPED; cancellation retains staging until acknowledgement.
+                // OVERLAPPED; cancellation retains staging until
+                // acknowledgement.
                 let read_result = unsafe {
                     ReadFile(
                         handle as HANDLE,
@@ -346,10 +341,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadvOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadvOp as Op>"))]
     #[cfg(target_os = "linux")]
     #[inline]
     fn build_completion_entry(
@@ -375,8 +367,8 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
         .build()
         .user_data(user_data);
 
-        // Store the iovec array for the completion, because it needs to be kept alive
-        // until the completion is ready.
+        // Store the iovec array for the completion, because it needs to be kept
+        // alive until the completion is ready.
         self.completion_system_iovecs = Some(iovecs);
 
         Ok(entry)
@@ -384,10 +376,7 @@ impl<B: IoVectoredBufMut> Op for ReadvOp<'_, B> {
 }
 
 impl<B: IoVectoredBufMut> Drop for ReadvOp<'_, B> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<ReadvOp as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<ReadvOp as Drop>"))]
     #[inline]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
@@ -439,8 +428,9 @@ mod cancellation_tests {
             drivers
         };
         for driver in drivers {
-            // Datagram boundaries make the short read deterministic: a stream may
-            // legally return fewer bytes than its currently queued payload.
+            // Datagram boundaries make the short read deterministic: a stream
+            // may legally return fewer bytes than its currently
+            // queued payload.
             let reader = UdpSocket::bind("127.0.0.1:0").unwrap();
             let writer = UdpSocket::bind("127.0.0.1:0").unwrap();
             reader.connect(writer.local_addr().unwrap()).unwrap();

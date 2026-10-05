@@ -31,6 +31,7 @@ def main():
     orders = balanced_orders(args.blocks, random.Random(args.seed))
     args.out.mkdir(parents=True, exist_ok=False)
     hashes = {name: sha256(path) for name, path in binaries.items()}
+    get_affinity = getattr(os, "sched_getaffinity", None)
     write_json(
         args.out / "plan.json",
         {
@@ -43,13 +44,11 @@ def main():
             "minimum_gain_pct": 1,
             "minimum_sample_seconds": 0.25,
             "platform": platform.platform(),
-            "affinity": sorted(os.sched_getaffinity(0))
-            if hasattr(os, "sched_getaffinity")
-            else None,
+            "affinity": sorted(get_affinity(0)) if get_affinity is not None else None,
             "runner_sha256": sha256(Path(__file__)),
         },
     )
-    values = {name: [] for name in binaries}
+    values: dict[str, list[float]] = {name: [] for name in binaries}
     with (args.out / "samples.jsonl").open("x") as samples:
         for block, order in enumerate(orders):
             for name in order:
@@ -70,7 +69,9 @@ def main():
             print(f"Completed paired block {block + 1}/{args.blocks}", flush=True)
     if hashes != {name: sha256(path) for name, path in binaries.items()}:
         raise ValueError("Benchmark binaries changed during measurement")
-    report = paired_estimate(**values, seed=args.seed)
+    report = paired_estimate(
+        values["baseline"], values["candidate"], seed=args.seed
+    )
     report["min_observed_seconds"] = min(values["baseline"] + values["candidate"])
     reliable = args.blocks >= 12 and report["min_observed_seconds"] >= 0.25
     report["decision"] = (

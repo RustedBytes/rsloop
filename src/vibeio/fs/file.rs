@@ -833,10 +833,7 @@ impl AsyncWrite for File {
 
 #[cfg(unix)]
 impl AsRawFd for File {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<File as AsRawFd>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<File as AsRawFd>"))]
     #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.inner.as_raw_fd()

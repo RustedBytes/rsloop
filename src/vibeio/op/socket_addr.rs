@@ -13,9 +13,10 @@ pub(crate) fn socket_addr_to_raw(address: SocketAddr) -> (NativeAddress, socket2
     let address = socket2::SockAddr::from(address);
     let length = address.len();
     let mut storage = address.as_storage();
-    // SAFETY: NativeAddress is this platform's sockaddr_storage type, as required
-    // by view_as. SockAddr::from initializes the storage with a valid IPv4/IPv6
-    // address, and the returned value is copied out while storage is alive.
+    // SAFETY: NativeAddress is this platform's sockaddr_storage type, as
+    // required by view_as. SockAddr::from initializes the storage with a
+    // valid IPv4/IPv6 address, and the returned value is copied out while
+    // storage is alive.
     let native = unsafe { *storage.view_as::<NativeAddress>() };
     (native, length)
 }
@@ -50,8 +51,9 @@ pub(super) fn sockaddr_storage_to_socketaddr(
             std::mem::size_of::<libc::sockaddr_in>(),
             std::mem::size_of_val(storage),
         )?;
-        // SAFETY: sockaddr_storage has sufficient size/alignment for sockaddr_in;
-        // the family and returned length establish that its IPv4 fields are present.
+        // SAFETY: sockaddr_storage has sufficient size/alignment for
+        // sockaddr_in; the family and returned length establish that
+        // its IPv4 fields are present.
         let addr_in: &libc::sockaddr_in =
             unsafe { &*(storage as *const _ as *const libc::sockaddr_in) };
         let port = u16::from_be(addr_in.sin_port);
@@ -64,8 +66,9 @@ pub(super) fn sockaddr_storage_to_socketaddr(
             std::mem::size_of::<libc::sockaddr_in6>(),
             std::mem::size_of_val(storage),
         )?;
-        // SAFETY: storage is aligned/sized for sockaddr_in6, and both the family
-        // and returned length have been checked before borrowing its fields.
+        // SAFETY: storage is aligned/sized for sockaddr_in6, and both the
+        // family and returned length have been checked before borrowing
+        // its fields.
         let addr_in6: &libc::sockaddr_in6 =
             unsafe { &*(storage as *const _ as *const libc::sockaddr_in6) };
         let port = u16::from_be(addr_in6.sin6_port);
@@ -99,10 +102,12 @@ pub(super) fn sockaddr_storage_to_socketaddr(
             std::mem::size_of::<SOCKADDR_IN>(),
             std::mem::size_of_val(storage),
         )?;
-        // SAFETY: storage is suitably sized/aligned, and the family/length match IPv4.
+        // SAFETY: storage is suitably sized/aligned, and the family/length
+        // match IPv4.
         let addr_in: &SOCKADDR_IN = unsafe { &*(storage as *const _ as *const SOCKADDR_IN) };
         let port = u16::from_be(addr_in.sin_port);
-        // SAFETY: the IPv4 address union contains initialized network-order bytes.
+        // SAFETY: the IPv4 address union contains initialized network-order
+        // bytes.
         let ip_u32 = u32::from_be(unsafe { addr_in.sin_addr.S_un.S_addr });
         let ip = std::net::Ipv4Addr::from(ip_u32);
         Ok(SocketAddr::V4(std::net::SocketAddrV4::new(ip, port)))
@@ -112,12 +117,15 @@ pub(super) fn sockaddr_storage_to_socketaddr(
             std::mem::size_of::<SOCKADDR_IN6>(),
             std::mem::size_of_val(storage),
         )?;
-        // SAFETY: storage is suitably sized/aligned, and the family/length match IPv6.
+        // SAFETY: storage is suitably sized/aligned, and the family/length
+        // match IPv6.
         let addr_in6: &SOCKADDR_IN6 = unsafe { &*(storage as *const _ as *const SOCKADDR_IN6) };
         let port = u16::from_be(addr_in6.sin6_port);
-        // SAFETY: the IPv6 address union contains sixteen initialized address bytes.
+        // SAFETY: the IPv6 address union contains sixteen initialized address
+        // bytes.
         let ip = std::net::Ipv6Addr::from(unsafe { addr_in6.sin6_addr.u.Byte });
-        // SAFETY: the validated IPv6 structure includes the initialized scope union.
+        // SAFETY: the validated IPv6 structure includes the initialized scope
+        // union.
         let scope_id = unsafe { addr_in6.Anonymous.sin6_scope_id };
         Ok(SocketAddr::V6(std::net::SocketAddrV6::new(
             ip,
@@ -327,7 +335,8 @@ mod tests {
         ];
         for (index, (family, required)) in families.into_iter().enumerate() {
             // SAFETY: socket address storage consists of integer/byte fields;
-            // zero initializes its entire storage before the family is assigned.
+            // zero initializes its entire storage before the family is
+            // assigned.
             let mut storage: Storage = unsafe { std::mem::zeroed() };
             storage.ss_family = family as _;
             let capacity = std::mem::size_of::<Storage>();

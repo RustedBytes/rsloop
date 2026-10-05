@@ -39,18 +39,12 @@ pub(super) enum SocketAction {
 }
 
 impl SocketAction {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "SocketAction")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "SocketAction"))]
     fn writable(&self) -> bool {
         matches!(self, Self::SendAll { .. })
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "SocketAction")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "SocketAction"))]
     fn attempt(&mut self, py: Python<'_>, socket: &Py<PyAny>) -> PyResult<Option<Py<PyAny>>> {
         let result = match self {
             Self::Recv(count) => socket.call_method1(py, "recv", (*count,)),
@@ -65,7 +59,8 @@ impl SocketAction {
             Self::SendAll { data, offset, len } => {
                 // Bound synchronous progress so a large writable socket cannot
                 // monopolize the loop. Only the remaining memoryview is sliced;
-                // partial sends never copy the unsent payload into Python bytes.
+                // partial sends never copy the unsent payload into Python
+                // bytes.
                 for _ in 0..16 {
                     if *offset == *len {
                         return Ok(Some(py.None()));
@@ -140,10 +135,7 @@ struct CancelWait(Arc<WakeState>);
 
 #[pymethods]
 impl CancelWait {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "CancelWait")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CancelWait"))]
     fn __call__(&self, _future: &Bound<'_, PyAny>) {
         self.0.done.store(true, Ordering::Release);
         self.0.waker.wake();
@@ -162,10 +154,7 @@ struct SocketOperation {
 
 #[pymethods]
 impl SocketOperation {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "SocketOperation")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "SocketOperation"))]
     fn __call__(slf: Py<Self>, py: Python<'_>) -> PyResult<()> {
         poll_operation(py, slf)
     }
@@ -357,7 +346,8 @@ async fn wait_socket(
                     return Poll::Ready(Ok(false));
                 }
                 // Readiness is advisory: any later retry still calls the Python
-                // socket and can arm another wait after a spurious notification.
+                // socket and can arm another wait after a spurious
+                // notification.
                 if armed {
                     return Poll::Ready(Ok(true));
                 }

@@ -29,26 +29,17 @@ struct PyImmediateRead {
 
 #[pymethods]
 impl PyImmediateRead {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PyImmediateRead")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyImmediateRead"))]
     fn __await__(slf: Py<Self>) -> Py<Self> {
         slf
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PyImmediateRead")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyImmediateRead"))]
     fn __iter__(slf: Py<Self>) -> Py<Self> {
         slf
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PyImmediateRead")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyImmediateRead"))]
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let value = self.value.take().unwrap_or_else(|| py.None());
         Err(PyStopIteration::new_err(value))
@@ -84,10 +75,7 @@ struct ReadBuffer {
 }
 
 impl ReadBuffer {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     fn with_capacity(capacity: usize) -> Self {
         Self {
             bytes: OwnedReadBuffer::with_capacity(capacity),
@@ -97,37 +85,25 @@ impl ReadBuffer {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     #[inline]
     fn len(&self) -> usize {
         self.bytes.len().saturating_sub(self.start)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     #[inline]
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     #[inline]
     fn unread(&self) -> &[u8] {
         &self.bytes[self.start..]
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     fn extend(&mut self, data: &[u8]) {
         if data.is_empty() {
             return;
@@ -137,10 +113,7 @@ impl ReadBuffer {
         self.bytes.extend_from_slice(data);
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     fn extend_owned(&mut self, data: OwnedReadBuffer) -> Option<OwnedReadBuffer> {
         if data.is_empty() {
             return Some(data);
@@ -155,39 +128,27 @@ impl ReadBuffer {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     fn consume(&mut self, n: usize) {
         self.start = self.start.saturating_add(n).min(self.bytes.len());
         self.compact_if_needed();
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     #[inline]
     fn consume_all(&mut self) {
         self.start = self.bytes.len();
         self.compact_if_needed();
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     fn replace(&mut self, data: &[u8]) {
         self.bytes.clear();
         self.bytes.extend_from_slice(data);
         self.start = 0;
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ReadBuffer")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     fn compact_if_needed(&mut self) {
         if self.start == 0 {
             return;
@@ -417,10 +378,7 @@ enum Separators {
 }
 
 impl Separators {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "Separators")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Separators"))]
     fn single(bytes: &[u8]) -> Self {
         if bytes.len() > INLINE_SEPARATOR_LEN {
             return Self::Heap(vec![bytes.to_vec()]);
@@ -433,10 +391,7 @@ impl Separators {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "Separators")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Separators"))]
     fn from_list(list: Vec<Vec<u8>>) -> Self {
         if let [only] = list.as_slice() {
             return Self::single(only);
@@ -447,20 +402,14 @@ impl Separators {
     /// Order shortest-first, matching `sorted(separator, key=len)`. The sort
     /// has to stay stable so equal-length separators keep their given
     /// order.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "Separators")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Separators"))]
     fn sort_by_length(&mut self) {
         if let Self::Heap(list) = self {
             list.sort_by_key(Vec::len);
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "Separators")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Separators"))]
     fn shortest(&self) -> Option<&[u8]> {
         match self {
             Self::Inline { bytes, len } => Some(&bytes[..*len]),
@@ -468,10 +417,7 @@ impl Separators {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "Separators")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Separators"))]
     fn longest_len(&self) -> usize {
         match self {
             Self::Inline { len, .. } => *len,
@@ -500,13 +446,11 @@ struct UntilReadState {
 }
 
 impl UntilReadState {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UntilReadState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UntilReadState"))]
     fn new(mut separators: Separators, line_mode: bool) -> PyResult<Self> {
-        // asyncio sorts shortest-first and keeps a strictly closer match end, so
-        // the shortest separator wins when two of them end at the same byte.
+        // asyncio sorts shortest-first and keeps a strictly closer match end,
+        // so the shortest separator wins when two of them end at the
+        // same byte.
         separators.sort_by_length();
         let Some(shortest) = separators.shortest() else {
             return Err(PyValueError::new_err(
@@ -530,10 +474,7 @@ impl UntilReadState {
     }
 
     /// One iteration of asyncio's `readuntil` scan loop.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UntilReadState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UntilReadState"))]
     fn scan(&mut self, buffer: &[u8], limit: usize) -> UntilScan {
         let buflen = buffer.len();
         if buflen.saturating_sub(self.offset) < self.min_seplen {
@@ -566,8 +507,8 @@ impl UntilReadState {
             };
         }
 
-        // Everything but the trailing `max_seplen - 1` bytes is now known not to
-        // begin a separator, so the next pass can start there.
+        // Everything but the trailing `max_seplen - 1` bytes is now known not
+        // to begin a separator, so the next pass can start there.
         self.offset = (buflen + 1).saturating_sub(self.max_seplen);
         if self.offset > limit {
             return UntilScan::OverLimit {
@@ -1216,7 +1157,8 @@ impl ExactReadAccumulator {
         if ptr.is_null() {
             return Err(PyErr::fetch(py));
         }
-        // SAFETY: `ptr` is a newly owned bytes object of the expected concrete type.
+        // SAFETY: `ptr` is a newly owned bytes object of the expected concrete
+        // type.
         let value = unsafe {
             Bound::<PyAny>::from_owned_ptr(py, ptr)
                 .cast_into_unchecked::<PyBytes>()

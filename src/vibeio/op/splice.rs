@@ -107,10 +107,7 @@ impl<'a> SpliceOp<'a> {
 impl Op for SpliceOp<'_> {
     type Output = usize;
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SpliceOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SpliceOp as Op>"))]
     #[inline]
     fn poll_poll(
         &mut self,
@@ -119,8 +116,9 @@ impl Op for SpliceOp<'_> {
     ) -> Poll<io::Result<Self::Output>> {
         let result = {
             // SAFETY: null offsets select the descriptors' current positions;
-            // no userspace payload pointers are supplied or retained. The kernel
-            // validates descriptors, and NONBLOCK avoids waiting on pipe buffers.
+            // no userspace payload pointers are supplied or retained. The
+            // kernel validates descriptors, and NONBLOCK avoids
+            // waiting on pipe buffers.
             let returned = unsafe {
                 libc::splice(
                     self.fd_in,
@@ -157,10 +155,7 @@ impl Op for SpliceOp<'_> {
         poll_result_or_wait(result, self.fd_out, cx, driver, Interest::WRITABLE)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SpliceOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SpliceOp as Op>"))]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -196,10 +191,7 @@ impl Op for SpliceOp<'_> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<SpliceOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<SpliceOp as Op>"))]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -344,7 +336,8 @@ mod tests {
                 .map(AsRawFd::as_raw_fd),
             descriptors
         );
-        // Model a queued SQE; no ambient runtime is entered during cancellation.
+        // Model a queued SQE; no ambient runtime is entered during
+        // cancellation.
         op.completion_token = Some(7);
         drop(op);
         drop(handle);

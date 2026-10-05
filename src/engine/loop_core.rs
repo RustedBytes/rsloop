@@ -116,10 +116,7 @@ impl WaitForWake {
         Self::until(wake, Instant::now() + timeout)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "WaitForWake")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WaitForWake"))]
     fn until(wake: Arc<LoopWake>, deadline: Instant) -> Self {
         Self {
             wake,
@@ -217,20 +214,14 @@ struct LocalTimers<'a> {
 }
 
 impl<'a> LocalTimers<'a> {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "LocalTimers")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LocalTimers"))]
     fn new(core: &'a LoopCore) -> Self {
         let mut heap = Box::new(TimerQueue::new());
         ACTIVE_LOOP_TLS.with(|tls| tls.timers.set(&mut *heap));
         Self { core, heap }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "LocalTimers")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LocalTimers"))]
     fn collect(&mut self, ready: &mut VecDeque<ReadyItem>) {
         if self.core.pending_timers_dirty.swap(false, Ordering::AcqRel) {
             self.heap.append_heap(
@@ -254,10 +245,7 @@ impl<'a> LocalTimers<'a> {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "LocalTimers")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LocalTimers"))]
     fn deadline(&self) -> Instant {
         let signal_deadline = Instant::now() + SIGNAL_POLL_INTERVAL;
         self.heap
@@ -755,15 +743,20 @@ impl LoopCore {
                             if ready_batch.is_empty() {
                                 std::mem::swap(&mut ready_batch, pending.deref_mut());
                             } else {
-                                // A refill triggered by READY_DRAIN_SLICE leaves
-                                // older items in `ready_batch`. Newly queued items
-                                // have to go behind them: asyncio orders callbacks
+                                // A refill triggered by READY_DRAIN_SLICE
+                                // leaves
+                                // older items in `ready_batch`. Newly queued
+                                // items have to
+                                // go behind them: asyncio orders callbacks
                                 // by when they were scheduled, so putting the
                                 // fresh arrivals first would run a producer's
-                                // later `call_soon_threadsafe` before its earlier
-                                // one. Rare with the GIL, because a producer only
+                                // later `call_soon_threadsafe` before its
+                                // earlier
+                                // one. Rare with the GIL, because a producer
+                                // only
                                 // gets to enqueue while this thread is parked;
-                                // constant on a free-threaded interpreter, where
+                                // constant on a free-threaded interpreter,
+                                // where
                                 // producers append all through the drain.
                                 ready_batch.append(pending.deref_mut());
                             }
@@ -773,8 +766,9 @@ impl LoopCore {
                         }
                     }
 
-                    // Prioritize cross-thread wakeups such as signals and transport
-                    // connection_lost notifications so they cannot be starved by a
+                    // Prioritize cross-thread wakeups such as signals and
+                    // transport connection_lost
+                    // notifications so they cannot be starved by a
                     // hot stream of locally-scheduled callbacks.
                     if !local_ready.is_empty() {
                         if ready_batch.is_empty() {
@@ -866,7 +860,8 @@ impl LoopCore {
                     #[cfg(unix)]
                     ReadyItem::StartTcpReader(start) => {
                         let TcpReaderStart { fd, core, stream } = *start;
-                        // The runtime is installed before the ready drain begins.
+                        // The runtime is installed before the ready drain
+                        // begins.
                         assert!(self.spawn_io_tracked(
                             fd,
                             crate::transport::stream::run_tcp_socket_reader_task(core, stream),
@@ -930,7 +925,8 @@ impl LoopCore {
 
             if self.pending_timers_dirty.load(Ordering::Acquire) {
                 // A producer may have published a timer while the ready drain
-                // cleared the ordinary wake flag. Never park before importing it.
+                // cleared the ordinary wake flag. Never park before importing
+                // it.
                 continue;
             }
             // A missed cross-thread spin suggests progress needs the owning
@@ -950,16 +946,18 @@ impl LoopCore {
                 }
             }
 
-            // Wait for the next wakeup with the GIL released. First spin briefly
-            // to catch an imminent cross-thread wake (reader worker / runtime
-            // thread) in user space — this keeps request/response ping-pong
-            // latency low and tight. On spin timeout (or after too many
-            // consecutive catches, to avoid starving this loop's own runtime
-            // tasks) park by driving the runtime: its `driver.wait` runs here on
-            // the loop thread and is interrupted by a cross-thread wake.
-            // Keep the `!Send` runtime lookup and future construction inside
-            // the closure so the closure itself satisfies PyO3's `Ungil`
-            // bound without bypassing PyO3's attachment bookkeeping.
+            // Wait for the next wakeup with the GIL released. First spin
+            // briefly to catch an imminent cross-thread wake
+            // (reader worker / runtime thread) in user space — this
+            // keeps request/response ping-pong latency low and
+            // tight. On spin timeout (or after too many consecutive
+            // catches, to avoid starving this loop's own runtime
+            // tasks) park by driving the runtime: its `driver.wait` runs here
+            // on the loop thread and is interrupted by a
+            // cross-thread wake. Keep the `!Send` runtime lookup
+            // and future construction inside the closure so the
+            // closure itself satisfies PyO3's `Ungil` bound without
+            // bypassing PyO3's attachment bookkeeping.
             let park_deadline = local_timers.deadline();
             py.detach(|| {
                 let mut caught = false;
@@ -1017,7 +1015,8 @@ impl LoopCore {
         // FinishRun moves pending_ready back into the runtime's ready_batch.
         if !ready_batch.is_empty() || !local_ready.is_empty() {
             // We want to *prepend* the scheduled items to preserve order (even
-            // if it's not strictly guaranteed). so rebuild and replace the pending Deque
+            // if it's not strictly guaranteed). so rebuild and replace the
+            // pending Deque
             let mut leftover = std::mem::take(&mut ready_batch);
             leftover.extend(local_ready.drain(..));
             let mut pending = pending_ready.lock().expect("poisoned pending ready queue");

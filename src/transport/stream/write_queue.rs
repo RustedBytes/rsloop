@@ -16,18 +16,12 @@ struct QueueState {
 }
 
 impl QueueState {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "QueueState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "QueueState"))]
     fn new() -> Self {
         Self::with_capacity(INITIAL_WRITER_QUEUE_CAPACITY)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "QueueState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "QueueState"))]
     fn with_capacity(capacity: usize) -> Self {
         Self {
             commands: VecDeque::with_capacity(capacity),
@@ -36,10 +30,7 @@ impl QueueState {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "QueueState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "QueueState"))]
     fn enqueue(&mut self, command: WriterCommand) -> Result<(), WriterCommand> {
         if !self.receiver_alive {
             return Err(command);
@@ -54,10 +45,7 @@ impl QueueState {
         Ok(())
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "QueueState")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "QueueState"))]
     fn try_dequeue(&mut self) -> Result<WriterCommand, TryRecvError> {
         if let Some(command) = self.commands.pop_front() {
             Ok(command)
@@ -102,10 +90,7 @@ pub(super) fn channel() -> (WriterSender, WriterReceiver) {
 }
 
 impl WriterSender {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "WriterSender")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriterSender"))]
     pub(super) fn send(&self, command: WriterCommand) -> Result<(), WriterCommand> {
         let mut state = self.shared.state.lock().expect("poisoned writer queue");
         state.enqueue(command)?;
@@ -135,10 +120,7 @@ impl Drop for WriterSender {
 }
 
 impl WriterReceiver {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "WriterReceiver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriterReceiver"))]
     pub(super) fn recv(&self) -> Result<WriterCommand, ()> {
         let mut state = self.shared.state.lock().expect("poisoned writer queue");
         loop {
@@ -156,10 +138,7 @@ impl WriterReceiver {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "WriterReceiver")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriterReceiver"))]
     pub(super) fn try_recv(&self) -> Result<WriterCommand, TryRecvError> {
         self.shared
             .state
@@ -177,7 +156,8 @@ impl Drop for WriterReceiver {
     fn drop(&mut self) {
         // Serialize disconnection with enqueue so later sends are rejected.
         // This guard only updates queue metadata; it does not wait for the
-        // worker to finish. Contention is possible, but cleanup must be synchronous.
+        // worker to finish. Contention is possible, but cleanup must be
+        // synchronous.
         self.shared
             .state
             // qualirs:ignore Q0082

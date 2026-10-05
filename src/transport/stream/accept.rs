@@ -414,7 +414,8 @@ pub(super) async fn run_tcp_accept_lane(server: Arc<ServerCore>, listener: StdTc
 
         match listener.accept().await {
             Ok((stream, _addr)) => {
-                // SAFETY: `into_raw_fd` transfers sole ownership to `StdTcpStream`.
+                // SAFETY: `into_raw_fd` transfers sole ownership to
+                // `StdTcpStream`.
                 let stream = unsafe { StdTcpStream::from_raw_fd(stream.into_raw_fd()) };
                 if !configure_accepted_tcp_stream(
                     &server,
@@ -507,7 +508,8 @@ pub(super) async fn run_unix_accept_task(server: Arc<ServerCore>, listener: StdU
 
         match listener.accept().await {
             Ok((stream, _addr)) => {
-                // SAFETY: `into_raw_fd` transfers sole ownership to `StdUnixStream`.
+                // SAFETY: `into_raw_fd` transfers sole ownership to
+                // `StdUnixStream`.
                 let stream = unsafe { StdUnixStream::from_raw_fd(stream.into_raw_fd()) };
                 if !configure_accepted_unix_stream(
                     &server,

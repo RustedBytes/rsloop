@@ -190,10 +190,7 @@ impl UnixStream {
     ///
     /// This function will return an error if the underlying socket is not
     /// connected.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnixStream"))]
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.local_addr()
@@ -205,20 +202,14 @@ impl UnixStream {
     ///
     /// This function will return an error if the underlying socket is not
     /// connected.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnixStream"))]
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.inner.peer_addr()
     }
 
     /// Shuts down the connection.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnixStream"))]
     #[inline]
     pub fn shutdown(&self, how: Shutdown) -> Result<(), io::Error> {
         match self.inner.shutdown(how) {
@@ -234,10 +225,7 @@ impl UnixStream {
     ///
     /// This function will return an error if registration with the async driver
     /// fails.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnixStream"))]
     #[inline]
     pub fn from_std(inner: StdUnixStream) -> Result<Self, io::Error> {
         Self::from_std_with_mode(inner, RegistrationMode::Completion)
@@ -245,10 +233,7 @@ impl UnixStream {
 
     /// Creates a new `UnixStream` from a standard library `UnixStream` with a
     /// specific registration mode.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnixStream"))]
     #[inline]
     pub(crate) fn from_std_with_mode(
         inner: StdUnixStream,
@@ -266,10 +251,7 @@ impl UnixStream {
     /// Converts this stream into a poll-only variant.
     ///
     /// The returned `PollUnixStream` will always use readiness-based I/O.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnixStream"))]
     #[inline]
     pub fn into_poll(self) -> Result<PollUnixStream, io::Error> {
         let mut stream = self;
@@ -304,10 +286,7 @@ impl PollUnixStream {
     }
 
     /// Creates a new `PollUnixStream` from a standard library `UnixStream`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollUnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollUnixStream"))]
     #[inline]
     pub fn from_std(inner: StdUnixStream) -> Result<Self, io::Error> {
         Ok(Self {
@@ -318,20 +297,14 @@ impl PollUnixStream {
     }
 
     /// Converts this poll stream into an adaptive `UnixStream`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollUnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollUnixStream"))]
     #[inline]
     pub fn into_adaptive(self) -> UnixStream {
         self.stream
     }
 
     /// Converts this poll stream into a completion-based `UnixStream`.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollUnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollUnixStream"))]
     #[inline]
     pub fn into_completion(self) -> Result<UnixStream, io::Error> {
         let mut stream = self.stream;
@@ -343,30 +316,21 @@ impl PollUnixStream {
     }
 
     /// Returns the local address of this connection.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollUnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollUnixStream"))]
     #[inline]
     pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
         self.stream.local_addr()
     }
 
     /// Returns the remote address of this connection.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollUnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollUnixStream"))]
     #[inline]
     pub fn peer_addr(&self) -> Result<SocketAddr, io::Error> {
         self.stream.peer_addr()
     }
 
     /// Shuts down the connection.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollUnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollUnixStream"))]
     #[inline]
     pub fn shutdown(&self, how: Shutdown) -> Result<(), io::Error> {
         self.stream.shutdown(how)
@@ -374,10 +338,7 @@ impl PollUnixStream {
 
     /// Tries to perform an I/O operation on the socket, returning an error if
     /// it is not ready.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollUnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollUnixStream"))]
     #[inline]
     pub fn try_io_readable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -388,10 +349,7 @@ impl PollUnixStream {
 
     /// Tries to perform an I/O operation on the socket, returning an error if
     /// it is not ready.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "PollUnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollUnixStream"))]
     #[inline]
     pub fn try_io_writable<Io, IoR>(&self, io: Io) -> io::Result<IoR>
     where
@@ -496,8 +454,9 @@ impl TokioAsyncWrite for PollUnixStream {
         }
         let this = self.get_mut();
         // SAFETY: IoSlice regions stay initialized and borrowed for this call.
-        // The local WritevOp copies metadata but uses only synchronous poll I/O,
-        // so no pointer into the caller's buffers survives the return.
+        // The local WritevOp copies metadata but uses only synchronous poll
+        // I/O, so no pointer into the caller's buffers survives the
+        // return.
         let bufs = unsafe { IoVectoredBufTemporaryPoll::new(bufs) };
         let mut op = WritevOp::new(&this.stream.handle, bufs);
         this.stream.handle.poll_op_poll(cx, &mut op)
@@ -537,10 +496,7 @@ impl UnixStream {
     ///
     /// This is useful when you want to create a Unix stream that uses
     /// poll-based I/O.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "UnixStream")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UnixStream"))]
     #[inline]
     pub fn from_std_poll(inner: StdUnixStream) -> Result<PollUnixStream, io::Error> {
         Ok(PollUnixStream {

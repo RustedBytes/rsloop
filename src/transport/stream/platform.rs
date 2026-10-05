@@ -72,7 +72,8 @@ fn raw_fd_for_std(fd: fd_ops::RawFd) -> PyResult<std::os::fd::RawFd> {
 #[cfg(unix)]
 pub(super) fn from_owned_raw_fd<T: FromRawFd>(fd: fd_ops::RawFd) -> PyResult<T> {
     let fd = raw_fd_for_std(fd)?;
-    // SAFETY: the caller transfers one owned descriptor to the returned IO object.
+    // SAFETY: the caller transfers one owned descriptor to the returned IO
+    // object.
     Ok(unsafe { T::from_raw_fd(fd) })
 }
 

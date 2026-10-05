@@ -121,8 +121,8 @@ impl StreamTransportCore {
             // rebinding the same socket to readiness mode. Cancel before the
             // direct write so the shared socket becomes nonblocking before a
             // full send buffer can park the event-loop thread.
-            // SAFETY: `fd` is the live transport handle; a null OVERLAPPED requests all
-            // pending IO.
+            // SAFETY: `fd` is the live transport handle; a null OVERLAPPED
+            // requests all pending IO.
             let _ = unsafe { CancelIoEx(fd as HANDLE, std::ptr::null()) };
         }
     }

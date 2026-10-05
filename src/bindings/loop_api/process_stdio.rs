@@ -69,10 +69,7 @@ fn process_stdio_plan(
 }
 
 impl ProcessStdioSpecs {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "ProcessStdioSpecs")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ProcessStdioSpecs"))]
     pub(super) fn parse(
         py: Python<'_>,
         stdin: &Py<PyAny>,

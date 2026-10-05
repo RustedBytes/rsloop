@@ -33,10 +33,7 @@ impl UnlinkOp {
 impl Op for UnlinkOp {
     type Output = ();
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<UnlinkOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<UnlinkOp as Op>"))]
     #[inline]
     fn poll_completion(
         &mut self,
@@ -78,10 +75,7 @@ impl Op for UnlinkOp {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<UnlinkOp as Op>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<UnlinkOp as Op>"))]
     #[inline]
     fn build_completion_entry(
         &mut self,
@@ -109,8 +103,9 @@ impl Drop for UnlinkOp {
     )]
     fn drop(&mut self) {
         if let Some(token) = self.completion_token.take() {
-            // Paths and result storage remain owned until the kernel acknowledges
-            // completion, even if cancellation runs outside the submitting runtime.
+            // Paths and result storage remain owned until the kernel
+            // acknowledges completion, even if cancellation runs
+            // outside the submitting runtime.
             self.driver
                 .ignore_completion(token, Box::new((self.path.take(),)));
         }

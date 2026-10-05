@@ -170,10 +170,7 @@ pub struct JoinHandle<T> {
 
 impl<T> JoinHandle<T> {
     /// Creates a new `JoinHandle` with the given state.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "JoinHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "JoinHandle"))]
     #[inline]
     fn new(state: Rc<RefCell<JoinState<T>>>) -> Self {
         Self { state }
@@ -184,10 +181,7 @@ impl<T> JoinHandle<T> {
     /// The task will be interrupted and not resumed.
     /// If called from inside the task's own poll, its future is released when
     /// that poll returns; otherwise its pending future is released immediately.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "JoinHandle")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "JoinHandle"))]
     #[inline]
     pub fn cancel(self) {
         let task = {
@@ -230,8 +224,9 @@ impl<T> Future for JoinHandle<T> {
                 return Poll::Pending;
             }
         }
-        // Clone and destroy custom wakers without holding the join-state borrow.
-        // Keep the unchanged-waker path above free of reference-count traffic.
+        // Clone and destroy custom wakers without holding the join-state
+        // borrow. Keep the unchanged-waker path above free of
+        // reference-count traffic.
         let incoming = cx.waker().clone();
         let mut state = self.state.borrow_mut();
         // A custom clone callback may have driven the task to completion.
@@ -255,10 +250,7 @@ struct BlockOnNotify {
 }
 
 impl BlockOnNotify {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "BlockOnNotify")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "BlockOnNotify"))]
     #[inline]
     fn new(
         interruptor: AnyInterruptor,
@@ -274,38 +266,26 @@ impl BlockOnNotify {
         })
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "BlockOnNotify")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "BlockOnNotify"))]
     #[inline]
     fn is_ready(&self) -> bool {
         self.ready.load(Ordering::Acquire)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "BlockOnNotify")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "BlockOnNotify"))]
     #[inline]
     fn take_ready(&self) -> bool {
         self.ready.swap(false, Ordering::AcqRel)
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "BlockOnNotify")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "BlockOnNotify"))]
     #[cfg(any(target_vendor = "apple", windows))]
     #[inline]
     fn force_ready(&self) {
         self.ready.store(true, Ordering::Release);
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "BlockOnNotify")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "BlockOnNotify"))]
     #[inline]
     fn notify(&self) {
         self.ready.store(true, Ordering::Release);
@@ -318,10 +298,7 @@ impl BlockOnNotify {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "BlockOnNotify")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "BlockOnNotify"))]
     #[inline]
     fn waker(self: &Arc<Self>) -> Waker {
         Waker::from(Arc::clone(self))
@@ -537,10 +514,7 @@ pub struct Runtime {
 
 impl RuntimeInner {
     /// Spawn a task on this runtime.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeInner")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeInner"))]
     #[inline]
     pub(crate) fn spawn<T>(&self, future: impl Future<Output = T> + 'static) -> JoinHandle<T>
     where
@@ -592,20 +566,14 @@ impl RuntimeInner {
     }
 
     /// Enqueue a task for polling.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeInner")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeInner"))]
     #[inline]
     fn enqueue(&self, task: Rc<Task>) {
         self.queue.borrow_mut().push_back(task);
     }
 
     /// Drain ready tasks into the given batch.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeInner")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeInner"))]
     #[inline]
     fn drain_ready(&self, batch: &mut Batch<'_, Rc<Task>>, mut budget: usize) {
         if budget != 0 {
@@ -624,7 +592,8 @@ impl RuntimeInner {
             }
         }
 
-        // Release the queue borrow before polling futures or invoking callbacks.
+        // Release the queue borrow before polling futures or invoking
+        // callbacks.
         let mut queue = self.queue.borrow_mut();
         while budget != 0 {
             let Some(task) = queue.pop_front() else {
@@ -636,10 +605,7 @@ impl RuntimeInner {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeInner")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeInner"))]
     #[inline]
     fn stop_waiting(&self) {
         self.remote_wake.waiting.store(false, Ordering::Release);
@@ -648,10 +614,7 @@ impl RuntimeInner {
             .store(false, Ordering::Release);
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeInner")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeInner"))]
     #[inline]
     fn should_skip_wait(&self) -> bool {
         if self.next_task.borrow().is_some() || !self.remote_wake.queue.is_empty() {
@@ -662,10 +625,7 @@ impl RuntimeInner {
     }
 
     /// Take the next task to run, if any.
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "RuntimeInner")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeInner"))]
     #[inline]
     fn take_next_task(&self) -> Option<Rc<Task>> {
         let task = self.next_task.take();
@@ -879,7 +839,8 @@ impl Runtime {
                 // A bounded wait on platforms with native interrupt recovery is
                 // also a recovery poll. Normal cross-thread notifications still
                 // wake immediately, while a missed notification can delay the
-                // root future by at most one interval instead of parking forever.
+                // root future by at most one interval instead of parking
+                // forever.
                 #[cfg(any(target_vendor = "apple", windows))]
                 root_notify.force_ready();
 
@@ -905,14 +866,15 @@ impl Runtime {
                         let mut future_slot = task.future.borrow_mut();
                         *future_slot = Some(future);
                     } else {
-                        // Future completed, remove task from token_to_task slab to prevent memory
-                        // leaks
+                        // Future completed, remove task from token_to_task slab
+                        // to prevent memory leaks
                         inner.token_to_task.borrow_mut().remove(task.token);
                     }
                 } else {
                     // Cancellation can synchronously drop the future and then
                     // enqueue the task so its slab entry is reclaimed here.
-                    // Check identity in case a stale wake targets a reused token.
+                    // Check identity in case a stale wake targets a reused
+                    // token.
                     let should_remove = inner
                         .token_to_task
                         .borrow()
@@ -926,7 +888,8 @@ impl Runtime {
 
             // Completion submissions must reach the kernel even when a task
             // continually wakes itself into the single-task fast slot. The old
-            // `next_task_taken` guard could postpone io_uring SQEs indefinitely.
+            // `next_task_taken` guard could postpone io_uring SQEs
+            // indefinitely.
             if inner.driver.should_flush() {
                 inner.driver.flush();
             }
@@ -935,10 +898,7 @@ impl Runtime {
 }
 
 impl Drop for Runtime {
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "<Runtime as Drop>")
-    )]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Runtime as Drop>"))]
     fn drop(&mut self) {
         // Drop all tasks with current runtime entered
         let inner = self.inner.take().expect("runtime has been dropped");
@@ -953,8 +913,9 @@ impl Drop for Runtime {
         // destructors calling `current_driver()` would then panic.
         drop(_runtime_guard);
         // Driver registrations can hold task wakers whose futures own that same
-        // driver. Break this cycle explicitly; dropping RuntimeInner alone cannot
-        // cancel those tasks. Detach the slab before running user destructors.
+        // driver. Break this cycle explicitly; dropping RuntimeInner alone
+        // cannot cancel those tasks. Detach the slab before running
+        // user destructors.
         let tasks = std::mem::take(&mut *inner.token_to_task.borrow_mut());
         for (_, task) in tasks {
             let future = task.future.borrow_mut().take();
@@ -1231,7 +1192,8 @@ mod tests {
             reenter_join();
             RawWaker::new(std::ptr::null(), &VTABLE)
         }
-        // SAFETY: a stateless waker has no allocation to release or dereference.
+        // SAFETY: a stateless waker has no allocation to release or
+        // dereference.
         unsafe fn ignore(_: *const ()) {}
         const VTABLE: RawWakerVTable = RawWakerVTable::new(clone, ignore, ignore, ignore);
         let state = Rc::new(RefCell::new(JoinState {
@@ -1248,8 +1210,9 @@ mod tests {
         });
         let _scope = JoinReentryScope;
         let mut handle = JoinHandle::new(state.clone());
-        // SAFETY: this stateless vtable never dereferences its null data pointer
-        // or owns resources. Only clone invokes the current thread's callback.
+        // SAFETY: this stateless vtable never dereferences its null data
+        // pointer or owns resources. Only clone invokes the current
+        // thread's callback.
         let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
         assert_eq!(
             Pin::new(&mut handle).poll(&mut Context::from_waker(&waker)),
