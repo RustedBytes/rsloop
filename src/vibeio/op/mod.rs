@@ -7,6 +7,7 @@ mod fsync;
 #[cfg(all(target_os = "linux", feature = "fs"))]
 mod hard_link;
 mod io_util;
+pub(crate) use io_util::poll_result_or_wait;
 #[cfg(all(target_os = "linux", feature = "fs"))]
 mod mkdir;
 #[cfg(all(target_os = "linux", feature = "fs"))]

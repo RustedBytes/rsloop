@@ -247,6 +247,25 @@ impl InnerRawHandle {
         }
     }
 
+    /// Run borrowed synchronous I/O without building an owned operation.
+    /// The closure cannot leave any borrowed pointers with the driver.
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
+    #[inline]
+    pub(crate) fn poll_io(
+        &self,
+        cx: &mut Context<'_>,
+        interest: Interest,
+        io: impl FnOnce() -> io::Result<usize>,
+    ) -> Poll<io::Result<usize>> {
+        if self.uses_completion() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "poll-based I/O operation called on a completion-based I/O handle",
+            )));
+        }
+        crate::vibeio::op::poll_result_or_wait(io(), self, cx, &self.driver, interest)
+    }
+
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
     #[inline]
     pub(crate) fn poll_op_poll<O, R>(
@@ -282,6 +301,25 @@ impl Drop for InnerRawHandle {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn borrowed_poll_rejects_completion_before_running_io() {
+        let mut driver = AnyDriver::new_mock();
+        let AnyDriver::Mock(mock) = &mut driver else {
+            unreachable!()
+        };
+        mock.registrations = Some(Default::default());
+        let handle = InnerRawHandle::for_mock_completion(Rc::new(driver));
+        let result = handle.poll_io(
+            &mut Context::from_waker(std::task::Waker::noop()),
+            Interest::WRITABLE,
+            || panic!("borrowed I/O ran on a completion handle"),
+        );
+        let Poll::Ready(Err(error)) = result else {
+            panic!("expected error")
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+    }
+
     #[cfg(unix)]
     use std::os::fd::AsRawFd;
     #[cfg(unix)]

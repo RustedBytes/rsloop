@@ -22,6 +22,9 @@ test-rust:
 test-write-allocations:
     uv run --no-project python scripts/check_write_allocations.py
 
+test-vibeio-allocations:
+    uv run --no-project python scripts/check_vibeio_allocations.py
+
 # Fast merge-gating proofs; `merge_` harnesses must fit the PR runtime budget.
 kani-core:
     cargo kani --harness merge_ -j 2 --output-format terse

@@ -278,3 +278,53 @@ fn complete_transfers_retry_interruptions_and_handle_single_byte_progress() {
         assert_eq!(sink.bytes, b"abc");
     });
 }
+
+/// Exercise borrowed vectors across partial writes and readiness suspension.
+pub(crate) async fn check_vectored_backpressure(
+    mut writer: impl tokio::io::AsyncWrite + Unpin,
+    mut reader: impl io::Read + Send + 'static,
+) {
+    use std::{io::IoSlice, pin::Pin};
+    let (start, ready) = std::sync::mpsc::channel();
+    let expected: Vec<u8> = (0..8)
+        .flat_map(|i| std::iter::repeat_n(i, 128 * 1024))
+        .collect();
+    let reference = expected.clone();
+    let worker = std::thread::spawn(move || {
+        ready.recv_timeout(WATCHDOG).unwrap();
+        let mut data = vec![0; reference.len()];
+        reader.read_exact(&mut data).unwrap();
+        assert_eq!(data, reference);
+    });
+    let mut descriptors: Vec<_> = expected.chunks(128 * 1024).map(IoSlice::new).collect();
+    descriptors.insert(0, IoSlice::new(&[]));
+    let mut remaining = descriptors.as_mut_slice();
+    let mut start = Some(start);
+    with_watchdog(async {
+        while !remaining.is_empty() {
+            let written = std::future::poll_fn(|cx| {
+                let result = Pin::new(&mut writer).poll_write_vectored(cx, remaining);
+                if result.is_pending() {
+                    if let Some(start) = start.take() {
+                        start.send(()).unwrap();
+                    }
+                }
+                result
+            })
+            .await
+            .unwrap();
+            assert!(written > 0);
+            IoSlice::advance_slices(&mut remaining, written);
+        }
+        assert!(
+            start.is_none(),
+            "write must suspend before the peer starts reading"
+        );
+        assert!(matches!(
+            std::future::poll_fn(|cx| Pin::new(&mut writer).poll_write_vectored(cx, &[])).await,
+            Ok(0)
+        ));
+    })
+    .await;
+    worker.join().unwrap();
+}

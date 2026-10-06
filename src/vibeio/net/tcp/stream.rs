@@ -42,7 +42,7 @@ use crate::vibeio::{
     fd_inner::InnerRawHandle,
     io::{
         AsInnerRawHandle, AsyncRead, AsyncReadPoll, AsyncWrite, AsyncWritePoll, IoBuf, IoBufMut,
-        IoBufTemporaryPoll, IoVectoredBuf, IoVectoredBufMut, IoVectoredBufTemporaryPoll,
+        IoBufTemporaryPoll, IoVectoredBuf, IoVectoredBufMut,
     },
     op::{ConnectOp, ReadOp, ReadinessOp, ReadvOp, RecvOp, WriteOp, WritevOp, socket_addr_to_raw},
 };
@@ -750,13 +750,11 @@ impl TokioAsyncWrite for PollTcpStream {
             return Poll::Ready(Ok(0));
         }
         let this = self.get_mut();
-        // SAFETY: these initialized IoSlice regions remain borrowed throughout
-        // the synchronous WritevOp poll. Metadata is copied, and the local op
-        // is dropped before this call returns; no completion I/O can
-        // retain it.
-        let bufs = unsafe { IoVectoredBufTemporaryPoll::new(bufs) };
-        let mut op = WritevOp::new(&this.stream.handle, bufs);
-        this.stream.handle.poll_op_poll(cx, &mut op)
+        // std socket writes consume the borrowed IoSlice descriptors directly;
+        // neither payload nor descriptor ownership crosses this poll.
+        this.stream.handle.poll_io(cx, Interest::WRITABLE, || {
+            std::io::Write::write_vectored(&mut (&*this.stream.inner), bufs)
+        })
     }
 
     #[cfg_attr(
@@ -827,6 +825,26 @@ impl AsyncWritePoll for PollTcpStream {
 
 #[cfg(test)]
 mod socket_creation_tests {
+    #[test]
+    fn vectored_poll_preserves_partial_writes_and_readiness() {
+        let runtime = crate::vibeio::RuntimeBuilder::new()
+            .enable_timer(true)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let socket = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (peer, _) = listener.accept().unwrap();
+            socket2::SockRef::from(&socket)
+                .set_send_buffer_size(4096)
+                .unwrap();
+            peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
+                .unwrap();
+            let writer = PollTcpStream::from_std(socket).unwrap();
+            crate::vibeio::test_support::check_vectored_backpressure(writer, peer).await;
+        });
+    }
+
     use super::*;
 
     #[test]
