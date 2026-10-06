@@ -550,6 +550,39 @@ impl RuntimeInner {
         JoinHandle::new(state)
     }
 
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeInner"))]
+    #[inline]
+    fn poll_task(&self, task: Rc<Task>) {
+        let mut future_slot = task.future.borrow_mut();
+        if let Some(mut future) = future_slot.take() {
+            drop(future_slot);
+            let waker = task.waker_ref();
+            let mut context = Context::from_waker(&waker);
+
+            if future.as_mut().poll(&mut context).is_pending() {
+                let mut future_slot = task.future.borrow_mut();
+                *future_slot = Some(future);
+            } else {
+                // Future completed, remove task from token_to_task slab
+                // to prevent memory leaks
+                self.token_to_task.borrow_mut().remove(task.token);
+            }
+        } else {
+            // Cancellation can synchronously drop the future and then
+            // enqueue the task so its slab entry is reclaimed here.
+            // Check identity in case a stale wake targets a reused
+            // token.
+            let should_remove = self
+                .token_to_task
+                .borrow()
+                .get(task.token)
+                .is_some_and(|current| Rc::ptr_eq(current, &task));
+            if should_remove {
+                self.token_to_task.borrow_mut().remove(task.token);
+            }
+        }
+    }
+
     /// Spawn a blocking task on this runtime's thread pool.
     #[cfg_attr(
         feature = "profile",
@@ -575,7 +608,12 @@ impl RuntimeInner {
     /// Drain ready tasks into the given batch.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeInner"))]
     #[inline]
-    fn drain_ready(&self, batch: &mut Batch<'_, Rc<Task>>, mut budget: usize) {
+    fn drain_ready(&self, batch: &mut Batch<'_, Rc<Task>>, budget: usize) {
+        self.drain_ready_with(|task| batch.push(task), budget);
+    }
+
+    #[inline]
+    fn drain_ready_with(&self, mut push: impl FnMut(Rc<Task>), mut budget: usize) {
         if budget != 0 {
             let slab = self.token_to_task.borrow();
             while budget != 0 {
@@ -586,7 +624,7 @@ impl RuntimeInner {
                     && Arc::ptr_eq(&task.wake, &wake)
                 {
                     task.mark_dequeued();
-                    batch.push(task.clone());
+                    push(task.clone());
                     budget -= 1;
                 }
             }
@@ -600,7 +638,7 @@ impl RuntimeInner {
                 break;
             };
             task.mark_dequeued();
-            batch.push(task);
+            push(task);
             budget -= 1;
         }
     }
@@ -745,16 +783,46 @@ impl Runtime {
         if let Some(timer) = inner.timer.as_ref() {
             let _ = timer.spin_and_get_deadline();
         }
-        let mut yielded = false;
-        self.block_on(std::future::poll_fn(move |cx| {
-            if yielded {
-                Poll::Ready(())
-            } else {
-                yielded = true;
-                cx.waker().wake_by_ref();
-                Poll::Pending
+        let _runtime_guard = CurrentRuntimeGuard::enter(inner.clone());
+        // Avoid initializing the stack batch when readiness and timer polling
+        // produced no work. A remote wake arriving after this check remains
+        // queued for the next embedding turn.
+        if !inner.should_skip_wait() {
+            return;
+        }
+        // The embedding services exactly one bounded batch. It needs neither
+        // a root future/waker nor heap storage for these task references.
+        let mut tasks: [Option<Rc<Task>>; 256] = std::array::from_fn(|_| None);
+        assert!(inner.task_batch_size <= tasks.len());
+        let mut count = 0;
+        if let Some(task) = inner.take_next_task() {
+            tasks[count] = Some(task);
+            count += 1;
+        }
+        let budget = inner.task_batch_size - count;
+        inner.drain_ready_with(
+            |task| {
+                tasks[count] = Some(task);
+                count += 1;
+            },
+            budget,
+        );
+        if count == 0 {
+            return;
+        }
+        if count > inner.timer_poll_threshold {
+            if let Some(timer) = inner.timer.as_ref() {
+                let _ = timer.spin_and_get_deadline();
             }
-        }));
+        }
+        // The owning iterator drops unpolled task references on unwind, just
+        // as the full-range Vec drain used by block_on does.
+        for task in tasks.into_iter().take(count).flatten() {
+            inner.poll_task(task);
+        }
+        if inner.driver.should_flush() {
+            inner.driver.flush();
+        }
     }
 
     /// Run the runtime and execute the given future to completion.
@@ -856,34 +924,7 @@ impl Runtime {
             }
 
             for task in drain_batch(&mut batch) {
-                let mut future_slot = task.future.borrow_mut();
-                if let Some(mut future) = future_slot.take() {
-                    drop(future_slot);
-                    let waker = task.waker_ref();
-                    let mut context = Context::from_waker(&waker);
-
-                    if future.as_mut().poll(&mut context).is_pending() {
-                        let mut future_slot = task.future.borrow_mut();
-                        *future_slot = Some(future);
-                    } else {
-                        // Future completed, remove task from token_to_task slab
-                        // to prevent memory leaks
-                        inner.token_to_task.borrow_mut().remove(task.token);
-                    }
-                } else {
-                    // Cancellation can synchronously drop the future and then
-                    // enqueue the task so its slab entry is reclaimed here.
-                    // Check identity in case a stale wake targets a reused
-                    // token.
-                    let should_remove = inner
-                        .token_to_task
-                        .borrow()
-                        .get(task.token)
-                        .is_some_and(|current| Rc::ptr_eq(current, &task));
-                    if should_remove {
-                        inner.token_to_task.borrow_mut().remove(task.token);
-                    }
-                }
+                inner.poll_task(task);
             }
 
             // Completion submissions must reach the kernel even when a task
@@ -927,6 +968,89 @@ impl Drop for Runtime {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn embedded_turn_polls_one_bounded_batch_and_preserves_ready_tasks() {
+        use std::{cell::Cell, rc::Rc, task::Poll};
+        let runtime = super::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
+        let counts: Vec<_> = (0..300).map(|_| Rc::new(Cell::new(0))).collect();
+        let handles: Vec<_> = counts
+            .iter()
+            .map(|count| {
+                let count = count.clone();
+                runtime.spawn(std::future::poll_fn(move |cx| {
+                    assert!(super::current_driver().is_some());
+                    count.set(count.get() + 1);
+                    cx.waker().wake_by_ref();
+                    Poll::<()>::Pending
+                }))
+            })
+            .collect();
+        runtime.poll_once();
+        assert_eq!(counts.iter().map(|count| count.get()).sum::<usize>(), 256);
+        runtime.poll_once();
+        assert_eq!(counts.iter().map(|count| count.get()).sum::<usize>(), 512);
+        assert!(counts.iter().all(|count| count.get() > 0));
+        for handle in handles {
+            handle.cancel();
+        }
+        runtime.poll_once();
+        runtime.poll_once();
+        assert!(
+            runtime
+                .inner
+                .as_ref()
+                .unwrap()
+                .token_to_task
+                .borrow()
+                .is_empty()
+        );
+        assert!(super::current_driver().is_none());
+    }
+
+    #[test]
+    fn embedded_idle_turn_preserves_later_remote_wakes() {
+        use std::{cell::Cell, rc::Rc, task::Poll};
+        let runtime = super::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
+        let polls = Rc::new(Cell::new(0));
+        let count = polls.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let task = runtime.spawn(std::future::poll_fn(move |cx| {
+            count.set(count.get() + 1);
+            if count.get() == 1 {
+                send.send(cx.waker().clone()).unwrap();
+                Poll::Pending
+            } else {
+                Poll::Ready(42)
+            }
+        }));
+        runtime.poll_once();
+        let waker = receive
+            .recv_timeout(crate::vibeio::test_support::WATCHDOG)
+            .unwrap();
+        runtime.poll_once();
+        assert_eq!(polls.get(), 1);
+        std::thread::spawn(move || waker.wake()).join().unwrap();
+        runtime.poll_once();
+        assert_eq!(polls.get(), 2);
+        assert_eq!(runtime.block_on(task), 42);
+    }
+
+    #[test]
+    fn embedded_turn_unwind_releases_unpolled_batch_owners() {
+        let runtime = super::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
+        let first = runtime.spawn(async { panic!("task poll panic") });
+        let second = runtime.spawn(std::future::pending::<()>());
+        let task = second.state.borrow().task.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.poll_once()));
+        assert!(result.is_err());
+        assert_eq!(task.strong_count(), 1);
+        assert!(super::current_driver().is_none());
+        second.cancel();
+        runtime.poll_once();
+        assert!(task.upgrade().is_none());
+        drop(first);
+    }
+
     #[cfg(all(feature = "scheduler-batch-cache", not(kani)))]
     #[test]
     fn repeated_runtime_turns_allocate_batch_storage_only_once() {

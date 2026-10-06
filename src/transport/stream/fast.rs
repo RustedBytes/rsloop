@@ -108,7 +108,11 @@ impl ReadBuffer {
         if data.is_empty() {
             return;
         }
-        self.compact_if_needed();
+        // Reading advances a cursor without moving the unread suffix. Reclaim
+        // that prefix only when appending would otherwise grow the allocation.
+        if data.len() > self.bytes.capacity() - self.bytes.len() {
+            self.compact_if_needed();
+        }
         self.bytes.reserve(data.len());
         self.bytes.extend_from_slice(data);
     }
@@ -131,7 +135,9 @@ impl ReadBuffer {
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     fn consume(&mut self, n: usize) {
         self.start = self.start.saturating_add(n).min(self.bytes.len());
-        self.compact_if_needed();
+        if self.start == self.bytes.len() {
+            self.compact_if_needed();
+        }
     }
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
@@ -243,10 +249,12 @@ mod read_buffer_tests {
         buffer.extend(&initial);
         buffer.consume(4096);
 
-        assert_eq!(buffer.start, 0);
+        assert_eq!(buffer.start, 4096);
+        assert_eq!(buffer.unread().as_ptr(), buffer.bytes[4096..].as_ptr());
         assert_eq!(buffer.unread(), &initial[4096..]);
 
         buffer.extend(b"tail");
+        assert_eq!(buffer.start, 0);
         assert_eq!(&buffer.unread()[..4096], &initial[4096..]);
         assert_eq!(&buffer.unread()[4096..], b"tail");
 

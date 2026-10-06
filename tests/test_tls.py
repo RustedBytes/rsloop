@@ -81,9 +81,10 @@ def make_ssl_contexts(tmpdir: str):
 
 
 class TestTls:
-    @pytest.mark.parametrize("chunk_size", [1024, 147456])
+    @pytest.mark.parametrize("method", ["write", "writelines"])
+    @pytest.mark.parametrize("chunk_size", [1024, 16384, 147456])
     def test_tls_streams_use_native_objects_without_stdlib_fallback(
-        self, monkeypatch, chunk_size
+        self, monkeypatch, chunk_size, method
     ):
         from rsloop import _loop
 
@@ -129,8 +130,15 @@ class TestTls:
                         assert cast(Any, reader)._limit == 32
                         assert writer.get_extra_info("sslcontext") is client_ctx
                         assert not writer.can_write_eof()
-                        for offset in range(0, len(payload), chunk_size):
-                            writer.write(payload[offset : offset + chunk_size])
+                        pieces = [
+                            payload[offset : offset + chunk_size]
+                            for offset in range(0, len(payload), chunk_size)
+                        ]
+                        if method == "writelines":
+                            writer.writelines(pieces)
+                        else:
+                            for piece in pieces:
+                                writer.write(piece)
                         await writer.drain()
                         assert await reader.readexactly(len(payload)) == payload
                         assert await reader.read() == b""

@@ -12,6 +12,7 @@ use std::{
 };
 
 use futures::{future::poll_fn, task::AtomicWaker};
+use pyo3::{prelude::*, pybacked::PyBackedBytes, types::PyBytes};
 
 use super::tuning::{
     MAX_STREAM_READ_BUFFER_SIZE, MIN_WRITE_BUFFER_CAPACITY, READ_BUFFER_POOL_LIMIT,
@@ -20,9 +21,16 @@ use super::tuning::{
 
 pub(super) struct OwnedWriteBuffer {
     bytes: Vec<u8>,
+    python_bytes: Option<PyBackedBytes>,
     offset: usize,
     pool: Option<Arc<WriteBufferPool>>,
 }
+
+/// Large write batches use bounded stack metadata; payloads retain their
+/// original owners. Queue capacity may grow during warmup, but constructing a
+/// batch of exact Python bytes must not allocate on the Rust heap.
+#[cfg(unix)]
+pub(super) type WriteBatch = [Option<OwnedWriteBuffer>; 16];
 
 /// A socket-read allocation whose pool slot follows the bytes into the
 /// consumer.  Native stream readers can retain this buffer directly instead
@@ -157,22 +165,44 @@ impl Drop for PendingReadBuffer<'_> {
 }
 
 impl OwnedWriteBuffer {
-    #[inline]
-    #[cfg(test)]
-    pub(super) fn from_slice(data: &[u8]) -> Self {
+    /// Keep immutable Python storage alive across partial writes and worker
+    /// handoff. PyBackedBytes permits reads without acquiring the GIL.
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OwnedWriteBuffer"))]
+    pub(super) fn from_python(data: &Bound<'_, PyBytes>) -> Self {
+        // A bytes subclass can have a Python finalizer. Never release its last
+        // reference under a transport mutex: that could re-enter the transport.
+        let data = if data.is_exact_instance_of::<PyBytes>() {
+            data.clone()
+        } else {
+            PyBytes::new(data.py(), data.as_bytes())
+        };
         Self {
-            bytes: data.to_vec(),
+            bytes: Vec::new(),
+            python_bytes: Some(PyBackedBytes::from(data)),
             offset: 0,
             pool: None,
         }
     }
 
+    #[inline]
+    #[cfg(test)]
+    pub(super) fn from_slice(data: &[u8]) -> Self {
+        Self {
+            bytes: data.to_vec(),
+            python_bytes: None,
+            offset: 0,
+            pool: None,
+        }
+    }
+
+    #[cfg(test)]
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OwnedWriteBuffer"))]
     pub(super) fn from_pooled_slice(data: &[u8], pool: &Arc<WriteBufferPool>) -> Self {
         let (mut bytes, pooled) = pool.acquire(data.len());
         bytes.extend_from_slice(data);
         Self {
             bytes,
+            python_bytes: None,
             offset: 0,
             pool: pooled.then(|| Arc::clone(pool)),
         }
@@ -183,6 +213,7 @@ impl OwnedWriteBuffer {
         let (bytes, pooled) = pool.acquire(capacity);
         Self {
             bytes,
+            python_bytes: None,
             offset: 0,
             pool: pooled.then(|| Arc::clone(pool)),
         }
@@ -190,15 +221,22 @@ impl OwnedWriteBuffer {
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OwnedWriteBuffer"))]
     pub(super) fn extend_from_slice(&mut self, data: &[u8]) {
+        if let Some(bytes) = self.python_bytes.take() {
+            // Batching needs contiguous storage. Copy only the unsent suffix
+            // and reserve the complete batch once.
+            self.bytes.reserve(bytes.len() - self.offset + data.len());
+            self.bytes.extend_from_slice(&bytes[self.offset..]);
+            self.offset = 0;
+        }
         self.bytes.extend_from_slice(data);
     }
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OwnedWriteBuffer"))]
     pub(super) fn try_append(&mut self, data: &[u8]) -> bool {
-        if !can_append(self.offset, self.bytes.len(), data.len()) {
+        if !can_append(self.offset, self.len(), data.len()) {
             return false;
         }
-        self.bytes.extend_from_slice(data);
+        self.extend_from_slice(data);
         true
     }
 
@@ -207,6 +245,7 @@ impl OwnedWriteBuffer {
     pub(super) fn from_vec(data: Vec<u8>) -> Self {
         Self {
             bytes: data,
+            python_bytes: None,
             offset: 0,
             pool: None,
         }
@@ -215,7 +254,11 @@ impl OwnedWriteBuffer {
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OwnedWriteBuffer"))]
     #[inline]
     pub(super) fn remaining(&self) -> &[u8] {
-        &self.bytes[self.offset..]
+        self.python_bytes
+            .as_deref()
+            .unwrap_or(&self.bytes)
+            .get(self.offset..)
+            .expect("valid write offset")
     }
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OwnedWriteBuffer"))]
@@ -233,7 +276,7 @@ impl OwnedWriteBuffer {
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "OwnedWriteBuffer"))]
     #[inline]
     pub(super) fn is_empty(&self) -> bool {
-        self.offset == self.bytes.len()
+        self.remaining().is_empty()
     }
 }
 
@@ -735,6 +778,51 @@ mod tests {
         assert!(!buffer.is_empty());
         buffer.advance(4);
         assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn python_write_storage_survives_worker_handoff_without_copying() {
+        use pyo3::{
+            Python,
+            types::{PyBytes, PyBytesMethods},
+        };
+        crate::initialize_python_for_tests();
+        let (mut buffer, address) = Python::attach(|py| {
+            let data = PyBytes::new(py, b"sent-payload");
+            let address = data.as_bytes().as_ptr() as usize;
+            (OwnedWriteBuffer::from_python(&data), address)
+        });
+        buffer.advance(5);
+        std::thread::spawn(move || {
+            assert_eq!(buffer.remaining(), b"payload");
+            assert_eq!(buffer.remaining().as_ptr() as usize, address + 5);
+            assert!(buffer.bytes.is_empty());
+            buffer.advance(7);
+            assert!(buffer.is_empty());
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn python_write_batch_copies_only_the_unsent_suffix() {
+        use pyo3::{
+            Python,
+            types::{PyBytes, PyBytesMethods},
+        };
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            let data = PyBytes::new(py, b"sent-first");
+            let mut buffer = OwnedWriteBuffer::from_python(&data);
+            buffer.advance(5);
+            assert!(!buffer.try_append(b"second"));
+            buffer.extend_from_slice(b"second");
+            assert!(buffer.python_bytes.is_none());
+            assert_eq!(buffer.remaining(), b"firstsecond");
+            assert_eq!(data.as_bytes(), b"sent-first");
+            assert!(buffer.try_append(b"third"));
+            assert_eq!(buffer.remaining(), b"firstsecondthird");
+        });
     }
 
     #[test]

@@ -29,6 +29,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
+#[cfg(feature = "pipe")]
 use std::io::{IoSlice, IoSliceMut};
 
 /// Trait for read-only buffers.
@@ -41,10 +42,17 @@ use std::io::{IoSlice, IoSliceMut};
 /// `buf_len()` bytes while the buffer value stays at a fixed address. Callers
 /// must not move the value while a submitted pointer is outstanding; completion
 /// operations enforce this by retaining the same boxed buffer allocation across
-/// cancellation. Moving a Vec or Box may preserve its pointer, but inline
-/// arrays require this caller-side address stability. The
+/// cancellation unless `STABLE_ON_MOVE` explicitly guarantees stable payload
+/// addresses across owner moves. Inline arrays require caller-side address
+/// stability. The
 /// reported length must not exceed `buf_capacity()`.
 pub unsafe trait IoBuf: Send + 'static {
+    /// Whether moving this owner preserves both readable and writable payload
+    /// pointers. Opting in is part of the unsafe trait contract: the memory
+    /// must remain valid through moves, including cancellation handoff.
+    /// Inline buffers and implementations without this guarantee stay boxed.
+    const STABLE_ON_MOVE: bool = false;
+
     /// Returns a raw pointer to the inner buffer.
     fn as_buf_ptr(&self) -> *const u8;
 
@@ -79,6 +87,8 @@ pub unsafe trait IoBufMut: IoBuf {
 // SAFETY: Vec owns its allocation; len describes initialized bytes and never
 // exceeds capacity. Operations do not resize it while its pointer is in use.
 unsafe impl IoBuf for Vec<u8> {
+    const STABLE_ON_MOVE: bool = true;
+
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Vec as IoBuf>"))]
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
@@ -118,6 +128,8 @@ unsafe impl IoBufMut for Vec<u8> {
 // SAFETY: String owns initialized UTF-8 bytes. Only read access to its len-byte
 // prefix is exposed, so neither UTF-8 validity nor spare capacity is modified.
 unsafe impl IoBuf for String {
+    const STABLE_ON_MOVE: bool = true;
+
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<String as IoBuf>"))]
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
@@ -139,6 +151,8 @@ unsafe impl IoBuf for String {
 
 // SAFETY: the initialized slice is immutable and outlives every operation.
 unsafe impl IoBuf for &'static [u8] {
+    const STABLE_ON_MOVE: bool = true;
+
     #[cfg_attr(
         feature = "profile",
         hotpath::measure(impl_type = "<& 'static [u8] as IoBuf>")
@@ -169,6 +183,8 @@ unsafe impl IoBuf for &'static [u8] {
 
 // SAFETY: the initialized UTF-8 bytes are immutable and have static storage.
 unsafe impl IoBuf for &'static str {
+    const STABLE_ON_MOVE: bool = true;
+
     #[cfg_attr(
         feature = "profile",
         hotpath::measure(impl_type = "<& 'static str as IoBuf>")
@@ -249,6 +265,8 @@ unsafe impl<const N: usize> IoBufMut for [u8; N] {
 
 // SAFETY: the box owns len initialized bytes at a stable allocation address.
 unsafe impl IoBuf for Box<[u8]> {
+    const STABLE_ON_MOVE: bool = true;
+
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "<Box as IoBuf>"))]
     #[inline]
     fn as_buf_ptr(&self) -> *const u8 {
@@ -317,6 +335,8 @@ impl<I: IoBuf> IoBufWithCursor<I> {
 // SAFETY: private fields and checked advance keep cursor within initialized
 // data. The underlying IoBuf retains ownership and supplies stable storage.
 unsafe impl<I: IoBuf> IoBuf for IoBufWithCursor<I> {
+    const STABLE_ON_MOVE: bool = I::STABLE_ON_MOVE;
+
     #[cfg_attr(
         feature = "profile",
         hotpath::measure(impl_type = "<IoBufWithCursor as IoBuf>")
@@ -580,10 +600,12 @@ unsafe impl IoVectoredBufMut for Vec<Box<[u8]>> {
 }
 
 /// A temporary vectored buffer for polling operations.
+#[cfg(feature = "pipe")]
 pub(crate) struct IoVectoredBufTemporaryPoll {
     iovecs: Vec<(*mut u8, usize)>,
 }
 
+#[cfg(feature = "pipe")]
 impl IoVectoredBufTemporaryPoll {
     /// Create a new `IoVectoredBufTemporaryPoll` from immutable slices.
     ///
@@ -629,6 +651,7 @@ impl IoVectoredBufTemporaryPoll {
 
 // SAFETY: the unsafe constructors require stable, initialized borrowed storage
 // and forbid retaining pointers beyond the synchronous polling operation.
+#[cfg(feature = "pipe")]
 unsafe impl IoVectoredBuf for IoVectoredBufTemporaryPoll {
     #[cfg_attr(
         feature = "profile",
@@ -654,6 +677,7 @@ unsafe impl IoVectoredBuf for IoVectoredBufTemporaryPoll {
 
 // SAFETY: mutable I/O is permitted only for new_mut, whose contract preserves
 // the non-overlapping exclusive IoSliceMut borrows throughout the poll.
+#[cfg(feature = "pipe")]
 unsafe impl IoVectoredBufMut for IoVectoredBufTemporaryPoll {
     #[cfg_attr(
         feature = "profile",

@@ -44,7 +44,7 @@ use crate::vibeio::{
     fd_inner::InnerRawHandle,
     io::{
         AsInnerRawHandle, AsyncRead, AsyncReadPoll, AsyncWrite, AsyncWritePoll, IoBuf, IoBufMut,
-        IoBufTemporaryPoll, IoVectoredBuf, IoVectoredBufMut, IoVectoredBufTemporaryPoll,
+        IoBufTemporaryPoll, IoVectoredBuf, IoVectoredBufMut,
     },
     op::{ConnectOp, ReadOp, ReadinessOp, ReadvOp, WriteOp, WritevOp},
 };
@@ -453,13 +453,11 @@ impl TokioAsyncWrite for PollUnixStream {
             return Poll::Ready(Ok(0));
         }
         let this = self.get_mut();
-        // SAFETY: IoSlice regions stay initialized and borrowed for this call.
-        // The local WritevOp copies metadata but uses only synchronous poll
-        // I/O, so no pointer into the caller's buffers survives the
-        // return.
-        let bufs = unsafe { IoVectoredBufTemporaryPoll::new(bufs) };
-        let mut op = WritevOp::new(&this.stream.handle, bufs);
-        this.stream.handle.poll_op_poll(cx, &mut op)
+        // std socket writes consume the borrowed IoSlice descriptors directly;
+        // neither payload nor descriptor ownership crosses this poll.
+        this.stream.handle.poll_io(cx, Interest::WRITABLE, || {
+            std::io::Write::write_vectored(&mut (&this.stream.inner), bufs)
+        })
     }
 
     #[cfg_attr(
@@ -663,6 +661,24 @@ impl AsyncWritePoll for PollUnixStream {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn vectored_poll_preserves_partial_writes_and_readiness() {
+        let runtime = crate::vibeio::RuntimeBuilder::new()
+            .enable_timer(true)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (socket, peer) = StdUnixStream::pair().unwrap();
+            socket2::SockRef::from(&socket)
+                .set_send_buffer_size(4096)
+                .unwrap();
+            peer.set_read_timeout(Some(crate::vibeio::test_support::WATCHDOG))
+                .unwrap();
+            let writer = PollUnixStream::from_std(socket).unwrap();
+            crate::vibeio::test_support::check_vectored_backpressure(writer, peer).await;
+        });
+    }
+
     use super::*;
     use crate::vibeio::{driver::AnyDriver, executor::Runtime};
 

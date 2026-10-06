@@ -554,6 +554,66 @@ mod storage_tests {
     }
 
     #[test]
+    fn stable_payloads_keep_addresses_without_boxing_the_owner() {
+        fn check<B: IoBuf>(buffer: B) {
+            let pointer = buffer.as_buf_ptr();
+            let storage = CompletionBuffer::new(buffer, true);
+            assert!(matches!(storage, CompletionBuffer::Inline(_)));
+            assert_eq!(storage.as_ref().as_buf_ptr(), pointer);
+            // Cancellation may box the owner, but must retain the payload.
+            let retained = storage.into_stable_box();
+            assert_eq!(retained.as_buf_ptr(), pointer);
+        }
+        check(vec![7u8; 32]);
+        check(vec![7u8; 32].into_boxed_slice());
+        check(String::from("payload"));
+        check("static payload");
+        check(b"static payload".as_slice());
+        check(crate::vibeio::io::IoBufWithCursor::new(vec![7u8; 32]));
+        let inline = crate::vibeio::io::IoBufWithCursor::new([7u8; 32]);
+        assert!(matches!(
+            CompletionBuffer::new(inline, true),
+            CompletionBuffer::Boxed(_)
+        ));
+    }
+
+    #[cfg_attr(feature = "profile", hotpath::measure)]
+    fn stable_completion_allocation_probe(mut buffer: Vec<u8>) -> Vec<u8> {
+        for _ in 0..1000 {
+            let storage = CompletionBuffer::new(std::hint::black_box(buffer), true);
+            std::hint::black_box(storage.as_ref().as_buf_ptr());
+            buffer = storage.into_inner();
+        }
+        buffer
+    }
+
+    #[test]
+    fn stable_completion_owners_reuse_storage() {
+        #[cfg(feature = "hotpath-alloc-profile")]
+        let _profile = std::env::var("RSLOOP_VIBEIO_ALLOCATION_REPORT")
+            .ok()
+            .map(|path| {
+                hotpath::HotpathGuardBuilder::new("vibeio-allocation-budget")
+                    .format(hotpath::Format::Json)
+                    .functions_limit(0)
+                    .output_path(path)
+                    .build()
+            });
+        // Warm the profiler's nested-call storage outside the measured probe.
+        #[cfg_attr(feature = "profile", hotpath::measure)]
+        fn warmup(buffer: Vec<u8>) -> Vec<u8> {
+            let storage = CompletionBuffer::new(buffer, true);
+            std::hint::black_box(storage.as_ref().as_buf_ptr());
+            storage.into_inner()
+        }
+        let buffer = warmup(vec![7u8; 1024]);
+        let pointer = buffer.as_ptr();
+        let returned = stable_completion_allocation_probe(buffer);
+        assert_eq!(returned.as_ptr(), pointer);
+        assert_eq!(returned, [7u8; 1024]);
+    }
+
+    #[test]
     fn poll_storage_returns_inline_array_without_stability_requirement() {
         let storage = CompletionBuffer::new([5u8; 8], false);
         assert!(matches!(storage, CompletionBuffer::Inline(_)));
@@ -561,11 +621,11 @@ mod storage_tests {
     }
 }
 
-impl<B> CompletionBuffer<B> {
+impl<B: crate::vibeio::io::IoBuf> CompletionBuffer<B> {
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "CompletionBuffer"))]
     #[inline]
     pub(crate) fn new(buf: B, stable: bool) -> Self {
-        if stable {
+        if stable && !B::STABLE_ON_MOVE {
             Self::Boxed(Box::new(buf))
         } else {
             Self::Inline(buf)
@@ -654,6 +714,7 @@ pub(crate) mod cancellation_tests {
 
     // SAFETY: the box owns eight initialized bytes at a stable address.
     unsafe impl IoBuf for TrackedBuffer {
+        const STABLE_ON_MOVE: bool = true;
         fn as_buf_ptr(&self) -> *const u8 {
             self.bytes.as_ptr()
         }

@@ -6,6 +6,8 @@ use std::{
 };
 
 use super::WriterCommand;
+#[cfg(any(unix, test))]
+use super::buffers::OwnedWriteBuffer;
 
 const INITIAL_WRITER_QUEUE_CAPACITY: usize = 8;
 
@@ -90,6 +92,28 @@ pub(super) fn channel() -> (WriterSender, WriterReceiver) {
 }
 
 impl WriterSender {
+    /// Publish an entire large write before a worker or control command can
+    /// observe it. The caller has already accounted for all of these bytes.
+    #[cfg(any(unix, test))]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriterSender"))]
+    pub(super) fn send_batch(
+        &self,
+        buffers: impl IntoIterator<Item = OwnedWriteBuffer>,
+    ) -> Result<(), ()> {
+        let mut state = self.shared.state.lock().expect("poisoned writer queue");
+        if !state.receiver_alive {
+            return Err(());
+        }
+        // Large batches retain each allocation instead of copying into a
+        // contiguous block. Small writes continue through send's coalescing.
+        state
+            .commands
+            .extend(buffers.into_iter().map(WriterCommand::Data));
+        drop(state);
+        self.shared.ready.notify_one();
+        Ok(())
+    }
+
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "WriterSender"))]
     pub(super) fn send(&self, command: WriterCommand) -> Result<(), WriterCommand> {
         let mut state = self.shared.state.lock().expect("poisoned writer queue");
@@ -171,6 +195,113 @@ impl Drop for WriterReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg_attr(feature = "profile", hotpath::measure)]
+    fn warmed_batch_allocation_probe(
+        sender: &WriterSender,
+        receiver: &WriterReceiver,
+        data: &pyo3::Bound<'_, pyo3::types::PyBytes>,
+    ) {
+        for _ in 0..100 {
+            let buffers: [_; 16] = std::array::from_fn(|_| OwnedWriteBuffer::from_python(data));
+            assert!(sender.send_batch(buffers).is_ok());
+            for _ in 0..16 {
+                assert!(matches!(receiver.recv(), Ok(WriterCommand::Data(_))));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[cfg_attr(feature = "profile", hotpath::measure)]
+    fn warmed_transport_batch_allocation_probe(
+        core: &Arc<super::super::StreamTransportCore>,
+        receiver: &WriterReceiver,
+        segments: &[pyo3::Bound<'_, pyo3::types::PyBytes>; 16],
+    ) {
+        for _ in 0..100 {
+            core.try_write_segments(segments, 16 * 8192).unwrap();
+            for _ in 0..16 {
+                assert!(matches!(receiver.recv(), Ok(WriterCommand::Data(_))));
+            }
+            core.record_write_buffer_drained(16 * 8192);
+            core.set_write_backpressure_active(false);
+            assert_eq!(core.get_write_buffer_size(), 0);
+        }
+    }
+
+    #[test]
+    fn warmed_python_batches_reuse_queue_storage() {
+        #[cfg(feature = "hotpath-alloc-profile")]
+        let _profile = std::env::var("RSLOOP_ALLOCATION_REPORT").ok().map(|path| {
+            hotpath::HotpathGuardBuilder::new("write-batch-allocation-budget")
+                .format(hotpath::Format::Json)
+                .functions_limit(0)
+                .output_path(path)
+                .build()
+        });
+        crate::initialize_python_for_tests();
+        pyo3::Python::attach(|py| {
+            let (sender, receiver) = channel();
+            let data = pyo3::types::PyBytes::new(py, &[7; 1024]);
+            let warmup: [_; 16] = std::array::from_fn(|_| OwnedWriteBuffer::from_python(&data));
+            assert!(sender.send_batch(warmup).is_ok());
+            for _ in 0..16 {
+                assert!(matches!(receiver.recv(), Ok(WriterCommand::Data(_))));
+            }
+            let capacity = sender.shared.state.lock().unwrap().commands.capacity();
+            warmed_batch_allocation_probe(&sender, &receiver, &data);
+            assert_eq!(
+                sender.shared.state.lock().unwrap().commands.capacity(),
+                capacity
+            );
+            #[cfg(unix)]
+            {
+                use super::super::test_support::{build_test_core, shutdown_test_core};
+                let (core, receiver, loop_core, _protocol) = build_test_core(py);
+                core.set_write_buffer_limits(Some(1024 * 1024), Some(0))
+                    .unwrap();
+                let data = pyo3::types::PyBytes::new(py, &[7; 8192]);
+                let segments = std::array::from_fn(|_| data.clone());
+                // Warm the real transport's queue before enforcing its budget.
+                core.try_write_segments(&segments, 16 * 8192).unwrap();
+                for _ in 0..16 {
+                    assert!(matches!(receiver.recv(), Ok(WriterCommand::Data(_))));
+                }
+                core.record_write_buffer_drained(16 * 8192);
+                core.set_write_backpressure_active(false);
+                warmed_transport_batch_allocation_probe(&core, &receiver, &segments);
+                shutdown_test_core(core, receiver, loop_core);
+            }
+        });
+    }
+
+    #[test]
+    fn large_batch_retains_allocations_and_precedes_shutdown() {
+        let (sender, receiver) = channel();
+        let first = OwnedWriteBuffer::from_slice(b"first");
+        let second = OwnedWriteBuffer::from_slice(b"second");
+        let addresses = [first.remaining().as_ptr(), second.remaining().as_ptr()];
+        assert!(sender.send_batch(vec![first, second]).is_ok());
+        assert!(sender.send(WriterCommand::WriteEof).is_ok());
+        for (index, expected) in [b"first".as_slice(), b"second".as_slice()]
+            .iter()
+            .enumerate()
+        {
+            let WriterCommand::Data(data) = receiver.recv().unwrap() else {
+                panic!("control command overtook batch");
+            };
+            assert_eq!(data.remaining(), *expected);
+            assert_eq!(data.remaining().as_ptr(), addresses[index]);
+        }
+        assert!(matches!(receiver.recv(), Ok(WriterCommand::WriteEof)));
+        drop(receiver);
+        assert!(
+            sender
+                .send_batch(vec![OwnedWriteBuffer::from_slice(b"rejected")])
+                .is_err()
+        );
+        assert!(sender.shared.state.lock().unwrap().commands.is_empty());
+    }
 
     #[test]
     fn queue_reuses_capacity_and_reports_disconnects() {

@@ -17,12 +17,10 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
-use pyo3::{exceptions::PyRuntimeError, prelude::*};
+use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyBytes};
 
 #[cfg(windows)]
 use super::tuning::SERVER_POLL_READER_WRITE_THRESHOLD;
-#[cfg(unix)]
-use super::unix_stream_from_owned_socket_fd;
 use super::{
     PendingReadEvent, StreamTransportCore, TransportSpawnContext, WriterCommand,
     buffers::OwnedWriteBuffer,
@@ -34,6 +32,8 @@ use super::{
     },
     writer::is_transient_write_backpressure,
 };
+#[cfg(unix)]
+use super::{buffers::WriteBatch, unix_stream_from_owned_socket_fd};
 use crate::{
     engine::{LoopCommand, LoopTransportCommand},
     fd_ops,
@@ -255,30 +255,6 @@ impl StreamTransportCore {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "StreamTransportCore")
-    )]
-    pub(super) fn stage_direct_write(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
-        if data.is_empty() {
-            return Ok(());
-        }
-        if transport_stats_enabled() {
-            TRANSPORT_STAGED_WRITES.fetch_add(1, Ordering::Relaxed);
-        }
-
-        let should_pause = self.record_write_buffer_enqueued(data.len())?;
-        let mut pending = self
-            .pending_direct_write
-            .lock()
-            .expect("poisoned pending direct write");
-        let buffer = pending.get_or_insert_with(|| self.new_pooled_write_buffer(data.len()));
-        buffer.extend_from_slice(data);
-        drop(pending);
-        self.finish_staged_write(should_pause);
-        Ok(())
-    }
-
     /// Retain an already-owned write allocation instead of copying it into a
     /// second pool slot. Only joining an existing batch requires a copy.
     #[cfg_attr(
@@ -417,7 +393,8 @@ impl StreamTransportCore {
         feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
-    pub(super) fn try_write_bytes(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
+    pub(super) fn try_write_bytes(self: &Arc<Self>, bytes: &Bound<'_, PyBytes>) -> io::Result<()> {
+        let data = bytes.as_bytes();
         #[cfg(windows)]
         if self.direct_writer.is_some()
             && (!self.server_side || data.len() >= SERVER_POLL_READER_WRITE_THRESHOLD)
@@ -429,7 +406,7 @@ impl StreamTransportCore {
             // nonblocking, and stage writes while any transition completes.
             self.request_poll_reader();
             if !self.poll_reader_ready.load(Ordering::Acquire) {
-                return self.stage_direct_write(data);
+                return self.stage_direct_write_buffer(OwnedWriteBuffer::from_python(bytes));
             }
         }
 
@@ -437,15 +414,13 @@ impl StreamTransportCore {
             if self.direct_write_scheduled.load(Ordering::Acquire)
                 || (self.coalesce_small_writes && is_write_batch_candidate(data.len()))
             {
-                return self.stage_direct_write(data);
+                return self.stage_direct_write_buffer(OwnedWriteBuffer::from_python(bytes));
             }
             match self.try_direct_tasked_write(data) {
                 Ok(written) if written == data.len() => return Ok(()),
                 Ok(written) => {
-                    let pending = OwnedWriteBuffer::from_pooled_slice(
-                        &data[written..],
-                        &self.write_buffer_pool,
-                    );
+                    let mut pending = OwnedWriteBuffer::from_python(bytes);
+                    pending.advance(written);
                     self.set_write_backpressure_active(true);
                     return self.queue_write(pending);
                 }
@@ -454,10 +429,7 @@ impl StreamTransportCore {
                         || is_transient_write_backpressure(&err) =>
                 {
                     self.set_write_backpressure_active(true);
-                    return self.queue_write(OwnedWriteBuffer::from_pooled_slice(
-                        data,
-                        &self.write_buffer_pool,
-                    ));
+                    return self.queue_write(OwnedWriteBuffer::from_python(bytes));
                 }
                 Err(err) => {
                     self.fail_write(Some(err));
@@ -466,10 +438,7 @@ impl StreamTransportCore {
             }
         }
 
-        self.queue_write(OwnedWriteBuffer::from_pooled_slice(
-            data,
-            &self.write_buffer_pool,
-        ))
+        self.queue_write(OwnedWriteBuffer::from_python(bytes))
     }
 
     #[cfg_attr(
@@ -478,6 +447,133 @@ impl StreamTransportCore {
     )]
     pub(super) fn new_pooled_write_buffer(&self, capacity: usize) -> OwnedWriteBuffer {
         OwnedWriteBuffer::with_pooled_capacity(capacity, &self.write_buffer_pool)
+    }
+
+    /// Send large immutable batches directly with scatter/gather I/O. Small
+    /// batches retain the existing coalescing policy. Large unsent batches
+    /// keep their original segments through the worker handoff as well.
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
+    pub(super) fn try_write_segments(
+        self: &Arc<Self>,
+        segments: &[Bound<'_, PyBytes>],
+        len: usize,
+    ) -> io::Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+        if segments.len() == 1 {
+            return self.try_write_bytes(&segments[0]);
+        }
+        #[allow(unused_mut)]
+        let mut written = 0;
+        #[cfg(unix)]
+        if len > SMALL_WRITE_COALESCE_MAX_BYTES
+            && self.direct_writer.is_some()
+            && !self.write_backpressure_active()
+            && !self.direct_write_scheduled.load(Ordering::Acquire)
+        {
+            // POSIX guarantees at least 16 iovecs. Bound stack usage and queue
+            // any remaining segments together with a partially written one.
+            let slices: [io::IoSlice<'_>; 16] = std::array::from_fn(|index| {
+                io::IoSlice::new(segments.get(index).map_or(&[], |data| data.as_bytes()))
+            });
+            let result = self.try_direct_tasked_write_vectored(&slices[..segments.len().min(16)]);
+            match result {
+                Ok(count) if count == len => return Ok(()),
+                Ok(count) => written = count,
+                Err(err)
+                    if err.kind() == io::ErrorKind::Interrupted
+                        || is_transient_write_backpressure(&err) => {}
+                Err(err) => {
+                    self.fail_write(Some(err));
+                    return Ok(());
+                }
+            }
+            self.set_write_backpressure_active(true);
+        }
+        #[cfg(unix)]
+        if len - written > super::tuning::DEFAULT_WRITE_BUFFER_HIGH_WATER
+            && segments.len() <= 16
+            && !self.direct_write_scheduled.load(Ordering::Acquire)
+        {
+            // Bound command/worker overhead for batches of tiny fragments.
+            // Account once and publish every segment before pause_writing can
+            // re-enter close/write_eof, preserving the single-write contract.
+            let mut buffers: WriteBatch = std::array::from_fn(|_| None);
+            for (index, segment) in segments.iter().enumerate() {
+                let size = segment.as_bytes().len();
+                if written >= size {
+                    written -= size;
+                    continue;
+                }
+                let mut buffer = OwnedWriteBuffer::from_python(segment);
+                buffer.advance(written);
+                written = 0;
+                buffers[index] = Some(buffer);
+            }
+            return self.queue_write_batch(buffers);
+        }
+        let mut joined = self.new_pooled_write_buffer(len - written);
+        for segment in segments {
+            let data = segment.as_bytes();
+            let skip = written.min(data.len());
+            written -= skip;
+            joined.extend_from_slice(&data[skip..]);
+        }
+        self.try_write_buffer(joined)
+    }
+
+    #[cfg(unix)]
+    // Keep batch publication out of the direct-write instruction footprint.
+    #[inline(never)]
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
+    fn queue_write_batch(self: &Arc<Self>, buffers: WriteBatch) -> io::Result<()> {
+        let len = buffers.iter().flatten().map(OwnedWriteBuffer::len).sum();
+        let should_pause = self.record_write_buffer_enqueued(len)?;
+        self.set_write_backpressure_active(true);
+        self.ensure_writer_worker();
+        if self
+            .writer_tx
+            .send_batch(buffers.into_iter().flatten())
+            .is_err()
+        {
+            self.clear_write_buffer(false);
+            self.fail_write(None);
+        } else if should_pause {
+            self.notify_pause_writing();
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
+    fn try_direct_tasked_write_vectored(&self, data: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        if transport_stats_enabled() {
+            TRANSPORT_DIRECT_WRITE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+        }
+        let mut writer = self
+            .direct_writer
+            .as_ref()
+            .expect("direct writer")
+            .lock()
+            .expect("poisoned direct tasked writer");
+        match writer.as_mut() {
+            Some(TaskedDirectWriter::Tcp(stream)) => stream.as_ref().write_vectored(data),
+            Some(TaskedDirectWriter::Unix(stream)) => stream.write_vectored(data),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "direct writer is closed",
+            )),
+        }
     }
 
     #[cfg_attr(
@@ -902,8 +998,10 @@ mod tests {
         Python::attach(|py| {
             for finish in [WriterCommand::Close, WriterCommand::WriteEof] {
                 let (core, writer_rx, loop_core, _protocol) = build_test_core(py);
-                core.stage_direct_write(b"first").unwrap();
-                core.stage_direct_write(b"second").unwrap();
+                core.stage_direct_write_buffer(OwnedWriteBuffer::from_slice(b"first"))
+                    .unwrap();
+                core.stage_direct_write_buffer(OwnedWriteBuffer::from_slice(b"second"))
+                    .unwrap();
                 assert_eq!(core.get_write_buffer_size(), 11);
 
                 core.queue_pending_direct_write();
@@ -1101,6 +1199,26 @@ mod tests {
             assert_eq!(err.kind(), io::ErrorKind::OutOfMemory);
             assert_eq!(core.get_write_buffer_size(), maximum);
 
+            core.clear_write_buffer(false);
+            shutdown_test_core(core, writer_rx, loop_core);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn batch_write_cap_rejects_every_segment_without_changing_accounting() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            let (core, writer_rx, loop_core, _protocol) = build_test_core(py);
+            let maximum = max_write_buffer_size();
+            core.record_write_buffer_enqueued(maximum - 1).unwrap();
+            let mut buffers = std::array::from_fn(|_| None);
+            buffers[0] = Some(OwnedWriteBuffer::from_slice(b"a"));
+            buffers[1] = Some(OwnedWriteBuffer::from_slice(b"b"));
+            let err = core.queue_write_batch(buffers).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::OutOfMemory);
+            assert_eq!(core.get_write_buffer_size(), maximum - 1);
+            assert!(writer_rx.try_recv().is_err());
             core.clear_write_buffer(false);
             shutdown_test_core(core, writer_rx, loop_core);
         });

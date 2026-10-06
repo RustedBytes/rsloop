@@ -83,6 +83,31 @@ currently defaults to
 CPython `3.10 3.11 3.12 3.13 3.14 3.14t 3.15`, and uses
 `uv python install` / `uv python find` to locate interpreters.
 
+### Vibeio allocation budgets
+
+`just test-vibeio-allocations` checks that 1,000 stable completion-buffer owner
+handoffs, TCP vectored writes, and embedded scheduler turns each perform zero Rust heap allocations
+inside the measured operations. Socket/runtime setup, payload creation, and
+completion cancellation are outside these budgets. This is not a claim that
+all of rsloop, CPython, or the kernel runs without allocations.
+
+TCP and Unix polling writes pass borrowed `IoSlice` descriptors directly to
+standard-library socket I/O, avoiding intermediate descriptor allocations and
+copies. Completion I/O retains the payload owner. `IoBuf::STABLE_ON_MOVE` is an
+unsafe opt-in guarantee that both readable and writable payload addresses survive
+owner moves; vectors, strings, boxes, static slices, and eligible cursor wrappers
+provide it. Other buffers retain boxed address stability. Cancellation still
+retains the owner until the driver acknowledges completion.
+
+The embedded `poll_once()` services one batch of up to 256 tasks using stack
+storage, without creating a root future or waker. Unpolled task references are
+released on panic, and task wakeups keep their existing scheduling order. The
+allocation check covers idle turns and 16 continuously ready tasks, with runtime
+and task creation outside the measurement.
+
+General `block_on()` batch allocation remains unchanged; the optional
+`scheduler-batch-cache` feature described above has a separate workload tradeoff.
+
 ### Profile-guided wheel builds
 
 Optionally build wheels with profile-guided optimization (PGO):
