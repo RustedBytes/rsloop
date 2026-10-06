@@ -1455,7 +1455,7 @@ impl LoopCore {
                 fd,
                 core,
                 reader: crate::transport::stream::ReaderTarget::Tcp(stream),
-            }) if !core.uses_native_stream_reader() => self
+            }) => self
                 .try_enqueue_local_ready(ReadyItem::StartTcpReader(Box::new(TcpReaderStart {
                     fd,
                     core,

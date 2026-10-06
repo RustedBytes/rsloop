@@ -44,22 +44,6 @@ impl StreamTransportCore {
         feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
-    pub(crate) fn uses_native_stream_reader(&self) -> bool {
-        matches!(
-            self.state
-                .lock()
-                .expect("poisoned transport state")
-                .callbacks
-                .stream_reader_fast_path
-                .as_ref(),
-            Some(super::protocol::StreamReaderFastPath::Native { .. })
-        )
-    }
-
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "StreamTransportCore")
-    )]
     pub(super) fn set_protocol(&self, py: Python<'_>, protocol: Py<PyAny>) -> PyResult<()> {
         let callbacks = build_protocol_callbacks(py, &protocol)?;
         let mut state = self.state.lock().expect("poisoned transport state");

@@ -466,6 +466,21 @@ impl UringDriver {
     ) -> Result<(), io::Error> {
         {
             let mut ring = self.ring.borrow_mut();
+            // A runnable callback batch need not enter the kernel merely to
+            // poll the interrupt eventfd. Still submit queued operations and
+            // service overflow/task-work flags; active I/O keeps normal
+            // polling.
+            let idle_poll = wait_for_one
+                && timeout == Some(Duration::ZERO)
+                && {
+                    let state = self.state.borrow();
+                    state.registrations.is_empty() && state.completions.is_empty()
+                }
+                && {
+                    let sq = ring.submission();
+                    !sq.cq_overflow() && !sq.taskrun()
+                };
+            let wait_for_one = wait_for_one && !idle_poll;
             let should_submit = if wait_for_one {
                 true
             } else {

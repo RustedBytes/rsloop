@@ -201,11 +201,11 @@ pub(super) fn spin_read_stream(
 
 /// Starts the socket reader for a stream transport.
 ///
-/// Active Unix loops route generic-protocol TCP readers to their loop-thread
-/// runtime. Native fast streams, Unix-domain sockets, and Windows readers
-/// retain the coordination-thread path. Both stop
-/// helpers check loop-thread task ownership before sending a dispatcher
-/// command, so `start_tls` drops a local reader before reclaiming its socket.
+/// Active Unix loops route TCP readers to their loop-thread runtime.
+/// Unix-domain sockets and Windows readers retain the coordination-thread path.
+/// Both stop helpers check loop-thread task ownership before sending a
+/// dispatcher command, so `start_tls` drops a local reader before reclaiming
+/// its socket.
 #[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn spawn_socket_reader(
     fd: fd_ops::RawFd,
