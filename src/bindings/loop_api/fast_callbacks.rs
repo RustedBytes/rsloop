@@ -156,6 +156,35 @@ unsafe fn schedule(
         return Ok(handle.into_ptr());
     }
 
+    // Task stepping and Future completion use precisely context= with zero
+    // or one callback argument. Validate the one keyword without constructing
+    // a tuple wrapper, extracting a Rust string, or walking the general parser.
+    // SAFETY: FASTCALL supplies a keyword tuple containing Unicode names.
+    if (nargs == 1 || nargs == 2)
+        && unsafe { ffi::PyTuple_Size(kwnames) } == 1
+        && unsafe {
+            ffi::PyUnicode_CompareWithASCIIString(
+                ffi::PyTuple_GetItem(kwnames, 0),
+                c"context".as_ptr(),
+            )
+        } == 0
+    {
+        // SAFETY: one/two positional entries and one keyword value are live.
+        let callback = unsafe { Bound::from_borrowed_ptr(py, *args) }.unbind();
+        let callback_args = if nargs == 2 {
+            CallbackArgs::One(unsafe { Bound::from_borrowed_ptr(py, *args.add(1)) }.unbind())
+        } else {
+            CallbackArgs::None
+        };
+        let context = unsafe { Borrowed::from_ptr(py, *args.add(nargs as usize)) };
+        let context = (!context.is_none()).then(|| context.to_owned().unbind());
+        let handle =
+            slf.get()
+                .core
+                .schedule_callback_args(py, kind, callback, callback_args, context)?;
+        return Ok(handle.into_ptr());
+    }
+
     let names = if kwnames.is_null() {
         None
     } else {
@@ -246,6 +275,48 @@ unsafe fn threadsafe(
     unsafe { schedule(py, slf, args, nargs, names, CallbackKind::Threadsafe) }
 }
 
+#[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+static HANDLE_DEALLOC: OnceLock<ffi::destructor> = OnceLock::new();
+
+#[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+unsafe extern "C" fn handle_dealloc(object: *mut ffi::PyObject) {
+    if !ATTACHED_CALLBACK_SCOPE.with(Cell::get) {
+        // The original trampoline was saved before this slot was installed.
+        if let Some(original) = HANDLE_DEALLOC.get() {
+            // SAFETY: this is the original deallocator for the same object.
+            unsafe { original(object) };
+        }
+        return;
+    }
+    let trap = pyo3::impl_::panic::PanicTrap::new("uncaught panic in Handle deallocation");
+    // SAFETY: CPython calls tp_dealloc while attached; the lifecycle frame owns
+    // attachment bookkeeping. Deferred references are flushed per loop turn.
+    let py = unsafe { Python::assume_attached() };
+    let result = std::panic::catch_unwind(|| {
+        use pyo3::impl_::{pycell::PyClassObjectBaseLayout, pyclass::PyClassImpl};
+        // SAFETY: only the final, non-GC PyHandle type receives this slot.
+        // Delegate the entire destruction operation to PyO3's own layout:
+        // Rust fields, weakrefs, object storage, and the heap-type reference.
+        // No borrowed reference to object survives the call.
+        unsafe {
+            <<crate::engine::PyHandle as PyClassImpl>::Layout as PyClassObjectBaseLayout<
+                crate::engine::PyHandle,
+            >>::tp_dealloc(py, object);
+        }
+    });
+    if let Err(payload) = result {
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("panic from Rust code");
+        // Match PyO3's deallocation trampoline: the object may already be
+        // freed, so an unraisable error must not refer to it.
+        pyo3::panic::PanicException::new_err(message.to_owned()).write_unraisable(py, None);
+    }
+    trap.disarm();
+}
+
 #[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn install_fast_callbacks(py: Python<'_>) -> PyResult<()> {
     // Descriptors borrow their method definition forever. These contain only
@@ -270,6 +341,26 @@ pub(crate) fn install_fast_callbacks(py: Python<'_>) -> PyResult<()> {
         // process lifetime and its function signature matches the method flags.
         let descriptor = unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyDescr_NewMethod(class.as_type_ptr(), definition)) }?;
         class.setattr(name.to_str().expect("ASCII method name"), descriptor)?;
+    }
+    // Slot installation is serialized by the GIL. Free-threaded builds keep
+    // the original destructor rather than mutate a type slot concurrently.
+    #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+    {
+        let handle = py.get_type::<crate::engine::PyHandle>();
+        let ptr = handle.as_type_ptr();
+        // SAFETY: type initialization runs before this extension publishes its
+        // classes. Do not apply this path if PyHandle ever becomes GC-tracked
+        // or subclassable; those types need additional deallocation protocols.
+        unsafe {
+            if ffi::PyType_GetFlags(ptr) & (ffi::Py_TPFLAGS_HAVE_GC | ffi::Py_TPFLAGS_BASETYPE) == 0
+            {
+                if let Some(original) = (*ptr).tp_dealloc {
+                    HANDLE_DEALLOC.get_or_init(|| original);
+                    (*ptr).tp_dealloc = Some(handle_dealloc);
+                    ffi::PyType_Modified(ptr);
+                }
+            }
+        }
     }
     Ok(())
 }

@@ -269,3 +269,49 @@ def test_empty_callback_contexts_keep_snapshots_tokens_and_explicit_identity(
 
     # Other tests and tracing frameworks can populate the ambient context.
     contextvars.Context().run(scenario)
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_handle_destruction_preserves_finalizers_and_weakrefs(running):
+    loop = rsloop.new_event_loop()
+    events = []
+    refs = []
+
+    class Callback:
+        def __call__(self):
+            events.append("called")
+
+        def __del__(self):
+            events.append("finalized")
+            if running:
+                loop.call_soon(events.append, "reentrant")
+
+    def queue():
+        callback = Callback()
+        refs.append(weakref.ref(callback))
+        handle = loop.call_soon(callback)
+        refs.append(weakref.ref(handle, lambda _: events.append("weakref")))
+        if not running:
+            handle.cancel()
+        return handle
+
+    async def drive():
+        queue()
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    try:
+        if running:
+            loop.run_until_complete(drive())
+            assert events == ["called", "finalized", "weakref", "reentrant"]
+        else:
+            handle = queue()
+            loop.run_until_complete(asyncio.sleep(0))
+            assert events == []
+            # The queue released the cancelled handle, but this Python
+            # reference keeps it alive until outside the lifecycle frame.
+            del handle
+            assert events == ["finalized", "weakref"]
+        assert all(ref() is None for ref in refs)
+    finally:
+        loop.close()

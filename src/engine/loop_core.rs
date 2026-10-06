@@ -723,6 +723,12 @@ impl LoopCore {
         let mut consecutive_spins: u32 = 0;
         let mut spin_cooldown: u32 = 0;
         let run_result = loop {
+            // Handle destruction inside the lifecycle frame reuses its Python
+            // attachment. Flush cross-thread deferred decrefs once per bounded
+            // ready turn, outside queue/timer borrows so finalizers can
+            // reenter.
+            #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+            Python::attach(|_| {});
             self.set_ready_drain_active(true);
             local_timers.collect(&mut local_ready);
 
@@ -895,6 +901,8 @@ impl LoopCore {
                     if !self.state.lock().expect("poisoned loop state").stopping {
                         break;
                     }
+                    #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+                    Python::attach(|_| {});
                     processed_this_turn = 0;
                 }
             }
@@ -1004,6 +1012,8 @@ impl LoopCore {
             });
         };
 
+        #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+        Python::attach(|_| {});
         self.set_ready_drain_active(false);
         drop(local_timers);
         self.clear_runtime_thread();
