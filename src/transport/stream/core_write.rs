@@ -449,6 +449,86 @@ impl StreamTransportCore {
         OwnedWriteBuffer::with_pooled_capacity(capacity, &self.write_buffer_pool)
     }
 
+    /// Send large immutable batches directly with scatter/gather I/O. Small
+    /// batches retain the existing coalescing policy; only an unsent suffix
+    /// needs contiguous owned storage after a partial vectored write.
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
+    pub(super) fn try_write_segments(
+        self: &Arc<Self>,
+        segments: &[Bound<'_, PyBytes>],
+        len: usize,
+    ) -> io::Result<()> {
+        if len == 0 {
+            return Ok(());
+        }
+        if segments.len() == 1 {
+            return self.try_write_bytes(&segments[0]);
+        }
+        #[allow(unused_mut)]
+        let mut written = 0;
+        #[cfg(unix)]
+        if len > SMALL_WRITE_COALESCE_MAX_BYTES
+            && self.direct_writer.is_some()
+            && !self.write_backpressure_active()
+            && !self.direct_write_scheduled.load(Ordering::Acquire)
+        {
+            // POSIX guarantees at least 16 iovecs. Bound stack usage and queue
+            // any remaining segments together with a partially written one.
+            let slices: [io::IoSlice<'_>; 16] = std::array::from_fn(|index| {
+                io::IoSlice::new(segments.get(index).map_or(&[], |data| data.as_bytes()))
+            });
+            let result = self.try_direct_tasked_write_vectored(&slices[..segments.len().min(16)]);
+            match result {
+                Ok(count) if count == len => return Ok(()),
+                Ok(count) => written = count,
+                Err(err)
+                    if err.kind() == io::ErrorKind::Interrupted
+                        || is_transient_write_backpressure(&err) => {}
+                Err(err) => {
+                    self.fail_write(Some(err));
+                    return Ok(());
+                }
+            }
+            self.set_write_backpressure_active(true);
+        }
+        let mut joined = self.new_pooled_write_buffer(len - written);
+        for segment in segments {
+            let data = segment.as_bytes();
+            let skip = written.min(data.len());
+            written -= skip;
+            joined.extend_from_slice(&data[skip..]);
+        }
+        self.try_write_buffer(joined)
+    }
+
+    #[cfg(unix)]
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
+    fn try_direct_tasked_write_vectored(&self, data: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        if transport_stats_enabled() {
+            TRANSPORT_DIRECT_WRITE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+        }
+        let mut writer = self
+            .direct_writer
+            .as_ref()
+            .expect("direct writer")
+            .lock()
+            .expect("poisoned direct tasked writer");
+        match writer.as_mut() {
+            Some(TaskedDirectWriter::Tcp(stream)) => stream.as_ref().write_vectored(data),
+            Some(TaskedDirectWriter::Unix(stream)) => stream.write_vectored(data),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "direct writer is closed",
+            )),
+        }
+    }
+
     #[cfg_attr(
         feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")

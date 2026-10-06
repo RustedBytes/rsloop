@@ -81,28 +81,49 @@ impl PyStreamTransport {
             return Err(PyRuntimeError::new_err("transport is not writable"));
         }
 
-        // Match asyncio's single-write writelines behavior. Besides reducing
-        // syscalls for framed protocols, validating and joining here lets the
-        // direct path account for backpressure once for the complete batch.
-        // Immutable byte segments need neither a Python conversion nor a
-        // builtins lookup (the common framed-protocol case).
+        // Validate and snapshot the entire iterable before sending anything.
+        // Keep immutable segments separate for scatter/gather socket writes.
         let mut bytes_type = None;
-        let mut joined = self.core.new_pooled_write_buffer(0);
+        // Most framed writes contain a header and a body. Avoid a heap
+        // allocation for that segment list while still accepting any iterable.
+        let empty = PyBytes::new(py, b"");
+        let mut inline: [_; 4] = std::array::from_fn(|_| empty.clone());
+        let mut count = 0;
+        let mut overflow: Option<Vec<Bound<'_, PyBytes>>> = None;
+        let mut len = 0_usize;
         for item in seq.try_iter()? {
             let item = item?;
-            if let Ok(bytes) = item.cast::<PyBytes>() {
-                joined.extend_from_slice(bytes.as_bytes());
+            let bytes = if let Ok(bytes) = item.cast::<PyBytes>() {
+                bytes.clone()
             } else {
                 let converter = match &bytes_type {
                     Some(converter) => converter,
                     None => bytes_type.insert(py.import("builtins")?.getattr("bytes")?),
                 };
-                let converted = converter.call1((item,))?;
-                joined.extend_from_slice(converted.cast::<PyBytes>()?.as_bytes());
+                converter.call1((item,))?.cast_into::<PyBytes>()?
+            };
+            len = len.checked_add(bytes.as_bytes().len()).ok_or_else(|| {
+                pyo3::exceptions::PyOverflowError::new_err("writelines is too large")
+            })?;
+            if !bytes.as_bytes().is_empty() {
+                if let Some(segments) = overflow.as_mut() {
+                    segments.push(bytes);
+                } else if count < inline.len() {
+                    inline[count] = bytes;
+                } else {
+                    let mut segments = Vec::with_capacity(inline.len() * 2);
+                    segments.extend(inline.iter().cloned());
+                    segments.push(bytes);
+                    overflow = Some(segments);
+                }
+                count += 1;
             }
         }
+        let segments = overflow
+            .as_deref()
+            .unwrap_or(&inline[..count.min(inline.len())]);
         self.core
-            .try_write_buffer(joined)
+            .try_write_segments(segments, len)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
         Ok(())
     }
