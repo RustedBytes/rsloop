@@ -19,10 +19,6 @@ Quick Rust check:
 cargo check
 ```
 
-For function timing, async poll data, allocation profiles, and a workload
-coverage inventory, see [Hotpath Profiling](hotpath-rs-profile.md). Profiling
-hooks are opt-in and absent from normal builds.
-
 The nightly pin supplies the allocator API merged in
 [rust-lang/rust#156882](https://github.com/rust-lang/rust/pull/156882). The opt-in
 `scheduler-batch-cache` Cargo feature uses the stabilized `Allocator` and
@@ -62,10 +58,8 @@ cargo build --manifest-path tools/vibeio-check/Cargo.toml --example runtime_turn
 ```
 
 The runner records binary hashes and randomized paired process order before
-measurement. This benchmark isolates runtime turns; use the
-[hot-path workload gate](hotpath-lab.md) separately to evaluate application
-timing and peak RSS.
-See the [measured results and limitations](allocator-batch-results.md).
+measurement. This benchmark isolates runtime turns; evaluate application
+timing and peak RSS separately.
 
 To evaluate the cache with your own Python workload, build explicitly with
 `uv run --with maturin maturin develop --release --features scheduler-batch-cache`.
@@ -297,13 +291,6 @@ benchmark runner. Profile passes are unmeasured and produce HTML flame graphs.
 See Python's [special-frame documentation](https://docs.python.org/3.15/library/profiling.sampling.html#special-frames).
 Use a native stack profiler when attributing CPU time to individual Rust
 functions.
-
-For isolated Rust/LLVM optimization experiments, runtime-only PGO training,
-LLM review packets, and randomized paired comparisons, see the
-[hot-path experiment harness](hotpath-lab.md).
-
-For rsloop's callback/task binding optimizations, their Rust API implications,
-and application-level measurements, see [binding hot paths](rsloop-bindings-performance.md).
 
 ## Current state of the project
 
