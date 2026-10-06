@@ -122,6 +122,8 @@ struct Registration {
     fd: RawFd,
     waiter: Option<Waker>,
     interest: Interest,
+    read_closed: bool,
+    unclaimed_readiness: bool,
 }
 
 struct DriverState {
@@ -138,6 +140,14 @@ pub struct MioDriver {
 }
 
 impl MioDriver {
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "MioDriver"))]
+    pub(crate) fn clear_readiness(&self, token: Token) {
+        if let Some(registration) = self.state.borrow_mut().registrations.get_mut(token.0) {
+            registration.unclaimed_readiness = false;
+        }
+    }
+
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "MioDriver"))]
     #[inline]
     pub(crate) fn new() -> Result<Self, io::Error> {
@@ -192,6 +202,8 @@ impl MioDriver {
                 }
 
                 if let Some(registration) = state.registrations.get_mut(event.token().0) {
+                    registration.read_closed |= event.is_read_closed();
+                    registration.unclaimed_readiness = true;
                     if let Some(task) = registration.waiter.take() {
                         ready.push(task);
                     }
@@ -269,6 +281,8 @@ impl Driver for MioDriver {
             let entry = state.registrations.vacant_entry();
             let token = Token(entry.key());
             entry.insert(Registration {
+                read_closed: false,
+                unclaimed_readiness: false,
                 fd: handle.handle,
                 waiter: None,
                 interest,
@@ -377,6 +391,13 @@ impl Driver for MioDriver {
             registration.interest = interest;
         }
 
+        if (interest.is_readable() && registration.read_closed)
+            || std::mem::take(&mut registration.unclaimed_readiness)
+        {
+            drop(state);
+            waker.wake();
+            return Ok(());
+        }
         let old_waker = Self::update_waiter(&mut registration.waiter, waker);
         drop(state);
         drop(old_waker);

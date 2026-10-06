@@ -97,6 +97,8 @@ impl Interruptor for UringInterruptor {
 }
 
 struct PollRegistration {
+    read_closed: bool,
+    unclaimed_readiness: bool,
     fd: RawFd,
     poll_mask: u32,
     waiter: Option<Waker>,
@@ -231,6 +233,15 @@ impl Drop for UringDriver {
 }
 
 impl UringDriver {
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
+    pub(crate) fn clear_readiness(&self, token: Token) {
+        if let Some(HandleRegistration::Poll(registration)) =
+            self.state.borrow_mut().registrations.get_mut(token.0)
+        {
+            registration.unclaimed_readiness = false;
+        }
+    }
+
     /// Stop all submitted work before retained operation storage is released.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "UringDriver"))]
     fn quiesce(&mut self) -> io::Result<()> {
@@ -396,7 +407,7 @@ impl UringDriver {
     fn interest_to_poll_mask(interest: Interest) -> u32 {
         let mut mask = 0;
         if interest.is_readable() {
-            mask |= libc::POLLIN as u32;
+            mask |= (libc::POLLIN | libc::POLLRDHUP) as u32;
         }
         if interest.is_writable() {
             mask |= libc::POLLOUT as u32;
@@ -480,8 +491,16 @@ impl UringDriver {
                     let sq = ring.submission();
                     !sq.cq_overflow() && !sq.taskrun()
                 };
-            let wait_for_one = wait_for_one && !idle_poll;
-            let should_submit = if wait_for_one {
+            // Completions already published in shared memory can be consumed
+            // without a GETEVENTS syscall. Kernel task work and overflow still
+            // require an entry even when the completion queue is nonempty.
+            let kernel_work = {
+                let sq = ring.submission();
+                sq.cq_overflow() || sq.taskrun()
+            };
+            let ready = !ring.completion().is_empty();
+            let wait_for_one = wait_for_one && !idle_poll && (!ready || kernel_work);
+            let should_submit = if wait_for_one || kernel_work {
                 true
             } else {
                 !ring.submission().is_empty()
@@ -557,8 +576,12 @@ impl UringDriver {
                         Some(HandleRegistration::Poll(registration))
                             if registration.generation == generation =>
                         {
+                            registration.read_closed |= result >= 0
+                                && result & (libc::POLLRDHUP | libc::POLLHUP) as i32 != 0;
                             registration.poll_armed = cqueue::more(cqe.flags());
-                            registration.waiter.take()
+                            let waiter = registration.waiter.take();
+                            registration.unclaimed_readiness = true;
+                            waiter
                         }
                         _ => None,
                     };
@@ -948,6 +971,8 @@ impl Driver for UringDriver {
             }
             RegistrationMode::Poll => {
                 entry.insert(HandleRegistration::Poll(PollRegistration {
+                    read_closed: false,
+                    unclaimed_readiness: false,
                     fd: handle.handle,
                     poll_mask: Self::interest_to_poll_mask(interest),
                     waiter: None,
@@ -1063,6 +1088,13 @@ impl Driver for UringDriver {
                 }
             };
 
+            if (interest.is_readable() && registration.read_closed)
+                || std::mem::take(&mut registration.unclaimed_readiness)
+            {
+                drop(state);
+                waker.wake();
+                return Ok(());
+            }
             old_waker = Self::update_waiter(&mut registration.waiter, waker);
             let desired_mask = Self::interest_to_poll_mask(interest);
             registration.poll_mask = desired_mask;
