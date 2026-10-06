@@ -89,6 +89,15 @@ test = [
 requires = ["maturin>=1.9.4,<2"]
 build-backend = "maturin"
 
+[tool.uv]
+# Security floors for transitive integration dependencies.
+constraint-dependencies = [
+  "mako>=1.4.2",
+  "multidict>=6.9.1",
+  "pymongo>=4.18.2",
+  "werkzeug>=3.1.9",
+]
+
 [tool.maturin]
 include = ["python/rsloop/_loop.pyi"]
 module-name = "rsloop._loop"
