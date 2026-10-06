@@ -12,7 +12,6 @@ nav:
   - Rust Extensions: rust-extensions.md
   - Examples: examples.md
   - Benchmarks: benchmarks.md
-  - Hotpath Profiling: hotpath-rs-profile.md
   - How It Works: how-it-works.md
   - Project Structure: project-structure.md
   - Development: development.md
