@@ -291,30 +291,43 @@ pub(crate) async fn check_vectored_backpressure(
         .collect();
     let reference = expected.clone();
     let worker = std::thread::spawn(move || {
-        ready.recv_timeout(WATCHDOG).unwrap();
+        let batches = ready.recv_timeout(WATCHDOG).unwrap();
         let mut data = vec![0; reference.len()];
-        reader.read_exact(&mut data).unwrap();
-        assert_eq!(data, reference);
+        for _ in 0..batches {
+            reader.read_exact(&mut data).unwrap();
+            assert_eq!(data, reference);
+        }
     });
     let mut descriptors: Vec<_> = expected.chunks(128 * 1024).map(IoSlice::new).collect();
     descriptors.insert(0, IoSlice::new(&[]));
-    let mut remaining = descriptors.as_mut_slice();
     let mut start = Some(start);
     with_watchdog(async {
-        while !remaining.is_empty() {
-            let written = std::future::poll_fn(|cx| {
-                let result = Pin::new(&mut writer).poll_write_vectored(cx, remaining);
-                if result.is_pending() {
-                    if let Some(start) = start.take() {
-                        start.send(()).unwrap();
+        let mut batches = 0;
+        while start.is_some() {
+            batches += 1;
+            assert!(
+                batches <= 32,
+                "could not establish backpressure within 32 MiB"
+            );
+            // The peer's receive window can absorb an entire batch even with
+            // a small send buffer. Repeat until Pending proves backpressure.
+            let mut batch_descriptors = descriptors.clone();
+            let mut remaining = batch_descriptors.as_mut_slice();
+            while !remaining.is_empty() {
+                let written = std::future::poll_fn(|cx| {
+                    let result = Pin::new(&mut writer).poll_write_vectored(cx, remaining);
+                    if result.is_pending() {
+                        if let Some(start) = start.take() {
+                            start.send(batches).unwrap();
+                        }
                     }
-                }
-                result
-            })
-            .await
-            .unwrap();
-            assert!(written > 0);
-            IoSlice::advance_slices(&mut remaining, written);
+                    result
+                })
+                .await
+                .unwrap();
+                assert!(written > 0);
+                IoSlice::advance_slices(&mut remaining, written);
+            }
         }
         assert!(
             start.is_none(),
