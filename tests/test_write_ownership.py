@@ -101,14 +101,15 @@ def test_writelines_partial_batch_preserves_order(segments, size, send_buffer, f
     rsloop.run(asyncio.wait_for(main(), 15))
 
 
-def test_writelines_snapshots_each_yield_and_validates_before_sending():
+@pytest.mark.parametrize("size", [32768, 131072])
+def test_writelines_snapshots_each_yield_and_validates_before_sending(size):
     async def main():
         loop = asyncio.get_running_loop()
         sender, receiver = socket.socketpair()
         sender.setblocking(False)
         receiver.setblocking(False)
         transport = None
-        data = bytearray(b"a" * 32768)
+        data = bytearray(b"a" * size)
 
         def invalid():
             yield b"must not be sent" * 4096
@@ -132,7 +133,7 @@ def test_writelines_snapshots_each_yield_and_validates_before_sending():
             received = bytearray()
             while chunk := await loop.sock_recv(receiver, 65536):
                 received.extend(chunk)
-            assert received == b"a" * 32768 + b"b" * 32768
+            assert received == b"a" * size + b"b" * size
         finally:
             if transport is not None:
                 transport.close()

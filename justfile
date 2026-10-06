@@ -18,6 +18,10 @@ clippy:
 test-rust:
     uv run --no-project python scripts/run_rust_tests.py
 
+# Allocation budget for bounded write metadata and the warmed writer queue.
+test-write-allocations:
+    uv run --no-project python scripts/check_write_allocations.py
+
 # Fast merge-gating proofs; `merge_` harnesses must fit the PR runtime budget.
 kani-core:
     cargo kani --harness merge_ -j 2 --output-format terse

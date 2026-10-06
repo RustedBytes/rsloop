@@ -26,6 +26,12 @@ pub(super) struct OwnedWriteBuffer {
     pool: Option<Arc<WriteBufferPool>>,
 }
 
+/// Large write batches use bounded stack metadata; payloads retain their
+/// original owners. Queue capacity may grow during warmup, but constructing a
+/// batch of exact Python bytes must not allocate on the Rust heap.
+#[cfg(unix)]
+pub(super) type WriteBatch = [Option<OwnedWriteBuffer>; 16];
+
 /// A socket-read allocation whose pool slot follows the bytes into the
 /// consumer.  Native stream readers can retain this buffer directly instead
 /// of copying it and still return the allocation to the bounded transport

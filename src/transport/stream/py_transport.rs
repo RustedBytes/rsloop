@@ -84,10 +84,10 @@ impl PyStreamTransport {
         // Validate and snapshot the entire iterable before sending anything.
         // Keep immutable segments separate for scatter/gather socket writes.
         let mut bytes_type = None;
-        // Most framed writes contain a header and a body. Avoid a heap
-        // allocation for that segment list while still accepting any iterable.
+        // Keep metadata for the bounded scatter/gather batch on the stack.
+        // Larger arbitrary iterables retain the heap-backed fallback.
         let empty = PyBytes::new(py, b"");
-        let mut inline: [_; 4] = std::array::from_fn(|_| empty.clone());
+        let mut inline: [_; 16] = std::array::from_fn(|_| empty.clone());
         let mut count = 0;
         let mut overflow: Option<Vec<Bound<'_, PyBytes>>> = None;
         let mut len = 0_usize;

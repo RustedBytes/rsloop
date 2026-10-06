@@ -21,8 +21,6 @@ use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyBytes};
 
 #[cfg(windows)]
 use super::tuning::SERVER_POLL_READER_WRITE_THRESHOLD;
-#[cfg(unix)]
-use super::unix_stream_from_owned_socket_fd;
 use super::{
     PendingReadEvent, StreamTransportCore, TransportSpawnContext, WriterCommand,
     buffers::OwnedWriteBuffer,
@@ -34,6 +32,8 @@ use super::{
     },
     writer::is_transient_write_backpressure,
 };
+#[cfg(unix)]
+use super::{buffers::WriteBatch, unix_stream_from_owned_socket_fd};
 use crate::{
     engine::{LoopCommand, LoopTransportCommand},
     fd_ops,
@@ -450,8 +450,8 @@ impl StreamTransportCore {
     }
 
     /// Send large immutable batches directly with scatter/gather I/O. Small
-    /// batches retain the existing coalescing policy; only an unsent suffix
-    /// needs contiguous owned storage after a partial vectored write.
+    /// batches retain the existing coalescing policy. Large unsent batches
+    /// keep their original segments through the worker handoff as well.
     #[cfg_attr(
         feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
@@ -494,6 +494,28 @@ impl StreamTransportCore {
             }
             self.set_write_backpressure_active(true);
         }
+        #[cfg(unix)]
+        if len - written > super::tuning::DEFAULT_WRITE_BUFFER_HIGH_WATER
+            && segments.len() <= 16
+            && !self.direct_write_scheduled.load(Ordering::Acquire)
+        {
+            // Bound command/worker overhead for batches of tiny fragments.
+            // Account once and publish every segment before pause_writing can
+            // re-enter close/write_eof, preserving the single-write contract.
+            let mut buffers: WriteBatch = std::array::from_fn(|_| None);
+            for (index, segment) in segments.iter().enumerate() {
+                let size = segment.as_bytes().len();
+                if written >= size {
+                    written -= size;
+                    continue;
+                }
+                let mut buffer = OwnedWriteBuffer::from_python(segment);
+                buffer.advance(written);
+                written = 0;
+                buffers[index] = Some(buffer);
+            }
+            return self.queue_write_batch(buffers);
+        }
         let mut joined = self.new_pooled_write_buffer(len - written);
         for segment in segments {
             let data = segment.as_bytes();
@@ -502,6 +524,31 @@ impl StreamTransportCore {
             joined.extend_from_slice(&data[skip..]);
         }
         self.try_write_buffer(joined)
+    }
+
+    #[cfg(unix)]
+    // Keep batch publication out of the direct-write instruction footprint.
+    #[inline(never)]
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "StreamTransportCore")
+    )]
+    fn queue_write_batch(self: &Arc<Self>, buffers: WriteBatch) -> io::Result<()> {
+        let len = buffers.iter().flatten().map(OwnedWriteBuffer::len).sum();
+        let should_pause = self.record_write_buffer_enqueued(len)?;
+        self.set_write_backpressure_active(true);
+        self.ensure_writer_worker();
+        if self
+            .writer_tx
+            .send_batch(buffers.into_iter().flatten())
+            .is_err()
+        {
+            self.clear_write_buffer(false);
+            self.fail_write(None);
+        } else if should_pause {
+            self.notify_pause_writing();
+        }
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -1152,6 +1199,26 @@ mod tests {
             assert_eq!(err.kind(), io::ErrorKind::OutOfMemory);
             assert_eq!(core.get_write_buffer_size(), maximum);
 
+            core.clear_write_buffer(false);
+            shutdown_test_core(core, writer_rx, loop_core);
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn batch_write_cap_rejects_every_segment_without_changing_accounting() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            let (core, writer_rx, loop_core, _protocol) = build_test_core(py);
+            let maximum = max_write_buffer_size();
+            core.record_write_buffer_enqueued(maximum - 1).unwrap();
+            let mut buffers = std::array::from_fn(|_| None);
+            buffers[0] = Some(OwnedWriteBuffer::from_slice(b"a"));
+            buffers[1] = Some(OwnedWriteBuffer::from_slice(b"b"));
+            let err = core.queue_write_batch(buffers).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::OutOfMemory);
+            assert_eq!(core.get_write_buffer_size(), maximum - 1);
+            assert!(writer_rx.try_recv().is_err());
             core.clear_write_buffer(false);
             shutdown_test_core(core, writer_rx, loop_core);
         });

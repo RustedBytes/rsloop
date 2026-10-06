@@ -2,6 +2,7 @@
 
 Run with the same release build and arguments before and after a change.
 The peer starts reading after enqueue timing, forcing writes into the queue.
+A reusable receive buffer keeps receiver allocation out of delivery timings.
 """
 
 import argparse
@@ -15,7 +16,7 @@ import time
 import rsloop
 
 
-async def measure(size, count):
+async def measure(size, count, segments=1):
     loop = asyncio.get_running_loop()
     sender, receiver = socket.socketpair()
     sender.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
@@ -23,17 +24,25 @@ async def measure(size, count):
     receiver.setblocking(False)
     transport = None
     payload = b"x" * size
+    pieces = [
+        payload[index * size // segments : (index + 1) * size // segments]
+        for index in range(segments)
+    ]
     try:
         transport, _ = await loop.create_connection(asyncio.Protocol, sock=sender)
+        receive_buffer = bytearray(256 * 1024)
         started = time.perf_counter()
         for _ in range(count):
-            transport.write(payload)
+            if segments == 1:
+                transport.write(payload)
+            else:
+                transport.writelines(pieces)
         queued = time.perf_counter()
         transport.write_eof()
         received = 0
-        while chunk := await loop.sock_recv(receiver, 256 * 1024):
-            assert chunk == b"x" * len(chunk)
-            received += len(chunk)
+        while count_read := await loop.sock_recv_into(receiver, receive_buffer):
+            assert receive_buffer.count(b"x", 0, count_read) == count_read
+            received += count_read
         finished = time.perf_counter()
         assert received == size * count
         return {"enqueue_s": queued - started, "delivery_s": finished - started}
@@ -48,13 +57,23 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--size", type=int, default=1024 * 1024)
     parser.add_argument("--count", type=int, default=32)
+    parser.add_argument("--segments", type=int, default=1)
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--repeat", type=int, default=9)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+    if (
+        min(args.size, args.count, args.segments, args.repeat) <= 0
+        or args.segments > args.size
+    ):
+        parser.error(
+            "size, count, segments, and repeat must be positive; segments must not exceed size"
+        )
     samples = []
     for index in range(args.warmups + args.repeat):
-        result = rsloop.run(asyncio.wait_for(measure(args.size, args.count), 60))
+        result = rsloop.run(
+            asyncio.wait_for(measure(args.size, args.count, args.segments), 60)
+        )
         if index >= args.warmups:
             samples.append(result)
     result = {
