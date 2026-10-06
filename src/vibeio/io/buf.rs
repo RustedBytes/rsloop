@@ -29,7 +29,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
-#[cfg(feature = "pipe")]
+#[cfg(all(unix, feature = "pipe"))]
 use std::io::{IoSlice, IoSliceMut};
 
 /// Trait for read-only buffers.
@@ -600,12 +600,12 @@ unsafe impl IoVectoredBufMut for Vec<Box<[u8]>> {
 }
 
 /// A temporary vectored buffer for polling operations.
-#[cfg(feature = "pipe")]
+#[cfg(all(unix, feature = "pipe"))]
 pub(crate) struct IoVectoredBufTemporaryPoll {
     iovecs: Vec<(*mut u8, usize)>,
 }
 
-#[cfg(feature = "pipe")]
+#[cfg(all(unix, feature = "pipe"))]
 impl IoVectoredBufTemporaryPoll {
     /// Create a new `IoVectoredBufTemporaryPoll` from immutable slices.
     ///
@@ -651,7 +651,7 @@ impl IoVectoredBufTemporaryPoll {
 
 // SAFETY: the unsafe constructors require stable, initialized borrowed storage
 // and forbid retaining pointers beyond the synchronous polling operation.
-#[cfg(feature = "pipe")]
+#[cfg(all(unix, feature = "pipe"))]
 unsafe impl IoVectoredBuf for IoVectoredBufTemporaryPoll {
     #[cfg_attr(
         feature = "profile",
@@ -677,7 +677,7 @@ unsafe impl IoVectoredBuf for IoVectoredBufTemporaryPoll {
 
 // SAFETY: mutable I/O is permitted only for new_mut, whose contract preserves
 // the non-overlapping exclusive IoSliceMut borrows throughout the poll.
-#[cfg(feature = "pipe")]
+#[cfg(all(unix, feature = "pipe"))]
 unsafe impl IoVectoredBufMut for IoVectoredBufTemporaryPoll {
     #[cfg_attr(
         feature = "profile",

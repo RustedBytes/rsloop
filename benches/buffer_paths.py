@@ -6,9 +6,13 @@ import json
 import platform
 import statistics
 import time
+from typing import Any, cast
 
 import rsloop
-from rsloop._loop import PyFastStreamReader
+import rsloop._loop as loop_module
+
+# Internal native types are accessed the same way as in test_stream_reader.py.
+PyFastStreamReader = cast(Any, loop_module).PyFastStreamReader
 
 
 async def buffered_reads(rounds, size):
