@@ -63,12 +63,15 @@ enum CallbackSource {
 ///
 /// The value is safe to enqueue across rsloop's worker threads. Invocation must
 /// still happen while attached to Python, normally on the event-loop thread.
-pub struct ReadyCallback {
+pub struct ReadyCallback<const SOURCE_WORDS: usize = 1> {
     id: CallbackId,
     source: CallbackSource,
-    source_value: RawFd,
+    source_value: [RawFd; SOURCE_WORDS],
     callback: Py<PyAny>,
-    args: CallbackArgs,
+    // The None/One/Many tag shares the flags' padding instead of adding a
+    // word to every callback through CallbackArgs' enum discriminant.
+    args: Option<Py<PyAny>>,
+    args_are_tuple: bool,
     context: Py<PyAny>,
     context_needs_run: bool,
     cancelled: AtomicBool,
@@ -122,18 +125,26 @@ impl ReadyCallback {
             CallbackKind::Reader(fd) => (CallbackSource::Reader, fd),
             CallbackKind::Writer(fd) => (CallbackSource::Writer, fd),
         };
+        let (args, args_are_tuple) = match args {
+            CallbackArgs::None => (None, false),
+            CallbackArgs::One(arg) => (Some(arg), false),
+            CallbackArgs::Many(args) => (Some(args.into_any()), true),
+        };
         Self {
             id,
             source,
-            source_value,
+            source_value: [source_value],
             callback,
             args,
+            args_are_tuple,
             context,
             context_needs_run,
             cancelled: AtomicBool::new(false),
         }
     }
+}
 
+impl<const SOURCE_WORDS: usize> ReadyCallback<SOURCE_WORDS> {
     #[inline]
     /// Returns the loop-unique identifier assigned to this callback.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadyCallback"))]
@@ -150,9 +161,9 @@ impl ReadyCallback {
             CallbackSource::Threadsafe => CallbackKind::Threadsafe,
             CallbackSource::Timer => CallbackKind::Timer,
             // Only an i32 signal number can initialize this source variant.
-            CallbackSource::Signal => CallbackKind::Signal(self.source_value as i32),
-            CallbackSource::Reader => CallbackKind::Reader(self.source_value),
-            CallbackSource::Writer => CallbackKind::Writer(self.source_value),
+            CallbackSource::Signal => CallbackKind::Signal(self.source_value[0] as i32),
+            CallbackSource::Reader => CallbackKind::Reader(self.source_value[0]),
+            CallbackSource::Writer => CallbackKind::Writer(self.source_value[0]),
         }
     }
 
@@ -207,9 +218,14 @@ impl ReadyCallback {
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadyCallback"))]
     fn invoke_direct(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         match &self.args {
-            CallbackArgs::None => call_callback_noargs(py, &self.callback),
-            CallbackArgs::One(arg) => call_callback_onearg(py, &self.callback, arg),
-            CallbackArgs::Many(args) => self.callback.call1(py, args),
+            None => call_callback_noargs(py, &self.callback),
+            Some(arg) if !self.args_are_tuple => call_callback_onearg(py, &self.callback, arg),
+            Some(args) => {
+                // SAFETY: from_args sets args_are_tuple only for an owned
+                // PyTuple; these fields are immutable after construction.
+                let args = unsafe { args.bind(py).cast_unchecked::<PyTuple>() };
+                Ok(self.callback.bind(py).call1(args)?.unbind())
+            }
         }
     }
 
@@ -240,7 +256,9 @@ impl ReadyCallback {
 /// until the ready batch drains, so allocation usually finds the list empty.
 #[pyclass(name = "Handle", module = "rsloop._loop", weakref, frozen)]
 pub struct PyHandle {
-    callback: ReadyCallback,
+    // call_soon handles have no signal/fd payload. Omitting that word keeps
+    // their Python allocation in a smaller size class on 64-bit CPython.
+    callback: ReadyCallback<0>,
 }
 
 impl PyHandle {
@@ -248,13 +266,40 @@ impl PyHandle {
     /// Wraps a callback in a Python-visible handle.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyHandle"))]
     pub fn new(callback: ReadyCallback) -> Self {
-        Self { callback }
+        assert!(matches!(
+            callback.source,
+            CallbackSource::Soon | CallbackSource::Threadsafe
+        ));
+        let ReadyCallback {
+            id,
+            source,
+            source_value: _,
+            callback,
+            args,
+            args_are_tuple,
+            context,
+            context_needs_run,
+            cancelled,
+        } = callback;
+        Self {
+            callback: ReadyCallback {
+                id,
+                source,
+                source_value: [],
+                callback,
+                args,
+                args_are_tuple,
+                context,
+                context_needs_run,
+                cancelled,
+            },
+        }
     }
 
     #[inline]
     /// Borrows the callback controlled by this handle.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyHandle"))]
-    pub fn ready(&self) -> &ReadyCallback {
+    pub fn ready(&self) -> &ReadyCallback<0> {
         &self.callback
     }
 }

@@ -1200,11 +1200,11 @@ impl LoopCore {
     /// Returns a secondary error only when reporting the original callback
     /// failure through the exception handler also fails.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
-    pub fn execute_ready(
+    pub fn execute_ready<const SOURCE_WORDS: usize>(
         &self,
         py: Python<'_>,
         loop_obj: Option<&Py<PyAny>>,
-        ready: &ReadyCallback,
+        ready: &ReadyCallback<SOURCE_WORDS>,
     ) -> PyResult<Option<PyErr>> {
         if ready.cancelled() {
             return Ok(None);

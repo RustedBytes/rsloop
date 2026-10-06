@@ -104,6 +104,7 @@ class TestFastCallback:
             variable.set("captured")
             loop.call_soon(callback)
             loop.call_soon(callback, None)
+            loop.call_soon(callback, (1, 2))
             loop.call_soon(callback, 1, 2, 3)
             loop.call_soon(callback=callback)
             loop.call_soon(callback, context=contextvars.Context())
@@ -114,6 +115,7 @@ class TestFastCallback:
             assert events == [
                 ((), "captured"),
                 ((None,), "captured"),
+                (((1, 2),), "captured"),
                 ((1, 2, 3), "captured"),
                 ((), "captured"),
                 ((), "default"),
@@ -122,9 +124,11 @@ class TestFastCallback:
         finally:
             loop.close()
 
-    def test_invalid_argument_combinations(self):
+    @pytest.mark.parametrize("running", [False, True])
+    def test_invalid_argument_combinations(self, running):
         loop = rsloop.new_event_loop()
-        try:
+
+        def check():
             for schedule in (loop.call_soon, loop.call_soon_threadsafe):
                 schedule = cast(Any, schedule)
                 with pytest.raises(TypeError):
@@ -135,6 +139,19 @@ class TestFastCallback:
                     schedule(lambda: None, callback=lambda: None)
                 with pytest.raises(TypeError):
                     schedule(lambda: None, unsupported=True)
+
+        async def while_running():
+            check()
+            # An error in the fast entry must not leave a pending exception.
+            future = loop.create_future()
+            loop.call_soon(future.set_result, "ok")
+            assert await future == "ok"
+
+        try:
+            if running:
+                loop.run_until_complete(while_running())
+            else:
+                check()
         finally:
             loop.close()
 

@@ -1,12 +1,105 @@
 //! FASTCALL descriptors preserve callback arguments without a transient tuple.
-//! PyO3's trampoline supplies attachment bookkeeping and panic containment.
+//! Nested calls reuse the lifecycle entry's attachment bookkeeping; external
+//! calls use PyO3's trampoline. Both paths contain Rust panics.
 
-use std::sync::OnceLock;
+use std::{cell::Cell, sync::OnceLock};
 
 use pyo3::{exceptions::PyTypeError, ffi, get_trampoline_function, prelude::*, types::PyTuple};
 
 use super::PyLoop;
 use crate::engine::{CallbackArgs, CallbackKind};
+
+thread_local! {
+    static ATTACHED_CALLBACK_SCOPE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The lifecycle entry's PyO3 guard already tracks attachment while Python
+/// callbacks execute. Keep other threads and calls outside that frame on the
+/// ordinary trampoline, including its deferred-reference cleanup.
+#[cfg_attr(feature = "profile", hotpath::measure)]
+pub(super) fn with_attached_callbacks<T>(py: Python<'_>, run: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Restore"))]
+        fn drop(&mut self) {
+            ATTACHED_CALLBACK_SCOPE.with(|scope| scope.set(self.0));
+        }
+    }
+    let _py = py;
+    let _restore = Restore(ATTACHED_CALLBACK_SCOPE.with(|scope| scope.replace(true)));
+    run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attached_callback_scope_restores_after_nested_calls_and_unwind() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            assert!(!ATTACHED_CALLBACK_SCOPE.with(Cell::get));
+            let result = std::panic::catch_unwind(|| {
+                with_attached_callbacks(py, || {
+                    assert!(ATTACHED_CALLBACK_SCOPE.with(Cell::get));
+                    with_attached_callbacks(py, || {
+                        assert!(ATTACHED_CALLBACK_SCOPE.with(Cell::get));
+                    });
+                    assert!(ATTACHED_CALLBACK_SCOPE.with(Cell::get));
+                    panic!("scope cleanup probe");
+                });
+            });
+            assert!(result.is_err());
+            assert!(!ATTACHED_CALLBACK_SCOPE.with(Cell::get));
+        });
+    }
+}
+
+unsafe extern "C" fn soon_entry(
+    slf: *mut ffi::PyObject,
+    args: *const *mut ffi::PyObject,
+    nargs: ffi::Py_ssize_t,
+    names: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    if !ATTACHED_CALLBACK_SCOPE.with(Cell::get) {
+        // SAFETY: CPython supplied this descriptor's FASTCALL arguments.
+        return unsafe {
+            get_trampoline_function!(fastcall_cfunction_with_keywords, soon)(
+                slf, args, nargs, names,
+            )
+        };
+    }
+    // Match PyO3's panic containment even if restoring an exception or
+    // destroying a panic payload itself panics.
+    let trap = pyo3::impl_::panic::PanicTrap::new("uncaught panic in call_soon");
+    // SAFETY: CPython invokes method descriptors with an attached thread;
+    // with_attached_callbacks additionally guarantees the enclosing PyO3
+    // lifecycle frame supplies attachment bookkeeping. The loop's detach
+    // sections execute Rust I/O only, never this Python descriptor.
+    let py = unsafe { Python::assume_attached() };
+    let result = std::panic::catch_unwind(|| {
+        // SAFETY: same FASTCALL contract as the ordinary trampoline.
+        unsafe { soon(py, slf, args, nargs, names) }
+    });
+    let output = match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            error.restore(py);
+            std::ptr::null_mut()
+        }
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("panic from Rust code");
+            pyo3::panic::PanicException::new_err(message.to_owned()).restore(py);
+            std::ptr::null_mut()
+        }
+    };
+    trap.disarm();
+    output
+}
 
 #[cfg_attr(feature = "profile", hotpath::measure)]
 unsafe fn schedule(
@@ -162,7 +255,7 @@ pub(crate) fn install_fast_callbacks(py: Python<'_>) -> PyResult<()> {
     static THREADSAFE: OnceLock<usize> = OnceLock::new();
     let class = py.get_type::<PyLoop>();
     for (name, cache, method, doc) in [
-        (c"call_soon", &SOON, get_trampoline_function!(fastcall_cfunction_with_keywords, soon) as ffi::PyCFunctionFastWithKeywords,
+        (c"call_soon", &SOON, soon_entry as ffi::PyCFunctionFastWithKeywords,
          c"call_soon($self, callback, *args, context=None)\n--\n\nSchedule a callback."),
         (c"call_soon_threadsafe", &THREADSAFE, get_trampoline_function!(fastcall_cfunction_with_keywords, threadsafe) as ffi::PyCFunctionFastWithKeywords,
          c"call_soon_threadsafe($self, callback, *args, context=None)\n--\n\nSchedule a callback from any thread."),
