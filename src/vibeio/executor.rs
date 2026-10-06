@@ -612,6 +612,7 @@ impl RuntimeInner {
         self.drain_ready_with(|task| batch.push(task), budget);
     }
 
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeInner"))]
     #[inline]
     fn drain_ready_with(&self, mut push: impl FnMut(Rc<Task>), mut budget: usize) {
         if budget != 0 {
