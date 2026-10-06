@@ -17,7 +17,7 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
-use pyo3::{exceptions::PyRuntimeError, prelude::*};
+use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyBytes};
 
 #[cfg(windows)]
 use super::tuning::SERVER_POLL_READER_WRITE_THRESHOLD;
@@ -255,30 +255,6 @@ impl StreamTransportCore {
         }
     }
 
-    #[cfg_attr(
-        feature = "profile",
-        hotpath::measure(impl_type = "StreamTransportCore")
-    )]
-    pub(super) fn stage_direct_write(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
-        if data.is_empty() {
-            return Ok(());
-        }
-        if transport_stats_enabled() {
-            TRANSPORT_STAGED_WRITES.fetch_add(1, Ordering::Relaxed);
-        }
-
-        let should_pause = self.record_write_buffer_enqueued(data.len())?;
-        let mut pending = self
-            .pending_direct_write
-            .lock()
-            .expect("poisoned pending direct write");
-        let buffer = pending.get_or_insert_with(|| self.new_pooled_write_buffer(data.len()));
-        buffer.extend_from_slice(data);
-        drop(pending);
-        self.finish_staged_write(should_pause);
-        Ok(())
-    }
-
     /// Retain an already-owned write allocation instead of copying it into a
     /// second pool slot. Only joining an existing batch requires a copy.
     #[cfg_attr(
@@ -417,7 +393,8 @@ impl StreamTransportCore {
         feature = "profile",
         hotpath::measure(impl_type = "StreamTransportCore")
     )]
-    pub(super) fn try_write_bytes(self: &Arc<Self>, data: &[u8]) -> io::Result<()> {
+    pub(super) fn try_write_bytes(self: &Arc<Self>, bytes: &Bound<'_, PyBytes>) -> io::Result<()> {
+        let data = bytes.as_bytes();
         #[cfg(windows)]
         if self.direct_writer.is_some()
             && (!self.server_side || data.len() >= SERVER_POLL_READER_WRITE_THRESHOLD)
@@ -429,7 +406,7 @@ impl StreamTransportCore {
             // nonblocking, and stage writes while any transition completes.
             self.request_poll_reader();
             if !self.poll_reader_ready.load(Ordering::Acquire) {
-                return self.stage_direct_write(data);
+                return self.stage_direct_write_buffer(OwnedWriteBuffer::from_python(bytes));
             }
         }
 
@@ -437,15 +414,13 @@ impl StreamTransportCore {
             if self.direct_write_scheduled.load(Ordering::Acquire)
                 || (self.coalesce_small_writes && is_write_batch_candidate(data.len()))
             {
-                return self.stage_direct_write(data);
+                return self.stage_direct_write_buffer(OwnedWriteBuffer::from_python(bytes));
             }
             match self.try_direct_tasked_write(data) {
                 Ok(written) if written == data.len() => return Ok(()),
                 Ok(written) => {
-                    let pending = OwnedWriteBuffer::from_pooled_slice(
-                        &data[written..],
-                        &self.write_buffer_pool,
-                    );
+                    let mut pending = OwnedWriteBuffer::from_python(bytes);
+                    pending.advance(written);
                     self.set_write_backpressure_active(true);
                     return self.queue_write(pending);
                 }
@@ -454,10 +429,7 @@ impl StreamTransportCore {
                         || is_transient_write_backpressure(&err) =>
                 {
                     self.set_write_backpressure_active(true);
-                    return self.queue_write(OwnedWriteBuffer::from_pooled_slice(
-                        data,
-                        &self.write_buffer_pool,
-                    ));
+                    return self.queue_write(OwnedWriteBuffer::from_python(bytes));
                 }
                 Err(err) => {
                     self.fail_write(Some(err));
@@ -466,10 +438,7 @@ impl StreamTransportCore {
             }
         }
 
-        self.queue_write(OwnedWriteBuffer::from_pooled_slice(
-            data,
-            &self.write_buffer_pool,
-        ))
+        self.queue_write(OwnedWriteBuffer::from_python(bytes))
     }
 
     #[cfg_attr(
@@ -902,8 +871,10 @@ mod tests {
         Python::attach(|py| {
             for finish in [WriterCommand::Close, WriterCommand::WriteEof] {
                 let (core, writer_rx, loop_core, _protocol) = build_test_core(py);
-                core.stage_direct_write(b"first").unwrap();
-                core.stage_direct_write(b"second").unwrap();
+                core.stage_direct_write_buffer(OwnedWriteBuffer::from_slice(b"first"))
+                    .unwrap();
+                core.stage_direct_write_buffer(OwnedWriteBuffer::from_slice(b"second"))
+                    .unwrap();
                 assert_eq!(core.get_write_buffer_size(), 11);
 
                 core.queue_pending_direct_write();

@@ -31,7 +31,6 @@ impl PyStreamTransport {
             return Err(PyRuntimeError::new_err("transport is not writable"));
         }
 
-        let borrowed_bytes;
         let converted = if self.core.has_text_encoding
             && let Some(encoding) = self.core.get_extra(py, "text_encoding")
         {
@@ -45,9 +44,8 @@ impl PyStreamTransport {
                 py.import("builtins")?.getattr("bytes")?.call1((data,))?
             }
         } else if let Ok(bytes) = data.cast::<PyBytes>() {
-            borrowed_bytes = bytes;
             self.core
-                .try_write_bytes(borrowed_bytes.as_bytes())
+                .try_write_bytes(bytes)
                 .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
             return Ok(());
         } else {
@@ -55,7 +53,7 @@ impl PyStreamTransport {
         };
         let bytes = converted.cast::<PyBytes>()?;
         self.core
-            .try_write_bytes(bytes.as_bytes())
+            .try_write_bytes(bytes)
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
         Ok(())
     }
