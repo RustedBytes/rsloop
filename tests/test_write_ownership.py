@@ -42,7 +42,17 @@ def test_queued_write_owns_original_contents(kind, finish):
             payload = memoryview(backing)[::2]
         try:
             transport, _ = await loop.create_connection(asyncio.Protocol, sock=sender)
-            transport.write(payload)
+            copies = 0
+            while True:
+                transport.write(payload)
+                copies += 1
+                if transport.get_write_buffer_size() > 0:
+                    break
+                # A small SO_SNDBUF does not bound the peer's receive window.
+                # Keep the peer idle until this payload is actually queued.
+                assert copies * len(expected) < 32 * 1024 * 1024, (
+                    "could not establish write backpressure within 32 MiB"
+                )
             transport.write(b"tail")
             assert transport.get_write_buffer_size() > 0
             del payload
@@ -54,7 +64,7 @@ def test_queued_write_owns_original_contents(kind, finish):
             received = bytearray()
             while chunk := await asyncio.wait_for(loop.sock_recv(receiver, 65536), 5):
                 received.extend(chunk)
-            assert received == expected + b"tail"
+            assert received == expected * copies + b"tail"
         finally:
             if transport is not None:
                 transport.close()

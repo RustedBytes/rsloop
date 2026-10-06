@@ -10,7 +10,6 @@ async-std = { version = "1", optional = true }
 crossbeam-queue = "0.3"
 errno = { version = "0.3", optional = true }
 futures-util = "0.3"
-libc = "0.2"
 mio = "1"
 once_cell = { version = "1", optional = true }
 oneshot = { version = "0.2", features = ["async", "std"] }
@@ -27,6 +26,7 @@ futures = { version = "0.3", default-features = false, features = ["std"] }
 io-uring = "0.7"
 
 [target."cfg(unix)".dependencies]
+libc = "0.2"
 mio = { version = "1", features = ["os-ext", "os-poll"] }
 
 [target."cfg(windows)".dependencies]
