@@ -39,7 +39,7 @@ use super::{
     timer_entry::{TimerEntry, TimerQueue},
 };
 use crate::{
-    context::{capture_context, clear_running_loop, ensure_running_loop},
+    context::{capture_callback_context, capture_context, clear_running_loop, ensure_running_loop},
     errors::handle_callback_error,
     fd_ops::RawFd,
 };
@@ -544,7 +544,7 @@ impl LoopCore {
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
     ) -> PyResult<Py<super::callbacks::PyHandle>> {
-        let (captured, context_needs_run) = capture_context(py, context)?;
+        let (captured, context_needs_run) = capture_callback_context(py, context)?;
         let ready = ReadyCallback::new(
             py,
             self.next_callback_id(),
@@ -573,7 +573,7 @@ impl LoopCore {
         args: CallbackArgs,
         context: Option<Py<PyAny>>,
     ) -> PyResult<Py<super::callbacks::PyHandle>> {
-        let (context, needs_run) = capture_context(py, context)?;
+        let (context, needs_run) = capture_callback_context(py, context)?;
         let ready = ReadyCallback::from_args(
             self.next_callback_id(),
             kind,

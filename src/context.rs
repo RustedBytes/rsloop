@@ -30,6 +30,25 @@ pub fn capture_context(py: Python<'_>, explicit: Option<Py<PyAny>>) -> PyResult<
     Ok((context, true))
 }
 
+/// Capture a one-shot callback context without retaining an empty snapshot.
+/// None is an internal marker: invocation must create a private empty Context,
+/// never copy the then-current context or share a mutable Context with peers.
+/// Explicit contexts retain their identity, including explicitly empty ones.
+#[cfg_attr(feature = "profile", hotpath::measure)]
+#[inline]
+pub(crate) fn capture_callback_context(
+    py: Python<'_>,
+    explicit: Option<Py<PyAny>>,
+) -> PyResult<(Py<PyAny>, bool)> {
+    let implicit = explicit.is_none();
+    let (context, needs_run) = capture_context(py, explicit)?;
+    if implicit && context.bind(py).len()? == 0 {
+        Ok((py.None(), needs_run))
+    } else {
+        Ok((context, needs_run))
+    }
+}
+
 #[cfg_attr(feature = "profile", hotpath::measure)]
 #[inline]
 pub fn is_nested_context_error(py: Python<'_>, err: &PyErr) -> bool {

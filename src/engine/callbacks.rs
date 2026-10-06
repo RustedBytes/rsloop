@@ -175,7 +175,8 @@ impl<const SOURCE_WORDS: usize> ReadyCallback<SOURCE_WORDS> {
     }
 
     #[inline]
-    /// Borrows the captured Python `contextvars.Context`.
+    /// Borrows the captured Context, or the implicit-empty marker for a
+    /// one-shot callback whose private Context is created on invocation.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadyCallback"))]
     pub fn context(&self) -> &Py<PyAny> {
         &self.context
@@ -198,7 +199,20 @@ impl<const SOURCE_WORDS: usize> ReadyCallback<SOURCE_WORDS> {
             return self.invoke_direct(py);
         }
 
-        if let Err(err) = enter_context(py, &self.context) {
+        // Only implicitly empty, one-shot callback contexts use the marker.
+        // Materialize a private context so mutations and retained ContextVar
+        // tokens cannot leak into siblings, the caller, or later callbacks.
+        let empty_context;
+        let context = if self.context.is_none(py) {
+            // SAFETY: Python is attached; PyContext_New returns a new owned
+            // reference or null with an exception set.
+            empty_context =
+                unsafe { Bound::from_owned_ptr_or_err(py, pyo3::ffi::PyContext_New())?.unbind() };
+            &empty_context
+        } else {
+            &self.context
+        };
+        if let Err(err) = enter_context(py, context) {
             return if is_nested_context_error(py, &err) {
                 self.invoke_direct(py)
             } else {
@@ -207,7 +221,7 @@ impl<const SOURCE_WORDS: usize> ReadyCallback<SOURCE_WORDS> {
         }
 
         let callback_result = self.invoke_direct(py);
-        let exit_result = exit_context(py, &self.context);
+        let exit_result = exit_context(py, context);
 
         match (callback_result, exit_result) {
             (Ok(result), Ok(())) => Ok(result),

@@ -213,3 +213,59 @@ class TestFastCallback:
         finally:
             thread.join()
             loop.close()
+
+
+@pytest.mark.parametrize("factory", [asyncio.new_event_loop, rsloop.new_event_loop])
+@pytest.mark.parametrize("threadsafe", [False, True])
+def test_empty_callback_contexts_keep_snapshots_tokens_and_explicit_identity(
+    factory, threadsafe
+):
+    def scenario():
+        loop = factory()
+        variable = contextvars.ContextVar("empty_callback_probe", default="default")
+        events = []
+        tokens = []
+        errors = []
+        schedule = loop.call_soon_threadsafe if threadsafe else loop.call_soon
+        shared = contextvars.Context()
+
+        def first():
+            events.append(variable.get())
+            tokens.append(variable.set("first"))
+            schedule(lambda: events.append(variable.get()))
+
+        def sibling():
+            events.append(variable.get())
+            # A token retained by a completed callback still belongs to that
+            # callback's private context, even after its handle is destroyed.
+            with pytest.raises(ValueError):
+                variable.reset(tokens[0])
+
+        def fail():
+            variable.set("failed")
+            raise RuntimeError("context callback failure")
+
+        try:
+            loop.set_exception_handler(
+                lambda _loop, info: errors.append(info["exception"])
+            )
+            schedule(first)
+            schedule(sibling)
+            schedule(variable.set, "shared", context=shared)
+            schedule(lambda: events.append(variable.get()), context=shared)
+            schedule(fail)
+            schedule(lambda: events.append(variable.get()))
+            cancelled = schedule(events.append, "cancelled")
+            cancelled.cancel()
+            variable.set("ambient")
+            loop.run_until_complete(asyncio.sleep(0))
+            assert events == ["default", "default", "shared", "default", "first"]
+            assert variable.get() == "ambient"
+            assert shared.get(variable) == "shared"
+            assert len(errors) == 1
+            assert isinstance(errors[0], RuntimeError)
+        finally:
+            loop.close()
+
+    # Other tests and tracing frameworks can populate the ambient context.
+    contextvars.Context().run(scenario)
