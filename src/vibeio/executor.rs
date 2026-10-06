@@ -1011,29 +1011,36 @@ mod tests {
     #[test]
     fn embedded_idle_turn_preserves_later_remote_wakes() {
         use std::{cell::Cell, rc::Rc, task::Poll};
-        let runtime = super::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
-        let polls = Rc::new(Cell::new(0));
-        let count = polls.clone();
-        let (send, receive) = std::sync::mpsc::channel();
-        let task = runtime.spawn(std::future::poll_fn(move |cx| {
-            count.set(count.get() + 1);
-            if count.get() == 1 {
-                send.send(cx.waker().clone()).unwrap();
-                Poll::Pending
-            } else {
-                Poll::Ready(42)
-            }
-        }));
-        runtime.poll_once();
-        let waker = receive
-            .recv_timeout(crate::vibeio::test_support::WATCHDOG)
-            .unwrap();
-        runtime.poll_once();
-        assert_eq!(polls.get(), 1);
-        std::thread::spawn(move || waker.wake()).join().unwrap();
-        runtime.poll_once();
-        assert_eq!(polls.get(), 2);
-        assert_eq!(runtime.block_on(task), 42);
+        let drivers = [
+            crate::vibeio::driver::AnyDriver::new_mock(),
+            #[cfg(target_os = "linux")]
+            crate::vibeio::driver::AnyDriver::new_uring().unwrap(),
+        ];
+        for driver in drivers {
+            let runtime = super::Runtime::new(driver);
+            let polls = Rc::new(Cell::new(0));
+            let count = polls.clone();
+            let (send, receive) = std::sync::mpsc::channel();
+            let task = runtime.spawn(std::future::poll_fn(move |cx| {
+                count.set(count.get() + 1);
+                if count.get() == 1 {
+                    send.send(cx.waker().clone()).unwrap();
+                    Poll::Pending
+                } else {
+                    Poll::Ready(42)
+                }
+            }));
+            runtime.poll_once();
+            let waker = receive
+                .recv_timeout(crate::vibeio::test_support::WATCHDOG)
+                .unwrap();
+            runtime.poll_once();
+            assert_eq!(polls.get(), 1);
+            std::thread::spawn(move || waker.wake()).join().unwrap();
+            runtime.poll_once();
+            assert_eq!(polls.get(), 2);
+            assert_eq!(runtime.block_on(task), 42);
+        }
     }
 
     #[test]

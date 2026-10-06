@@ -1,12 +1,105 @@
 //! FASTCALL descriptors preserve callback arguments without a transient tuple.
-//! PyO3's trampoline supplies attachment bookkeeping and panic containment.
+//! Nested calls reuse the lifecycle entry's attachment bookkeeping; external
+//! calls use PyO3's trampoline. Both paths contain Rust panics.
 
-use std::sync::OnceLock;
+use std::{cell::Cell, sync::OnceLock};
 
 use pyo3::{exceptions::PyTypeError, ffi, get_trampoline_function, prelude::*, types::PyTuple};
 
 use super::PyLoop;
 use crate::engine::{CallbackArgs, CallbackKind};
+
+thread_local! {
+    static ATTACHED_CALLBACK_SCOPE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The lifecycle entry's PyO3 guard already tracks attachment while Python
+/// callbacks execute. Keep other threads and calls outside that frame on the
+/// ordinary trampoline, including its deferred-reference cleanup.
+#[cfg_attr(feature = "profile", hotpath::measure)]
+pub(super) fn with_attached_callbacks<T>(py: Python<'_>, run: impl FnOnce() -> T) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Restore"))]
+        fn drop(&mut self) {
+            ATTACHED_CALLBACK_SCOPE.with(|scope| scope.set(self.0));
+        }
+    }
+    let _py = py;
+    let _restore = Restore(ATTACHED_CALLBACK_SCOPE.with(|scope| scope.replace(true)));
+    run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attached_callback_scope_restores_after_nested_calls_and_unwind() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            assert!(!ATTACHED_CALLBACK_SCOPE.with(Cell::get));
+            let result = std::panic::catch_unwind(|| {
+                with_attached_callbacks(py, || {
+                    assert!(ATTACHED_CALLBACK_SCOPE.with(Cell::get));
+                    with_attached_callbacks(py, || {
+                        assert!(ATTACHED_CALLBACK_SCOPE.with(Cell::get));
+                    });
+                    assert!(ATTACHED_CALLBACK_SCOPE.with(Cell::get));
+                    panic!("scope cleanup probe");
+                });
+            });
+            assert!(result.is_err());
+            assert!(!ATTACHED_CALLBACK_SCOPE.with(Cell::get));
+        });
+    }
+}
+
+unsafe extern "C" fn soon_entry(
+    slf: *mut ffi::PyObject,
+    args: *const *mut ffi::PyObject,
+    nargs: ffi::Py_ssize_t,
+    names: *mut ffi::PyObject,
+) -> *mut ffi::PyObject {
+    if !ATTACHED_CALLBACK_SCOPE.with(Cell::get) {
+        // SAFETY: CPython supplied this descriptor's FASTCALL arguments.
+        return unsafe {
+            get_trampoline_function!(fastcall_cfunction_with_keywords, soon)(
+                slf, args, nargs, names,
+            )
+        };
+    }
+    // Match PyO3's panic containment even if restoring an exception or
+    // destroying a panic payload itself panics.
+    let trap = pyo3::impl_::panic::PanicTrap::new("uncaught panic in call_soon");
+    // SAFETY: CPython invokes method descriptors with an attached thread;
+    // with_attached_callbacks additionally guarantees the enclosing PyO3
+    // lifecycle frame supplies attachment bookkeeping. The loop's detach
+    // sections execute Rust I/O only, never this Python descriptor.
+    let py = unsafe { Python::assume_attached() };
+    let result = std::panic::catch_unwind(|| {
+        // SAFETY: same FASTCALL contract as the ordinary trampoline.
+        unsafe { soon(py, slf, args, nargs, names) }
+    });
+    let output = match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => {
+            error.restore(py);
+            std::ptr::null_mut()
+        }
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("panic from Rust code");
+            pyo3::panic::PanicException::new_err(message.to_owned()).restore(py);
+            std::ptr::null_mut()
+        }
+    };
+    trap.disarm();
+    output
+}
 
 #[cfg_attr(feature = "profile", hotpath::measure)]
 unsafe fn schedule(
@@ -60,6 +153,35 @@ unsafe fn schedule(
             slf.get()
                 .core
                 .schedule_callback_args(py, kind, callback, callback_args, None)?;
+        return Ok(handle.into_ptr());
+    }
+
+    // Task stepping and Future completion use precisely context= with zero
+    // or one callback argument. Validate the one keyword without constructing
+    // a tuple wrapper, extracting a Rust string, or walking the general parser.
+    // SAFETY: FASTCALL supplies a keyword tuple containing Unicode names.
+    if (nargs == 1 || nargs == 2)
+        && unsafe { ffi::PyTuple_Size(kwnames) } == 1
+        && unsafe {
+            ffi::PyUnicode_CompareWithASCIIString(
+                ffi::PyTuple_GetItem(kwnames, 0),
+                c"context".as_ptr(),
+            )
+        } == 0
+    {
+        // SAFETY: one/two positional entries and one keyword value are live.
+        let callback = unsafe { Bound::from_borrowed_ptr(py, *args) }.unbind();
+        let callback_args = if nargs == 2 {
+            CallbackArgs::One(unsafe { Bound::from_borrowed_ptr(py, *args.add(1)) }.unbind())
+        } else {
+            CallbackArgs::None
+        };
+        let context = unsafe { Borrowed::from_ptr(py, *args.add(nargs as usize)) };
+        let context = (!context.is_none()).then(|| context.to_owned().unbind());
+        let handle =
+            slf.get()
+                .core
+                .schedule_callback_args(py, kind, callback, callback_args, context)?;
         return Ok(handle.into_ptr());
     }
 
@@ -153,6 +275,48 @@ unsafe fn threadsafe(
     unsafe { schedule(py, slf, args, nargs, names, CallbackKind::Threadsafe) }
 }
 
+#[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+static HANDLE_DEALLOC: OnceLock<ffi::destructor> = OnceLock::new();
+
+#[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+unsafe extern "C" fn handle_dealloc(object: *mut ffi::PyObject) {
+    if !ATTACHED_CALLBACK_SCOPE.with(Cell::get) {
+        // The original trampoline was saved before this slot was installed.
+        if let Some(original) = HANDLE_DEALLOC.get() {
+            // SAFETY: this is the original deallocator for the same object.
+            unsafe { original(object) };
+        }
+        return;
+    }
+    let trap = pyo3::impl_::panic::PanicTrap::new("uncaught panic in Handle deallocation");
+    // SAFETY: CPython calls tp_dealloc while attached; the lifecycle frame owns
+    // attachment bookkeeping. Deferred references are flushed per loop turn.
+    let py = unsafe { Python::assume_attached() };
+    let result = std::panic::catch_unwind(|| {
+        use pyo3::impl_::{pycell::PyClassObjectBaseLayout, pyclass::PyClassImpl};
+        // SAFETY: only the final, non-GC PyHandle type receives this slot.
+        // Delegate the entire destruction operation to PyO3's own layout:
+        // Rust fields, weakrefs, object storage, and the heap-type reference.
+        // No borrowed reference to object survives the call.
+        unsafe {
+            <<crate::engine::PyHandle as PyClassImpl>::Layout as PyClassObjectBaseLayout<
+                crate::engine::PyHandle,
+            >>::tp_dealloc(py, object);
+        }
+    });
+    if let Err(payload) = result {
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or("panic from Rust code");
+        // Match PyO3's deallocation trampoline: the object may already be
+        // freed, so an unraisable error must not refer to it.
+        pyo3::panic::PanicException::new_err(message.to_owned()).write_unraisable(py, None);
+    }
+    trap.disarm();
+}
+
 #[cfg_attr(feature = "profile", hotpath::measure)]
 pub(crate) fn install_fast_callbacks(py: Python<'_>) -> PyResult<()> {
     // Descriptors borrow their method definition forever. These contain only
@@ -162,7 +326,7 @@ pub(crate) fn install_fast_callbacks(py: Python<'_>) -> PyResult<()> {
     static THREADSAFE: OnceLock<usize> = OnceLock::new();
     let class = py.get_type::<PyLoop>();
     for (name, cache, method, doc) in [
-        (c"call_soon", &SOON, get_trampoline_function!(fastcall_cfunction_with_keywords, soon) as ffi::PyCFunctionFastWithKeywords,
+        (c"call_soon", &SOON, soon_entry as ffi::PyCFunctionFastWithKeywords,
          c"call_soon($self, callback, *args, context=None)\n--\n\nSchedule a callback."),
         (c"call_soon_threadsafe", &THREADSAFE, get_trampoline_function!(fastcall_cfunction_with_keywords, threadsafe) as ffi::PyCFunctionFastWithKeywords,
          c"call_soon_threadsafe($self, callback, *args, context=None)\n--\n\nSchedule a callback from any thread."),
@@ -177,6 +341,26 @@ pub(crate) fn install_fast_callbacks(py: Python<'_>) -> PyResult<()> {
         // process lifetime and its function signature matches the method flags.
         let descriptor = unsafe { Bound::from_owned_ptr_or_err(py, ffi::PyDescr_NewMethod(class.as_type_ptr(), definition)) }?;
         class.setattr(name.to_str().expect("ASCII method name"), descriptor)?;
+    }
+    // Slot installation is serialized by the GIL. Free-threaded builds keep
+    // the original destructor rather than mutate a type slot concurrently.
+    #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+    {
+        let handle = py.get_type::<crate::engine::PyHandle>();
+        let ptr = handle.as_type_ptr();
+        // SAFETY: type initialization runs before this extension publishes its
+        // classes. Do not apply this path if PyHandle ever becomes GC-tracked
+        // or subclassable; those types need additional deallocation protocols.
+        unsafe {
+            if ffi::PyType_GetFlags(ptr) & (ffi::Py_TPFLAGS_HAVE_GC | ffi::Py_TPFLAGS_BASETYPE) == 0
+            {
+                if let Some(original) = (*ptr).tp_dealloc {
+                    HANDLE_DEALLOC.get_or_init(|| original);
+                    (*ptr).tp_dealloc = Some(handle_dealloc);
+                    ffi::PyType_Modified(ptr);
+                }
+            }
+        }
     }
     Ok(())
 }

@@ -75,6 +75,17 @@ pub(crate) fn set_nonblocking(fd: RawOsHandle, nonblocking: bool) -> io::Result<
 }
 
 impl InnerRawHandle {
+    /// A synchronous read observes all readiness delivered before this call.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "InnerRawHandle"))]
+    pub(crate) fn clear_readiness(&self) {
+        match self.driver.as_ref() {
+            AnyDriver::Mio(driver) => driver.clear_readiness(self.token),
+            AnyDriver::IoUring(driver) => driver.clear_readiness(self.token),
+            AnyDriver::Mock(_) => {}
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn for_mock_completion(driver: Rc<AnyDriver>) -> Self {
         assert!(matches!(driver.as_ref(), AnyDriver::Mock(_)));

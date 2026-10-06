@@ -104,6 +104,7 @@ class TestFastCallback:
             variable.set("captured")
             loop.call_soon(callback)
             loop.call_soon(callback, None)
+            loop.call_soon(callback, (1, 2))
             loop.call_soon(callback, 1, 2, 3)
             loop.call_soon(callback=callback)
             loop.call_soon(callback, context=contextvars.Context())
@@ -114,6 +115,7 @@ class TestFastCallback:
             assert events == [
                 ((), "captured"),
                 ((None,), "captured"),
+                (((1, 2),), "captured"),
                 ((1, 2, 3), "captured"),
                 ((), "captured"),
                 ((), "default"),
@@ -122,9 +124,11 @@ class TestFastCallback:
         finally:
             loop.close()
 
-    def test_invalid_argument_combinations(self):
+    @pytest.mark.parametrize("running", [False, True])
+    def test_invalid_argument_combinations(self, running):
         loop = rsloop.new_event_loop()
-        try:
+
+        def check():
             for schedule in (loop.call_soon, loop.call_soon_threadsafe):
                 schedule = cast(Any, schedule)
                 with pytest.raises(TypeError):
@@ -135,6 +139,19 @@ class TestFastCallback:
                     schedule(lambda: None, callback=lambda: None)
                 with pytest.raises(TypeError):
                     schedule(lambda: None, unsupported=True)
+
+        async def while_running():
+            check()
+            # An error in the fast entry must not leave a pending exception.
+            future = loop.create_future()
+            loop.call_soon(future.set_result, "ok")
+            assert await future == "ok"
+
+        try:
+            if running:
+                loop.run_until_complete(while_running())
+            else:
+                check()
         finally:
             loop.close()
 
@@ -196,3 +213,105 @@ class TestFastCallback:
         finally:
             thread.join()
             loop.close()
+
+
+@pytest.mark.parametrize("factory", [asyncio.new_event_loop, rsloop.new_event_loop])
+@pytest.mark.parametrize("threadsafe", [False, True])
+def test_empty_callback_contexts_keep_snapshots_tokens_and_explicit_identity(
+    factory, threadsafe
+):
+    def scenario():
+        loop = factory()
+        variable = contextvars.ContextVar("empty_callback_probe", default="default")
+        events = []
+        tokens = []
+        errors = []
+        schedule = loop.call_soon_threadsafe if threadsafe else loop.call_soon
+        shared = contextvars.Context()
+
+        def first():
+            events.append(variable.get())
+            tokens.append(variable.set("first"))
+            schedule(lambda: events.append(variable.get()))
+
+        def sibling():
+            events.append(variable.get())
+            # A token retained by a completed callback still belongs to that
+            # callback's private context, even after its handle is destroyed.
+            with pytest.raises(ValueError):
+                variable.reset(tokens[0])
+
+        def fail():
+            variable.set("failed")
+            raise RuntimeError("context callback failure")
+
+        try:
+            loop.set_exception_handler(
+                lambda _loop, info: errors.append(info["exception"])
+            )
+            schedule(first)
+            schedule(sibling)
+            schedule(variable.set, "shared", context=shared)
+            schedule(lambda: events.append(variable.get()), context=shared)
+            schedule(fail)
+            schedule(lambda: events.append(variable.get()))
+            cancelled = schedule(events.append, "cancelled")
+            cancelled.cancel()
+            variable.set("ambient")
+            loop.run_until_complete(asyncio.sleep(0))
+            assert events == ["default", "default", "shared", "default", "first"]
+            assert variable.get() == "ambient"
+            assert shared.get(variable) == "shared"
+            assert len(errors) == 1
+            assert isinstance(errors[0], RuntimeError)
+        finally:
+            loop.close()
+
+    # Other tests and tracing frameworks can populate the ambient context.
+    contextvars.Context().run(scenario)
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_handle_destruction_preserves_finalizers_and_weakrefs(running):
+    loop = rsloop.new_event_loop()
+    events = []
+    refs = []
+
+    class Callback:
+        def __call__(self):
+            events.append("called")
+
+        def __del__(self):
+            events.append("finalized")
+            if running:
+                loop.call_soon(events.append, "reentrant")
+
+    def queue():
+        callback = Callback()
+        refs.append(weakref.ref(callback))
+        handle = loop.call_soon(callback)
+        refs.append(weakref.ref(handle, lambda _: events.append("weakref")))
+        if not running:
+            handle.cancel()
+        return handle
+
+    async def drive():
+        queue()
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    try:
+        if running:
+            loop.run_until_complete(drive())
+            assert events == ["called", "finalized", "weakref", "reentrant"]
+        else:
+            handle = queue()
+            loop.run_until_complete(asyncio.sleep(0))
+            assert events == []
+            # The queue released the cancelled handle, but this Python
+            # reference keeps it alive until outside the lifecycle frame.
+            del handle
+            assert events == ["finalized", "weakref"]
+        assert all(ref() is None for ref in refs)
+    finally:
+        loop.close()

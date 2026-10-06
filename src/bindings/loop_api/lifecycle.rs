@@ -38,7 +38,7 @@ pub(super) fn run_forever(slf: Py<PyLoop>, py: Python<'_>) -> PyResult<()> {
     let loop_obj = PyLoop::as_py_any(py, &slf);
     let core = slf.borrow(py).core.clone();
     let _asyncgen_hooks = AsyncgenHooksGuard::install(py, &loop_obj, &core)?;
-    core.run_forever(py, loop_obj)
+    super::fast_callbacks::with_attached_callbacks(py, || core.run_forever(py, loop_obj))
 }
 
 #[cfg_attr(feature = "profile", hotpath::measure)]
@@ -69,7 +69,8 @@ pub(super) fn run_until_complete(
     ))?;
 
     wrapped.call_method1("add_done_callback", (stopper.clone(),))?;
-    let result = core.run_forever(py, loop_obj);
+    let result =
+        super::fast_callbacks::with_attached_callbacks(py, || core.run_forever(py, loop_obj));
     let _ = wrapped.call_method1("remove_done_callback", (stopper,));
     if let Err(err) = result {
         if wrapped.call_method0("done")?.extract::<bool>()?

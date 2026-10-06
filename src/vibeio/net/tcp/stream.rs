@@ -114,6 +114,8 @@ pub struct PollTcpStream {
     stream: TcpStream,
     write_ready: RefCell<bool>,
     read_ready: RefCell<bool>,
+    #[cfg(target_os = "linux")]
+    read_drained: bool,
 }
 
 impl TcpStream {
@@ -313,6 +315,8 @@ impl TcpStream {
             stream,
             write_ready: RefCell::new(false),
             read_ready: RefCell::new(false),
+            #[cfg(target_os = "linux")]
+            read_drained: false,
         })
     }
 }
@@ -361,6 +365,8 @@ impl PollTcpStream {
             stream: TcpStream::from_std_with_mode(inner, RegistrationMode::Poll)?,
             write_ready: RefCell::new(false),
             read_ready: RefCell::new(false),
+            #[cfg(target_os = "linux")]
+            read_drained: false,
         })
     }
 
@@ -372,6 +378,8 @@ impl PollTcpStream {
             stream: TcpStream::from_shared_with_mode(inner, RegistrationMode::Poll)?,
             write_ready: RefCell::new(false),
             read_ready: RefCell::new(false),
+            #[cfg(target_os = "linux")]
+            read_drained: false,
         })
     }
 
@@ -655,6 +663,18 @@ impl TokioAsyncRead for PollTcpStream {
         }
 
         let this = self.get_mut();
+        #[cfg(target_os = "linux")]
+        if std::mem::take(&mut this.read_drained) {
+            // A short Linux TCP read consumed the currently available data.
+            // Register before yielding; new data and FIN both wake this reader.
+            // A spurious poll is harmless: the next read handles WouldBlock.
+            return this
+                .stream
+                .handle
+                .poll_op_poll(cx, &mut ReadinessOp::new_readable(&this.stream.handle));
+        }
+        #[cfg(target_os = "linux")]
+        this.stream.handle.clear_readiness();
         // SAFETY: only a raw pointer is passed to the synchronous read below;
         // no initialized-byte reference is formed and no pointer is retained.
         let unfilled = unsafe { buf.unfilled_mut() };
@@ -664,6 +684,10 @@ impl TokioAsyncRead for PollTcpStream {
         let mut op = ReadOp::new(&this.stream.handle, buf_temp);
         match this.stream.handle.poll_op_poll(cx, &mut op) {
             Poll::Ready(Ok(read)) => {
+                #[cfg(target_os = "linux")]
+                {
+                    this.read_drained = read > 0 && read < buf.remaining();
+                }
                 // SAFETY: the successful read initialized exactly this prefix.
                 unsafe {
                     buf.assume_init(read);
@@ -825,6 +849,65 @@ impl AsyncWritePoll for PollTcpStream {
 
 #[cfg(test)]
 mod socket_creation_tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn short_reads_preserve_readiness_cancellation_and_eof() {
+        use std::{future::Future, io::Write, net::Shutdown};
+
+        use tokio::io::AsyncReadExt;
+
+        use crate::vibeio::{Runtime, driver::AnyDriver};
+
+        for driver in [
+            AnyDriver::new_mio().unwrap(),
+            AnyDriver::new_uring().unwrap(),
+        ] {
+            Runtime::new(driver).block_on(async {
+                crate::vibeio::time::timeout(crate::vibeio::test_support::WATCHDOG, async {
+                    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                    let socket =
+                        std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+                    let (mut peer, _) = listener.accept().unwrap();
+                    let mut stream = PollTcpStream::from_std(socket).unwrap();
+                    let mut bytes = [0; 64];
+                    peer.write_all(b"first").unwrap();
+                    assert_eq!(stream.read(&mut bytes).await.unwrap(), 5);
+                    assert_eq!(&bytes[..5], b"first");
+
+                    // Cancel the readiness wait, then deliver data before the
+                    // replacement read installs its waiter.
+                    let mut read = Box::pin(stream.read(&mut bytes));
+                    assert!(
+                        read.as_mut()
+                            .poll(&mut Context::from_waker(std::task::Waker::noop()))
+                            .is_pending()
+                    );
+                    drop(read);
+                    peer.write_all(b"next").unwrap();
+                    assert_eq!(stream.read(&mut bytes).await.unwrap(), 4);
+                    assert_eq!(&bytes[..4], b"next");
+
+                    // Let the driver observe new data while this reader has
+                    // no waiter, as happens when a transport pauses reading.
+                    peer.write_all(b"queued").unwrap();
+                    crate::vibeio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    assert_eq!(stream.read(&mut bytes).await.unwrap(), 6);
+                    assert_eq!(&bytes[..6], b"queued");
+
+                    // Both data and FIN can be present before we await
+                    // readiness.
+                    peer.write_all(b"last").unwrap();
+                    peer.shutdown(Shutdown::Write).unwrap();
+                    assert_eq!(stream.read(&mut bytes).await.unwrap(), 4);
+                    assert_eq!(&bytes[..4], b"last");
+                    assert_eq!(stream.read(&mut bytes).await.unwrap(), 0);
+                })
+                .await
+                .unwrap();
+            });
+        }
+    }
+
     #[test]
     fn vectored_poll_preserves_partial_writes_and_readiness() {
         let runtime = crate::vibeio::RuntimeBuilder::new()

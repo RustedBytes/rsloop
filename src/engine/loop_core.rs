@@ -39,7 +39,7 @@ use super::{
     timer_entry::{TimerEntry, TimerQueue},
 };
 use crate::{
-    context::{capture_context, clear_running_loop, ensure_running_loop},
+    context::{capture_callback_context, capture_context, clear_running_loop, ensure_running_loop},
     errors::handle_callback_error,
     fd_ops::RawFd,
 };
@@ -544,7 +544,7 @@ impl LoopCore {
         args: Py<PyTuple>,
         context: Option<Py<PyAny>>,
     ) -> PyResult<Py<super::callbacks::PyHandle>> {
-        let (captured, context_needs_run) = capture_context(py, context)?;
+        let (captured, context_needs_run) = capture_callback_context(py, context)?;
         let ready = ReadyCallback::new(
             py,
             self.next_callback_id(),
@@ -573,7 +573,7 @@ impl LoopCore {
         args: CallbackArgs,
         context: Option<Py<PyAny>>,
     ) -> PyResult<Py<super::callbacks::PyHandle>> {
-        let (context, needs_run) = capture_context(py, context)?;
+        let (context, needs_run) = capture_callback_context(py, context)?;
         let ready = ReadyCallback::from_args(
             self.next_callback_id(),
             kind,
@@ -723,6 +723,12 @@ impl LoopCore {
         let mut consecutive_spins: u32 = 0;
         let mut spin_cooldown: u32 = 0;
         let run_result = loop {
+            // Handle destruction inside the lifecycle frame reuses its Python
+            // attachment. Flush cross-thread deferred decrefs once per bounded
+            // ready turn, outside queue/timer borrows so finalizers can
+            // reenter.
+            #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+            Python::attach(|_| {});
             self.set_ready_drain_active(true);
             local_timers.collect(&mut local_ready);
 
@@ -895,6 +901,8 @@ impl LoopCore {
                     if !self.state.lock().expect("poisoned loop state").stopping {
                         break;
                     }
+                    #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+                    Python::attach(|_| {});
                     processed_this_turn = 0;
                 }
             }
@@ -1004,6 +1012,8 @@ impl LoopCore {
             });
         };
 
+        #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+        Python::attach(|_| {});
         self.set_ready_drain_active(false);
         drop(local_timers);
         self.clear_runtime_thread();
@@ -1200,11 +1210,11 @@ impl LoopCore {
     /// Returns a secondary error only when reporting the original callback
     /// failure through the exception handler also fails.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
-    pub fn execute_ready(
+    pub fn execute_ready<const SOURCE_WORDS: usize>(
         &self,
         py: Python<'_>,
         loop_obj: Option<&Py<PyAny>>,
-        ready: &ReadyCallback,
+        ready: &ReadyCallback<SOURCE_WORDS>,
     ) -> PyResult<Option<PyErr>> {
         if ready.cancelled() {
             return Ok(None);
@@ -1455,7 +1465,7 @@ impl LoopCore {
                 fd,
                 core,
                 reader: crate::transport::stream::ReaderTarget::Tcp(stream),
-            }) if !core.uses_native_stream_reader() => self
+            }) => self
                 .try_enqueue_local_ready(ReadyItem::StartTcpReader(Box::new(TcpReaderStart {
                     fd,
                     core,
