@@ -88,6 +88,11 @@ jobs:
             scripts/build-wheels.sh --out dist --target "${{ matrix.rust_target }}"
           fi
 
+      - name: Check installed cp315t wheel
+        # Windows ARM64 retains its explicit GIL-only interpreter list.
+        if: matrix.os_name != 'windows-arm64'
+        run: uv run --no-project --python 3.15t python scripts/check-free-threaded-wheel.py dist
+
       - name: Upload wheel artifacts
         uses: actions/upload-artifact@v4
         with:

@@ -1,6 +1,6 @@
 # Free-Threaded CPython
 
-`rsloop` builds and runs on free-threaded CPython 3.14 (`3.14t`). The extension
+`rsloop` builds and runs on free-threaded CPython 3.14 and 3.15 (`3.14t`, `3.15t`). The extension
 declares `#[pymodule(gil_used = false)]`, which keeps CPython from silently
 switching the GIL back on for the whole process at import time:
 
@@ -36,8 +36,20 @@ The pieces that make this safe include:
 standard-library stream-reader paths, `call_soon_threadsafe()` fan-in from
 eight threads, and a check that importing `rsloop` leaves the GIL off.
 
-Wheels are built for `3.14t` alongside the GIL builds, and the test matrix runs
-it as its own entry.
+Wheels are built for `3.14t` and `3.15t` alongside the GIL builds, and the test
+matrix runs each as its own entry. Windows ARM64 release jobs retain their
+explicit GIL-only interpreter list.
+
+The manual `Python 3.15t wheels` workflow builds release wheels on Linux, macOS
+Intel, and Windows x64. It installs each wheel in a clean 3.15t environment,
+checks import and `build_info()`, runs a callback/TCP smoke check with the GIL
+disabled, and runs the focused free-threading and callback tests. Release wheel
+jobs also check their installed 3.15t wheel before upload. To run this locally:
+
+```bash
+RSLOOP_PYTHON_VERSIONS=3.15t scripts/build-wheels.sh --out dist/315t -- --locked
+uv run --no-project --python 3.15t python scripts/check-free-threaded-wheel.py dist/315t
+```
 
 Downstream PyO3 extensions should also follow the guidance in
 [Free-threaded interpreters](rust-extensions.md#free-threaded-interpreters).

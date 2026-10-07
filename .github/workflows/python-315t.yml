@@ -1,0 +1,52 @@
+name: Python 3.15t wheels
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-315t-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wheel-test:
+    name: cp315t / ${{ matrix.os_name }} x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_name: linux
+            runner: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+          - os_name: macos
+            runner: macos-15-intel
+            rust_target: x86_64-apple-darwin
+          - os_name: windows
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-25
+      - uses: Swatinem/rust-cache@v2
+      - name: Build cp315t release wheel
+        shell: bash
+        env:
+          RSLOOP_PYTHON_VERSIONS: "3.15t"
+        run: scripts/build-wheels.sh --out dist --target "${{ matrix.rust_target }}" -- --locked
+      - name: Check installed wheel and focused free-threading tests
+        run: uv run --no-project --python 3.15t python scripts/check-free-threaded-wheel.py dist
+      - name: Upload cp315t wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: cp315t-${{ matrix.os_name }}-x64
+          path: dist/*-cp315-cp315t-*.whl
+          if-no-files-found: error
