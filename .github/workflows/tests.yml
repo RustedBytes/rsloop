@@ -1,6 +1,17 @@
 name: Tests
 
 on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - "src/**"
+      - "python/**"
+      - "tests/**"
+      - "scripts/**"
+      - "tools/vibeio-check/**"
+      - ".github/workflows/tests.yml"
   workflow_dispatch:
     inputs:
       python_versions:

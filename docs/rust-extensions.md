@@ -53,7 +53,7 @@ use pyo3::prelude::*;
 #[pyfunction]
 fn sleep_and_tag(py: Python<'_>, label: String, delay_ms: u64) -> PyResult<Bound<'_, PyAny>> {
     rsloop::rust_async::future_into_py(py, async move {
-        async_std::task::sleep(Duration::from_millis(delay_ms)).await;
+        smol::Timer::after(Duration::from_millis(delay_ms)).await;
         Ok(format!("rust finished: {label}"))
     })
 }
@@ -116,7 +116,7 @@ Your extension crate should depend on:
 
 ```toml
 [dependencies]
-async-std = "1"
+smol = "2"
 pyo3 = "0.29.2"
 rsloop = { version = "0.1.52" }
 ```
@@ -206,3 +206,18 @@ uv run --with . --with ./examples/rust python examples/rust/demo.py
 
 If you call the helper outside a running event loop, capturing the current loop
 will fail, because there is no active Python loop to attach to.
+
+## Runtime and local futures
+
+Send futures run on smol's global executor. Python awaitable completion,
+context propagation, cancellation and panic conversion use
+`pyo3_async_runtimes::generic`. Dropping an internal spawn handle does not
+cancel its background task. Blocking TLS and filesystem fallback operations
+use smol's blocking pool; the configured vibeio filesystem pool still takes
+precedence.
+
+The `local_future_into_py*` helpers poll non-Send futures through callbacks
+on the captured Python event loop. Create these futures on the same thread
+that runs that loop, and keep the loop running until completion or cancellation.
+Do not move that loop to another thread while local futures are active.
+Task locals are scoped to each poll and restored on return or unwind.

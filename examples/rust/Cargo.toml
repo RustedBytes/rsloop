@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 name = "rsloop_rust_example"
 
 [dependencies]
-async-std = "1"
+smol = "2"
 pyo3 = "0.29.2"
 rsloop = { path = "../.." }
 

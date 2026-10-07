@@ -59,7 +59,7 @@ pub(super) fn create_server<'py>(
     let env = LoopSpawnEnv::capture(py, &slf)?;
     let backlog = socket_options.backlog;
 
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+    crate::rust_async::future_into_py_with_locals(py, locals, async move {
         let sockets = Python::attach(|py| -> PyResult<Vec<Py<PyAny>>> {
             if let Some(sock) = &sock {
                 sock.call_method1(py, "listen", (backlog,))?;
@@ -131,7 +131,7 @@ pub(super) fn create_unix_server<'py>(
         let locals = PyLoop::task_locals(py, &slf)?;
         let env = LoopSpawnEnv::capture(py, &slf)?;
 
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+        crate::rust_async::future_into_py_with_locals(py, locals, async move {
             let socket_obj = Python::attach(|py| -> PyResult<Py<PyAny>> {
                 if let Some(sock) = &sock {
                     sock.call_method1(py, "setblocking", (false,))?;

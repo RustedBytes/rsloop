@@ -151,7 +151,7 @@ where
         api_name,
     } = params;
 
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+    crate::rust_async::future_into_py_with_locals(py, locals, async move {
         let protocol = Python::attach(|py| env.call_protocol_factory(py, &protocol_factory))?;
         if text_config.is_some()
             && Python::attach(|py| is_asyncio_subprocess_stream_protocol(py, &protocol))?

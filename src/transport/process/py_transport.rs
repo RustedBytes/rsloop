@@ -122,7 +122,7 @@ impl PyProcessTransport {
     fn _wait<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let locals = crate::transport::stream::task_locals_for_loop(py, &self.core.loop_obj)?;
         let core = self.core.clone();
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+        crate::rust_async::future_into_py_with_locals(py, locals, async move {
             loop {
                 if let Some(returncode) = core.get_returncode() {
                     return Python::attach(|py| -> PyResult<Py<PyAny>> {

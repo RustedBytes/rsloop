@@ -16,7 +16,7 @@
 //! - For platforms without native async support, operations run on a blocking
 //!   thread pool so they never block the thread polling the async operation.
 //! - A runtime-configured pool is preferred when file I/O offload is enabled;
-//!   otherwise the shared `async-std` blocking pool is used.
+//!   otherwise the shared `smol` blocking pool is used.
 //!
 //! # Examples
 //!
@@ -52,7 +52,7 @@ use crate::vibeio::op::UnlinkOp;
 
 /// Run a filesystem operation away from the async executor thread.
 ///
-/// A caller-selected runtime pool takes precedence. The shared async-std pool
+/// A caller-selected runtime pool takes precedence. The shared smol pool
 /// keeps the async filesystem API non-blocking when that optional integration
 /// is disabled or when the future is polled by another executor.
 #[cfg_attr(feature = "profile", hotpath::measure(future = true))]
@@ -66,7 +66,7 @@ where
             .await
             .map_err(|_| crate::vibeio::fs::file::blocking_pool_io_error())?
     } else {
-        async_std::task::spawn_blocking(operation).await
+        smol::unblock(operation).await
     }
 }
 

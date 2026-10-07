@@ -81,7 +81,7 @@ pub(super) fn run_in_executor<'py>(
 
     let locals = PyLoop::task_locals(py, &slf)?;
     let args = args.clone().unbind();
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+    crate::rust_async::future_into_py_with_locals(py, locals, async move {
         crate::blocking::run("rsloop-run-in-executor", move || {
             Python::attach(|py| func.call1(py, args.clone_ref(py)))
         })
@@ -231,7 +231,7 @@ pub(super) fn shutdown_default_executor<'py>(
     };
 
     let locals = PyLoop::task_locals(py, &slf)?;
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+    crate::rust_async::future_into_py_with_locals(py, locals, async move {
         if let Some(executor) = executor {
             let wait_forever = timeout.is_none() || timeout.is_some_and(f64::is_infinite);
             if wait_forever {
@@ -278,7 +278,7 @@ async fn shutdown_executor_with_timeout(
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
 
     let timed_out = if timeout.is_finite() && timeout > 0.0 {
-        match async_std::future::timeout(Duration::from_secs_f64(timeout), async move {
+        match crate::rust_async::timeout(Duration::from_secs_f64(timeout), async move {
             rx.await
                 .map_err(|_| PyRuntimeError::new_err("default executor shutdown worker dropped"))?
         })

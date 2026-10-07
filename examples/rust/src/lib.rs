@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 #[pyfunction]
 fn sleep_and_tag(py: Python<'_>, label: String, delay_ms: u64) -> PyResult<Bound<'_, PyAny>> {
     rsloop::rust_async::future_into_py(py, async move {
-        async_std::task::sleep(Duration::from_millis(delay_ms)).await;
+        smol::Timer::after(Duration::from_millis(delay_ms)).await;
         Ok(format!("rust finished: {label}"))
     })
 }
@@ -20,8 +20,8 @@ fn race_sum(py: Python<'_>, values: Vec<u64>) -> PyResult<Bound<'_, PyAny>> {
     rsloop::rust_async::future_into_py(py, async move {
         let mut tasks = Vec::with_capacity(values.len());
         for value in values {
-            tasks.push(async_std::task::spawn(async move {
-                async_std::task::sleep(Duration::from_millis(value * 10)).await;
+            tasks.push(smol::spawn(async move {
+                smol::Timer::after(Duration::from_millis(value * 10)).await;
                 value
             }));
         }

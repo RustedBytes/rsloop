@@ -217,7 +217,7 @@ pub(super) fn schedule_accepted_transport(
         };
         let server = Arc::clone(server);
         let message = message.to_owned();
-        drop(async_std::task::spawn_blocking(move || {
+        smol::unblock(move || {
             let _pending = pending;
             if server.is_closed() {
                 return;
@@ -229,7 +229,8 @@ pub(super) fn schedule_accepted_transport(
             {
                 server.report_error(err, &message);
             }
-        }));
+        })
+        .detach();
         return;
     }
 
