@@ -24,35 +24,44 @@ use crate::{
 pub enum ReadyItem {
     Callback(Arc<ReadyCallback>),
     HandleCallback(Py<PyHandle>),
-    FutureSetResult {
-        future: Py<PyAny>,
-        value: Py<PyAny>,
-    },
-    FutureSetException {
-        future: Py<PyAny>,
-        value: Py<PyAny>,
-    },
+    FutureSetResult(Box<FutureCompletion>),
+    FutureSetException(Box<FutureCompletion>),
     StreamTransportRead(Arc<StreamTransportCore>),
     StreamTransportWrite(Arc<StreamTransportCore>),
     #[cfg(unix)]
     StartTcpReader(Box<TcpReaderStart>),
     ProcessTransport(Arc<ProcessTransportCore>),
-    ServerAccepted {
-        server: Arc<ServerCore>,
-        stream: AcceptedStream,
-    },
+    ServerAccepted(Box<AcceptedConnection>),
     // A non-blocking TCP connect finished its writability wait on the vibeio
     // reactor. The Python-object work (SO_ERROR check, set_result /
     // set_exception) is deferred to the loop thread so the vibeio side never
     // touches the GIL — many concurrent connects then drain in one GIL-held
     // batch instead of one contended handoff per completion.
     #[cfg(unix)]
-    ConnectCompleted {
-        future: Py<PyAny>,
-        fd: RawFd,
-        wait_errno: i32,
-    },
+    ConnectCompleted(Box<ConnectCompletion>),
     Stop,
+}
+
+// Keep every ready slot within two pointer words. Multiword control-plane
+// payloads allocate separately; ordinary callbacks and stream-read/write
+// notifications remain allocation-free at the queue boundary.
+const _: () = assert!(std::mem::size_of::<ReadyItem>() <= 2 * std::mem::size_of::<usize>());
+
+pub struct FutureCompletion {
+    pub future: Py<PyAny>,
+    pub value: Py<PyAny>,
+}
+
+pub struct AcceptedConnection {
+    pub server: Arc<ServerCore>,
+    pub stream: AcceptedStream,
+}
+
+#[cfg(unix)]
+pub struct ConnectCompletion {
+    pub future: Py<PyAny>,
+    pub fd: RawFd,
+    pub wait_errno: i32,
 }
 
 // Reader startup is infrequent compared with callback dispatch. Keep its

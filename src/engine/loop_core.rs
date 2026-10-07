@@ -28,12 +28,12 @@ use pyo3::{
 };
 
 #[cfg(unix)]
-use super::commands::TcpReaderStart;
+use super::commands::{ConnectCompletion, TcpReaderStart};
 use super::{
     callbacks::{CallbackArgs, CallbackId, CallbackKind, ReadyCallback},
     commands::{
-        LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopTransportCommand,
-        ReadyItem,
+        AcceptedConnection, FutureCompletion, LoopCommand, LoopFutureCommand, LoopIoCommand,
+        LoopRunCommand, LoopTransportCommand, ReadyItem,
     },
     dispatcher::run_runtime_thread,
     timer_entry::{TimerEntry, TimerQueue},
@@ -821,7 +821,8 @@ impl LoopCore {
                             break;
                         }
                     }
-                    ReadyItem::FutureSetResult { future, value } => {
+                    ReadyItem::FutureSetResult(payload) => {
+                        let FutureCompletion { future, value } = *payload;
                         let future = future.bind(py);
                         if !crate::python_names::call_method0(
                             py,
@@ -839,7 +840,8 @@ impl LoopCore {
                             )?;
                         }
                     }
-                    ReadyItem::FutureSetException { future, value } => {
+                    ReadyItem::FutureSetException(payload) => {
+                        let FutureCompletion { future, value } = *payload;
                         let future = future.bind(py);
                         if !crate::python_names::call_method0(
                             py,
@@ -876,7 +878,8 @@ impl LoopCore {
                     ReadyItem::ProcessTransport(core) => {
                         core.drain_pending_events_with_py(py)?;
                     }
-                    ReadyItem::ServerAccepted { server, stream } => {
+                    ReadyItem::ServerAccepted(payload) => {
+                        let AcceptedConnection { server, stream } = *payload;
                         if let Err(err) = crate::transport::stream::spawn_accepted_transport_with_py(
                             py, &server, stream,
                         ) {
@@ -884,11 +887,12 @@ impl LoopCore {
                         }
                     }
                     #[cfg(unix)]
-                    ReadyItem::ConnectCompleted {
-                        future,
-                        fd,
-                        wait_errno,
-                    } => {
+                    ReadyItem::ConnectCompleted(payload) => {
+                        let ConnectCompletion {
+                            future,
+                            fd,
+                            wait_errno,
+                        } = *payload;
                         self.resolve_connect_completed(py, future, fd, wait_errno)?;
                     }
                 }
@@ -1490,10 +1494,12 @@ impl LoopCore {
                     ReadyItem::Callback(callback) => LoopCommand::ScheduleReady(callback),
                     ReadyItem::HandleCallback(handle) => LoopCommand::ScheduleReadyHandle(handle),
                     ReadyItem::Stop => LoopCommand::RequestStop,
-                    ReadyItem::FutureSetResult { future, value } => {
+                    ReadyItem::FutureSetResult(payload) => {
+                        let FutureCompletion { future, value } = *payload;
                         LoopCommand::Future(LoopFutureCommand::SetResult { future, value })
                     }
-                    ReadyItem::FutureSetException { future, value } => {
+                    ReadyItem::FutureSetException(payload) => {
+                        let FutureCompletion { future, value } = *payload;
                         LoopCommand::Future(LoopFutureCommand::SetException { future, value })
                     }
                     ReadyItem::StreamTransportRead(core) => {
@@ -1514,22 +1520,26 @@ impl LoopCore {
                     ReadyItem::ProcessTransport(core) => {
                         LoopCommand::Transport(LoopTransportCommand::Process(core))
                     }
-                    ReadyItem::ServerAccepted { server, stream } => {
+                    ReadyItem::ServerAccepted(payload) => {
+                        let AcceptedConnection { server, stream } = *payload;
                         LoopCommand::Transport(LoopTransportCommand::ServerAccepted {
                             server,
                             stream,
                         })
                     }
                     #[cfg(unix)]
-                    ReadyItem::ConnectCompleted {
-                        future,
-                        fd,
-                        wait_errno,
-                    } => LoopCommand::ConnectCompleted {
-                        future,
-                        fd,
-                        wait_errno,
-                    },
+                    ReadyItem::ConnectCompleted(payload) => {
+                        let ConnectCompletion {
+                            future,
+                            fd,
+                            wait_errno,
+                        } = *payload;
+                        LoopCommand::ConnectCompleted {
+                            future,
+                            fd,
+                            wait_errno,
+                        }
+                    }
                 }),
             LoopCommand::ScheduleReadyHandle(handle) => self
                 .try_enqueue_local_ready(ReadyItem::HandleCallback(handle))
@@ -1538,22 +1548,29 @@ impl LoopCore {
                     ReadyItem::HandleCallback(handle) => LoopCommand::ScheduleReadyHandle(handle),
                     _ => unreachable!("local handle enqueue preserves item kind"),
                 }),
-            LoopCommand::Future(LoopFutureCommand::SetResult { future, value }) => self
-                .try_enqueue_local_ready(ReadyItem::FutureSetResult { future, value })
+            LoopCommand::Future(LoopFutureCommand::SetResult { future, value }) => {
+                self.try_enqueue_local_ready(ReadyItem::FutureSetResult(Box::new(
+                    FutureCompletion { future, value },
+                )))
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
-                    ReadyItem::FutureSetResult { future, value } => {
+                    ReadyItem::FutureSetResult(payload) => {
+                        let FutureCompletion { future, value } = *payload;
                         LoopCommand::Future(LoopFutureCommand::SetResult { future, value })
                     }
                     _ => {
                         unreachable!("local future result enqueue preserves item kind")
                     }
-                }),
+                })
+            }
             LoopCommand::Future(LoopFutureCommand::SetException { future, value }) => self
-                .try_enqueue_local_ready(ReadyItem::FutureSetException { future, value })
+                .try_enqueue_local_ready(ReadyItem::FutureSetException(Box::new(
+                    FutureCompletion { future, value },
+                )))
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
-                    ReadyItem::FutureSetException { future, value } => {
+                    ReadyItem::FutureSetException(payload) => {
+                        let FutureCompletion { future, value } = *payload;
                         LoopCommand::Future(LoopFutureCommand::SetException { future, value })
                     }
                     _ => {
@@ -1593,11 +1610,14 @@ impl LoopCore {
                         unreachable!("local process enqueue preserves item kind")
                     }
                 }),
-            LoopCommand::Transport(LoopTransportCommand::ServerAccepted { server, stream }) => self
-                .try_enqueue_local_ready(ReadyItem::ServerAccepted { server, stream })
+            LoopCommand::Transport(LoopTransportCommand::ServerAccepted { server, stream }) => {
+                self.try_enqueue_local_ready(ReadyItem::ServerAccepted(Box::new(
+                    AcceptedConnection { server, stream },
+                )))
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
-                    ReadyItem::ServerAccepted { server, stream } => {
+                    ReadyItem::ServerAccepted(payload) => {
+                        let AcceptedConnection { server, stream } = *payload;
                         LoopCommand::Transport(LoopTransportCommand::ServerAccepted {
                             server,
                             stream,
@@ -1606,29 +1626,33 @@ impl LoopCore {
                     _ => {
                         unreachable!("local accepted transport enqueue preserves item kind")
                     }
-                }),
+                })
+            }
             #[cfg(unix)]
             LoopCommand::ConnectCompleted {
                 future,
                 fd,
                 wait_errno,
             } => self
-                .try_enqueue_local_ready(ReadyItem::ConnectCompleted {
+                .try_enqueue_local_ready(ReadyItem::ConnectCompleted(Box::new(ConnectCompletion {
                     future,
                     fd,
                     wait_errno,
-                })
+                })))
                 .or_else(|item| self.try_enqueue_active_ready(item))
                 .map_err(|item| match item {
-                    ReadyItem::ConnectCompleted {
-                        future,
-                        fd,
-                        wait_errno,
-                    } => LoopCommand::ConnectCompleted {
-                        future,
-                        fd,
-                        wait_errno,
-                    },
+                    ReadyItem::ConnectCompleted(payload) => {
+                        let ConnectCompletion {
+                            future,
+                            fd,
+                            wait_errno,
+                        } = *payload;
+                        LoopCommand::ConnectCompleted {
+                            future,
+                            fd,
+                            wait_errno,
+                        }
+                    }
                     _ => unreachable!("local connect completion enqueue preserves item kind"),
                 }),
             LoopCommand::RequestStop => self
