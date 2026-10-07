@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# 3.14t is the free-threaded build. uv accepts the "t" suffix directly, and
-# the interpreter it resolves to is named python3.14t on disk.
-RSLOOP_DEFAULT_PYTHON_VERSIONS=(3.10 3.11 3.12 3.13 3.14 3.14t 3.15)
+# The "t" suffix selects free-threaded CPython (3.14t and 3.15t).
+# uv accepts it directly and resolves a python3.Xt interpreter.
+RSLOOP_DEFAULT_PYTHON_VERSIONS=(3.10 3.11 3.12 3.13 3.14 3.14t 3.15 3.15t)
 
 rsloop_target_python_request() {
   local version="$1"
@@ -57,7 +57,7 @@ rsloop_default_versions_for_target() {
   case "$target" in
     aarch64-pc-windows-msvc)
       # Windows ARM64 Python distributions are only available for newer CPython releases.
-      printf '%s\n' 3.11 3.12 3.13 3.14 3.14t 3.15
+      printf '%s\n' 3.11 3.12 3.13 3.14 3.14t 3.15 3.15t
       ;;
     *)
       printf '%s\n' "${RSLOOP_DEFAULT_PYTHON_VERSIONS[@]}"

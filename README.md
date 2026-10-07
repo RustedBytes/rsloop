@@ -30,7 +30,7 @@ The package exposes:
 Repository metadata supports CPython 3.10 through 3.15.
 The native runtime requires Linux 6.1+, macOS 13+, or Windows 10+ so its hot
 paths can rely on modern completion, timer, and scheduler primitives.
-Free-threaded CPython (`3.14t`) is supported: the extension declares
+Free-threaded CPython (`3.14t`, `3.15t`) is supported: the extension declares
 `gil_used = false`, so importing it no longer re-enables the GIL. See
 [Free-Threaded CPython](./docs/free-threading.md) for what that does and does not
 buy you.

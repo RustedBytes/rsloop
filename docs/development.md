@@ -80,7 +80,7 @@ scripts/build-wheels.sh
 
 [`scripts/build-wheels.sh`](https://github.com/RustedBytes/rsloop/blob/master/scripts/build-wheels.sh)
 currently defaults to
-CPython `3.10 3.11 3.12 3.13 3.14 3.14t 3.15`, and uses
+CPython `3.10 3.11 3.12 3.13 3.14 3.14t 3.15 3.15t`, and uses
 `uv python install` / `uv python find` to locate interpreters.
 
 ### Vibeio allocation budgets
@@ -150,7 +150,8 @@ from the default `dev` environment because some frameworks have native
 dependencies that do not support every Python interpreter.
 
 The default matrix covers CPython 3.10 through 3.15 plus the free-threaded
-CPython 3.14 build (`3.14t`). Until Python 3.15 is final, uv resolves `3.15` to
+CPython 3.14 and 3.15 builds (`3.14t`, `3.15t`). Until Python 3.15 is final,
+uv resolves `3.15` and `3.15t` to
 the latest available prerelease standalone build.
 
 ## Run Rust lints
