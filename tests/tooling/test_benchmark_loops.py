@@ -162,6 +162,34 @@ class TestBenchmarkLoop:
         assert command[command.index("--loop") + 1] == "zuvloop"
         assert result.loop == "zuvloop"
 
+    def test_child_preserves_context_warning_and_gil_options(self, monkeypatch, mocker):
+        monkeypatch.setattr(sys, "argv", ["benchmark"])
+        monkeypatch.setattr(
+            sys, "_xoptions", {"context_aware_warnings": "0", "gil": "0"}
+        )
+        args = comparison.parse_args()
+        payload = {
+            "loop": "rsloop",
+            "workload": "callbacks",
+            "seconds": 0.1,
+            "operations": 10,
+            "peak_rss_bytes": 1024,
+        }
+        run = mocker.patch.object(
+            comparison.subprocess,
+            "run",
+            return_value=SimpleNamespace(
+                returncode=0, stdout=json.dumps(payload), stderr=""
+            ),
+        )
+        comparison.run_child("/tmp/benchmark.py", "rsloop", "callbacks", args)
+        assert run.call_args.args[0][1:5] == [
+            "-X",
+            "context_aware_warnings=0",
+            "-X",
+            "gil=0",
+        ]
+
     def test_child_failure_is_not_replaced_with_another_loop(self, monkeypatch, mocker):
         monkeypatch.setattr(sys, "argv", ["benchmark"])
         args = matrix.parse_args()

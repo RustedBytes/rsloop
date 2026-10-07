@@ -275,10 +275,18 @@ unsafe fn threadsafe(
     unsafe { schedule(py, slf, args, nargs, names, CallbackKind::Threadsafe) }
 }
 
-#[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+#[cfg(all(
+    not(Py_LIMITED_API),
+    not(Py_GIL_DISABLED),
+    not(feature = "standard-handle-dealloc")
+))]
 static HANDLE_DEALLOC: OnceLock<ffi::destructor> = OnceLock::new();
 
-#[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+#[cfg(all(
+    not(Py_LIMITED_API),
+    not(Py_GIL_DISABLED),
+    not(feature = "standard-handle-dealloc")
+))]
 unsafe extern "C" fn handle_dealloc(object: *mut ffi::PyObject) {
     if !ATTACHED_CALLBACK_SCOPE.with(Cell::get) {
         // The original trampoline was saved before this slot was installed.
@@ -344,7 +352,11 @@ pub(crate) fn install_fast_callbacks(py: Python<'_>) -> PyResult<()> {
     }
     // Slot installation is serialized by the GIL. Free-threaded builds keep
     // the original destructor rather than mutate a type slot concurrently.
-    #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
+    #[cfg(all(
+        not(Py_LIMITED_API),
+        not(Py_GIL_DISABLED),
+        not(feature = "standard-handle-dealloc")
+    ))]
     {
         let handle = py.get_type::<crate::engine::PyHandle>();
         let ptr = handle.as_type_ptr();

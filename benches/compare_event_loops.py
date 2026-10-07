@@ -505,8 +505,16 @@ def run_child(
     *,
     profile_output: Path | None = None,
 ) -> ChildResult:
+    # Interpreter options are not inherited through the environment. In
+    # particular, context-aware warnings change callback context allocations.
+    xoptions = [
+        arg
+        for key, value in sys._xoptions.items()
+        for arg in ("-X", key if value is True else f"{key}={value}")
+    ]
     cmd = [
         sys.executable,
+        *xoptions,
         script_path,
         "--child",
         "--loop",
