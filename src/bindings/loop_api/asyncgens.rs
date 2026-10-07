@@ -130,7 +130,7 @@ pub(super) fn shutdown_asyncgens<'py>(
 
     let locals = PyLoop::task_locals(py, &slf)?;
     let locals_for_await = locals.clone();
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+    crate::rust_async::future_into_py_with_locals(py, locals, async move {
         if closing_agens.is_empty() {
             return Ok(Python::attach(|py| py.None()));
         }

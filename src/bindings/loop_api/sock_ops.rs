@@ -83,7 +83,7 @@ pub(super) fn sock_connect<'py>(
     address: Py<PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let locals = PyLoop::task_locals(py, &slf)?;
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+    crate::rust_async::future_into_py_with_locals(py, locals, async move {
         connect_socket_to_address(sock, address).await?;
         Ok(Python::attach(|py| py.None()))
     })

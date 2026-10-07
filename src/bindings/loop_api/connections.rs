@@ -55,7 +55,7 @@ pub(super) fn create_connection<'py>(
     let locals = PyLoop::task_locals(py, &slf)?;
     let env = LoopSpawnEnv::capture(py, &slf)?;
 
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+    crate::rust_async::future_into_py_with_locals(py, locals, async move {
         let protocol = Python::attach(|py| env.call_protocol_factory(py, &protocol_factory))?;
 
         let socket_obj = if let Some(sock) = sock {
@@ -131,7 +131,7 @@ async fn finish_client_connection(
                 .expect("client settings exist when ssl is set");
             Ok::<_, PyErr>((env.spawn_context(py, protocol), settings))
         })?;
-        async_std::task::spawn_blocking(move || {
+        smol::unblock(move || {
             Python::attach(|py| transport_from_socket_tls(py, spawn_context, socket_obj, settings))
         })
         .await?
@@ -188,7 +188,7 @@ pub(super) fn create_unix_connection<'py>(
         let locals = PyLoop::task_locals(py, &slf)?;
         let env = LoopSpawnEnv::capture(py, &slf)?;
 
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+        crate::rust_async::future_into_py_with_locals(py, locals, async move {
             let protocol = Python::attach(|py| env.call_protocol_factory(py, &protocol_factory))?;
 
             let socket_obj = if let Some(sock) = sock {
@@ -224,24 +224,28 @@ pub(super) fn connect_accepted_socket<'py>(
     let locals = PyLoop::task_locals(py, &slf)?;
     let env = LoopSpawnEnv::capture(py, &slf)?;
 
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+    crate::rust_async::future_into_py_with_locals(py, locals, async move {
         let protocol = Python::attach(|py| env.call_protocol_factory(py, &protocol_factory))?;
         let socket_obj = Python::attach(|py| -> PyResult<Py<PyAny>> {
             sock.call_method1(py, "setblocking", (false,))?;
             Ok(sock.clone_ref(py))
         })?;
-        let transport = Python::attach(|py| {
-            if let Some(settings) = tls.server_settings(py)? {
-                transport_from_socket_server_tls(
-                    py,
-                    env.spawn_context(py, &protocol),
-                    socket_obj,
-                    settings,
-                )
-            } else {
+        let settings = Python::attach(|py| tls.server_settings(py))?;
+        let transport = if let Some(settings) = settings {
+            let spawn_context = Python::attach(|py| env.spawn_context(py, &protocol));
+            // A handshake can wait for peer I/O. Never block smol's executor:
+            // it may also need to poll the client's handshake future.
+            smol::unblock(move || {
+                Python::attach(|py| {
+                    transport_from_socket_server_tls(py, spawn_context, socket_obj, settings)
+                })
+            })
+            .await?
+        } else {
+            Python::attach(|py| {
                 transport_from_socket(py, env.spawn_context(py, &protocol), socket_obj)
-            }
-        })?;
+            })?
+        };
         Python::attach(|py| transport_protocol_pair(py, transport.into_any(), &protocol))
     })
 }
@@ -271,14 +275,14 @@ pub(super) fn start_tls<'py>(
     // Stop plaintext I/O while still on the calling loop turn. The Rust
     // future below yields once before either peer can start its handshake.
     let prepared = prepare_start_tls_transport(py, transport, protocol)?;
-    pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+    crate::rust_async::future_into_py_with_locals(py, locals, async move {
         let barrier = Python::attach(|py| {
             let sleep = py.import("asyncio")?.getattr("sleep")?.call1((0,))?;
             pyo3_async_runtimes::into_future_with_locals(&locals_for_barrier, sleep)
         })?;
         let _ = barrier.await?;
 
-        let upgraded = async_std::task::spawn_blocking(move || -> PyResult<Py<PyAny>> {
+        let upgraded = smol::unblock(move || -> PyResult<Py<PyAny>> {
             Python::attach(|py| {
                 let upgraded = start_tls_transport(py, prepared, client_tls, server_tls)?;
                 Ok(upgraded.into_any())

@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import contextvars
 import gc
+import importlib
 import json
 import os
 import platform
@@ -56,9 +57,8 @@ def child(args) -> dict:
 
         factory = rsloop.new_event_loop
     elif args.loop == "zuvloop":
-        import zuvloop
-
-        factory = zuvloop.new_event_loop
+        # Optional benchmark baseline; load only when explicitly selected.
+        factory = importlib.import_module("zuvloop").new_event_loop
     result = {
         "metadata": metadata(),
         "loop": args.loop,

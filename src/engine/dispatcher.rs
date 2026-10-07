@@ -24,7 +24,6 @@ use signal_hook::iterator::{Handle as SignalHandle, Signals};
 
 #[cfg(unix)]
 use super::commands::ConnectCompletion;
-
 use super::{
     commands::{
         AcceptedConnection, FutureCompletion, LoopCommand, LoopFutureCommand, LoopIoCommand,

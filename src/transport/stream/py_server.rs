@@ -31,7 +31,7 @@ impl PyServer {
     fn start_serving<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let locals = self.core.locals(py)?;
         let core = Arc::clone(&self.core);
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+        crate::rust_async::future_into_py_with_locals(py, locals, async move {
             core.spawn_accept_tasks();
             Ok(Python::attach(|py| py.None()))
         })
@@ -41,7 +41,7 @@ impl PyServer {
     fn wait_closed<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let locals = self.core.locals(py)?;
         let core = Arc::clone(&self.core);
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+        crate::rust_async::future_into_py_with_locals(py, locals, async move {
             loop {
                 if core.is_closed()
                     && core.active_accept_tasks.load(Ordering::Acquire) == 0
@@ -67,7 +67,7 @@ impl PyServer {
     fn serve_forever<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let locals = self.core.locals(py)?;
         let core = Arc::clone(&self.core);
-        pyo3_async_runtimes::async_std::future_into_py_with_locals(py, locals, async move {
+        crate::rust_async::future_into_py_with_locals(py, locals, async move {
             core.spawn_accept_tasks();
             loop {
                 if core.is_closed() {

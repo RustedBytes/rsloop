@@ -2729,19 +2729,17 @@ pub fn open_connection(
     let (locals, awaitable) =
         fast_open_connection_awaitable(py, &loop_obj, host_obj, port_obj, limit, kwargs)?;
 
-    Ok(pyo3_async_runtimes::async_std::future_into_py_with_locals(
-        py,
-        locals.clone(),
-        async move {
+    Ok(
+        crate::rust_async::future_into_py_with_locals(py, locals.clone(), async move {
             let created = Python::attach(|py| {
                 pyo3_async_runtimes::into_future_with_locals(&locals, awaitable.bind(py).clone())
             })?
             .await?;
 
             Python::attach(|py| fast_open_connection_result(py, created))
-        },
-    )?
-    .unbind())
+        })?
+        .unbind(),
+    )
 }
 
 /// Returns an awaitable that starts a stream server.
@@ -2786,15 +2784,13 @@ pub fn start_server(
     let create_args = PyTuple::new(py, [factory.into_any(), host_obj, port_obj])?;
     let awaitable = loop_obj.call_method(py, "create_server", &create_args, kwargs.as_ref())?;
 
-    Ok(pyo3_async_runtimes::async_std::future_into_py_with_locals(
-        py,
-        locals.clone(),
-        async move {
+    Ok(
+        crate::rust_async::future_into_py_with_locals(py, locals.clone(), async move {
             Python::attach(|py| {
                 pyo3_async_runtimes::into_future_with_locals(&locals, awaitable.bind(py).clone())
             })?
             .await
-        },
-    )?
-    .unbind())
+        })?
+        .unbind(),
+    )
 }

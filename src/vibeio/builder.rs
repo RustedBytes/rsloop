@@ -220,7 +220,7 @@ impl RuntimeBuilder {
     /// operations.
     ///
     /// When disabled (the default), filesystem path operations use the shared
-    /// `async-std` blocking pool. They never run blocking filesystem calls on
+    /// `smol` blocking pool. They never run blocking filesystem calls on
     /// the async executor thread.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeBuilder"))]
     pub fn enable_fs_offload(mut self, enable: bool) -> Self {

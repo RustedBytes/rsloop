@@ -150,7 +150,7 @@ async fn wait_for_interest(fd: RawFd, read: bool, write: bool) -> PyResult<()> {
         // thread instead of spawning a fresh OS thread per wait. The previous
         // thread-per-wait approach dominated connection-setup latency: a burst
         // of N concurrent connects spawned N `poll()` threads. async-io drives
-        // the same epoll/kqueue reactor smol/async-std already run, so this
+        // the same epoll/kqueue reactor smol already runs, so this
         // adds no extra threads and deregisters as soon as the wait
         // resolves.
         let raw = raw_fd_to_c_int(fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
