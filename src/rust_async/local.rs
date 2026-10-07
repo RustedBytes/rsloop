@@ -21,9 +21,17 @@ struct Schedule {
     event_loop: Py<PyAny>,
 }
 impl Wake for Schedule {
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "<Schedule as Wake>")
+    )]
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "<Schedule as Wake>")
+    )]
     fn wake_by_ref(self: &Arc<Self>) {
         Python::attach(|py| {
             if let Err(err) =
@@ -37,6 +45,7 @@ impl Wake for Schedule {
 }
 #[pymethods]
 impl PollLocal {
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PollLocal"))]
     fn __call__(slf: Bound<'_, Self>) {
         let py = slf.py();
         let state = slf.borrow();
@@ -57,6 +66,7 @@ impl PollLocal {
         }
     }
 }
+#[cfg_attr(feature = "profile", hotpath::measure)]
 pub(super) fn spawn(fut: impl Future<Output = Result<(), PanicError>> + 'static) -> Handle {
     let (tx, rx) = futures::channel::oneshot::channel();
     Python::attach(|py| {

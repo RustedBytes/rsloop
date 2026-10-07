@@ -15,15 +15,21 @@ use super::*;
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 struct DropProbe;
 impl Drop for DropProbe {
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "<DropProbe as Drop>")
+    )]
     fn drop(&mut self) {
         CANCELLED.store(true, Ordering::SeqCst);
     }
 }
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[pyfunction]
 fn cancelled() -> bool {
     CANCELLED.load(Ordering::SeqCst)
 }
 
+#[cfg_attr(feature = "profile", hotpath::measure)]
 #[pyfunction]
 fn bridge<'py>(py: Python<'py>, mode: &str) -> PyResult<Bound<'py, PyAny>> {
     match mode {

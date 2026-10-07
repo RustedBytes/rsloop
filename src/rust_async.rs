@@ -79,6 +79,7 @@ where
     })
 }
 
+#[cfg_attr(feature = "profile", hotpath::measure(future = true))]
 /// Race an operation against the executor-independent async-io timer.
 pub(crate) async fn timeout<F: Future>(
     duration: std::time::Duration,
