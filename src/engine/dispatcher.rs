@@ -22,10 +22,13 @@ use pyo3::prelude::*;
 #[cfg(unix)]
 use signal_hook::iterator::{Handle as SignalHandle, Signals};
 
+#[cfg(unix)]
+use super::commands::ConnectCompletion;
+
 use super::{
     commands::{
-        LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
-        LoopTransportCommand, ReadyItem,
+        AcceptedConnection, FutureCompletion, LoopCommand, LoopFutureCommand, LoopIoCommand,
+        LoopRunCommand, LoopSignalCommand, LoopTransportCommand, ReadyItem,
     },
     loop_core::LoopCore,
 };
@@ -207,11 +210,17 @@ impl RuntimeDispatcher {
             }
             LoopCommand::Future(LoopFutureCommand::SetResult { future, value }) => {
                 self.ready_batch
-                    .push_back(ReadyItem::FutureSetResult { future, value });
+                    .push_back(ReadyItem::FutureSetResult(Box::new(FutureCompletion {
+                        future,
+                        value,
+                    })));
             }
             LoopCommand::Future(LoopFutureCommand::SetException { future, value }) => {
                 self.ready_batch
-                    .push_back(ReadyItem::FutureSetException { future, value });
+                    .push_back(ReadyItem::FutureSetException(Box::new(FutureCompletion {
+                        future,
+                        value,
+                    })));
             }
             LoopCommand::Transport(LoopTransportCommand::StreamRead(core)) => {
                 self.ready_batch
@@ -227,7 +236,10 @@ impl RuntimeDispatcher {
             }
             LoopCommand::Transport(LoopTransportCommand::ServerAccepted { server, stream }) => {
                 self.ready_batch
-                    .push_back(ReadyItem::ServerAccepted { server, stream });
+                    .push_back(ReadyItem::ServerAccepted(Box::new(AcceptedConnection {
+                        server,
+                        stream,
+                    })));
             }
             LoopCommand::Run(LoopRunCommand::EnterRun { pending_ready }) => {
                 self.active_run = Some(ActiveRun { pending_ready });
@@ -447,11 +459,12 @@ impl RuntimeDispatcher {
                 fd,
                 wait_errno,
             } => {
-                self.ready_batch.push_back(ReadyItem::ConnectCompleted {
-                    future,
-                    fd,
-                    wait_errno,
-                });
+                self.ready_batch
+                    .push_back(ReadyItem::ConnectCompleted(Box::new(ConnectCompletion {
+                        future,
+                        fd,
+                        wait_errno,
+                    })));
             }
             LoopCommand::RequestStop => {
                 self.ready_batch.push_back(ReadyItem::Stop);
