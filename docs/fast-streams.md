@@ -21,7 +21,7 @@ reading surface protocols actually use:
   form CPython 3.13+ accepts
 - `at_eof()`, `exception()`, `feed_data()`, `feed_eof()`, `set_exception()`
 
-These match `asyncio.StreamReader` down to the exception types and their
+The differential tests cover matching `asyncio.StreamReader` exception types and
 attributes — `IncompleteReadError.partial`, `LimitOverrunError.consumed`, the
 `ValueError` that `readline()` raises on limit overrun — and down to what is
 left in the buffer afterwards. `tests/test_stream_reader.py` pins that behavior

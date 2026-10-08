@@ -27,12 +27,15 @@ The current codebase implements these user-facing areas.
 
 - `add_reader`, `remove_reader`, `add_writer`, `remove_writer`
 - `sock_recv`, `sock_recv_into`, `sock_sendall`, `sock_accept`, `sock_connect`
+- `sock_recvfrom`, `sock_recvfrom_into`, `sock_sendto`
+- `create_datagram_endpoint` for UDP transports
+- `sendfile`, `sock_sendfile` using a buffered fallback; `fallback=False` raises `RuntimeError`
 - `getaddrinfo`, `getnameinfo`
 - `create_server`, `create_connection`
 - `create_unix_server`, `create_unix_connection`
 - `connect_accepted_socket`
 - returned `Server` objects with `close()`, `is_serving()`, `get_loop()`,
-  and the `sockets` property
+  `start_serving()`, `serve_forever()`, `wait_closed()`, and the `sockets` property
 - returned `StreamTransport` objects with `write()`, `writelines()`, `close()`,
   `abort()`, `is_closing()`, `write_eof()`, `can_write_eof()`,
   `get_extra_info()`, `get_protocol()`, `set_protocol()`,

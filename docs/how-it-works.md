@@ -59,7 +59,8 @@ Important files:
 - `errors.rs`: shared error types
 - `rust_async.rs`: public Rust/Python async interop helpers for downstream extensions
 - `async_event.rs`, `blocking.rs`, `python_names.rs`: support code used by the public pieces
-- `platform/windows_vibeio.rs`: Windows-specific runtime support
+- `platform/fd/windows.rs`: Windows descriptor compatibility
+- `vibeio/`: the embedded runtime, including platform I/O drivers
 
 You do not need to understand every file before using the project. For a first
 pass, `lib.rs`, `bindings/loop_api.rs`, and `engine/loop_core.rs` are the most
@@ -83,9 +84,9 @@ Each loop combines a coordination runtime with a loop-thread I/O runtime:
 - some transport paths still fall back to helper threads, especially TLS I/O,
   TLS server accept, and parts of the legacy transport write path
 
-Python tasks and callbacks still execute on the Python side. The runtime
-dependency is now unified, but the codebase has not finished eliminating every
-helper thread yet.
+Python tasks and callbacks still execute on the Python side. The coordination
+and loop-thread I/O runtimes use the embedded `src/vibeio/` implementation.
+Rust/Python Send-future interop uses smol, and some I/O uses helper threads.
 
 Transport overload safeguards use conservative defaults: inbound reads pause
 at 1 MiB of pending data per connection and resume below 256 KiB, buffered

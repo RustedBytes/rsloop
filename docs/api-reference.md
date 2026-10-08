@@ -106,7 +106,10 @@ implementation counters, not application request counts or latency measurements.
 Stream helpers return native reader and writer objects, so use their documented
 methods rather than relying on `isinstance(reader, asyncio.StreamReader)`.
 `server.sockets` is a tuple-valued property, not a method. Closing a server
-stops listening; close client writers separately and await `wait_closed()`.
+stops listening; close client writers separately and await their `wait_closed()`.
+`server.wait_closed()` waits for the closed state, accept tasks, active
+connections, and pending TLS handshakes. It can keep waiting if a client
+connection remains open.
 TLS uses rustls and does not implement every OpenSSL `SSLContext` behavior.
 Unix sockets and Unix signal handlers require Unix; `preexec_fn` is unsupported.
 See [How It Works](how-it-works.md#current-limitations) for the remaining limits.

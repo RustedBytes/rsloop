@@ -36,7 +36,8 @@ This is the engine room of the project.
 - `transport/stream/`: stream transports, servers, fast streams, and I/O workers
 - `transport/process/`: subprocess lifecycle and pipe transports
 - `transport/tls/`: TLS configuration and certificate loading
-- `platform/`: Unix/Windows descriptor and runtime integration
+- `platform/`: Unix/Windows descriptor compatibility
+- `vibeio/`: embedded runtime, scheduler, and platform I/O drivers
 - `rust_async.rs`: the public Rust/Python async interop API
 
 If you want to understand behavior changes, this directory is usually where the real implementation lives.
@@ -65,7 +66,8 @@ Examples are a good first stop before reading tests.
 
 Path: `tests/`
 
-The tests tell you what behavior the project promises today.
+The tests record covered behavior; their presence does not prove every platform
+or every asyncio edge case is supported.
 
 - `test_run.py`: basic lifecycle and common operations
 - `test_compat.py`: `asyncio` compatibility behaviors
@@ -88,7 +90,8 @@ This directory contains performance comparison tools.
 It compares:
 
 - stdlib `asyncio`
-- `uvloop`
+- `uvloop` on Unix or `winloop` on Windows
+- optional `zuvloop`
 - `rsloop`
 
 Use this directory when you want numbers, not just correctness.
