@@ -10,6 +10,9 @@ Granian exposes a registry for customizing how its worker event loops are
 created. Register an `rsloop` builder for Granian's `auto` loop and set the
 new loop as current before returning it:
 
+This integration snippet requires your own importable `myapp` module with an
+ASGI `app` and the optional Granian dependency. It is not a standalone script.
+
 ```python
 import asyncio
 
@@ -189,7 +192,7 @@ This is a good fit when your project already uses `asyncio.Protocol`.
 
 ## Use streams
 
-Because `rsloop` can patch stream helpers, high-level stream code can stay familiar:
+Because importing `rsloop` patches stream helpers, high-level stream code can stay familiar:
 
 ```python
 import asyncio
@@ -207,9 +210,10 @@ async def handle_client(
 
 
 async def main() -> None:
-    server = await asyncio.start_server(handle_client, "127.0.0.1", 9001)
+    server = await asyncio.start_server(handle_client, "127.0.0.1", 0)
     try:
-        reader, writer = await asyncio.open_connection("127.0.0.1", 9001)
+        port = server.sockets[0].getsockname()[1]
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
         writer.write(b"hello")
         await writer.drain()
         print((await reader.read(100)).decode())
