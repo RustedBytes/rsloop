@@ -150,6 +150,7 @@ Importing `rsloop` does a little setup work:
 - it wraps selected `ssl.SSLContext` methods to track certificate and trust configuration for the rustls backend
 - it patches `asyncio.set_event_loop(...)` for compatibility, especially on older Python versions
 - it patches `asyncio.open_connection(...)` and `asyncio.start_server(...)` to use native fast streams on rsloop, including TLS
+- it wraps `asyncio.create_subprocess_exec(...)` and `asyncio.create_subprocess_shell(...)` to support rsloop text-mode subprocess streams; other loops use the original helpers
 
 Native fast streams are automatic on rsloop, with no mode switch or stdlib
 fallback. Other event loops retain their standard stream helpers. See

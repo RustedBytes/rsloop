@@ -167,8 +167,9 @@ See [benchmark results and reproduction commands](./docs/benchmarks.md).
 ## Acknowledgements
 
 `rsloop` builds on the Python `asyncio` model and is implemented with
-[PyO3](https://pyo3.rs/) on the Rust side. Runtime and socket I/O are powered by
-[vibeio](https://crates.io/crates/vibeio).
+[PyO3](https://pyo3.rs/) on the Rust side. Coordination and socket I/O use an embedded, rsloop-specialized
+[vibeio runtime](./src/vibeio/). Rust/Python Send-future interoperability uses
+[smol](https://github.com/smol-rs/smol).
 
 ## License
 
