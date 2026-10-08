@@ -345,7 +345,7 @@ impl StreamTransportCore {
         high: Option<usize>,
         low: Option<usize>,
     ) -> PyResult<()> {
-        let (should_pause, should_resume) = {
+        let signal = {
             let mut state = self.state.lock().expect("poisoned transport state");
             let Some((low, high)) = normalize_write_buffer_limits(high, low) else {
                 return Err(PyValueError::new_err(format!(
@@ -353,17 +353,15 @@ impl StreamTransportCore {
                 )));
             };
 
-            match reconcile_write_buffer_limits(&mut state.write_buffer, low, high) {
-                WriteBufferSignal::Pause => (true, false),
-                WriteBufferSignal::Resume => (false, true),
-                WriteBufferSignal::None => (false, false),
-            }
+            reconcile_write_buffer_limits(&mut state.write_buffer, low, high)
         };
 
-        if should_pause {
-            self.notify_pause_writing();
-        } else if should_resume {
-            self.notify_resume_writing();
+        // Execute the decision only after releasing the state lock: protocol
+        // callbacks may re-enter the transport.
+        match signal {
+            WriteBufferSignal::Pause => self.notify_pause_writing(),
+            WriteBufferSignal::Resume => self.notify_resume_writing(),
+            WriteBufferSignal::None => {}
         }
 
         Ok(())
