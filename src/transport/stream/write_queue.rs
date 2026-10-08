@@ -47,6 +47,8 @@ impl QueueState {
         Ok(())
     }
 
+    /// Drain queued commands before reporting sender disconnection. Both
+    /// receive paths use this transition; locking and waiting stay outside it.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "QueueState"))]
     fn try_dequeue(&mut self) -> Result<WriterCommand, TryRecvError> {
         if let Some(command) = self.commands.pop_front() {
@@ -148,11 +150,10 @@ impl WriterReceiver {
     pub(super) fn recv(&self) -> Result<WriterCommand, ()> {
         let mut state = self.shared.state.lock().expect("poisoned writer queue");
         loop {
-            if let Some(command) = state.commands.pop_front() {
-                return Ok(command);
-            }
-            if !state.sender_alive {
-                return Err(());
+            match state.try_dequeue() {
+                Ok(command) => return Ok(command),
+                Err(TryRecvError::Disconnected) => return Err(()),
+                Err(TryRecvError::Empty) => {}
             }
             state = self
                 .shared
@@ -195,6 +196,46 @@ impl Drop for WriterReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn both_receive_paths_drain_pending_commands_after_sender_disconnects() {
+        for blocking in [false, true] {
+            let (sender, receiver) = channel();
+            assert!(sender.send(WriterCommand::WriteEof).is_ok());
+            assert!(sender.send(WriterCommand::Stop).is_ok());
+            drop(sender);
+
+            if blocking {
+                assert!(matches!(receiver.recv(), Ok(WriterCommand::WriteEof)));
+                assert!(matches!(receiver.recv(), Ok(WriterCommand::Stop)));
+                assert!(receiver.recv().is_err());
+            } else {
+                assert!(matches!(receiver.try_recv(), Ok(WriterCommand::WriteEof)));
+                assert!(matches!(receiver.try_recv(), Ok(WriterCommand::Stop)));
+                assert!(matches!(
+                    receiver.try_recv(),
+                    Err(TryRecvError::Disconnected)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn blocking_receive_wakes_on_command_and_sender_disconnect() {
+        let (sender, receiver) = channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            assert!(matches!(receiver.recv(), Ok(WriterCommand::Stop)));
+            assert!(receiver.recv().is_err());
+            result_tx.send(()).unwrap();
+        });
+        assert!(sender.send(WriterCommand::Stop).is_ok());
+        drop(sender);
+        result_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        worker.join().unwrap();
+    }
 
     #[cfg_attr(feature = "profile", hotpath::measure)]
     fn warmed_batch_allocation_probe(
