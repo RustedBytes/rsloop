@@ -257,14 +257,14 @@ With MkDocs installed:
 
 ```bash
 mkdocs serve
-mkdocs build
+mkdocs build --strict
 ```
 
 Or with `uv` without adding a permanent dependency:
 
 ```bash
 uvx --from mkdocs mkdocs serve
-uvx --from mkdocs mkdocs build
+uvx --from mkdocs mkdocs build --strict
 ```
 
 ## Good places to start reading

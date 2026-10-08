@@ -32,7 +32,7 @@ The current codebase implements these user-facing areas.
 - `create_unix_server`, `create_unix_connection`
 - `connect_accepted_socket`
 - returned `Server` objects with `close()`, `is_serving()`, `get_loop()`,
-  and `sockets()`
+  and the `sockets` property
 - returned `StreamTransport` objects with `write()`, `writelines()`, `close()`,
   `abort()`, `is_closing()`, `write_eof()`, `can_write_eof()`,
   `get_extra_info()`, `get_protocol()`, `set_protocol()`,

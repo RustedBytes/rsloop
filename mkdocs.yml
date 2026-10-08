@@ -6,6 +6,8 @@ theme:
 nav:
   - Home: index.md
   - Getting Started: getting-started.md
+  - API Reference: api-reference.md
+  - Configuration: configuration.md
   - Verified Surface Area: supported-features.md
   - Fast Streams: fast-streams.md
   - Free-Threaded CPython: free-threading.md

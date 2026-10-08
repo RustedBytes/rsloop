@@ -2,6 +2,15 @@
 
 This page covers the parts most Python users will touch first.
 
+## Requirements
+
+The package metadata requires CPython 3.10+. The repository declares support
+through 3.15, including 3.14t and 3.15t. The native runtime requires Linux 6.1+,
+macOS 13+, or Windows 10+. These are source and CI compatibility declarations;
+they do not establish that a wheel exists for every interpreter and architecture.
+For source installation, use the pinned Rust toolchain and
+[development instructions](development.md#build-the-project).
+
 ## Install
 
 From PyPI:
@@ -30,12 +39,15 @@ The package exports a small public surface:
 - `rsloop.EventLoopPolicy`
 - `rsloop.__version__`
 - `rsloop.build_info()`
+- `rsloop.transport_stats()`
+- `rsloop.reset_transport_stats()`
 - `rsloop.new_event_loop()`
 - `rsloop.run(...)`
 - `rsloop.install()`
 - `rsloop.uninstall()`
 
-For most programs, `rsloop.run(...)` is enough.
+For most programs, `rsloop.run(...)` is enough. See the
+[API reference](api-reference.md) for signatures, cleanup, and errors.
 
 ## Build diagnostics
 
@@ -80,6 +92,10 @@ loops:
 ```python
 import asyncio
 import rsloop
+
+
+async def main() -> None:
+    print("hello from rsloop")
 
 
 rsloop.install()
@@ -131,6 +147,7 @@ The big difference is the implementation of the event loop itself.
 Importing `rsloop` does a little setup work:
 
 - it boots the native extension
+- it wraps selected `ssl.SSLContext` methods to track certificate and trust configuration for the rustls backend
 - it patches `asyncio.set_event_loop(...)` for compatibility, especially on older Python versions
 - it patches `asyncio.open_connection(...)` and `asyncio.start_server(...)` to use native fast streams on rsloop, including TLS
 

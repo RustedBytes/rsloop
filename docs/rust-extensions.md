@@ -117,9 +117,12 @@ Your extension crate should depend on:
 ```toml
 [dependencies]
 smol = "2"
-pyo3 = "0.29.2"
-rsloop = { version = "0.1.52" }
+pyo3 = "0.29.3"
+rsloop = { git = "https://github.com/RustedBytes/rsloop", rev = "e42b8132730c70b1f1d79eaf1403eb3c3c7b66cf" }
 ```
+
+This pins the reviewed source revision rather than assuming the current checkout
+has been published to crates.io.
 
 Keep your PyO3 version aligned with the version used by `rsloop`, because the
 interop helpers expose PyO3 types in their public signatures. When developing

@@ -36,7 +36,7 @@ If you already use `asyncio` comfortably, these are the main things worth knowin
 - `rsloop` tries to keep the standard `asyncio` mental model, not invent a new one.
 - The Python package is mostly a thin wrapper around a Rust extension built with PyO3.
 - `rsloop.run(...)` behaves like a focused `asyncio.run(...)` helper that ensures an `rsloop` loop is actually being used.
-- Importing `rsloop` can monkeypatch parts of `asyncio`, especially `set_event_loop(...)` and optionally stream helpers such as `open_connection(...)` and `start_server(...)`.
+- Importing `rsloop` can monkeypatch parts of `asyncio`, especially `set_event_loop(...)` and stream helpers such as `open_connection(...)` and `start_server(...)`.
 - The runtime model is hybrid: Python coroutines still run as Python code, while lower-level loop coordination and parts of the I/O stack are handled in Rust.
 - Compatibility is a project goal, but not every `asyncio` edge case is identical yet, especially around TLS and some transport internals.
 
@@ -76,6 +76,7 @@ rsloop.run(main())
 ## Recommended reading order
 
 - Start with [Getting Started](getting-started.md) if you want to use the package.
+- Read the [API reference](api-reference.md) for package contracts and [Configuration](configuration.md) for transport limits.
 - Check [Verified Surface Area](supported-features.md) for the currently supported APIs.
 - Read [Fast Streams](fast-streams.md) for the optimized stream path and its compatibility behavior.
 - Read [Free-Threaded CPython](free-threading.md) before running loops concurrently across threads.

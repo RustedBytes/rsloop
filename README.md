@@ -43,6 +43,8 @@ If you are new to the repository, start with:
 
 - [`docs/index.md`](./docs/index.md)
 - [`docs/getting-started.md`](./docs/getting-started.md)
+- [`docs/api-reference.md`](./docs/api-reference.md)
+- [`docs/configuration.md`](./docs/configuration.md)
 - [`docs/supported-features.md`](./docs/supported-features.md)
 - [`docs/fast-streams.md`](./docs/fast-streams.md)
 - [`docs/free-threading.md`](./docs/free-threading.md)
@@ -85,10 +87,11 @@ Simple entry point:
 import rsloop
 
 
-async def main(): ...
+async def main() -> str:
+    return "done"
 
 
-rsloop.run(main())
+print(rsloop.run(main()))
 ```
 
 Install as the default asyncio event loop policy:
@@ -96,6 +99,10 @@ Install as the default asyncio event loop policy:
 ```python
 import asyncio
 import rsloop
+
+async def main() -> None:
+    print("hello from rsloop")
+
 
 rsloop.install()
 try:
@@ -113,7 +120,7 @@ import rsloop
 loop = rsloop.new_event_loop()
 asyncio.set_event_loop(loop)
 try:
-    loop.run_until_complete(...)
+    loop.run_until_complete(asyncio.sleep(0))
 finally:
     asyncio.set_event_loop(None)
     loop.close()
