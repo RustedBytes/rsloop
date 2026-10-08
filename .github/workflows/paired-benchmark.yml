@@ -1,0 +1,101 @@
+name: Paired event-loop benchmarks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/paired-benchmark.yml'
+      - 'benches/paired_comparison.py'
+      - 'benches/compare_event_loops.py'
+      - 'tests/tooling/test_paired_comparison.py'
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: '3.14.0'
+            mode: gil
+          - python: '3.14.0t'
+            mode: free-threaded
+    env:
+      PYTHONHASHSEED: '0'
+      RUSTUP_TOOLCHAIN: nightly-2026-09-25
+      CARGO_BUILD_JOBS: '2'
+      BENCH_MODE: ${{ matrix.mode }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-25
+      - uses: astral-sh/setup-uv@v6
+      - name: Check benchmark statistics
+        run: python -m unittest discover -s tests/tooling -p test_paired_comparison.py
+      - name: Build isolated release wheels for exact revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/paired-envs"
+          mkdir -p "$root"
+          current=$(git rev-parse HEAD)
+          historical=43f624a2d5a9781b15e5a976ea780d19da3325dc
+          pre=56d0ebd6769255adace1db76718d1c986ddf998e
+          python - "$root/revisions.json" "$historical" "$pre" "$current" <<'PY'
+          import json, sys
+          from pathlib import Path
+          Path(sys.argv[1]).write_text(json.dumps(dict(zip(('historical', 'pre', 'current'), sys.argv[2:])), indent=2))
+          PY
+          for label in historical pre current; do
+            case "$label" in
+              historical) revision="$historical" ;;
+              pre) revision="$pre" ;;
+              current) revision="$current" ;;
+            esac
+            source_dir="$RUNNER_TEMP/source-$label"
+            git worktree add --detach "$source_dir" "$revision"
+            uv venv --python "$(command -v python)" "$root/$label"
+            uv pip install --python "$root/$label/bin/python" maturin==1.14.1 uvloop==0.22.1 zuvloop==0.0.17 opentelemetry-api==1.45.1 typing-extensions==4.16.0
+            (
+              cd "$source_dir"
+              "$root/$label/bin/maturin" build --release --locked -i "$root/$label/bin/python" --out "$root/wheels-$label"
+            )
+            uv pip install --python "$root/$label/bin/python" "$root/wheels-$label/"*.whl
+            uv pip freeze --python "$root/$label/bin/python" > "$root/$label-freeze.txt"
+          done
+      - name: Collect runner and build conditions
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/paired-results"
+          lscpu > "$RUNNER_TEMP/paired-results/lscpu.txt"
+          rustc -Vv > "$RUNNER_TEMP/paired-results/rustc.txt"
+          uname -a > "$RUNNER_TEMP/paired-results/kernel.txt"
+          cp "$RUNNER_TEMP/paired-envs/"*-freeze.txt "$RUNNER_TEMP/paired-results/"
+      - name: Run randomized paired trials on one CPU
+        run: >-
+          python benches/paired_comparison.py
+          --env-root "$RUNNER_TEMP/paired-envs"
+          --output "$RUNNER_TEMP/paired-results"
+          --mode "$BENCH_MODE" --repeat 9 --warmups 2
+      - name: Add measured summary
+        run: cat "$RUNNER_TEMP/paired-results/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: paired-${{ matrix.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/paired-results/
+            ${{ runner.temp }}/paired-envs/revisions.json
+          if-no-files-found: error
+          retention-days: 30
