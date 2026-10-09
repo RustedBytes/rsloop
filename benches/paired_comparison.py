@@ -24,6 +24,14 @@ from typing import Any
 import compare_event_loops as bench
 
 
+def get_worker_peak_rss_bytes():
+    """Linux high-water mark since exec, excluding the launching parent's RSS."""
+    for line in Path("/proc/self/status").read_text().splitlines():
+        if line.startswith("VmHWM:"):
+            return int(line.split()[1]) * 1024
+    raise RuntimeError("Linux did not report the worker's VmHWM")
+
+
 def distribution(values):
     ordered = sorted(values)
     median = statistics.median(ordered)
@@ -95,6 +103,7 @@ def worker(args):
         "free_threaded_build": bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
         "gil_enabled_after_import": gil,
         "affinity": sorted(os.sched_getaffinity(0)),
+        "peak_rss_source": "/proc/self/status:VmHWM",
         "packages": {
             name: importlib.metadata.version(name)
             for name in ("rsloop", "uvloop", "zuvloop")
@@ -129,7 +138,7 @@ def worker(args):
     result.update(
         metadata=metadata,
         baseline_rss_bytes=baseline,
-        peak_rss_bytes=bench.get_peak_rss_bytes(),
+        peak_rss_bytes=get_worker_peak_rss_bytes(),
     )
     result["peak_rss_delta_bytes"] = max(0, result["peak_rss_bytes"] - baseline)
     return result

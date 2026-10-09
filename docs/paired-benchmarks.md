@@ -4,6 +4,9 @@ Run **Paired event-loop benchmarks** in Actions (`paired-benchmark.yml`). A PR
 changing the harness or workflow also runs it. No historical numbers are copied
 into the output: all five candidates are measured afresh.
 
+The [October 9 Linux host comparison](paired-benchmarks-host-2026-10-09.md)
+contains completed GIL and free-threaded measurements, including raw trials.
+
 Each Python job builds release wheels with the same Rust toolchain and locked
 Cargo dependencies for:
 
@@ -32,9 +35,11 @@ including rsloop's native streams.
 Two fresh-process warmups precede nine measured rounds per workload. Each round
 randomizes all five candidates with a recorded seed to reduce order bias.
 Children have a 180-second timeout. Absolute peak RSS is the child's OS high-water
-mark after loop shutdown; it includes interpreter/import costs and is not an
-allocation count. Baseline RSS is also saved. Latency-run RSS includes the RTT
-sample array; use the uninstrumented TCP run for the memory comparison.
+mark (`/proc/self/status`'s `VmHWM`) after loop shutdown; it includes interpreter
+and import costs and is not an allocation count. Unlike `getrusage().ru_maxrss`,
+this excludes memory inherited from the orchestrator before `exec`. Baseline RSS
+is also saved. Latency-run RSS includes the RTT sample array; use the
+uninstrumented TCP run for the memory comparison.
 
 Artifacts include exact SHAs, harness hashes, interpreter/package versions,
 runner CPU/kernel, Rust compiler, dependency freezes, raw trials (including
@@ -70,4 +75,5 @@ Use `--mode free-threaded` with environments built with 3.14.0t. The parent
 interpreter only orchestrates; all measurements use the environments' Python.
 The October 8 Codex environment allowed CPython and wheel installation but
 rejected io_uring_setup with EPERM. Its measurements are not published as
-representative post-migration results; Actions execution is required.
+representative post-migration results. A Linux host with io_uring available can
+also run the complete comparison locally.

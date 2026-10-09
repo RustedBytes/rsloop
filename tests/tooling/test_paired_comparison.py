@@ -1,5 +1,7 @@
 """Statistics checks independent of optional native loop packages."""
 
+import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -9,6 +11,27 @@ from paired_comparison import distribution, summarize
 
 
 class PairedStatisticsTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "linux", "Linux VmHWM accounting")
+    def test_worker_peak_excludes_parent_memory_before_exec(self):
+        # Force fork rather than posix_spawn: a large orchestrator must not
+        # become the minimum reported RSS of every fresh benchmark worker.
+        parent_memory = bytearray(64 * 1024 * 1024)
+        command = [
+            sys.executable,
+            "-c",
+            "import json, resource, sys; "
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parents[2] / 'benches')!r}); "
+            "from paired_comparison import get_worker_peak_rss_bytes; "
+            "print(json.dumps([get_worker_peak_rss_bytes(), "
+            "resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024]))",
+        ]
+        child = subprocess.run(
+            command, capture_output=True, text=True, check=True, preexec_fn=lambda: None
+        )
+        worker_peak, inherited_peak = json.loads(child.stdout)
+        self.assertGreater(worker_peak, 0)
+        self.assertGreater(inherited_peak - worker_peak, len(parent_memory) // 2)
+
     def test_nearest_rank_percentiles(self):
         result = distribution(list(range(1, 101)))
         self.assertEqual(result["median"], 50.5)

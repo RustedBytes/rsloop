@@ -1,0 +1,7 @@
+{
+  "syscall": "io_uring_setup",
+  "entries": 2,
+  "success": true,
+  "errno": 0,
+  "message": "Success"
+}

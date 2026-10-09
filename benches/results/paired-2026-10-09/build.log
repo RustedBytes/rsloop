@@ -1,0 +1,184 @@
+Building gil/historical
+Using CPython 3.14.0 interpreter at: /home/devops/.local/bin/python3.14
+Creating virtual environment at: /tmp/rsloop-pr102-benchmark/envs-gil/historical
+Activate with: source /tmp/rsloop-pr102-benchmark/envs-gil/historical/bin/activate
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-gil/historical
+Resolved 5 packages in 347ms
+Installed 5 packages in 20ms
+ + maturin==1.14.1
+ + opentelemetry-api==1.45.1
+ + typing-extensions==4.16.0
+ + uvloop==0.22.1
+ + zuvloop==0.0.17
+🍹 Building a mixed python/rust project
+🐍 Found CPython 3.14 at /tmp/rsloop-pr102-benchmark/envs-gil/historical/bin/python
+🔗 Found pyo3 bindings
+   Compiling pyo3-ffi v0.29.3
+   Compiling rsloop v0.1.57 (/tmp/rsloop-pr102-historical)
+   Compiling pyo3 v0.29.3
+   Compiling pyo3-async-runtimes v0.29.0
+    Finished `release` profile [optimized] target(s) in 39.34s
+📦 Including files matching "python/rsloop/_loop.pyi"
+📦 Built wheel for CPython 3.14 to /tmp/rsloop-pr102-benchmark/envs-gil/wheels-historical/rsloop-0.1.57-cp314-cp314-manylinux_2_39_x86_64.whl
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-gil/historical
+Resolved 1 package in 23ms
+Prepared 1 package in 28ms
+Installed 1 package in 2ms
+ + rsloop==0.1.57 (from file:///tmp/rsloop-pr102-benchmark/envs-gil/wheels-historical/rsloop-0.1.57-cp314-cp314-manylinux_2_39_x86_64.whl)
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-gil/historical
+Building gil/pre
+Using CPython 3.14.0 interpreter at: /home/devops/.local/bin/python3.14
+Creating virtual environment at: /tmp/rsloop-pr102-benchmark/envs-gil/pre
+Activate with: source /tmp/rsloop-pr102-benchmark/envs-gil/pre/bin/activate
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-gil/pre
+Resolved 5 packages in 1ms
+Installed 5 packages in 2ms
+ + maturin==1.14.1
+ + opentelemetry-api==1.45.1
+ + typing-extensions==4.16.0
+ + uvloop==0.22.1
+ + zuvloop==0.0.17
+🍹 Building a mixed python/rust project
+🐍 Found CPython 3.14 at /tmp/rsloop-pr102-benchmark/envs-gil/pre/bin/python
+🔗 Found pyo3 bindings
+   Compiling pyo3-ffi v0.29.3
+   Compiling rsloop v0.1.59 (/tmp/rsloop-pr102-pre)
+   Compiling pyo3 v0.29.3
+   Compiling pyo3-async-runtimes v0.29.0
+    Finished `release` profile [optimized] target(s) in 36.14s
+📦 Including files matching "python/rsloop/_loop.pyi"
+📦 Built wheel for CPython 3.14 to /tmp/rsloop-pr102-benchmark/envs-gil/wheels-pre/rsloop-0.1.59-cp314-cp314-manylinux_2_39_x86_64.whl
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-gil/pre
+Resolved 1 package in 1ms
+Prepared 1 package in 15ms
+Installed 1 package in 0.42ms
+ + rsloop==0.1.59 (from file:///tmp/rsloop-pr102-benchmark/envs-gil/wheels-pre/rsloop-0.1.59-cp314-cp314-manylinux_2_39_x86_64.whl)
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-gil/pre
+Building gil/current
+Using CPython 3.14.0 interpreter at: /home/devops/.local/bin/python3.14
+Creating virtual environment at: /tmp/rsloop-pr102-benchmark/envs-gil/current
+Activate with: source /tmp/rsloop-pr102-benchmark/envs-gil/current/bin/activate
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-gil/current
+Resolved 5 packages in 1ms
+Installed 5 packages in 2ms
+ + maturin==1.14.1
+ + opentelemetry-api==1.45.1
+ + typing-extensions==4.16.0
+ + uvloop==0.22.1
+ + zuvloop==0.0.17
+🍹 Building a mixed python/rust project
+🐍 Found CPython 3.14 at /tmp/rsloop-pr102-benchmark/envs-gil/current/bin/python
+🔗 Found pyo3 bindings
+   Compiling crossbeam-utils v0.8.23
+   Compiling pyo3-ffi v0.29.3
+   Compiling pyo3 v0.29.3
+   Compiling log v0.4.34
+   Compiling concurrent-queue v2.5.0
+   Compiling async-channel v2.5.0
+   Compiling async-io v2.6.0
+   Compiling blocking v1.7.0
+   Compiling async-signal v0.2.14
+   Compiling async-process v2.5.0
+   Compiling async-net v2.0.0
+   Compiling async-fs v2.2.0
+   Compiling async-executor v1.14.0
+   Compiling rsloop v0.1.60 (/tmp/rsloop-pr102)
+   Compiling rustls v0.23.45
+   Compiling smol v2.0.2
+   Compiling pyo3-async-runtimes v0.29.0
+   Compiling mio v1.2.3
+   Compiling crossbeam-queue v0.3.14
+   Compiling crossbeam-channel v0.5.17
+    Finished `release` profile [optimized] target(s) in 38.78s
+📦 Including files matching "python/rsloop/_loop.pyi"
+📦 Built wheel for CPython 3.14 to /tmp/rsloop-pr102-benchmark/envs-gil/wheels-current/rsloop-0.1.60-cp314-cp314-manylinux_2_39_x86_64.whl
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-gil/current
+Resolved 1 package in 1ms
+Prepared 1 package in 13ms
+Installed 1 package in 0.41ms
+ + rsloop==0.1.60 (from file:///tmp/rsloop-pr102-benchmark/envs-gil/wheels-current/rsloop-0.1.60-cp314-cp314-manylinux_2_39_x86_64.whl)
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-gil/current
+Building free-threaded/historical
+Using CPython 3.14.0+freethreaded interpreter at: /home/devops/.local/bin/python3.14t
+Creating virtual environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/historical
+Activate with: source /tmp/rsloop-pr102-benchmark/envs-free-threaded/historical/bin/activate
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/historical
+Resolved 5 packages in 1ms
+Installed 5 packages in 4ms
+ + maturin==1.14.1
+ + opentelemetry-api==1.45.1
+ + typing-extensions==4.16.0
+ + uvloop==0.22.1
+ + zuvloop==0.0.17
+🍹 Building a mixed python/rust project
+🐍 Found CPython 3.14t at /tmp/rsloop-pr102-benchmark/envs-free-threaded/historical/bin/python
+🔗 Found pyo3 bindings
+   Compiling pyo3-ffi v0.29.3
+   Compiling pyo3 v0.29.3
+   Compiling rsloop v0.1.57 (/tmp/rsloop-pr102-historical)
+   Compiling pyo3-async-runtimes v0.29.0
+    Finished `release` profile [optimized] target(s) in 34.31s
+📦 Including files matching "python/rsloop/_loop.pyi"
+📦 Built wheel for CPython 3.14t to /tmp/rsloop-pr102-benchmark/envs-free-threaded/wheels-historical/rsloop-0.1.57-cp314-cp314t-manylinux_2_39_x86_64.whl
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/historical
+Resolved 1 package in 1ms
+Prepared 1 package in 13ms
+Installed 1 package in 0.44ms
+ + rsloop==0.1.57 (from file:///tmp/rsloop-pr102-benchmark/envs-free-threaded/wheels-historical/rsloop-0.1.57-cp314-cp314t-manylinux_2_39_x86_64.whl)
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/historical
+Building free-threaded/pre
+Using CPython 3.14.0+freethreaded interpreter at: /home/devops/.local/bin/python3.14t
+Creating virtual environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/pre
+Activate with: source /tmp/rsloop-pr102-benchmark/envs-free-threaded/pre/bin/activate
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/pre
+Resolved 5 packages in 1ms
+Installed 5 packages in 1ms
+ + maturin==1.14.1
+ + opentelemetry-api==1.45.1
+ + typing-extensions==4.16.0
+ + uvloop==0.22.1
+ + zuvloop==0.0.17
+🍹 Building a mixed python/rust project
+🐍 Found CPython 3.14t at /tmp/rsloop-pr102-benchmark/envs-free-threaded/pre/bin/python
+🔗 Found pyo3 bindings
+   Compiling pyo3-ffi v0.29.3
+   Compiling pyo3 v0.29.3
+   Compiling rsloop v0.1.59 (/tmp/rsloop-pr102-pre)
+   Compiling pyo3-async-runtimes v0.29.0
+    Finished `release` profile [optimized] target(s) in 34.37s
+📦 Including files matching "python/rsloop/_loop.pyi"
+📦 Built wheel for CPython 3.14t to /tmp/rsloop-pr102-benchmark/envs-free-threaded/wheels-pre/rsloop-0.1.59-cp314-cp314t-manylinux_2_39_x86_64.whl
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/pre
+Resolved 1 package in 1ms
+Prepared 1 package in 14ms
+Installed 1 package in 0.43ms
+ + rsloop==0.1.59 (from file:///tmp/rsloop-pr102-benchmark/envs-free-threaded/wheels-pre/rsloop-0.1.59-cp314-cp314t-manylinux_2_39_x86_64.whl)
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/pre
+Building free-threaded/current
+Using CPython 3.14.0+freethreaded interpreter at: /home/devops/.local/bin/python3.14t
+Creating virtual environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/current
+Activate with: source /tmp/rsloop-pr102-benchmark/envs-free-threaded/current/bin/activate
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/current
+Resolved 5 packages in 1ms
+Installed 5 packages in 2ms
+ + maturin==1.14.1
+ + opentelemetry-api==1.45.1
+ + typing-extensions==4.16.0
+ + uvloop==0.22.1
+ + zuvloop==0.0.17
+🍹 Building a mixed python/rust project
+🐍 Found CPython 3.14t at /tmp/rsloop-pr102-benchmark/envs-free-threaded/current/bin/python
+🔗 Found pyo3 bindings
+   Compiling pyo3-ffi v0.29.3
+   Compiling pyo3 v0.29.3
+   Compiling rsloop v0.1.60 (/tmp/rsloop-pr102)
+   Compiling pyo3-async-runtimes v0.29.0
+    Finished `release` profile [optimized] target(s) in 32.19s
+📦 Including files matching "python/rsloop/_loop.pyi"
+📦 Built wheel for CPython 3.14t to /tmp/rsloop-pr102-benchmark/envs-free-threaded/wheels-current/rsloop-0.1.60-cp314-cp314t-manylinux_2_39_x86_64.whl
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/current
+Resolved 1 package in 1ms
+Prepared 1 package in 13ms
+Installed 1 package in 0.48ms
+ + rsloop==0.1.60 (from file:///tmp/rsloop-pr102-benchmark/envs-free-threaded/wheels-current/rsloop-0.1.60-cp314-cp314t-manylinux_2_39_x86_64.whl)
+Using Python 3.14.0 environment at: /tmp/rsloop-pr102-benchmark/envs-free-threaded/current

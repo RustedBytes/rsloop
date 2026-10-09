@@ -1,0 +1,6 @@
+maturin==1.14.1
+opentelemetry-api==1.45.1
+rsloop @ file:///tmp/rsloop-pr102-benchmark/envs-gil/wheels-current/rsloop-0.1.60-cp314-cp314-manylinux_2_39_x86_64.whl
+typing-extensions==4.16.0
+uvloop==0.22.1
+zuvloop==0.0.17
