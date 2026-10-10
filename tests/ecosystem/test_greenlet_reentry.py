@@ -4,6 +4,7 @@ import asyncio
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 import rsloop
@@ -20,7 +21,7 @@ def _exercise(depth, bridge):
             self.driver = driver
 
     def await_only(awaitable):
-        return greenlet.getcurrent().driver.switch(awaitable)
+        return cast(AsyncGreenlet, greenlet.getcurrent()).driver.switch(awaitable)
 
     async def spawn(fn):
         child = AsyncGreenlet(fn, greenlet.getcurrent())
@@ -28,8 +29,8 @@ def _exercise(depth, bridge):
         while not child.dead:
             try:
                 value = await result
-            except BaseException:  # noqa: BLE001 - forward cancellation into the greenlet
-                result = child.throw(*sys.exc_info())
+            except BaseException as exc:  # noqa: BLE001 - forward cancellation into the greenlet
+                result = child.throw(type(exc), exc, exc.__traceback__)
             else:
                 result = child.switch(value)
         return result

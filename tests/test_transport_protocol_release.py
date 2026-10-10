@@ -4,6 +4,7 @@ import asyncio
 import gc
 import sys
 import weakref
+from typing import cast
 
 import pytest
 import rsloop
@@ -78,7 +79,7 @@ def test_closed_stream_reader_releases_fast_path_references():
         class Peer(asyncio.Protocol):
             def connection_made(self, transport):
                 peers.append(transport)
-                transport.write(b"reply")
+                cast(asyncio.Transport, transport).write(b"reply")
 
         server = await loop.create_server(Peer, "127.0.0.1", 0)
         try:
@@ -91,9 +92,10 @@ def test_closed_stream_reader_releases_fast_path_references():
             )
             assert await asyncio.wait_for(reader.readexactly(5), 5) == b"reply"
             reader_ref, protocol_ref = weakref.ref(reader), weakref.ref(protocol)
-            transport.close()
-            await asyncio.wait_for(protocol._get_close_waiter(transport), 5)
-            del reader, protocol, _
+            writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), 5)
+            del reader, protocol, writer, _
             await asyncio.sleep(0)
             gc.collect()
             assert reader_ref() is None
