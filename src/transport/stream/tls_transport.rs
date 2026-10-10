@@ -42,9 +42,22 @@ use super::{
 };
 use crate::transport::tls::{ClientTlsSettings, ServerTlsSettings, tls_extra};
 
+/// Owns the accepted connection's existing server count during a TLS handoff.
+/// Failure/cancellation releases it; success transfers it to the new core.
+pub(super) struct ServerConnectionLease(pub(super) Option<Weak<ServerCore>>);
+
+impl Drop for ServerConnectionLease {
+    fn drop(&mut self) {
+        if let Some(server) = self.0.take().and_then(|server| server.upgrade()) {
+            server.connection_lost();
+        }
+    }
+}
+
 pub struct PreparedTlsTransport {
     spawn_context: TransportSpawnContext,
     stream: StreamKind,
+    server_connection: ServerConnectionLease,
 }
 
 /// Retires plaintext I/O before a TLS handshake is allowed to touch the socket.
@@ -54,11 +67,13 @@ pub fn prepare_start_tls_transport(
     transport: Py<PyStreamTransport>,
     protocol: Py<PyAny>,
 ) -> PyResult<PreparedTlsTransport> {
-    let (mut spawn_context, stream) = transport.borrow(py).core.upgrade_stream(py)?;
+    let (mut spawn_context, stream, server_connection) =
+        transport.borrow(py).core.upgrade_stream(py)?;
     spawn_context.protocol = protocol;
     Ok(PreparedTlsTransport {
         spawn_context,
         stream,
+        server_connection,
     })
 }
 
@@ -72,12 +87,36 @@ pub fn start_tls_transport(
     let PreparedTlsTransport {
         spawn_context,
         stream,
+        server_connection,
     } = prepared;
-    match (client_tls, server_tls) {
-        (Some(tls), None) => spawn_tls_client_transport(py, spawn_context, stream, tls, None, true),
-        (None, Some(tls)) => spawn_tls_server_transport(py, spawn_context, stream, tls, None, true),
-        _ => Err(PyRuntimeError::new_err("invalid TLS upgrade configuration")),
-    }
+    let config = match (client_tls, server_tls) {
+        (Some(tls), None) => TlsTransportConfig {
+            connection: TlsConnectionKind::Client(
+                ClientConnection::new(tls.config, tls.server_name)
+                    .map_err(|err| PyRuntimeError::new_err(err.to_string()))?,
+            ),
+            tls_extra: tls_extra(py, &tls.ssl_context),
+            handshake_timeout: tls.handshake_timeout,
+            shutdown_timeout: tls.shutdown_timeout,
+            server: None,
+            server_connection: Some(server_connection),
+            call_connection_made: true,
+        },
+        (None, Some(tls)) => TlsTransportConfig {
+            connection: TlsConnectionKind::Server(
+                ServerConnection::new(tls.config)
+                    .map_err(|err| PyRuntimeError::new_err(err.to_string()))?,
+            ),
+            tls_extra: tls_extra(py, &tls.ssl_context),
+            handshake_timeout: tls.handshake_timeout,
+            shutdown_timeout: tls.shutdown_timeout,
+            server: None,
+            server_connection: Some(server_connection),
+            call_connection_made: true,
+        },
+        _ => return Err(PyRuntimeError::new_err("invalid TLS upgrade configuration")),
+    };
+    spawn_tls_transport(py, spawn_context, stream, config)
 }
 
 #[cfg_attr(feature = "profile", hotpath::measure)]
@@ -101,6 +140,7 @@ pub(super) fn spawn_tls_client_transport(
             handshake_timeout: tls.handshake_timeout,
             shutdown_timeout: tls.shutdown_timeout,
             server,
+            server_connection: None,
             call_connection_made,
         },
     )
@@ -127,6 +167,7 @@ pub(super) fn spawn_tls_server_transport(
             handshake_timeout: tls.handshake_timeout,
             shutdown_timeout: tls.shutdown_timeout,
             server,
+            server_connection: None,
             call_connection_made,
         },
     )
@@ -138,6 +179,7 @@ pub(super) struct TlsTransportConfig {
     pub(super) handshake_timeout: Duration,
     pub(super) shutdown_timeout: Duration,
     pub(super) server: Option<Weak<ServerCore>>,
+    pub(super) server_connection: Option<ServerConnectionLease>,
     pub(super) call_connection_made: bool,
 }
 
@@ -186,6 +228,7 @@ pub(super) fn spawn_tls_transport(
         handshake_timeout,
         shutdown_timeout,
         server,
+        mut server_connection,
         call_connection_made,
     } = config;
     let handshake_server = server.clone();
@@ -217,17 +260,23 @@ pub(super) fn spawn_tls_transport(
             writable: true,
             can_write_eof: false,
             close_on_write_eof: false,
-            server,
+            server: server_connection
+                .as_ref()
+                .and_then(|lease| lease.0.clone())
+                .or(server),
         },
     );
     let core = new_stream_transport_core(parts, writer_tx, None, None);
 
     let transport = new_py_stream_transport(py, &core)?;
+    // Establish accounting before callbacks/workers can close this transport.
+    if let Some(lease) = &mut server_connection {
+        lease.0.take();
+    } else if let Some(server) = core.server_ref().and_then(|weak| weak.upgrade()) {
+        server.connection_opened();
+    }
     if call_connection_made {
         core.connection_made(transport.clone_ref(py))?;
-    }
-    if let Some(server) = core.server_ref().and_then(|weak| weak.upgrade()) {
-        server.connection_opened();
     }
 
     if let Err(err) = spawn_tls_reader_worker(Arc::clone(&core), Arc::clone(&tls_state)) {

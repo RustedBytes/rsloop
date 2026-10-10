@@ -5,7 +5,7 @@ use pyo3::{
     ffi,
     prelude::*,
     sync::PyOnceLock,
-    types::{PyByteArray, PyBytes, PyDict, PyTuple},
+    types::{PyByteArray, PyBytes, PyDict, PyTuple, PyWeakrefMethods, PyWeakrefReference},
 };
 use pyo3_async_runtimes::TaskLocals;
 
@@ -2044,7 +2044,7 @@ impl PyFastStreamReader {
     }
 }
 
-#[pyclass(module = "rsloop._loop")]
+#[pyclass(module = "rsloop._loop", weakref)]
 pub struct PyFastStreamProtocol {
     loop_obj: Py<PyAny>,
     reader: Py<PyFastStreamReader>,
@@ -2218,13 +2218,21 @@ impl PyFastStreamProtocol {
             .is_none();
         {
             let mut protocol = slf.borrow_mut(py);
+            if protocol.connection_lost {
+                drop(protocol);
+                transport.call_method0(py, "abort")?;
+                return Ok(());
+            }
+            let replacing_transport = !protocol.transport.bind(py).is_none();
             protocol.over_ssl = over_ssl;
             protocol.transport = transport.clone_ref(py);
             protocol
                 .reader
                 .borrow_mut(py)
                 .set_transport_obj(py, transport.clone_ref(py))?;
-            if !protocol.has_client_connected_cb(py) {
+            // TLS replacement must not create a second writer or restart the
+            // application's server callback for the same connection.
+            if replacing_transport || !protocol.has_client_connected_cb(py) {
                 return Ok(());
             }
         }
@@ -2263,6 +2271,7 @@ impl PyFastStreamProtocol {
             py,
             PyFastClientDoneCallback {
                 loop_obj,
+                protocol: PyWeakrefReference::new(slf.bind(py))?.unbind(),
                 transport,
             },
         )?;
@@ -2436,6 +2445,57 @@ pub struct PyFastStreamWriter {
 
 #[pymethods]
 impl PyFastStreamWriter {
+    #[pyo3(signature = (sslcontext, *, server_hostname=None, ssl_handshake_timeout=None, ssl_shutdown_timeout=None))]
+    fn start_tls(
+        slf: Py<Self>,
+        py: Python<'_>,
+        sslcontext: Py<PyAny>,
+        server_hostname: Option<Py<PyAny>>,
+        ssl_handshake_timeout: Option<f64>,
+        ssl_shutdown_timeout: Option<f64>,
+    ) -> PyResult<Py<PyAny>> {
+        let (loop_obj, protocol, server_side) = {
+            let writer = slf.borrow(py);
+            let protocol = writer.protocol.borrow(py);
+            (
+                protocol.loop_obj.clone_ref(py),
+                writer.protocol.clone_ref(py),
+                protocol.has_client_connected_cb(py),
+            )
+        };
+        // A Python coroutine keeps drain/upgrade/replacement on the loop
+        // thread and holds no PyO3 borrow across either await.
+        Ok(py
+            .import("rsloop._stream_tls")?
+            .getattr("start_tls")?
+            .call1((
+                slf,
+                loop_obj,
+                protocol,
+                server_side,
+                sslcontext,
+                server_hostname,
+                ssl_handshake_timeout,
+                ssl_shutdown_timeout,
+            ))?
+            .unbind())
+    }
+
+    fn _replace_transport(&mut self, py: Python<'_>, transport: Py<PyAny>) -> PyResult<()> {
+        let over_ssl = !transport
+            .call_method1(py, "get_extra_info", ("sslcontext",))?
+            .bind(py)
+            .is_none();
+        let mut protocol = self.protocol.borrow_mut(py);
+        protocol.over_ssl = over_ssl;
+        protocol.transport = transport.clone_ref(py);
+        self.reader
+            .borrow_mut(py)
+            .set_transport_obj(py, transport.clone_ref(py))?;
+        self.transport = transport;
+        Ok(())
+    }
+
     #[cfg_attr(
         feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamWriter")
@@ -2551,6 +2611,7 @@ impl PyFastStreamWriter {
 #[pyclass(module = "rsloop._loop")]
 struct PyFastClientDoneCallback {
     loop_obj: Py<PyAny>,
+    protocol: Py<PyWeakrefReference>,
     transport: Py<PyAny>,
 }
 
@@ -2561,8 +2622,22 @@ impl PyFastClientDoneCallback {
         hotpath::measure(impl_type = "PyFastClientDoneCallback")
     )]
     fn __call__(&self, py: Python<'_>, task: Py<PyAny>) -> PyResult<()> {
+        let transport = if let Some(protocol) = self.protocol.bind(py).upgrade() {
+            let current = protocol
+                .cast::<PyFastStreamProtocol>()?
+                .borrow()
+                .transport
+                .clone_ref(py);
+            if current.bind(py).is_none() {
+                self.transport.clone_ref(py)
+            } else {
+                current
+            }
+        } else {
+            self.transport.clone_ref(py)
+        };
         if task.call_method0(py, "cancelled")?.extract::<bool>(py)? {
-            self.transport.call_method0(py, "close")?;
+            transport.call_method0(py, "close")?;
             return Ok(());
         }
 
@@ -2574,10 +2649,10 @@ impl PyFastClientDoneCallback {
         let context = PyDict::new(py);
         context.set_item("message", "Unhandled exception in client_connected_cb")?;
         context.set_item("exception", exc.clone_ref(py))?;
-        context.set_item("transport", self.transport.clone_ref(py))?;
+        context.set_item("transport", transport.clone_ref(py))?;
         self.loop_obj
             .call_method1(py, "call_exception_handler", (context,))?;
-        self.transport.call_method0(py, "close")?;
+        transport.call_method0(py, "close")?;
         Ok(())
     }
 }

@@ -14,6 +14,7 @@ async def result() -> int:
 def check_public_api() -> None:
     loop = rsloop.new_event_loop()
     assert_type(loop, rsloop.Loop)
+    assert_type(loop.runtime_info(), dict[str, str | None])
     assert_type(loop.create_future(), asyncio.Future[Any])
     assert_type(loop.create_task(result()), asyncio.Task[int])
 
