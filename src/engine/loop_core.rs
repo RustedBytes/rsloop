@@ -377,6 +377,7 @@ pub struct LoopCore {
     next_callback_id: AtomicU64,
     command_tx: Sender<LoopCommand>,
     runtime_thread: Mutex<Option<JoinHandle<()>>>,
+    active_reactor: Mutex<Option<&'static str>>,
     runtime_waker: Mutex<Option<Waker>>,
     active_ready_dispatch: Mutex<Option<ActiveReadyDispatch>>,
     pending_timers: Mutex<BinaryHeap<TimerEntry>>,
@@ -387,6 +388,12 @@ pub struct LoopCore {
 }
 
 impl LoopCore {
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
+    /// Loop-thread reactor, absent before first run and after close.
+    pub(crate) fn active_reactor(&self) -> Option<&'static str> {
+        *self.active_reactor.lock().expect("poisoned active reactor")
+    }
+
     /// Creates a loop core and starts its command-dispatcher thread.
     ///
     /// Python callbacks are not run on that thread; the dispatcher only
@@ -402,6 +409,7 @@ impl LoopCore {
             next_callback_id: AtomicU64::new(1),
             command_tx,
             runtime_thread: Mutex::new(None),
+            active_reactor: Mutex::new(None),
             runtime_waker: Mutex::new(None),
             active_ready_dispatch: Mutex::new(None),
             pending_timers: Mutex::new(BinaryHeap::new()),
@@ -703,11 +711,12 @@ impl LoopCore {
                     let builder = crate::vibeio::RuntimeBuilder::new()
                         .rsloop_profile()
                         .enable_timer(true);
-                    std::mem::ManuallyDrop::new(
-                        builder
-                            .build()
-                            .expect("failed to initialize loop-thread vibeio runtime"),
-                    )
+                    let runtime = builder
+                        .build()
+                        .expect("failed to initialize loop-thread vibeio runtime");
+                    *self.active_reactor.lock().expect("poisoned active reactor") =
+                        Some(runtime.reactor_name());
+                    std::mem::ManuallyDrop::new(runtime)
                 });
         });
 
@@ -1137,6 +1146,7 @@ impl LoopCore {
             }
         });
 
+        *self.active_reactor.lock().expect("poisoned active reactor") = None;
         self.send_command(LoopCommand::Close)?;
         if let Some(handle) = self
             .runtime_thread

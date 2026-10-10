@@ -38,3 +38,29 @@ the lower-level transport code in `src/transport/stream/mod.rs`.
 
 See [Getting Started](getting-started.md#import-time-behavior) for the other
 setup performed when `rsloop` is imported.
+
+## Upgrading an existing connection to TLS
+
+The native writer supports the Python 3.11+ stream API:
+
+```python
+await writer.start_tls(
+    ssl_context,
+    server_hostname="example.com",  # client side
+    ssl_handshake_timeout=10,
+    ssl_shutdown_timeout=5,
+)
+```
+
+The method drains pending writes, upgrades the existing connection, and returns
+`None`. It updates the writer, reader and protocol to the TLS transport. The
+server side is inferred from the stream protocol; server callbacks pass their
+server SSLContext without `server_hostname`. The callback is not restarted on
+upgrade. After upgrade, `get_extra_info("sslcontext")` describes TLS and
+`can_write_eof()` is false.
+
+A failed/cancelled handshake closes the stream and completes its close waiters.
+A blocking handshake may finish after cancellation; any late transport is
+aborted. Server connection accounting is retained across the handoff and released
+on handshake failure or eventual connection closure, so `server.wait_closed()`
+can finish correctly.

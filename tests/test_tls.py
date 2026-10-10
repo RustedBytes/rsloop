@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import inspect
 import os
 import pathlib
 import shutil
@@ -444,12 +445,12 @@ class TestTls:
                     transport = cast(asyncio.Transport, transport)
                     self.transport = transport
                     self.connected.set()
-                    if not isinstance(
-                        transport.get_extra_info("sslcontext"), type(None)
+                    if (
+                        transport.get_extra_info("sslcontext") is not None
+                        and not self.upgraded.done()
                     ):
-                        if not self.upgraded.done():
-                            self.upgraded.set_result(None)
-                            server_upgraded.set()
+                        self.upgraded.set_result(None)
+                        server_upgraded.set()
 
                 async def upgrade(self, ssl_context) -> None:
                     transport = await loop.start_tls(
@@ -567,3 +568,258 @@ class TestTls:
                     )
 
         assert rsloop.run(main()) == [("hello 0", "HELLO 0"), ("hello 1", "HELLO 1")]
+
+
+@pytest.mark.parametrize("backend", ["asyncio", "rsloop", "uvloop"])
+@pytest.mark.parametrize("client_first", [False, True])
+def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
+    if backend != "rsloop" and not hasattr(asyncio.StreamWriter, "start_tls"):
+        pytest.skip("stdlib StreamWriter.start_tls requires Python 3.11+")
+    timeouts = {"ssl_handshake_timeout": 3}
+    if backend == "rsloop" or "ssl_shutdown_timeout" in inspect.signature(
+        asyncio.StreamWriter.start_tls
+    ).parameters:
+        timeouts["ssl_shutdown_timeout"] = 1
+    factory = (
+        pytest.importorskip("uvloop").new_event_loop
+        if backend == "uvloop"
+        else (asyncio if backend == "asyncio" else rsloop).new_event_loop
+    )
+    server_ctx, client_ctx = make_ssl_contexts(str(tmp_path))
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        server_go = asyncio.Event()
+        done = loop.create_future()
+        callbacks = 0
+
+        async def serve(reader, writer):
+            nonlocal callbacks
+            callbacks += 1
+            try:
+                assert await reader.readline() == b"STARTTLS\n"
+                writer.write(b"READY\n")
+                await writer.drain()
+                await server_go.wait()
+                old_transport = writer.transport
+                assert (
+                    await writer.start_tls(
+                        server_ctx, **timeouts
+                    )
+                    is None
+                )
+                assert writer.transport is not old_transport
+                assert cast(Any, reader)._transport is writer.transport
+                assert writer.get_extra_info("sslcontext") is server_ctx
+                assert not writer.can_write_eof()
+                assert await reader.readexactly(6) == b"secret"
+                writer.write(b"encrypted reply")
+                await writer.drain()
+            except BaseException as exc:  # noqa: BLE001 - forward callback failure to test
+                if not done.done():
+                    done.set_exception(exc)
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                if not done.done():
+                    done.set_result(None)
+
+        server = await asyncio.start_server(serve, "127.0.0.1", 0)
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", server.sockets[0].getsockname()[1]
+            )
+            try:
+                writer.write(b"STARTTLS\n")
+                await writer.drain()
+                assert await reader.readline() == b"READY\n"
+                old_transport = writer.transport
+                if not client_first:
+                    server_go.set()
+                    await asyncio.sleep(0)
+                upgrade = asyncio.create_task(
+                    writer.start_tls(
+                        client_ctx,
+                        server_hostname="localhost",
+                        **timeouts,
+                    )
+                )
+                if client_first:
+                    await asyncio.sleep(0)
+                    server_go.set()
+                assert await upgrade is None
+                assert writer.transport is not old_transport
+                assert cast(Any, reader)._transport is writer.transport
+                assert writer.get_extra_info("sslcontext") is client_ctx
+                assert not writer.can_write_eof()
+                writer.write(b"secret")
+                await writer.drain()
+                assert await reader.readexactly(15) == b"encrypted reply"
+                assert await reader.read(1) == b""
+                assert callbacks == 1
+            finally:
+                server_go.set()
+                writer.close()
+                await writer.wait_closed()
+                await asyncio.wait_for(done, 3)
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    loop = factory()
+    try:
+        loop.run_until_complete(asyncio.wait_for(main(), 10))
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.close()
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_native_start_tls_handler_error_closes_upgraded_transport(tmp_path, cancelled):
+    server_ctx, client_ctx = make_ssl_contexts(str(tmp_path))
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        errors = []
+        loop.set_exception_handler(lambda loop, context: errors.append(context))
+        callbacks = 0
+
+        async def serve(reader, writer):
+            nonlocal callbacks
+            callbacks += 1
+            await writer.start_tls(server_ctx, ssl_handshake_timeout=3)
+            assert await reader.readexactly(1) == b"!"
+            if cancelled:
+                raise asyncio.CancelledError
+            raise RuntimeError("handler failed after upgrade")
+
+        server = await asyncio.start_server(serve, "127.0.0.1", 0)
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", server.sockets[0].getsockname()[1]
+            )
+            try:
+                await writer.start_tls(
+                    client_ctx, server_hostname="localhost", ssl_handshake_timeout=3
+                )
+                writer.write(b"!")
+                await writer.drain()
+                assert await reader.read(1) == b""
+                assert callbacks == 1
+                if cancelled:
+                    assert not errors
+                else:
+                    assert len(errors) == 1
+                    assert str(errors[0]["exception"]) == "handler failed after upgrade"
+                    assert (
+                        errors[0]["transport"].get_extra_info("sslcontext")
+                        is server_ctx
+                    )
+            finally:
+                writer.close()
+                await writer.wait_closed()
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    rsloop.run(asyncio.wait_for(main(), 10))
+
+
+def test_start_tls_handshake_failure_releases_server(tmp_path):
+    server_ctx, _ = make_ssl_contexts(str(tmp_path))
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        done = loop.create_future()
+
+        async def serve(reader, writer):
+            try:
+                with pytest.raises(RuntimeError) as caught:
+                    await writer.start_tls(server_ctx, ssl_handshake_timeout=1)
+                assert writer.is_closing()
+                with pytest.raises(RuntimeError):
+                    await writer.wait_closed()
+                assert reader.exception() is caught.value
+            except BaseException as exc:  # noqa: BLE001 - forward callback failure
+                done.set_exception(exc)
+            else:
+                done.set_result(None)
+
+        server = await asyncio.start_server(serve, "127.0.0.1", 0)
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", server.sockets[0].getsockname()[1]
+            )
+            try:
+                writer.write(b"not a TLS client")
+                await writer.drain()
+                await done
+                assert await reader.read() == b""
+            finally:
+                writer.close()
+                await writer.wait_closed()
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    rsloop.run(asyncio.wait_for(main(), 5))
+
+
+def test_start_tls_cancellation_finishes_wait_closed(tmp_path, monkeypatch):
+    _, client_ctx = make_ssl_contexts(str(tmp_path))
+    upgrades = []
+    original = cast(Any, rsloop.Loop).start_tls
+
+    def capture_upgrade(self, *args, **kwargs):
+        future = original(self, *args, **kwargs)
+        upgrades.append(future)
+        return future
+
+    monkeypatch.setattr(rsloop.Loop, "start_tls", capture_upgrade)
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        release = asyncio.Event()
+        done = loop.create_future()
+        errors = []
+        loop.set_exception_handler(lambda loop, context: errors.append(context))
+
+        async def serve(reader, writer):
+            await release.wait()
+            writer.close()
+            await writer.wait_closed()
+            done.set_result(None)
+
+        server = await asyncio.start_server(serve, "127.0.0.1", 0)
+        try:
+            _, writer = await asyncio.open_connection(
+                "127.0.0.1", server.sockets[0].getsockname()[1]
+            )
+            try:
+                task = asyncio.create_task(
+                    writer.start_tls(
+                        client_ctx, server_hostname="localhost", ssl_handshake_timeout=1
+                    )
+                )
+                await asyncio.sleep(0)
+                assert len(upgrades) == 1
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert writer.is_closing()
+                await writer.wait_closed()
+                release.set()
+                await done
+                with pytest.raises(RuntimeError):
+                    await upgrades[0]
+                await asyncio.sleep(0)
+                assert not errors
+            finally:
+                release.set()
+                writer.close()
+                await writer.wait_closed()
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    rsloop.run(asyncio.wait_for(main(), 5))

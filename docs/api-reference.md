@@ -81,6 +81,33 @@ print(rsloop.__version__)
 print(rsloop.build_info())
 ```
 
+## Active reactor diagnostics
+
+`loop.runtime_info() -> dict[str, str | None]` reports the driver actually
+selected for that loop's I/O runtime. Its `reactor` is `io_uring`, `mio`, `kqueue`
+or `iocp`. On Linux, `mio` uses epoll and can be selected when io_uring is denied
+by container policy or unavailable on the kernel.
+
+The value is `None` before the loop's first run and after `close()`. A stopped
+but initialized loop retains its driver. Reading these diagnostics does not
+initialize a runtime, probe the OS, or report another loop's driver.
+
+```python
+loop = rsloop.new_event_loop()
+print(loop.runtime_info())  # {"reactor": None}
+async def inspect_runtime():
+    print(loop.runtime_info())  # e.g. {"reactor": "mio"} on Linux fallback
+try:
+    loop.run_until_complete(inspect_runtime())
+finally:
+    loop.close()
+```
+
+`build_info()["reactor"]` remains the **compile-time target/preferred reactor**
+for backward compatibility; use `loop.runtime_info()["reactor"]` to diagnose
+actual selection. This identifies the loop reactor, not the execution mechanism
+of every operation (TLS and some operations can use worker threads).
+
 ## Transport diagnostics
 
 `transport_stats() -> dict[str, int | bool]` returns a snapshot of native

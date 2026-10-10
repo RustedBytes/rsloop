@@ -676,6 +676,16 @@ impl RuntimeInner {
 }
 
 impl Runtime {
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Runtime"))]
+    /// Identify this runtime's actual driver, including automatic fallback.
+    pub fn reactor_name(&self) -> &'static str {
+        self.inner
+            .as_ref()
+            .expect("runtime has been dropped")
+            .driver
+            .name()
+    }
+
     /// Create a new runtime with the given driver.
     ///
     /// By default, this enables the timer and file I/O offload.
@@ -1673,5 +1683,21 @@ mod tests {
             handle * 2
         });
         assert_eq!(value, 42);
+    }
+}
+
+#[cfg(test)]
+mod reactor_diagnostics_tests {
+    use super::Runtime;
+    use crate::vibeio::driver::AnyDriver;
+
+    #[test]
+    fn reports_the_constructed_driver() {
+        assert_eq!(Runtime::new(AnyDriver::new_mock()).reactor_name(), "mock");
+        #[cfg(unix)]
+        assert_eq!(
+            Runtime::new(AnyDriver::new_mio().unwrap()).reactor_name(),
+            "mio"
+        );
     }
 }
