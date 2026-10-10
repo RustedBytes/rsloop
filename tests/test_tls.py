@@ -592,6 +592,8 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
     async def main():
         loop = asyncio.get_running_loop()
         server_go = asyncio.Event()
+        server_started = asyncio.Event()
+        client_started = asyncio.Event()
         done = loop.create_future()
         callbacks = 0
 
@@ -600,10 +602,17 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
             callbacks += 1
             try:
                 assert await reader.readline() == b"STARTTLS\n"
+                if backend != "rsloop":
+                    # Baseline loops can lose ClientHello bytes delivered to
+                    # the plaintext reader before TLS takes over (e.g. CPython
+                    # #142352). Pause before advertising readiness.
+                    # Keep rsloop's early-ClientHello path exercised unchanged.
+                    writer.transport.pause_reading()
                 writer.write(b"READY\n")
                 await writer.drain()
                 await server_go.wait()
                 old_transport = writer.transport
+                server_started.set()
                 assert await writer.start_tls(server_ctx, **timeouts) is None
                 assert writer.transport is not old_transport
                 # Older asyncio versions retain the reader's private transport.
@@ -635,16 +644,19 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
                 old_transport = writer.transport
                 if not client_first:
                     server_go.set()
-                    await asyncio.sleep(0)
-                upgrade = asyncio.create_task(
-                    writer.start_tls(
+                    await server_started.wait()
+
+                async def upgrade_client():
+                    client_started.set()
+                    return await writer.start_tls(
                         client_ctx,
                         server_hostname="localhost",
                         **timeouts,
                     )
-                )
+
+                upgrade = asyncio.create_task(upgrade_client())
                 if client_first:
-                    await asyncio.sleep(0)
+                    await client_started.wait()
                     server_go.set()
                 assert await upgrade is None
                 assert writer.transport is not old_transport
