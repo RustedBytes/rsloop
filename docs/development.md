@@ -251,6 +251,29 @@ pytest-mock's `mocker` fixture for mocks, spies, and call assertions. Use
 `monkeypatch.context()` when a shared function must be restored before the test
 finishes (for example, import machinery or warning handling).
 
+### Stream application contracts
+
+Run `uv run python -m pytest tests/test_stream_usecases.py` after rebuilding the
+native extension. These loopback TCP scenarios run against asyncio, rsloop and
+uvloop when installed. The rsloop cases assert that both endpoints use the
+native reader, so a fallback cannot silently bypass the implementation.
+
+| Scenario | Contract |
+| --- | --- |
+| JSON Lines, UTF-8 and different write sizes | `async for` yields complete records, including a final line without a newline; repeated EOF stays exhausted. |
+| Length-prefixed pipeline | Empty and large bodies retain exact framing; reads larger than the watermark complete; half-close preserves the reply direction. |
+| Truncated final body | `IncompleteReadError.partial` and `.expected` describe the missing body accurately. |
+| Oversized line followed by another request | `readline` and iteration discard the rejected line; `readuntil` preserves it for explicit recovery. |
+| Cancelled iteration | Cancellation reaches the pending read; a later iteration receives the next record on the same connection. |
+| Invalid or large declared size | Negative sizes fail when awaited without consuming data; EOF preserves the full expected unsigned size. |
+
+Keep peer failures observable: await background tasks, close both endpoints and
+the server, and check for leaked tasks and event-loop exceptions. Use events or
+protocol acknowledgements to coordinate peers. Timeouts bound deadlocks; they
+do not establish ordering. A TCP write boundary is not a packet or read boundary.
+For a regression, first run the new test against the unchanged extension and
+record the failure, then rebuild and run the affected suite after the fix.
+
 ## Build the docs
 
 With MkDocs installed:

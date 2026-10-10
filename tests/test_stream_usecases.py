@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import struct
+import sys
 
 import pytest
 import rsloop
@@ -157,7 +158,7 @@ def test_pipelined_length_prefixed_messages(event_loop, truncated):
 @pytest.mark.parametrize("method", ["readline", "readuntil", "__anext__"])
 def test_oversized_line_then_next_request(event_loop, method):
     async def main():
-        async with tcp_pair(limit=8) as ((reader, writer), (_, peer_writer)):
+        async with tcp_pair(limit=8) as ((reader, _), (_, peer_writer)):
             peer_writer.write(b"x" * 9 + b"\nOK\n")
             peer_writer.write_eof()
             if method != "readuntil":
@@ -175,7 +176,7 @@ def test_oversized_line_then_next_request(event_loop, method):
     event_loop.run_until_complete(asyncio.wait_for(main(), 10))
 
 
-@pytest.mark.parametrize("size", [-1, -64])
+@pytest.mark.parametrize("size", [-1, -64, -(2**100)])
 def test_invalid_frame_length_leaves_stream_reusable(event_loop, size):
     async def main():
         async with tcp_pair() as ((reader, _), (_, peer_writer)):
@@ -212,5 +213,19 @@ def test_cancel_iteration_then_resume_same_connection(event_loop):
             assert await anext(reader) == b"after cancellation\n"
             with pytest.raises(StopAsyncIteration):
                 await anext(reader)
+
+    event_loop.run_until_complete(asyncio.wait_for(main(), 10))
+
+
+@pytest.mark.parametrize("size", [1, sys.maxsize + 1])
+def test_eof_reports_full_declared_frame_size(event_loop, size):
+    async def main():
+        async with tcp_pair() as ((reader, _), (_, peer_writer)):
+            peer_writer.write_eof()
+            assert await reader.read() == b""
+            with pytest.raises(asyncio.IncompleteReadError) as caught:
+                await reader.readexactly(size)
+            assert caught.value.expected == size
+            assert caught.value.partial == b""
 
     event_loop.run_until_complete(asyncio.wait_for(main(), 10))
