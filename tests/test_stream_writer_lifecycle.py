@@ -68,7 +68,7 @@ def test_cancelled_drains_release_waiters_while_still_paused(
                     with pytest.raises(asyncio.CancelledError):
                         await task
                 else:
-                    with pytest.raises(TimeoutError):
+                    with pytest.raises(asyncio.TimeoutError):
                         await asyncio.wait_for(task, 0)
                 return reference
 
