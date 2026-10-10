@@ -47,6 +47,10 @@ use crate::transport::tls::{ClientTlsSettings, ServerTlsSettings, tls_extra};
 pub(super) struct ServerConnectionLease(pub(super) Option<Weak<ServerCore>>);
 
 impl Drop for ServerConnectionLease {
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "<ServerConnectionLease as Drop>")
+    )]
     fn drop(&mut self) {
         if let Some(server) = self.0.take().and_then(|server| server.upgrade()) {
             server.connection_lost();

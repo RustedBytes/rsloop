@@ -388,6 +388,7 @@ pub struct LoopCore {
 }
 
 impl LoopCore {
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
     /// Loop-thread reactor, absent before first run and after close.
     pub(crate) fn active_reactor(&self) -> Option<&'static str> {
         *self.active_reactor.lock().expect("poisoned active reactor")

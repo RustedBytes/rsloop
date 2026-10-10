@@ -312,7 +312,7 @@ class TestFastStreamReaderCompat:
 
         rsloop.run(main())
 
-    def test_cancelled_exact_result_is_not_exposed_by_later_feeds(self):
+    def test_cancelled_exact_read_preserves_bytes_for_later_reads(self):
         async def main():
             reader = PyFastStreamReader(64, asyncio.get_running_loop())
             pending = asyncio.ensure_future(reader.readexactly(8))
@@ -323,7 +323,7 @@ class TestFastStreamReaderCompat:
                 await pending
             reader.feed_data(b"efgh")
             reader.feed_data(b"next")
-            assert await reader.readexactly(4) == b"next"
+            assert await reader.readexactly(12) == b"abcdefghnext"
 
         rsloop.run(main())
 

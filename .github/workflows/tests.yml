@@ -232,6 +232,33 @@ jobs:
           )
           PY
 
+  stream-redis:
+    name: stream cancellation / redis-py + hiredis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "nightly-2026-09-25"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Redis and Python test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+          python -m venv .venv
+          .venv/bin/pip install maturin pytest uvloop redis==5.3.1 hiredis
+      - name: Build and compare stream cancellation across event loops
+        run: |
+          source .venv/bin/activate
+          maturin develop --locked
+          python -m pytest tests/test_stream_cancellation.py tests/test_stream_redis.py
+
   test-matrix:
     name: test matrix
     runs-on: ubuntu-latest

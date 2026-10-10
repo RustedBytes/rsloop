@@ -86,8 +86,14 @@ jobs:
 
       - name: Run native all-feature tests repeatedly
         run: |
+          # Native Rust output can abort on MSYS pipes under Windows (rust-lang/rust#98947).
+          # Capture to a regular file, then print it while preserving the test exit code.
           for ((iteration=1; iteration<=REPETITIONS; iteration++)); do
-            cargo test --manifest-path tools/vibeio-check/Cargo.toml --all-features --locked -- --nocapture 2>&1 | tee "target/vibeio-native-logs/all-features-${iteration}.log"
+            log="target/vibeio-native-logs/all-features-${iteration}.log"
+            status=0
+            cargo test --manifest-path tools/vibeio-check/Cargo.toml --all-features --locked -- --nocapture > "$log" 2>&1 || status=$?
+            cat "$log"
+            if ((status != 0)); then exit "$status"; fi
           done
 
       - name: Check isolated features
@@ -96,7 +102,11 @@ jobs:
           for feature in '' fs process signal pipe stdio splice blocking-default; do
             label="${feature:-default}"
             cargo clippy --manifest-path tools/vibeio-check/Cargo.toml --all-targets --no-default-features --features "$feature" --locked -- -D warnings 2>&1 | tee "target/vibeio-native-logs/clippy-${label}.log"
-            cargo test --manifest-path tools/vibeio-check/Cargo.toml --no-default-features --features "$feature" --locked -- --nocapture 2>&1 | tee "target/vibeio-native-logs/tests-${label}.log"
+            log="target/vibeio-native-logs/tests-${label}.log"
+            status=0
+            cargo test --manifest-path tools/vibeio-check/Cargo.toml --no-default-features --features "$feature" --locked -- --nocapture > "$log" 2>&1 || status=$?
+            cat "$log"
+            if ((status != 0)); then exit "$status"; fi
           done
 
       - name: Upload native test evidence

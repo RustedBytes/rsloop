@@ -676,6 +676,7 @@ impl RuntimeInner {
 }
 
 impl Runtime {
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "Runtime"))]
     /// Identify this runtime's actual driver, including automatic fallback.
     pub fn reactor_name(&self) -> &'static str {
         self.inner

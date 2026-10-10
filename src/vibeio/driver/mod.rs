@@ -490,6 +490,7 @@ pub enum AnyDriver {
 }
 
 impl AnyDriver {
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     /// The selected driver, rather than the platform's preferred backend.
     pub(crate) fn name(&self) -> &'static str {
         match self {

@@ -34,6 +34,7 @@ use crate::engine::{CallbackKind, LoopCore, PyTimerHandle};
 
 #[pymethods]
 impl PyLoop {
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyLoop"))]
     /// Diagnostics for the runtime owned by this loop, not a platform guess.
     fn runtime_info(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let info = PyDict::new(py);
