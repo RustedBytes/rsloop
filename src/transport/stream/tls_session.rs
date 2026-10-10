@@ -178,7 +178,14 @@ pub(super) fn complete_tls_handshake(
     timeout: Duration,
     server: Option<&Weak<ServerCore>>,
 ) -> io::Result<()> {
-    let deadline = std::time::Instant::now() + timeout;
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "TLS handshake timeout is too large",
+            )
+        })?;
     loop {
         if tls_server_closed(server) {
             return Err(io::Error::new(
@@ -456,6 +463,10 @@ mod tests {
         let err = complete_tls_handshake(&tls_state, Duration::ZERO, None)
             .expect_err("zero timeout should fail before handshake I/O");
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+
+        let err = complete_tls_handshake(&tls_state, Duration::MAX, None)
+            .expect_err("unrepresentable deadline should fail before handshake I/O");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 
         crate::initialize_python_for_tests();
         Python::attach(|py| {

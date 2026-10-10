@@ -576,9 +576,11 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
     if backend != "rsloop" and not hasattr(asyncio.StreamWriter, "start_tls"):
         pytest.skip("stdlib StreamWriter.start_tls requires Python 3.11+")
     timeouts = {"ssl_handshake_timeout": 3}
-    if backend == "rsloop" or "ssl_shutdown_timeout" in inspect.signature(
-        asyncio.StreamWriter.start_tls
-    ).parameters:
+    if (
+        backend == "rsloop"
+        or "ssl_shutdown_timeout"
+        in inspect.signature(asyncio.StreamWriter.start_tls).parameters
+    ):
         timeouts["ssl_shutdown_timeout"] = 1
     factory = (
         pytest.importorskip("uvloop").new_event_loop
@@ -602,12 +604,7 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
                 await writer.drain()
                 await server_go.wait()
                 old_transport = writer.transport
-                assert (
-                    await writer.start_tls(
-                        server_ctx, **timeouts
-                    )
-                    is None
-                )
+                assert await writer.start_tls(server_ctx, **timeouts) is None
                 assert writer.transport is not old_transport
                 # Older asyncio versions retain the reader's private transport.
                 if backend == "rsloop":
@@ -826,3 +823,18 @@ def test_start_tls_cancellation_finishes_wait_closed(tmp_path, monkeypatch):
             await server.wait_closed()
 
     rsloop.run(asyncio.wait_for(main(), 5))
+
+
+@pytest.mark.parametrize("keyword", ["ssl_handshake_timeout", "ssl_shutdown_timeout"])
+@pytest.mark.parametrize("value", [-1.0, float("nan"), sys.float_info.max])
+def test_tls_timeout_validation_reports_value_error(tmp_path, keyword, value):
+    server_ctx, _ = make_ssl_contexts(str(tmp_path))
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        with pytest.raises(ValueError, match=keyword):
+            await loop.create_server(
+                asyncio.Protocol, "127.0.0.1", 0, ssl=server_ctx, **{keyword: value}
+            )
+
+    rsloop.run(main())
