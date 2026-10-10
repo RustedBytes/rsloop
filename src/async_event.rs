@@ -30,17 +30,102 @@ impl AsyncEvent {
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AsyncEvent"))]
     pub fn notify_all(&self) {
-        let mut waiters = self.waiters.lock().expect("poisoned async event waiters");
-        let drained = waiters.drain(..);
-        for waiter in drained {
+        let mut pending = {
+            let mut waiters = self.waiters.lock().expect("poisoned async event waiters");
+            if waiters.is_empty() {
+                return;
+            }
+            std::mem::take(&mut *waiters)
+        };
+        // Sending can invoke an arbitrary waker synchronously. Notify this
+        // snapshot outside the lock; reentrant listeners belong to the next
+        // one.
+        for waiter in pending.drain(..) {
             let _ = waiter.send(());
+        }
+        // Reuse the allocation when callbacks/concurrent threads have not
+        // registered more waiters. Never overwrite their live registrations.
+        let mut waiters = self.waiters.lock().expect("poisoned async event waiters");
+        if waiters.is_empty() && pending.capacity() > waiters.capacity() {
+            *waiters = pending;
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        task::{Context, Wake, Waker},
+    };
+
     use super::AsyncEvent;
+
+    #[test]
+    fn notification_callbacks_can_register_the_next_listener() {
+        struct RegisterListener {
+            event: Arc<AsyncEvent>,
+            unlocked: AtomicBool,
+            next: Mutex<Option<futures::channel::oneshot::Receiver<()>>>,
+        }
+        impl Wake for RegisterListener {
+            fn wake(self: Arc<Self>) {
+                self.wake_by_ref();
+            }
+
+            fn wake_by_ref(self: &Arc<Self>) {
+                // Detect the old deadlock without making the test hang.
+                let unlocked = self.event.waiters.try_lock().is_ok();
+                self.unlocked.store(unlocked, Ordering::Relaxed);
+                if unlocked {
+                    *self.next.lock().unwrap() = Some(self.event.listen());
+                }
+            }
+        }
+
+        let event = Arc::new(AsyncEvent::new());
+        let callback = Arc::new(RegisterListener {
+            event: Arc::clone(&event),
+            unlocked: AtomicBool::new(false),
+            next: Mutex::new(None),
+        });
+        let waker = Waker::from(Arc::clone(&callback));
+        let mut first = event.listen();
+        assert!(
+            Pin::new(&mut first)
+                .poll(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+
+        event.notify_all();
+        assert!(callback.unlocked.load(Ordering::Relaxed));
+        assert_eq!(first.try_recv().unwrap(), Some(()));
+        let mut next = callback.next.lock().unwrap().take().unwrap();
+        assert_eq!(next.try_recv().unwrap(), None);
+        event.notify_all();
+        assert_eq!(next.try_recv().unwrap(), Some(()));
+    }
+
+    #[test]
+    fn notification_reuses_waiter_capacity_between_bursts() {
+        let event = AsyncEvent::new();
+        let mut listeners: Vec<_> = (0..16).map(|_| event.listen()).collect();
+        let capacity = event.waiters.lock().unwrap().capacity();
+        event.notify_all();
+        assert!(
+            listeners
+                .iter_mut()
+                .all(|listener| listener.try_recv().unwrap() == Some(()))
+        );
+        assert_eq!(event.waiters.lock().unwrap().capacity(), capacity);
+        event.notify_all();
+        assert_eq!(event.waiters.lock().unwrap().capacity(), capacity);
+    }
 
     #[test]
     fn notification_wakes_all_current_listeners() {

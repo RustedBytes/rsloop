@@ -137,26 +137,44 @@ pub fn server_tls_settings(
     })
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum TimeoutValueError {
+    NotPositiveFinite,
+    TooLarge,
+}
+
+/// Convert scalar input without Python interaction or panicking on overflow.
+#[cfg_attr(feature = "profile", hotpath::measure)]
+fn timeout_duration(value: f64) -> Result<Duration, TimeoutValueError> {
+    if !value.is_finite() || value <= 0.0 {
+        return Err(TimeoutValueError::NotPositiveFinite);
+    }
+    Duration::try_from_secs_f64(value).map_err(|_| TimeoutValueError::TooLarge)
+}
+
+#[cfg_attr(feature = "profile", hotpath::measure)]
+fn python_timeout(value: Option<f64>, default: f64, parameter: &str) -> PyResult<Duration> {
+    timeout_duration(value.unwrap_or(default)).map_err(|error| {
+        let detail = match error {
+            TimeoutValueError::NotPositiveFinite => "must be a positive finite number",
+            TimeoutValueError::TooLarge => "is too large",
+        };
+        PyValueError::new_err(format!("{parameter} {detail}"))
+    })
+}
+
 #[cfg_attr(feature = "profile", hotpath::measure)]
 fn handshake_timeout(value: Option<f64>) -> PyResult<Duration> {
-    let secs = value.unwrap_or(DEFAULT_HANDSHAKE_TIMEOUT_SECS);
-    if !secs.is_finite() || secs <= 0.0 {
-        return Err(PyValueError::new_err(
-            "ssl_handshake_timeout must be a positive finite number",
-        ));
-    }
-    Ok(Duration::from_secs_f64(secs))
+    python_timeout(
+        value,
+        DEFAULT_HANDSHAKE_TIMEOUT_SECS,
+        "ssl_handshake_timeout",
+    )
 }
 
 #[cfg_attr(feature = "profile", hotpath::measure)]
 fn shutdown_timeout(value: Option<f64>) -> PyResult<Duration> {
-    let secs = value.unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT_SECS);
-    if !secs.is_finite() || secs <= 0.0 {
-        return Err(PyValueError::new_err(
-            "ssl_shutdown_timeout must be a positive finite number",
-        ));
-    }
-    Ok(Duration::from_secs_f64(secs))
+    python_timeout(value, DEFAULT_SHUTDOWN_TIMEOUT_SECS, "ssl_shutdown_timeout")
 }
 
 #[cfg_attr(feature = "profile", hotpath::measure)]
@@ -371,4 +389,61 @@ fn build_server_config(py: Python<'_>, ssl_context: &Py<PyAny>) -> PyResult<Serv
 #[cfg_attr(feature = "profile", hotpath::measure)]
 fn default_protocol_versions() -> &'static [&'static SupportedProtocolVersion] {
     rustls::DEFAULT_VERSIONS
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::*;
+
+    #[test]
+    fn timeout_values_preserve_defaults_rounding_and_invalid_classification() {
+        assert_eq!(handshake_timeout(None).unwrap(), Duration::from_secs(60));
+        assert_eq!(shutdown_timeout(None).unwrap(), Duration::from_secs(30));
+        for value in [f64::MIN_POSITIVE, 0.000_000_000_1, 0.25, 1.5, 1e10] {
+            assert_eq!(
+                timeout_duration(value).unwrap(),
+                Duration::from_secs_f64(value)
+            );
+        }
+        for value in [0.0, -0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(
+                timeout_duration(value),
+                Err(TimeoutValueError::NotPositiveFinite)
+            );
+        }
+        assert_eq!(timeout_duration(f64::MAX), Err(TimeoutValueError::TooLarge));
+    }
+
+    #[test]
+    fn invalid_timeout_messages_keep_the_parameter_name() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            type ParseTimeout = fn(Option<f64>) -> PyResult<Duration>;
+            for (parse, name) in [
+                (handshake_timeout as ParseTimeout, "ssl_handshake_timeout"),
+                (shutdown_timeout, "ssl_shutdown_timeout"),
+            ] {
+                let error = parse(Some(-1.0)).unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py));
+                assert_eq!(
+                    error.value(py).to_string(),
+                    format!("{name} must be a positive finite number")
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn oversized_timeouts_report_python_errors_instead_of_panicking() {
+        crate::initialize_python_for_tests();
+        Python::attach(|py| {
+            for parse in [handshake_timeout, shutdown_timeout] {
+                let outcome = std::panic::catch_unwind(|| parse(Some(f64::MAX)));
+                assert!(outcome.is_ok(), "timeout conversion must not panic");
+                let error = outcome.unwrap().unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py));
+                assert!(error.to_string().contains("too large"));
+            }
+        });
+    }
 }

@@ -88,86 +88,162 @@ impl Interval {
         hotpath::measure(impl_type = "Interval", future = true)
     )]
     async fn tick_at(&mut self, now: Instant) -> u64 {
-        // Determine base next (the previous next_deadline or now+period)
-        let base_next = self
-            .next_deadline
-            .unwrap_or_else(|| super::deadline_after(now, self.period));
-
-        match self.missed_tick_behavior {
-            MissedTickBehavior::Skip => {
-                // Advance target forward until it's in the future.
-                let mut target = base_next;
-                if target <= now {
-                    if self.period.as_nanos() == 0 {
-                        target = now;
-                    } else {
-                        // Advance directly to the first cadence boundary after
-                        // `now`; iterating once per missed period can otherwise
-                        // make an old interval stall the executor.
-                        let elapsed = now.duration_since(target);
-                        target = super::deadline_after(
-                            now,
-                            self.period - duration_remainder(elapsed, self.period),
-                        );
-                    }
-                }
-
+        let (ticks, next_deadline) = match plan_tick(
+            self.period,
+            self.next_deadline,
+            self.missed_tick_behavior,
+            now,
+        ) {
+            TickPlan::WaitUntil(target) => {
                 Sleep::sleep_until_with_zero_behavior(target, super::sleep::ZeroBehavior::Yield)
                     .await;
-
-                // Schedule next deadline for subsequent tick
-                self.next_deadline = Some(super::deadline_after(target, self.period));
-                1
+                (1, super::deadline_after(target, self.period))
             }
-            MissedTickBehavior::CatchUp => {
-                if base_next > now {
-                    // Not missed yet: sleep until base_next and return 1
-                    Sleep::sleep_until_with_zero_behavior(
-                        base_next,
-                        super::sleep::ZeroBehavior::Yield,
-                    )
+            TickPlan::CatchUp {
+                ticks,
+                next_deadline,
+            } => (ticks, next_deadline),
+            TickPlan::YieldAndReset => {
+                Sleep::new_with_zero_behavior(Duration::ZERO, super::sleep::ZeroBehavior::Yield)
                     .await;
-                    self.next_deadline = Some(super::deadline_after(base_next, self.period));
-                    1
-                } else {
-                    // We missed one or more ticks. Compute how many.
-                    if self.period.as_nanos() == 0 {
-                        // A zero-period catch-up loop must still let other
-                        // tasks run, just as zero-period Skip mode does.
-                        Sleep::new_with_zero_behavior(
-                            Duration::ZERO,
-                            super::sleep::ZeroBehavior::Yield,
-                        )
-                        .await;
-                        self.next_deadline = Some(Instant::now());
-                        return 1;
-                    }
-
-                    let elapsed = now.duration_since(base_next);
-                    let missed = (elapsed.as_nanos() / self.period.as_nanos())
-                        .saturating_add(1)
-                        .min(u64::MAX as u128) as u64;
-
-                    // The next deadline is the first cadence boundary after
-                    // `now`. `missed` already accounts for the tick at
-                    // `base_next`, so adding another period would skip a tick.
-                    let new_next = super::deadline_after(
-                        now,
-                        self.period - duration_remainder(elapsed, self.period),
-                    );
-                    self.next_deadline = Some(new_next);
-
-                    // Return the number of missed ticks so caller can catch up.
-                    missed
-                }
+                (1, Instant::now())
             }
-        }
+        };
+        // Commit only after the wait completes. Dropping a pending tick leaves
+        // the previous schedule intact, including zero-period catch-up ticks.
+        self.next_deadline = Some(next_deadline);
+        ticks
+    }
+}
+
+/// Scheduling decisions contain no timer registration, clock read or mutation.
+#[derive(Debug, PartialEq, Eq)]
+enum TickPlan {
+    WaitUntil(Instant),
+    CatchUp { ticks: u64, next_deadline: Instant },
+    YieldAndReset,
+}
+
+#[cfg_attr(feature = "profile", hotpath::measure)]
+#[inline]
+fn plan_tick(
+    period: Duration,
+    next_deadline: Option<Instant>,
+    behavior: MissedTickBehavior,
+    now: Instant,
+) -> TickPlan {
+    let base_next = next_deadline.unwrap_or_else(|| super::deadline_after(now, period));
+    if base_next > now {
+        return TickPlan::WaitUntil(base_next);
+    }
+    if period.is_zero() {
+        return match behavior {
+            MissedTickBehavior::Skip => TickPlan::WaitUntil(now),
+            MissedTickBehavior::CatchUp => TickPlan::YieldAndReset,
+        };
+    }
+
+    let elapsed = now.duration_since(base_next);
+    // Jump to the first cadence boundary after now, independent of the number
+    // of missed periods. The remainder preserves sub-millisecond precision.
+    let next = super::deadline_after(now, period - duration_remainder(elapsed, period));
+    match behavior {
+        MissedTickBehavior::Skip => TickPlan::WaitUntil(next),
+        MissedTickBehavior::CatchUp => TickPlan::CatchUp {
+            ticks: (elapsed.as_nanos() / period.as_nanos())
+                .saturating_add(1)
+                .min(u64::MAX as u128) as u64,
+            next_deadline: next,
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tick_plan_preserves_cadence_at_and_between_boundaries() {
+        let base = Instant::now();
+        for period_ns in [1, 3, 100_000_000] {
+            let period = Duration::from_nanos(period_ns);
+            for elapsed_ns in [0, 1, period_ns - 1, period_ns, 17 * period_ns + 1] {
+                let now = base + Duration::from_nanos(elapsed_ns);
+                // An intentionally simple bounded reference: advance one tick
+                // at a time rather than reuse the production remainder formula.
+                let mut next = base;
+                let mut ticks = 0;
+                while next <= now {
+                    next += period;
+                    ticks += 1;
+                }
+                assert_eq!(
+                    plan_tick(period, Some(base), MissedTickBehavior::Skip, now),
+                    TickPlan::WaitUntil(next)
+                );
+                assert_eq!(
+                    plan_tick(period, Some(base), MissedTickBehavior::CatchUp, now),
+                    TickPlan::CatchUp {
+                        ticks,
+                        next_deadline: next
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tick_plan_distinguishes_initial_future_and_zero_period_ticks() {
+        let now = Instant::now();
+        let period = Duration::from_secs(1);
+        let future = now + period;
+        for behavior in [MissedTickBehavior::Skip, MissedTickBehavior::CatchUp] {
+            assert_eq!(
+                plan_tick(period, None, behavior, now),
+                TickPlan::WaitUntil(future)
+            );
+            assert_eq!(
+                plan_tick(period, Some(future), behavior, now),
+                TickPlan::WaitUntil(future)
+            );
+            // An explicit future first tick must still wait with a zero period.
+            assert_eq!(
+                plan_tick(Duration::ZERO, Some(future), behavior, now),
+                TickPlan::WaitUntil(future)
+            );
+        }
+        assert_eq!(
+            plan_tick(Duration::ZERO, None, MissedTickBehavior::Skip, now),
+            TickPlan::WaitUntil(now)
+        );
+        assert_eq!(
+            plan_tick(Duration::ZERO, None, MissedTickBehavior::CatchUp, now),
+            TickPlan::YieldAndReset
+        );
+    }
+
+    #[test]
+    fn cancelling_future_tick_preserves_explicit_and_initial_schedules() {
+        Runtime::new(AnyDriver::new_mock()).block_on(async {
+            let now = Instant::now();
+            for behavior in [MissedTickBehavior::Skip, MissedTickBehavior::CatchUp] {
+                for original in [None, Some(now + Duration::from_secs(60))] {
+                    let mut interval = Interval::new(Duration::from_secs(60));
+                    interval.set_missed_tick_behavior(behavior);
+                    interval.next_deadline = original;
+                    {
+                        let mut tick = std::pin::pin!(interval.tick_at(now));
+                        assert!(
+                            tick.as_mut()
+                                .poll(&mut Context::from_waker(Waker::noop()))
+                                .is_pending()
+                        );
+                    }
+                    assert_eq!(interval.next_deadline, original);
+                }
+            }
+        });
+    }
 
     #[test]
     fn overdue_large_period_saturates_its_next_deadline() {
