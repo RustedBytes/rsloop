@@ -490,6 +490,21 @@ pub enum AnyDriver {
 }
 
 impl AnyDriver {
+    /// The selected driver, rather than the platform's preferred backend.
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::Mock(_) => "mock",
+            #[cfg(windows)]
+            Self::Iocp(_) => "iocp",
+            #[cfg(unix)]
+            Self::Mio(_) => "mio",
+            #[cfg(target_vendor = "apple")]
+            Self::Kqueue(_) => "kqueue",
+            #[cfg(target_os = "linux")]
+            Self::IoUring(_) => "io_uring",
+        }
+    }
+
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "AnyDriver"))]
     #[cfg(unix)]
     #[inline]

@@ -27,6 +27,7 @@ use super::{
     io_targets::{StreamKind, TaskedDirectWriter},
     stats::{TRANSPORT_DIRECT_WRITE_ATTEMPTS, TRANSPORT_STAGED_WRITES, transport_stats_enabled},
     stop_socket_reader, tcp_stream_from_owned_socket_fd,
+    tls_transport::ServerConnectionLease,
     tuning::{
         SMALL_WRITE_COALESCE_MAX_BYTES, SMALL_WRITE_COALESCE_MIN_BYTES, max_write_buffer_size,
     },
@@ -664,7 +665,7 @@ impl StreamTransportCore {
     pub(super) fn upgrade_stream(
         self: &Arc<Self>,
         py: Python<'_>,
-    ) -> PyResult<(TransportSpawnContext, StreamKind)> {
+    ) -> PyResult<(TransportSpawnContext, StreamKind, ServerConnectionLease)> {
         self.flush_pending_direct_write();
         let protocol = self.get_protocol(py);
         let context = self
@@ -692,6 +693,13 @@ impl StreamTransportCore {
         }
 
         self.detach_underlying_stream(py);
+        let server_connection = ServerConnectionLease(
+            self.state
+                .lock()
+                .expect("poisoned transport state")
+                .server
+                .take(),
+        );
         let _ = self.writer_tx.send(WriterCommand::Stop);
         if let Some(fd) = self.runtime_socket_fd() {
             stop_socket_reader(self, fd).map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -720,6 +728,7 @@ impl StreamTransportCore {
                 context_needs_run,
             ),
             stream,
+            server_connection,
         ))
     }
 
