@@ -575,17 +575,23 @@ class TestTls:
 def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
     if backend != "rsloop" and not hasattr(asyncio.StreamWriter, "start_tls"):
         pytest.skip("stdlib StreamWriter.start_tls requires Python 3.11+")
-    timeouts = {"ssl_handshake_timeout": 10}
+    timeouts = {"ssl_handshake_timeout": 3}
     if (
         backend == "rsloop"
         or "ssl_shutdown_timeout"
         in inspect.signature(asyncio.StreamWriter.start_tls).parameters
     ):
         timeouts["ssl_shutdown_timeout"] = 1
+    # Use the same selector-based stdlib reference on every platform.
+    # Windows CPython 3.11 ProactorEventLoop intermittently stalls this
+    # STARTTLS exchange after the client completes its handshake. Native
+    # rsloop/IOCP remains covered by the rsloop parameter on Windows.
     factory = (
         pytest.importorskip("uvloop").new_event_loop
         if backend == "uvloop"
-        else (asyncio if backend == "asyncio" else rsloop).new_event_loop
+        else (
+            asyncio.SelectorEventLoop if backend == "asyncio" else rsloop.new_event_loop
+        )
     )
     server_ctx, client_ctx = make_ssl_contexts(str(tmp_path))
 
@@ -596,10 +602,6 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
         client_started = asyncio.Event()
         done = loop.create_future()
         callbacks = 0
-        started_at = loop.time()
-
-        def trace(stage):
-            print(f"STARTTLS {stage}: {loop.time() - started_at:.3f}s", flush=True)
 
         async def serve(reader, writer):
             nonlocal callbacks
@@ -617,9 +619,7 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
                 await server_go.wait()
                 old_transport = writer.transport
                 server_started.set()
-                trace("server handshake start")
                 assert await writer.start_tls(server_ctx, **timeouts) is None
-                trace("server handshake done")
                 assert writer.transport is not old_transport
                 # Older asyncio versions retain the reader's private transport.
                 if backend == "rsloop":
@@ -630,7 +630,6 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
                 writer.write(b"encrypted reply")
                 await writer.drain()
             except BaseException as exc:  # noqa: BLE001 - forward callback failure to test
-                trace(f"server error: {exc!r}")
                 if not done.done():
                     done.set_exception(exc)
             finally:
@@ -655,7 +654,6 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
 
                 async def upgrade_client():
                     client_started.set()
-                    trace("client handshake start")
                     return await writer.start_tls(
                         client_ctx,
                         server_hostname="localhost",
@@ -667,7 +665,6 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
                     await client_started.wait()
                     server_go.set()
                 assert await upgrade is None
-                trace("client handshake done")
                 assert writer.transport is not old_transport
                 if backend == "rsloop":
                     assert cast(Any, reader)._transport is writer.transport
@@ -689,7 +686,7 @@ def test_stream_writer_start_tls_round_trip(tmp_path, backend, client_first):
 
     loop = factory()
     try:
-        loop.run_until_complete(asyncio.wait_for(main(), 20))
+        loop.run_until_complete(asyncio.wait_for(main(), 10))
     finally:
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()

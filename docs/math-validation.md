@@ -100,3 +100,22 @@ connections) passed. The local full suite had 416 passes, 2 Unix-socket EPERM
 failures and 68 skips (optional uvloop/Redis dependencies, Winsock and profile
 build). These checks supplement the earlier GIL-enabled validation above;
 stress success does not constitute a proof for arbitrary interleavings.
+
+
+## CI follow-up: STARTTLS comparison fixture
+
+Windows CPython 3.11.9 intermittently timed out in the **stdlib Proactor**
+parameter of `test_stream_writer_start_tls_round_trip`, after the client
+handshake returned while the server handshake remained pending. Native rsloop
+parameters passed. Explicit start events and pausing baseline plaintext reads
+before READY prevent early ClientHello from being stranded in the plaintext
+reader, but did not eliminate the Proactor failure. A diagnostic run with a
+longer deadline passed in under 0.19 s; this does not establish that the old
+3-second deadline was too short.
+
+The comparison now explicitly uses `asyncio.SelectorEventLoop` on all platforms,
+alongside uvloop where available and rsloop. This keeps the stdlib reference
+consistent across OSes; it does not repair or verify Windows Proactor STARTTLS.
+The original deadlines are retained. Native rsloop/IOCP STARTTLS remains in the
+Windows matrix, including both client-first and server-first upgrade order.
+The test runner reports the ten slowest tests to aid future CI diagnosis.
