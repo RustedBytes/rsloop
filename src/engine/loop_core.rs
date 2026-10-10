@@ -723,8 +723,10 @@ impl LoopCore {
         ensure_running_loop(py, &loop_obj)?;
         self.mark_runtime_thread();
         let mut local_timers = LocalTimers::new(self);
-        let mut local_ready = VecDeque::new();
-        self.install_local_ready_queue(&mut local_ready);
+        // Greenlets can copy this run's C stack out while a callback executes.
+        // TLS must point to heap storage, not a queue header on that stack.
+        let mut local_ready = Box::new(VecDeque::new());
+        self.install_local_ready_queue(&mut *local_ready);
 
         let mut pending_signal_error: Option<PyErr> = None;
         let mut ready_batch = VecDeque::new();
@@ -787,7 +789,7 @@ impl LoopCore {
                     // hot stream of locally-scheduled callbacks.
                     if !local_ready.is_empty() {
                         if ready_batch.is_empty() {
-                            std::mem::swap(&mut ready_batch, &mut local_ready);
+                            std::mem::swap(&mut ready_batch, &mut *local_ready);
                         } else {
                             ready_batch.extend(local_ready.drain(..));
                         }
@@ -1686,9 +1688,11 @@ impl LoopCore {
                 return Err(item);
             }
 
-            // SAFETY: `ready` points to run_forever's stack-local queue on this
-            // thread. Neither callback invocation nor runtime polling holds a
-            // mutable reference to it across this call.
+            // SAFETY: `ready` points to run_forever's heap-allocated queue on
+            // this thread, stable even across greenlet stack switches. Neither
+            // callback invocation nor runtime polling holds a mutable reference
+            // to it across this call. TLS is cleared before the allocation
+            // drops.
             unsafe { (*ready).push_back(item) };
             if !tls.drain_active.get() {
                 // I/O futures are polled with Python detached, but still on

@@ -485,14 +485,15 @@ impl StreamTransportCore {
             )
         };
 
-        if let Some(fast_path) = fast_path.as_ref() {
-            fast_path.connection_lost(py, exc)?;
+        let result = if let Some(fast_path) = fast_path.as_ref() {
+            fast_path.connection_lost(py, exc)
         } else {
             let arg = exc
                 .map(|err| err.value(py).clone().unbind().into_any())
                 .unwrap_or_else(|| py.None());
-            self.call_protocol_method1(py, &callback, &context, context_needs_run, arg)?;
-        }
+            self.call_protocol_method1(py, &callback, &context, context_needs_run, arg)
+                .map(|_| ())
+        };
 
         // Preserve asyncio's post-close get_extra_info("socket") behavior
         // without retaining the live shared owner through Python reference
@@ -504,6 +505,22 @@ impl StreamTransportCore {
         if let Some(server) = server.and_then(|weak| weak.upgrade()) {
             server.connection_lost();
         }
-        Ok(())
+        // Even a failing connection_lost must break protocol -> transport ->
+        // protocol cycles. Bound methods and fast-reader caches also own Python
+        // references. Drop them outside the mutex: finalizers may reenter us.
+        let released = {
+            let mut state = self.state.lock().expect("poisoned transport state");
+            state.context_needs_run = false;
+            (
+                std::mem::replace(&mut state.protocol, py.None()),
+                std::mem::replace(
+                    &mut state.callbacks,
+                    super::protocol::ProtocolCallbacks::cleared(py),
+                ),
+                std::mem::replace(&mut state.context, py.None()),
+            )
+        };
+        drop(released);
+        result
     }
 }

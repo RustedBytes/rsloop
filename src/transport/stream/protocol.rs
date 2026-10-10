@@ -36,6 +36,25 @@ pub(super) struct ProtocolCallbacks {
     pub(super) stream_reader_fast_path: Option<StreamReaderFastPath>,
 }
 
+impl ProtocolCallbacks {
+    /// No protocol callbacks may run after connection_lost has been delivered.
+    /// Release cached bound methods and fast readers as well as the protocol.
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ProtocolCallbacks"))]
+    pub(super) fn cleared(py: Python<'_>) -> Self {
+        Self {
+            connection_made: py.None(),
+            data_received: None,
+            eof_received: None,
+            connection_lost: py.None(),
+            pause_writing: py.None(),
+            resume_writing: py.None(),
+            get_buffer: None,
+            buffer_updated: None,
+            stream_reader_fast_path: None,
+        }
+    }
+}
+
 pub(super) enum StreamReaderFastPath {
     Native {
         protocol: Py<PyFastStreamProtocol>,

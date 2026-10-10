@@ -256,8 +256,20 @@ impl ProcessTransportCore {
         let arg = exc
             .map(|err| err.value(py).clone().unbind().into_any())
             .unwrap_or_else(|| py.None());
-        self.call_protocol_method1(py, "connection_lost", arg)?;
-        Ok(())
+        let result = self.call_protocol_method1(py, "connection_lost", arg);
+        // Subprocess protocols commonly store their transport too. Release
+        // references even if the callback fails, outside the state lock so
+        // Python finalizers can safely reenter the transport.
+        let released = {
+            let mut state = self.state.lock().expect("poisoned process state");
+            state.context_needs_run = false;
+            (
+                std::mem::replace(&mut state.protocol, py.None()),
+                std::mem::replace(&mut state.context, py.None()),
+            )
+        };
+        drop(released);
+        result.map(|_| ())
     }
 
     #[cfg_attr(

@@ -85,6 +85,37 @@ aiosqlite 0.22.1 and uvloop 0.23.0. These cases did not reproduce a new rsloop
 defect; no production implementation change was needed. See the PR checks for
 platform-specific execution results.
 
+## Greenlet re-entry and transport ownership regressions
+
+`tests/ecosystem/test_greenlet_reentry.py` covers the two-run lifecycle used by
+ASGI servers: start background tasks, then re-enter the loop from a deeper C
+stack. It tests a minimal greenlet bridge and SQLAlchemy's `greenlet_spawn` at
+depths 0, 2, 4, 8, 50 and 100. Each case runs in a subprocess with a deadline and
+faulthandler, verifies progress by both contending tasks, and verifies cancellation
+completes. No database is required. The active ready queue lives on the heap so
+greenlet stack copying cannot invalidate its thread-local pointer.
+
+`tests/test_transport_protocol_release.py` checks that closed TCP and subprocess
+transports release protocols that retain their transport, including when
+`connection_lost` raises. It also checks release of `StreamReaderProtocol` and its
+cached reader. These tests use weak references and garbage collection rather than
+RSS, which can vary with allocator behavior. Stream teardown clears the protocol,
+cached bound methods, fast-reader references and saved context after delivering
+`connection_lost`; `get_protocol()` then returns `None`. This breaks the closed
+connection cycle without making native transports cyclic-GC types.
+
+Run both regression groups with:
+
+```sh
+uv run --no-sync python scripts/run_python_tests.py \
+  tests/test_transport_protocol_release.py tests/ecosystem/test_greenlet_reentry.py -m ''
+```
+
+These regressions reproduce the scheduling and ownership mechanisms reported in
+[issue #115](https://github.com/RustedBytes/rsloop/issues/115) and
+[issue #116](https://github.com/RustedBytes/rsloop/issues/116). They do not replace
+end-to-end Granian/PostgreSQL load or shutdown testing.
+
 ## PostgreSQL contracts
 
 `tests/ecosystem/test_postgresql.py` adds 36 cases: asyncpg and SQLAlchemy
