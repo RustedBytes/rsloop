@@ -238,6 +238,21 @@ uv run python -m pytest tests/test_compat.py
 uv run python -m pytest tests/test_tls.py -k start_tls
 ```
 
+Writer lifecycle contracts are exercised with:
+
+```bash
+uv run python -m pytest tests/test_stream_writer_lifecycle.py
+```
+
+These tests compare asyncio, rsloop and optional uvloop over loopback TCP.
+They cover concurrent drains against a slow peer, cancellation and timeout
+cleanup while writing remains paused, ordered delivery through close/half-close,
+shutdown of pending drains, and error precedence. Events establish when drains
+are pending; a raw peer controls when bytes can be consumed. Protocol callbacks
+exercise prolonged pause deterministically without depending on kernel buffer
+sizes. Weak references check that cancelled waits are released before resume.
+Tests also check for leaked tasks and unhandled loop exceptions.
+
 CI and `just test` use `scripts/run_python_tests.py`, which forwards pytest
 arguments and prints recurring stack dumps when tests stop making progress.
 For the same diagnostics locally, run `uv run python scripts/run_python_tests.py`.

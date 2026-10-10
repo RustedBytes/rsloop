@@ -2164,7 +2164,57 @@ pub struct PyFastStreamProtocol {
     over_ssl: bool,
 }
 
+/// Remove completed drains even if a stalled peer never resumes writing.
+/// The weak reference avoids a protocol -> Future -> callback -> protocol
+/// cycle.
+#[pyclass(module = "rsloop._loop")]
+struct PyDrainWaiterDone {
+    protocol: Py<PyWeakrefReference>,
+}
+
+#[pymethods]
+impl PyDrainWaiterDone {
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "PyDrainWaiterDone"))]
+    fn __call__(&self, py: Python<'_>, future: &Bound<'_, PyAny>) -> PyResult<()> {
+        if let Some(protocol) = self.protocol.bind(py).upgrade() {
+            protocol
+                .cast::<PyFastStreamProtocol>()?
+                .try_borrow_mut()?
+                .drain_waiters
+                .retain(|waiter| !waiter.bind(py).is(future));
+        }
+        Ok(())
+    }
+}
+
 impl PyFastStreamProtocol {
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "PyFastStreamProtocol")
+    )]
+    fn watch_drain_waiter(
+        slf: PyRefMut<'_, Self>,
+        py: Python<'_>,
+        future: Py<PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        // Ready drains keep their allocation-free fast path.
+        if slf
+            .drain_waiters
+            .last()
+            .is_some_and(|waiter| waiter.bind(py).is(future.bind(py)))
+        {
+            let protocol = slf.into_pyobject(py)?;
+            let callback = Py::new(
+                py,
+                PyDrainWaiterDone {
+                    protocol: PyWeakrefReference::new(&protocol)?.unbind(),
+                },
+            )?;
+            future.call_method1(py, "add_done_callback", (callback,))?;
+        }
+        Ok(future)
+    }
+
     #[cfg_attr(
         feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
@@ -2506,8 +2556,9 @@ impl PyFastStreamProtocol {
         feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamProtocol")
     )]
-    fn _drain_helper(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.build_drain_future(py, None)
+    fn _drain_helper(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let future = slf.build_drain_future(py, None)?;
+        Self::watch_drain_waiter(slf, py, future)
     }
 
     #[cfg_attr(
@@ -2715,9 +2766,28 @@ impl PyFastStreamWriter {
             .exception
             .as_ref()
             .map(|exc| exc.clone_ref(py));
-        self.protocol
-            .borrow_mut(py)
-            .build_drain_future(py, reader_exception)
+        // Match StreamWriter.drain(): reader errors take precedence, and a
+        // closing transport must yield so connection_lost can be delivered.
+        if reader_exception.is_none() {
+            let closing =
+                if let Ok(transport) = self.transport.bind(py).cast_exact::<PyStreamTransport>() {
+                    transport.borrow().core.is_closing()
+                } else {
+                    self.transport
+                        .call_method0(py, "is_closing")?
+                        .extract::<bool>(py)?
+                };
+            if closing {
+                return Ok(py
+                    .import("rsloop._stream_writer")?
+                    .getattr("drain_closing")?
+                    .call1((self.protocol.clone_ref(py),))?
+                    .unbind());
+            }
+        }
+        let mut protocol = self.protocol.borrow_mut(py);
+        let future = protocol.build_drain_future(py, reader_exception)?;
+        PyFastStreamProtocol::watch_drain_waiter(protocol, py, future)
     }
 }
 

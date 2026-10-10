@@ -37,11 +37,15 @@ def run(loop, coro):
     return loop.run_until_complete(asyncio.wait_for(coro, 20))
 
 
+@pytest.mark.parametrize("drain_api", ["writer", "protocol"])
 @pytest.mark.parametrize("cancel_mode", ["cancel", "timeout"])
-def test_cancelled_drains_release_waiters_while_still_paused(loop, cancel_mode):
+def test_cancelled_drains_release_waiters_while_still_paused(
+    loop, cancel_mode, drain_api
+):
     async def main():
         _, writer, peer = await connect(loop)
-        protocol = writer.transport.get_protocol()
+        protocol = cast(Any, writer.transport.get_protocol())
+        drain_call = writer.drain if drain_api == "writer" else protocol._drain_helper
         paused = False
         try:
             protocol.pause_writing()
@@ -52,7 +56,7 @@ def test_cancelled_drains_release_waiters_while_still_paused(loop, cancel_mode):
 
                 async def drain():
                     entered.set()
-                    await writer.drain()
+                    await drain_call()
 
                 task = asyncio.create_task(drain())
                 await entered.wait()
@@ -81,7 +85,7 @@ def test_cancelled_drains_release_waiters_while_still_paused(loop, cancel_mode):
 
             async def live_drain():
                 entered.set()
-                await writer.drain()
+                await drain_call()
 
             live = asyncio.create_task(live_drain())
             await entered.wait()
@@ -89,14 +93,14 @@ def test_cancelled_drains_release_waiters_while_still_paused(loop, cancel_mode):
             protocol.resume_writing()
             paused = False
             await live
-            await writer.drain()
+            await drain_call()
 
         finally:
             if paused:
                 protocol.resume_writing()
             peer.close()
             writer.close()
-            await writer.wait_closed()
+            await asyncio.wait_for(writer.wait_closed(), 5)
 
     run(loop, main())
 
@@ -108,6 +112,8 @@ async def connect(loop):
     listener.setblocking(False)
     try:
         reader, writer = await asyncio.open_connection(*listener.getsockname())
+        if isinstance(loop, rsloop.Loop):
+            assert type(writer).__name__ == "PyFastStreamWriter"
         peer, _ = await loop.sock_accept(listener)
         peer.setblocking(False)
         return reader, writer, peer
@@ -127,7 +133,7 @@ def test_drain_yields_when_transport_is_closing(loop):
         finally:
             peer.close()
             writer.close()
-            await writer.wait_closed()
+            await asyncio.wait_for(writer.wait_closed(), 5)
 
     run(loop, main())
 
@@ -188,6 +194,64 @@ def test_slow_peer_concurrent_drains_cancellation_and_ordered_shutdown(loop, fin
             await asyncio.gather(*tasks, return_exceptions=True)
             peer.close()
             writer.close()
-            await writer.wait_closed()
+            await asyncio.wait_for(writer.wait_closed(), 5)
+
+    run(loop, main())
+
+
+def test_reader_error_takes_precedence_over_closing_drain(loop):
+    async def main():
+        reader, writer, peer = await connect(loop)
+        error = OSError("peer failed while closing")
+        try:
+            reader.set_exception(error)
+            writer.close()
+            with pytest.raises(OSError) as raised:
+                await writer.drain()
+            assert raised.value is error
+        finally:
+            peer.close()
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), 5)
+
+    run(loop, main())
+
+
+@pytest.mark.parametrize("finish", ["close", "abort"])
+def test_shutdown_wakes_all_paused_drains(loop, finish):
+    async def main():
+        _, writer, peer = await connect(loop)
+        tasks = []
+        try:
+            writer.transport.get_protocol().pause_writing()
+            started = [asyncio.Event() for _ in range(3)]
+
+            async def drain(index):
+                started[index].set()
+                await writer.drain()
+
+            tasks = [asyncio.create_task(drain(i)) for i in range(3)]
+            for event in started:
+                await event.wait()
+            assert all(not task.done() for task in tasks)
+            tasks[1].cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await tasks[1]
+            getattr(writer.transport, finish)()
+            results = await asyncio.gather(tasks[0], tasks[2], return_exceptions=True)
+            # Graceful connection_lost(None) releases existing drains; a new
+            # drain observes the closed connection and must fail.
+            assert results == [None, None]
+            await asyncio.wait_for(writer.wait_closed(), 5)
+            with pytest.raises(ConnectionResetError):
+                await writer.drain()
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            peer.close()
+            writer.close()
+            await asyncio.wait_for(writer.wait_closed(), 5)
 
     run(loop, main())
