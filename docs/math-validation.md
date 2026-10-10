@@ -78,3 +78,25 @@ Python skips require Winsock, free-threaded Python and a profile extension.
 Windows, macOS, free-threaded Python and a working io_uring backend were not
 executed locally. The IOCP arithmetic itself is compiled and tested on Linux
 through its existing `cfg(any(windows, test))` configuration.
+
+## CI follow-up: free-threaded stream connection handoff
+
+The initial PR CI failed on Linux / Python 3.15t in
+`test_close_flushes_coalesced_server_writes`. The smol worker assembled the
+`open_connection` result by borrowing its protocol while the event loop could
+hold a mutable borrow during data/EOF delivery (`PyBorrowError` in
+`fast_open_connection_result`). This was reproduced locally on CPython
+3.15.0rc3 free-threaded, with `PYTHON_GIL=0`.
+
+Result assembly now follows a direct Python await on the calling loop. It
+cannot run concurrently with that loop's protocol callbacks, and cancellation
+propagates directly to `create_connection`. A deterministic event-based test
+checks cancellation reaches the inner coroutine; another checks thread, loop
+and context identity after completion from a worker thread. A socket stress
+test checks immediate peer data/close during the handoff.
+
+On the fixed free-threaded debug extension, 100 stress iterations (12,800
+connections) passed. The local full suite had 416 passes, 2 Unix-socket EPERM
+failures and 68 skips (optional uvloop/Redis dependencies, Winsock and profile
+build). These checks supplement the earlier GIL-enabled validation above;
+stress success does not constitute a proof for arbitrary interleavings.

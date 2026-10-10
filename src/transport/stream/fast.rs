@@ -7,7 +7,6 @@ use pyo3::{
     sync::PyOnceLock,
     types::{PyByteArray, PyBytes, PyDict, PyTuple, PyWeakrefMethods, PyWeakrefReference},
 };
-use pyo3_async_runtimes::TaskLocals;
 
 use super::{
     PyStreamTransport,
@@ -2861,8 +2860,7 @@ fn fast_open_connection_awaitable(
     port_obj: Py<PyAny>,
     limit: usize,
     kwargs: Option<&Bound<'_, PyDict>>,
-) -> PyResult<(TaskLocals, Py<PyAny>)> {
-    let locals = task_locals_for_loop(py, loop_obj)?;
+) -> PyResult<Py<PyAny>> {
     let factory = Py::new(
         py,
         PyFastProtocolFactory {
@@ -2873,11 +2871,11 @@ fn fast_open_connection_awaitable(
     )?;
     let kwargs = copy_kwargs(py, kwargs)?;
     let create_args = PyTuple::new(py, [factory.into_any(), host_obj, port_obj])?;
-    let awaitable = loop_obj.call_method(py, "create_connection", &create_args, kwargs.as_ref())?;
-    Ok((locals, awaitable))
+    loop_obj.call_method(py, "create_connection", &create_args, kwargs.as_ref())
 }
 
 #[cfg_attr(feature = "profile", hotpath::measure)]
+#[pyfunction]
 fn fast_open_connection_result(py: Python<'_>, created: Py<PyAny>) -> PyResult<Py<PyAny>> {
     let result = created.bind(py).cast::<PyTuple>()?;
     let transport = result.get_item(0)?.unbind();
@@ -2915,20 +2913,21 @@ pub fn open_connection(
     let (host_obj, port_obj) = host_port_objects(py, host, port);
     let loop_obj = native_stream_loop(py)?;
 
-    let (locals, awaitable) =
+    let awaitable =
         fast_open_connection_awaitable(py, &loop_obj, host_obj, port_obj, limit, kwargs)?;
 
-    Ok(
-        crate::rust_async::future_into_py_with_locals(py, locals.clone(), async move {
-            let created = Python::attach(|py| {
-                pyo3_async_runtimes::into_future_with_locals(&locals, awaitable.bind(py).clone())
-            })?
-            .await?;
-
-            Python::attach(|py| fast_open_connection_result(py, created))
-        })?
-        .unbind(),
-    )
+    // Result assembly borrows the protocol to obtain its reader. Keep it on
+    // the loop thread with data_received/connection_lost; a Send bridge runs
+    // on smol workers and races those mutable borrows without the GIL.
+    // Direct Python await also forwards cancellation to create_connection.
+    Ok(py
+        .import("rsloop._stream_connection")?
+        .getattr("open_connection")?
+        .call1((
+            awaitable,
+            wrap_pyfunction!(fast_open_connection_result, py)?,
+        ))?
+        .unbind())
 }
 
 /// Returns an awaitable that starts a stream server.
