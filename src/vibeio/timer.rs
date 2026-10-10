@@ -301,6 +301,99 @@ mod tests {
         timer
     }
 
+    #[test]
+    fn indexed_heap_matches_ordered_model_after_cancellation_and_expiry() {
+        use std::{collections::BTreeMap, sync::Mutex};
+
+        struct RecordWake(usize, Arc<Mutex<Vec<usize>>>);
+        impl std::task::Wake for RecordWake {
+            fn wake(self: Arc<Self>) {
+                self.1.lock().unwrap().push(self.0);
+            }
+        }
+
+        // Fixed seeds make every mixed-operation trace reproducible. The
+        // oracle is an ordered map with independent insertion IDs, not a heap.
+        for seed in 1..=64_u64 {
+            let mut rng = seed;
+            let base = Instant::now();
+            let mut heap = DeadlineHeap::new();
+            let mut model = BTreeMap::new();
+            let mut history = Vec::new();
+            let observed = Arc::new(Mutex::new(Vec::new()));
+            for id in 0..512 {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                let deadline = base + Duration::from_nanos((rng >> 8) % 32);
+                match rng % 4 {
+                    0 | 1 => {
+                        let handle = heap.insert(
+                            deadline,
+                            Waker::from(Arc::new(RecordWake(id, observed.clone()))),
+                        );
+                        model.insert((deadline, id), handle);
+                        history.push(((deadline, id), handle));
+                    }
+                    2 if !history.is_empty() => {
+                        // Include already cancelled/expired handles after slab
+                        // reuse: they must not remove another registration.
+                        let (key, handle) = history[(rng >> 16) as usize % history.len()];
+                        assert_eq!(heap.remove(handle).is_some(), model.remove(&key).is_some());
+                    }
+                    _ => {
+                        let expected: Vec<_> = model
+                            .keys()
+                            .take_while(|(when, _)| *when <= deadline)
+                            .copied()
+                            .collect();
+                        let mut expired = Vec::new();
+                        heap.pop_expired(deadline, &mut expired);
+                        for waker in expired {
+                            waker.wake();
+                        }
+                        let actual = std::mem::take(&mut *observed.lock().unwrap());
+                        assert_eq!(
+                            actual,
+                            expected.iter().map(|(_, id)| *id).collect::<Vec<_>>()
+                        );
+                        for key in expected {
+                            model.remove(&key);
+                        }
+                    }
+                }
+                assert_eq!(heap.entries.len(), model.len(), "seed={seed}, step={id}");
+                assert_eq!(heap.heap.len(), model.len());
+                assert_eq!(
+                    heap.deadline(),
+                    model.first_key_value().map(|((when, _), _)| *when)
+                );
+                for (position, slab_index) in heap.heap.iter().enumerate() {
+                    let entry = &heap.entries[*slab_index];
+                    assert_eq!(entry.heap_index, position);
+                    if position > 0 {
+                        let parent = &heap.entries[heap.heap[(position - 1) / 4]];
+                        assert!(
+                            (parent.deadline, parent.generation)
+                                <= (entry.deadline, entry.generation)
+                        );
+                    }
+                }
+            }
+            let mut expired = Vec::new();
+            heap.pop_expired(base + Duration::from_secs(1), &mut expired);
+            for waker in expired {
+                waker.wake();
+            }
+            assert_eq!(
+                *observed.lock().unwrap(),
+                model.keys().map(|(_, id)| *id).collect::<Vec<_>>()
+            );
+            assert!(heap.heap.is_empty());
+            assert!(heap.entries.is_empty());
+        }
+    }
+
     thread_local! {
         static REENTER: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
     }

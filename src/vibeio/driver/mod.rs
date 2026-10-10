@@ -238,12 +238,18 @@ mod completion_encoding_tests {
     }
 }
 
-/// Reserve Windows INFINITE for an explicitly unbounded wait.
+/// Round positive waits up to milliseconds; reserve Windows INFINITE for None.
 #[cfg_attr(feature = "profile", hotpath::measure)]
 #[cfg(any(windows, test))]
 fn iocp_timeout_ms(timeout: Option<Duration>) -> u32 {
     match timeout {
-        Some(timeout) => timeout.as_millis().min((u32::MAX - 1) as u128) as u32,
+        // Truncation turns sub-millisecond waits into zero-timeout polls and
+        // busy-spins until the deadline. Round first, then cap below INFINITE.
+        // Duration::MAX in nanoseconds fits u128, including div_ceil's result.
+        Some(timeout) => timeout
+            .as_nanos()
+            .div_ceil(1_000_000)
+            .min((u32::MAX - 1) as u128) as u32,
         None => u32::MAX,
     }
 }
@@ -251,6 +257,30 @@ fn iocp_timeout_ms(timeout: Option<Duration>) -> u32 {
 #[cfg(test)]
 mod iocp_timeout_tests {
     use super::*;
+
+    #[test]
+    fn finite_wait_rounding_is_monotone_and_has_less_than_one_ms_error() {
+        // Integer inequalities are an independent oracle for ceil(ns / 1e6).
+        // No floating-point tolerance or wall-clock scheduling is involved.
+        let cap = u128::from(u32::MAX - 1) * 1_000_000;
+        let mut previous = 0;
+        for nanos in
+            (0..2_000_001_u64).chain([cap as u64 - 1, cap as u64, cap as u64 + 1, u64::MAX])
+        {
+            let actual = iocp_timeout_ms(Some(Duration::from_nanos(nanos)));
+            assert!(actual >= previous);
+            assert!(actual < u32::MAX);
+            let represented = u128::from(actual) * 1_000_000;
+            if u128::from(nanos) <= cap {
+                assert!(represented >= u128::from(nanos), "rounded down {nanos} ns");
+                assert!(represented - u128::from(nanos) < 1_000_000);
+            } else {
+                assert_eq!(represented, cap);
+            }
+            assert_eq!(actual == 0, nanos == 0);
+            previous = actual;
+        }
+    }
 
     #[test]
     fn finite_timeouts_never_select_infinite_wait() {
