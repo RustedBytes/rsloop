@@ -122,8 +122,20 @@ PostgreSQL execution on macOS/Windows is not claimed.
 Local validation for this addition: Linux, CPython 3.14.7, release rsloop build;
 66 existing ecosystem cases passed, 36 PostgreSQL cases skipped (no runnable
 PostgreSQL service; container UID restrictions prevent starting the downloaded
-server). Ruff and Pyright passed for the added test module. PostgreSQL results
-must be obtained from the dedicated CI jobs; skips do not establish compatibility.
+server). Ruff and Pyright passed for the added test module. Skips do not establish PostgreSQL compatibility.
+
+[GitHub Actions run 38062646332](https://github.com/RustedBytes/rsloop/actions/runs/38062646332)
+executed the added PostgreSQL suite at code commit `40a9ad8`:
+
+| Actual environment | Result |
+| --- | --- |
+| Linux x86_64, CPython 3.10.22, PostgreSQL 16.15 | 36 passed (asyncio, rsloop, uvloop) |
+| Linux x86_64, CPython 3.14.8, PostgreSQL 16.15 | 36 passed (asyncio, rsloop, uvloop) |
+
+Both jobs used asyncpg 0.32.0, SQLAlchemy 2.0.52 and uvloop 0.23.0.
+These scenarios reproduced no rsloop implementation defect; no production-code
+change was needed. PostgreSQL ran in CI, not locally. This is lifecycle
+compatibility evidence under the listed conditions, not a production-load test.
 
 Primary contracts: [asyncpg pools and transactions](https://magicstack.github.io/asyncpg/current/api/index.html),
 [SQLAlchemy asyncio](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html),
