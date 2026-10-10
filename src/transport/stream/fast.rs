@@ -2109,9 +2109,44 @@ impl PyFastStreamReader {
         feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
-    fn readexactly(mut slf: PyRefMut<'_, Self>, py: Python<'_>, n: usize) -> PyResult<Py<PyAny>> {
+    fn readexactly(
+        mut slf: PyRefMut<'_, Self>,
+        py: Python<'_>,
+        n: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        // Keep the full unsigned size range, including expected sizes reported
+        // at EOF. A signed binding would reject previously accepted lengths.
+        let n = match n.extract::<usize>() {
+            Ok(n) => n,
+            Err(err) => {
+                if err.is_instance_of::<pyo3::exceptions::PyOverflowError>(py) && n.lt(0)? {
+                    let exc = PyValueError::new_err("readexactly size can not be less than zero");
+                    return slf.ready_exception_future(py, exc.into_value(py).into_any());
+                }
+                return Err(err);
+            }
+        };
         let future = slf.build_readexactly_future(py, n)?;
         Self::watch_waiter(slf, py, future)
+    }
+
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "PyFastStreamReader")
+    )]
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "PyFastStreamReader")
+    )]
+    fn __anext__(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        Ok(py
+            .import("rsloop._stream_reader")?
+            .call_method1("next_line", (slf,))?
+            .unbind())
     }
 
     #[cfg_attr(
