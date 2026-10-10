@@ -156,22 +156,43 @@ def test_pipelined_length_prefixed_messages(event_loop, truncated):
 
 
 @pytest.mark.parametrize("method", ["readline", "readuntil", "__anext__"])
-def test_oversized_line_then_next_request(event_loop, method):
+@pytest.mark.parametrize("split_before_delimiter", [False, True])
+def test_oversized_line_then_next_request(event_loop, method, split_before_delimiter):
     async def main():
         async with tcp_pair(limit=8) as ((reader, _), (_, peer_writer)):
-            peer_writer.write(b"x" * 9 + b"\nOK\n")
-            peer_writer.write_eof()
-            if method != "readuntil":
-                with pytest.raises(ValueError):
-                    await getattr(reader, method)()
-            else:
-                with pytest.raises(asyncio.LimitOverrunError) as caught:
-                    await reader.readuntil(b"\n")
-                assert caught.value.consumed == 9
-                # readuntil retains the rejected record, unlike readline.
-                assert await reader.readexactly(10) == b"x" * 9 + b"\n"
-            assert await reader.readline() == b"OK\n"
-            assert await reader.readline() == b""
+            allow_suffix = asyncio.Event()
+
+            async def publish():
+                if split_before_delimiter:
+                    peer_writer.write(b"x" * 9)
+                    await peer_writer.drain()
+                    # Force the overrun to occur before the newline arrives.
+                    await allow_suffix.wait()
+                    peer_writer.write(b"\nOK\n")
+                else:
+                    peer_writer.write(b"x" * 9 + b"\nOK\n")
+                peer_writer.write_eof()
+
+            async with background(publish()):
+                if method != "readuntil":
+                    with pytest.raises(ValueError):
+                        await getattr(reader, method)()
+                else:
+                    with pytest.raises(asyncio.LimitOverrunError) as caught:
+                        await reader.readuntil(b"\n")
+                    assert caught.value.consumed == 9
+                allow_suffix.set()
+                if method == "readuntil":
+                    # readuntil retains the rejected record, unlike readline.
+                    assert await reader.readexactly(10) == b"x" * 9 + b"\n"
+                following = await reader.readline()
+                if following == b"\n":
+                    # readline may reject the prefix before seeing its delimiter,
+                    # even when the peer supplied the entire line in one write.
+                    assert method != "readuntil"
+                    following = await reader.readline()
+                assert following == b"OK\n"
+                assert await reader.readline() == b""
 
     event_loop.run_until_complete(asyncio.wait_for(main(), 10))
 
