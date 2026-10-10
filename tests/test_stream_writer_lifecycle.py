@@ -167,7 +167,10 @@ def test_slow_peer_concurrent_drains_cancellation_and_ordered_shutdown(loop, fin
             tasks[1].cancel()
             with pytest.raises(asyncio.CancelledError):
                 await tasks[1]
-            assert not tasks[0].done() and not tasks[2].done()
+            # The kernel may have accepted queued bytes during cancellation,
+            # even though the peer application has not read yet (notably IOCP).
+            # Other drains may already succeed, but must never be cancelled.
+            assert not tasks[0].cancelled() and not tasks[2].cancelled()
 
             async def receive():
                 received = bytearray()
@@ -237,6 +240,9 @@ def test_shutdown_wakes_all_paused_drains(loop, finish):
             tasks[1].cancel()
             with pytest.raises(asyncio.CancelledError):
                 await tasks[1]
+            # Here pause is explicit: no kernel write completion can resume
+            # the protocol. Cancelling one drain must leave the others blocked.
+            assert not tasks[0].done() and not tasks[2].done()
             getattr(writer.transport, finish)()
             results = await asyncio.gather(tasks[0], tasks[2], return_exceptions=True)
             # Graceful connection_lost(None) releases existing drains; a new
