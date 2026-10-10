@@ -17,4 +17,5 @@ nav:
   - How It Works: how-it-works.md
   - Project Structure: project-structure.md
   - Development: development.md
+  - Async Ecosystem Tests: async-ecosystem-tests.md
   - Verification: verification.md
