@@ -163,6 +163,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn duration_remainders_satisfy_euclidean_invariants_at_numeric_limits() {
+        let values = [
+            Duration::ZERO,
+            Duration::from_nanos(1),
+            Duration::new(0, 999_999_999),
+            Duration::from_secs(1),
+            Duration::new(1, 1),
+            Duration::new(u64::MAX / 2, 999_999_999),
+            Duration::from_secs(u64::MAX),
+            Duration::MAX,
+        ];
+        for dividend in values {
+            for divisor in values.into_iter().filter(|value| !value.is_zero()) {
+                let remainder = duration_remainder(dividend, divisor);
+                // These two conditions uniquely determine Euclidean remainder;
+                // check the reconstructed Duration, not a duplicate conversion.
+                assert!(remainder < divisor);
+                assert!(remainder <= dividend);
+                assert_eq!((dividend - remainder).as_nanos() % divisor.as_nanos(), 0);
+                if dividend < divisor {
+                    assert_eq!(remainder, dividend);
+                }
+            }
+        }
+        // Translation by any whole number of periods preserves phase.
+        for period in 1..=64 {
+            for nanos in 0..=128 {
+                let divisor = Duration::from_nanos(period);
+                let dividend = Duration::from_nanos(nanos);
+                assert_eq!(
+                    duration_remainder(dividend + divisor * 17, divisor),
+                    duration_remainder(dividend, divisor)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn tick_plan_preserves_cadence_at_and_between_boundaries() {
         let base = Instant::now();
         for period_ns in [1, 3, 100_000_000] {

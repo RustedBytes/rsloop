@@ -129,6 +129,41 @@ class TestFreeThreading:
     def test_parallel_loops_echo_over_fast_streams(self) -> None:
         self._run_parallel_echo(asyncio.start_server, asyncio.open_connection)
 
+    def test_immediate_peer_close_during_native_connection_handoff(self) -> None:
+        # The peer can deliver data/EOF before open_connection has constructed
+        # the client writer. Exercise that handoff repeatedly, including with
+        # no GIL to serialize the bridge worker and protocol callbacks.
+        payload = b"a" * 128 + b"b" * 128
+
+        async def exercise() -> None:
+            accepted = []
+
+            def connected(_reader, writer):
+                accepted.append(writer)
+                writer.write(payload[:128])
+                writer.write(payload[128:])
+                writer.close()
+
+            server = await asyncio.start_server(connected, "127.0.0.1", 0)
+            port = server.sockets[0].getsockname()[1]
+            try:
+                for _ in range(128):
+                    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                    try:
+                        assert await reader.read() == payload
+                        assert reader.at_eof()
+                    finally:
+                        writer.close()
+                        await writer.wait_closed()
+                assert len(accepted) == 128
+            finally:
+                server.close()
+                await server.wait_closed()
+                for writer in accepted:
+                    await writer.wait_closed()
+
+        run_in_own_loop(lambda: asyncio.wait_for(exercise(), 30))
+
     def test_parallel_loops_echo_over_stdlib_stream_reader_protocol(self) -> None:
         # The generic fast path writes into `StreamReader._buffer` through a raw
         # pointer; running it on several loops at once is the regression test

@@ -70,6 +70,7 @@ def test_wrapper_forwards_arguments_and_exit_code(wrapper_calls, exit_code, mock
                 [
                     "-p",
                     "no:faulthandler",
+                    "--durations=10",
                     "tests/test_run.py",
                     "-k",
                     "stats",

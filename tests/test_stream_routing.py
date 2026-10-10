@@ -38,7 +38,9 @@ def test_rsloop_streams_do_not_call_stdlib_helpers(monkeypatch):
     startup = asyncio.start_server(echo, "127.0.0.1", 0)
     try:
         server = loop.run_until_complete(startup)
-        pending = asyncio.open_connection("127.0.0.1", server.sockets[0].getsockname()[1])
+        pending = asyncio.open_connection(
+            "127.0.0.1", server.sockets[0].getsockname()[1]
+        )
 
         async def exchange():
             reader, writer = await asyncio.create_task(pending)
@@ -98,6 +100,40 @@ def test_native_entry_points_reject_other_loops():
             _ = _loop.start_server(lambda *_: None, "127.0.0.1", 0)
 
     asyncio.run(main())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_native_connection_handoff_preserves_error_and_cancellation(cancel):
+    started = asyncio.Event()
+    finished = asyncio.Event()
+
+    class Loop(rsloop.Loop):
+        async def create_connection(self, *args, **kwargs):
+            started.set()
+            try:
+                if cancel:
+                    await asyncio.get_running_loop().create_future()
+                raise ConnectionRefusedError("connection probe")
+            finally:
+                finished.set()
+
+    async def main():
+        pending = asyncio.create_task(asyncio.open_connection("127.0.0.1", 1))
+        await asyncio.wait_for(started.wait(), 5)
+        if cancel:
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+        else:
+            with pytest.raises(ConnectionRefusedError, match="connection probe"):
+                await pending
+        await asyncio.wait_for(finished.wait(), 5)
+
+    loop = Loop()
+    try:
+        loop.run_until_complete(asyncio.wait_for(main(), 10))
+    finally:
+        loop.close()
 
 
 @pytest.mark.parametrize("loop_name", ["asyncio", "uvloop"])

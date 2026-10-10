@@ -278,7 +278,12 @@ async fn shutdown_executor_with_timeout(
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
 
     let timed_out = if timeout.is_finite() && timeout > 0.0 {
-        match crate::rust_async::timeout(Duration::from_secs_f64(timeout), async move {
+        // Positive finite inputs can exceed Duration's range. Saturate rather
+        // than panic after the shutdown worker has already been started.
+        // async-io treats an unrepresentable Instant deadline as never firing;
+        // worker completion and cancellation still resolve the outer future.
+        let duration = Duration::try_from_secs_f64(timeout).unwrap_or(Duration::MAX);
+        match crate::rust_async::timeout(duration, async move {
             rx.await
                 .map_err(|_| PyRuntimeError::new_err("default executor shutdown worker dropped"))?
         })
