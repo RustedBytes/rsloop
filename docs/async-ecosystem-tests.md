@@ -3,8 +3,8 @@
 The downstream suite exercises actual clients, protocols, SQLite worker threads,
 and event loops. It extends the existing framework smoke scripts beyond a single
 successful request. HTTP clients run against loopback servers; databases use
-temporary SQLite files. No public endpoint, database service, or credentials are
-required at test time.
+temporary SQLite files. The SQLite/HTTP suite requires no external service. PostgreSQL tests opt in
+with `RSLOOP_POSTGRES_DSN` pointing to an isolated disposable database.
 
 ## Selected projects and contracts
 
@@ -38,7 +38,7 @@ Contract sources:
 
 Existing Redis/hiredis and AnyIO CI jobs remain useful complements. Framework
 smokes for FastAPI, Starlette, Uvicorn and other packages remain under
-tests/integration/packages. This suite does not establish PostgreSQL, Redis
+tests/integration/packages. This suite does not establish Redis
 cluster, HTTP/2, proxy, or production load compatibility.
 
 ## Run the suite
@@ -84,3 +84,48 @@ HTTPX 0.28.1, HTTPcore 1.0.9, AnyIO 4.14.2, websockets 17.0.1, SQLAlchemy 2.0.52
 aiosqlite 0.22.1 and uvloop 0.23.0. These cases did not reproduce a new rsloop
 defect; no production implementation change was needed. See the PR checks for
 platform-specific execution results.
+
+## PostgreSQL contracts
+
+`tests/ecosystem/test_postgresql.py` adds 36 cases: asyncpg and SQLAlchemy
+AsyncEngine, each compared on asyncio, rsloop and uvloop. Transactions are
+interrupted by cancellation, timeout or application exceptions; rollback is
+verified from an independent connection before a new transaction commits.
+Concurrent transactions remain invisible until both are released by an event.
+A held limit-one pool guarantees exhaustion until acquisition times out;
+backend PIDs prove subsequent connection reuse.
+
+For in-flight interruption, an observer holds a PostgreSQL advisory lock and
+polls `pg_stat_activity` until the target backend reports a lock wait. Thus
+cancellation occurs during real database I/O, without arbitrary sleeps. The
+20-second scenario deadline bounds server-state polling. Pool timeouts expire
+while the sole slot is held; no scheduler speed assumption is required.
+
+TCP recovery terminates only the test backend with `pg_terminate_backend`
+while its query is blocked. This tests a real server-side socket close and
+replacement connection, not packet loss, a TCP RST proxy, or a full server
+restart. The test user must be able to inspect and terminate its own backends.
+Unique table names and advisory keys isolate cases; tables, locks, connections,
+pools and tasks are cleaned up. Use only a disposable test database.
+
+```bash
+export RSLOOP_POSTGRES_DSN=postgresql://rsloop:rsloop@127.0.0.1:5432/rsloop_test
+uv run --no-sync python scripts/run_python_tests.py tests/ecosystem/test_postgresql.py -m ecosystem -ra
+```
+
+A separate Linux GitHub Actions job provisions PostgreSQL 16 with a health
+check and runs Python 3.10/3.14 with all three loops. It requires imports and
+records Python, platform, client and server versions. Existing SQLite and
+HTTP/WebSocket OS jobs remain in place; without the DSN PostgreSQL cases skip.
+PostgreSQL execution on macOS/Windows is not claimed.
+
+Local validation for this addition: Linux, CPython 3.14.7, release rsloop build;
+66 existing ecosystem cases passed, 36 PostgreSQL cases skipped (no runnable
+PostgreSQL service; container UID restrictions prevent starting the downloaded
+server). Ruff and Pyright passed for the added test module. PostgreSQL results
+must be obtained from the dedicated CI jobs; skips do not establish compatibility.
+
+Primary contracts: [asyncpg pools and transactions](https://magicstack.github.io/asyncpg/current/api/index.html),
+[SQLAlchemy asyncio](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html),
+[PostgreSQL activity monitoring](https://www.postgresql.org/docs/16/monitoring-stats.html),
+[backend termination](https://www.postgresql.org/docs/16/functions-admin.html).
