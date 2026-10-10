@@ -253,6 +253,10 @@ exercise prolonged pause deterministically without depending on kernel buffer
 sizes. Weak references check that cancelled waits are released before resume.
 Tests also check for leaked tasks and unhandled loop exceptions.
 
+For real HTTP, WebSocket and database cancellation/recovery scenarios, see
+[Async application lifecycle tests](async-ecosystem-tests.md). The optional
+ecosystem dependency group has a dedicated cross-platform CI matrix.
+
 CI and `just test` use `scripts/run_python_tests.py`, which forwards pytest
 arguments and prints recurring stack dumps when tests stop making progress.
 For the same diagnostics locally, run `uv run python scripts/run_python_tests.py`.

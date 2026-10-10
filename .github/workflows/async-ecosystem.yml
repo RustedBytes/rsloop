@@ -1,0 +1,67 @@
+name: Async ecosystem
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - "src/**"
+      - "python/**"
+      - "tests/ecosystem/**"
+      - "tests/conftest.py"
+      - "scripts/generate_test_tls_certs.py"
+      - "scripts/run_python_tests.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/async-ecosystem.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: async-ecosystem-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lifecycle:
+    name: ecosystem / ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.10"
+          - os: ubuntu-latest
+            python: "3.14"
+          - os: macos-15
+            python: "3.14"
+          - os: windows-latest
+            python: "3.14"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          python-version: ${{ matrix.python }}
+          cache-suffix: ecosystem-${{ matrix.os }}-${{ matrix.python }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-09-25
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - name: Install locked downstream dependencies and build rsloop
+        run: |
+          uv sync --locked --no-default-groups --group ecosystem --no-install-project
+          uv run --no-sync maturin develop --locked
+          uv run --no-sync python scripts/generate_test_tls_certs.py
+      - name: Record versions and require downstream imports
+        run: |
+          uv run --no-sync python -c "import aiohttp, aiosqlite, anyio, httpx, sqlalchemy, websockets; from importlib.metadata import version; print({p: version(p) for p in ('aiohttp', 'aiosqlite', 'anyio', 'httpx', 'sqlalchemy', 'websockets')})"
+      - name: Compare real application lifecycles across event loops
+        run: uv run --no-sync python scripts/run_python_tests.py tests/ecosystem -m ecosystem
