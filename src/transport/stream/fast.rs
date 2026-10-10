@@ -5,7 +5,7 @@ use pyo3::{
     ffi,
     prelude::*,
     sync::PyOnceLock,
-    types::{PyByteArray, PyBytes, PyDict, PyTuple},
+    types::{PyByteArray, PyBytes, PyDict, PyTuple, PyWeakrefMethods, PyWeakrefReference},
 };
 use pyo3_async_runtimes::TaskLocals;
 
@@ -148,6 +148,18 @@ impl ReadBuffer {
     }
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
+    fn prepend(&mut self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let mut bytes = OwnedReadBuffer::with_capacity(data.len() + self.len());
+        bytes.extend_from_slice(data);
+        bytes.extend_from_slice(self.unread());
+        self.bytes = bytes;
+        self.start = 0;
+    }
+
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "ReadBuffer"))]
     fn replace(&mut self, data: &[u8]) {
         self.bytes.clear();
         self.bytes.extend_from_slice(data);
@@ -204,6 +216,7 @@ mod read_buffer_tests {
         Consume(usize),
         ConsumeAll,
         Replace(Vec<u8>),
+        Prepend(Vec<u8>),
     }
 
     fn read_operation() -> impl Strategy<Value = ReadOperation> {
@@ -214,6 +227,7 @@ mod read_buffer_tests {
             5 => (0_usize..16_384).prop_map(ReadOperation::Consume),
             1 => Just(ReadOperation::ConsumeAll),
             2 => bytes().prop_map(ReadOperation::Replace),
+            2 => bytes().prop_map(ReadOperation::Prepend),
         ]
     }
 
@@ -308,6 +322,10 @@ mod read_buffer_tests {
                     ReadOperation::ConsumeAll => {
                         buffer.consume_all();
                         model.clear();
+                    }
+                    ReadOperation::Prepend(data) => {
+                        buffer.prepend(data);
+                        model.splice(..0, data.iter().copied());
                     }
                     ReadOperation::Replace(data) => {
                         buffer.replace(data);
@@ -1221,7 +1239,7 @@ impl ExactReadAccumulator {
 /// The Python surface mirrors the commonly used `asyncio.StreamReader`
 /// operations while retaining buffers in Rust. Only one read coroutine may wait
 /// at a time, matching asyncio's stream-reader contract.
-#[pyclass(module = "rsloop._loop")]
+#[pyclass(module = "rsloop._loop", weakref)]
 pub struct PyFastStreamReader {
     loop_obj: Py<PyAny>,
     limit: usize,
@@ -1233,7 +1251,78 @@ pub struct PyFastStreamReader {
     exception: Option<Py<PyAny>>,
 }
 
+/// A weak reader reference avoids a reader -> Future -> callback -> reader
+/// cycle.
+#[pyclass(module = "rsloop._loop")]
+struct PyReadWaiterDone {
+    reader: Py<PyWeakrefReference>,
+}
+
+#[pymethods]
+impl PyReadWaiterDone {
+    fn __call__(&self, py: Python<'_>, future: &Bound<'_, PyAny>) -> PyResult<()> {
+        if let Some(reader) = self.reader.bind(py).upgrade() {
+            let reader = reader.cast::<PyFastStreamReader>()?;
+            let mut reader = reader.try_borrow_mut()?;
+            // An earlier cancellation may already have been reconciled by a
+            // read/feed. Its delayed callback must not touch the replacement.
+            if reader
+                .waiter
+                .as_ref()
+                .is_some_and(|waiter| waiter.future.bind(py).is(future))
+            {
+                reader.clear_cancelled_waiter(py)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl PyFastStreamReader {
+    fn watch_waiter(
+        slf: PyRefMut<'_, Self>,
+        py: Python<'_>,
+        future: Py<PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        if slf
+            .waiter
+            .as_ref()
+            .is_some_and(|waiter| waiter.future.bind(py).is(future.bind(py)))
+        {
+            let reader = slf.into_pyobject(py)?;
+            let callback = Py::new(
+                py,
+                PyReadWaiterDone {
+                    reader: PyWeakrefReference::new(&reader)?.unbind(),
+                },
+            )?;
+            future.call_method1(py, "add_done_callback", (callback,))?;
+        }
+        Ok(future)
+    }
+
+    /// Reconcile cancellation before inspecting or consuming buffered data.
+    /// Future callbacks are deferred, so relying on the done callback alone
+    /// permits both stale-waiter errors and lost bytes in the same loop turn.
+    fn clear_cancelled_waiter(&mut self, py: Python<'_>) -> PyResult<()> {
+        let Some(waiter) = self.waiter.as_ref() else {
+            return Ok(());
+        };
+        if !python_names::call_method0(py, waiter.future.bind(py), python_names::cancelled(py))?
+            .bind(py)
+            .extract::<bool>()?
+        {
+            return Ok(());
+        }
+        let waiter = self.waiter.take().expect("cancelled waiter is present");
+        if let Some(exact) = waiter.exact {
+            // Only the initialized prefix may be read from the private bytes
+            // allocation. It precedes any newer data already in the buffer.
+            self.buffer.prepend(exact.partial());
+        }
+        self.maybe_pause_transport(py)
+    }
+
     #[cfg_attr(
         feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
@@ -1439,6 +1528,7 @@ impl PyFastStreamReader {
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn maybe_complete_waiter(&mut self, py: Python<'_>) -> PyResult<()> {
+        self.clear_cancelled_waiter(py)?;
         let Some((future, kind)) = self
             .waiter
             .as_ref()
@@ -1643,6 +1733,7 @@ impl PyFastStreamReader {
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn build_read_future(&mut self, py: Python<'_>, n: isize) -> PyResult<Py<PyAny>> {
+        self.clear_cancelled_waiter(py)?;
         if let Some(exc) = self.exception.as_ref() {
             return self.ready_exception_future(py, exc.clone_ref(py));
         }
@@ -1670,6 +1761,7 @@ impl PyFastStreamReader {
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     fn build_readexactly_future(&mut self, py: Python<'_>, n: usize) -> PyResult<Py<PyAny>> {
+        self.clear_cancelled_waiter(py)?;
         if let Some(exc) = self.exception.as_ref() {
             return self.ready_exception_future(py, exc.clone_ref(py));
         }
@@ -1813,6 +1905,7 @@ impl PyFastStreamReader {
         if let Some(exc) = self.exception.as_ref() {
             return self.ready_exception_future(py, exc.clone_ref(py));
         }
+        self.clear_cancelled_waiter(py)?;
         let line_mode = state.line_mode;
         // A chunk can complete the separator and set EOF at once, so the buffer
         // is always inspected before EOF is allowed to end the read.
@@ -1999,16 +2092,18 @@ impl PyFastStreamReader {
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
     #[pyo3(signature = (n=-1))]
-    fn read(&mut self, py: Python<'_>, n: isize) -> PyResult<Py<PyAny>> {
-        self.build_read_future(py, n)
+    fn read(mut slf: PyRefMut<'_, Self>, py: Python<'_>, n: isize) -> PyResult<Py<PyAny>> {
+        let future = slf.build_read_future(py, n)?;
+        Self::watch_waiter(slf, py, future)
     }
 
     #[cfg_attr(
         feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
-    fn readexactly(&mut self, py: Python<'_>, n: usize) -> PyResult<Py<PyAny>> {
-        self.build_readexactly_future(py, n)
+    fn readexactly(mut slf: PyRefMut<'_, Self>, py: Python<'_>, n: usize) -> PyResult<Py<PyAny>> {
+        let future = slf.build_readexactly_future(py, n)?;
+        Self::watch_waiter(slf, py, future)
     }
 
     #[cfg_attr(
@@ -2017,7 +2112,7 @@ impl PyFastStreamReader {
     )]
     #[pyo3(signature = (separator=None))]
     fn readuntil(
-        &mut self,
+        mut slf: PyRefMut<'_, Self>,
         py: Python<'_>,
         separator: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
@@ -2029,18 +2124,20 @@ impl PyFastStreamReader {
             Ok(state) => state,
             // asyncio validates the separator inside the coroutine, so these
             // surface when the awaitable is awaited rather than when it is made.
-            Err(err) => return self.ready_exception_future(py, err.into_value(py).into_any()),
+            Err(err) => return slf.ready_exception_future(py, err.into_value(py).into_any()),
         };
-        self.build_until_future(py, "readuntil", state)
+        let future = slf.build_until_future(py, "readuntil", state)?;
+        Self::watch_waiter(slf, py, future)
     }
 
     #[cfg_attr(
         feature = "profile",
         hotpath::measure(impl_type = "PyFastStreamReader")
     )]
-    fn readline(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    fn readline(mut slf: PyRefMut<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let state = UntilReadState::new(Separators::single(b"\n"), true)?;
-        self.build_until_future(py, "readline", state)
+        let future = slf.build_until_future(py, "readline", state)?;
+        Self::watch_waiter(slf, py, future)
     }
 }
 
