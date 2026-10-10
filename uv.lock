@@ -2883,7 +2883,7 @@ wheels = [
 
 [[package]]
 name = "rsloop"
-version = "0.1.60"
+version = "0.1.61"
 source = { editable = "." }
 
 [package.dev-dependencies]
