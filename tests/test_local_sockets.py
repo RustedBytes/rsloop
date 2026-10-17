@@ -303,3 +303,47 @@ def test_loop_close_releases_socket_wait_cancelled_before_native_poll():
     finally:
         loop.close()
         sender.close()
+
+
+def test_tcp_data_is_delivered_between_call_soon_generations():
+    # Like asyncio's _run_once, a turn runs the callbacks that were ready when
+    # it started and then polls I/O again, so a callback chain that keeps
+    # rescheduling itself cannot hold back a readable protocol for a whole
+    # budget of callbacks (MAX_READY_ITEMS_PER_TURN); hundreds before the fix.
+    loop = rsloop.new_event_loop()
+    listener = socket.create_server(("127.0.0.1", 0))
+    chained = [0]
+    seen_at: list[int] = []
+
+    class Client(asyncio.Protocol):
+        def data_received(self, data: bytes) -> None:
+            seen_at.append(chained[0])
+
+    try:
+        transport, _ = loop.run_until_complete(
+            loop.create_connection(Client, *listener.getsockname())
+        )
+        peer, _ = listener.accept()
+
+        def spin() -> None:
+            chained[0] += 1
+            if chained[0] == 5:
+                peer.send(b"x")
+            if not seen_at and chained[0] < 10_000:
+                loop.call_soon(spin)
+
+        async def until_seen() -> None:
+            while not seen_at and chained[0] < 10_000:
+                await asyncio.sleep(0)
+
+        try:
+            loop.call_soon(spin)
+            loop.run_until_complete(asyncio.wait_for(until_seen(), 10))
+            transport.close()
+            loop.run_until_complete(asyncio.sleep(0))
+        finally:
+            peer.close()
+    finally:
+        listener.close()
+        loop.close()
+    assert seen_at and seen_at[0] - 5 < 32, seen_at

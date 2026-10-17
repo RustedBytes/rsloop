@@ -27,6 +27,8 @@ mod pre_exec;
 mod process_handles;
 mod process_spawn;
 mod process_stdio;
+#[cfg(unix)]
+mod resolver;
 mod servers;
 mod signals;
 mod sock_ops;

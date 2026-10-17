@@ -83,6 +83,15 @@ Each loop combines a coordination runtime with a loop-thread I/O runtime:
   workers because `vibeio` does not expose arbitrary raw-descriptor registration
 - some transport paths still fall back to helper threads, especially TLS I/O,
   TLS server accept, and parts of the legacy transport write path
+- on Unix, `getaddrinfo()` of plain host and port arguments calls the system
+  resolver on the blocking pool without the GIL and builds the `socket.getaddrinfo`
+  result on the loop thread. At most `min(32, CPUs + 4)` lookups run at once
+  per process, the size of asyncio's default executor (CPUs are those the
+  process may run on, not a container's CPU quota); further lookups wait
+  their turn instead of starting more threads. Loop subclasses, a custom
+  default executor, a replaced or wrapped `socket.getaddrinfo` or
+  `_socket.getaddrinfo` (checked on every lookup) and arguments that need CPython's own conversion (IDNA,
+  unusual port types) keep the executor path
 
 Python tasks and callbacks still execute on the Python side. The coordination
 and loop-thread I/O runtimes use the embedded `src/vibeio/` implementation.

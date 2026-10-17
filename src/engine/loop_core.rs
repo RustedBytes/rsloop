@@ -33,7 +33,7 @@ use super::{
     callbacks::{CallbackArgs, CallbackId, CallbackKind, ReadyCallback, TimerCallback},
     commands::{
         AcceptedConnection, FutureCompletion, LoopCommand, LoopFutureCommand, LoopIoCommand,
-        LoopRunCommand, LoopTransportCommand, ReadyItem, ServerAcceptStart,
+        LoopRunCommand, LoopTransportCommand, PendingReady, ReadyItem, ServerAcceptStart,
     },
     dispatcher::run_runtime_thread,
     timer_entry::{TimerEntry, TimerQueue},
@@ -110,11 +110,18 @@ impl<'a> WaitForWake<'a> {
     }
 }
 
-/// Bounded busy-wait before parking in `block_on`. Cross-thread wakeups (reader
-/// worker threads, the transitional runtime thread) otherwise pay the full
-/// `driver.wait` park + interrupt round-trip, which dominates request/response
-/// ping-pong latency and inflates its variance. Env-tunable via
-/// `RSLOOP_WAKE_SPIN_US` (0 disables).
+/// Optional bounded busy-wait before parking in `block_on`, off by default.
+///
+/// A spin saves the `driver.wait` park + interrupt round-trip when the waker is
+/// a GIL-free Rust thread, but most cross-thread wakes come from Python threads
+/// (`call_soon_threadsafe` from a server's I/O threads) that still hold the
+/// GIL when the flag flips. The spinning loop thread then queues for the GIL
+/// behind those threads, each reattach costing up to the switch interval, and
+/// request starts and completions arrive in bursts: behind Granian with a
+/// small SQLAlchemy pool that made the pool discard and reopen connections
+/// (~55 new Postgres sessions per 1k requests vs 0 parked). A parked loop
+/// wakes once the producer has let go of the GIL and drains everything queued.
+/// `RSLOOP_WAKE_SPIN_US` opts back in (microseconds, at most 1000).
 #[cfg_attr(feature = "profile", hotpath::measure)]
 fn wake_spin_window() -> Duration {
     static WINDOW: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
@@ -122,7 +129,7 @@ fn wake_spin_window() -> Duration {
         let micros = std::env::var("RSLOOP_WAKE_SPIN_US")
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(50);
+            .unwrap_or(0);
         Duration::from_micros(micros.min(1_000))
     })
 }
@@ -161,7 +168,6 @@ impl Future for WaitForWake<'_> {
     }
 }
 
-const READY_DRAIN_SLICE: usize = 64;
 const MAX_READY_ITEMS_PER_TURN: usize = 1024;
 const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const RUN_FINISH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -316,7 +322,7 @@ pub struct FdWatch {
 }
 
 struct ActiveReadyDispatch {
-    pending_ready: Arc<Mutex<VecDeque<ReadyItem>>>,
+    pending_ready: Arc<Mutex<PendingReady>>,
 }
 
 /// Mutable lifecycle and Python-facing configuration guarded by `LoopCore`.
@@ -391,6 +397,20 @@ pub struct LoopCore {
     pending_timers: Mutex<BinaryHeap<TimerEntry>>,
     pending_timers_dirty: AtomicBool,
     cancelled_timers: Arc<AtomicUsize>,
+    /// Handles sent through the command channel that the dispatcher has not
+    /// yet moved into an active run's queue. While it is zero, an off-thread
+    /// handle may join the active queue directly without overtaking an
+    /// earlier handle from the same producer.
+    channel_handles: AtomicUsize,
+    /// A `stop()` whose queued Stop item has not run yet. Until it runs, the
+    /// ready drain keeps taking newly queued work into the current turn, so a
+    /// stop takes effect at the end of the turn that requested it.
+    stop_requested: AtomicBool,
+    /// Items the loop thread has queued for itself (its lock-free local ready
+    /// queue). Only that thread writes it; off-thread producers stamp their
+    /// items with it so the drain can restore scheduling order between the
+    /// two queues.
+    local_enqueues: AtomicU64,
     // Wakes the loop thread when a producer enqueues a ready item. Held in an
     // Shared with producers; the park future borrows it under `py.detach`.
     wake: Arc<LoopWake>,
@@ -425,6 +445,9 @@ impl LoopCore {
             pending_timers: Mutex::new(BinaryHeap::new()),
             pending_timers_dirty: AtomicBool::new(false),
             cancelled_timers: Arc::new(AtomicUsize::new(0)),
+            channel_handles: AtomicUsize::new(0),
+            stop_requested: AtomicBool::new(false),
+            local_enqueues: AtomicU64::new(0),
             wake: Arc::new(LoopWake::new()),
         });
 
@@ -485,15 +508,36 @@ impl LoopCore {
             Ok(()) => return Ok(()),
             Err(item) => item,
         };
+        // Off the loop thread (call_soon_threadsafe from a server's I/O
+        // threads): join the active run's queue directly, one wake instead of
+        // a dispatcher-thread hop plus a second wake. Only while no handle is
+        // still on the command channel: one queued before EnterRun, or sent
+        // between runs, would otherwise be overtaken.
+        let item = if self.channel_handles.load(Ordering::Acquire) == 0 {
+            match self.try_enqueue_active_ready(item) {
+                Ok(()) => return Ok(()),
+                Err(item) => item,
+            }
+        } else {
+            item
+        };
         let ReadyItem::HandleCallback(handle) = item else {
             unreachable!("ready handle enqueue preserves item kind")
         };
-        // Keep every off-thread callback on the runtime command queue. During
-        // run_forever startup, callbacks queued before EnterRun already live
-        // there; sending later callbacks directly to pending_ready can overtake
-        // that older batch before the dispatcher processes EnterRun. The local
-        // loop-thread path above remains direct and allocation-free.
+        self.channel_handles.fetch_add(1, Ordering::AcqRel);
         self.send_remote_command(LoopCommand::ScheduleReadyHandle(handle))
+            .inspect_err(|_| {
+                self.channel_handles.fetch_sub(1, Ordering::AcqRel);
+            })
+    }
+
+    /// The dispatcher moved `count` channel handles into the active run's
+    /// queue; later handles may bypass the channel once none remain.
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
+    pub(crate) fn channel_handles_forwarded(&self, count: usize) {
+        if count != 0 {
+            self.channel_handles.fetch_sub(count, Ordering::AcqRel);
+        }
     }
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
@@ -743,7 +787,7 @@ impl LoopCore {
             state.stopping = false;
         }
 
-        let pending_ready = Arc::new(Mutex::new(VecDeque::new()));
+        let pending_ready = Arc::new(Mutex::new(PendingReady::default()));
         self.wake.ready_pending.store(false, Ordering::Release);
         {
             let mut active_dispatch = self
@@ -756,6 +800,7 @@ impl LoopCore {
         }
         self.send_command(LoopCommand::Run(LoopRunCommand::EnterRun {
             pending_ready: Arc::clone(&pending_ready),
+            local_mark: self.local_enqueue_mark(),
         }))
         .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?;
 
@@ -787,6 +832,9 @@ impl LoopCore {
         // TLS must point to heap storage, not a queue header on that stack.
         let mut local_ready = Box::new(VecDeque::new());
         self.install_local_ready_queue(&mut *local_ready);
+        // Loop-thread enqueues already merged into a generation; the items in
+        // `local_ready` follow them in order.
+        let mut local_taken = self.local_enqueues.load(Ordering::Relaxed);
 
         let mut pending_signal_error: Option<PyErr> = None;
         let mut ready_batch = VecDeque::new();
@@ -802,61 +850,45 @@ impl LoopCore {
             #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
             Python::attach(|_| {});
             self.set_ready_drain_active(true);
+            let queued = local_ready.len();
             local_timers.collect(&mut local_ready);
+            self.note_local_enqueues(local_ready.len() - queued);
 
             let mut ready_error = None;
             let mut deferred_fd_rearms = Vec::new();
-            let mut processed_since_refill = 0_usize;
             let mut processed_this_turn = 0_usize;
             loop {
-                if ready_batch.is_empty() || processed_since_refill >= READY_DRAIN_SLICE {
+                if ready_batch.is_empty() {
+                    // One generation per turn, as in asyncio's `_run_once`:
+                    // callbacks scheduled while this batch runs wait for the
+                    // next turn, after the reactor has been polled again.
+                    // Running each turn to quiescence instead let completions
+                    // pile up between polls, then land in one burst: behind a
+                    // SQLAlchemy pool, more connections came back in one turn
+                    // than its idle queue holds before any woken waiter ran,
+                    // and the overflow was closed and reopened. A pending
+                    // stop() still ends the turn that requested it.
+                    if processed_this_turn != 0 && !self.stop_requested.load(Ordering::Acquire) {
+                        break;
+                    }
                     // Every cross-thread producer raises `wake_pending` after
                     // pushing, so the pending queue only needs to be locked
-                    // when the flag is set; a hot chain of locally scheduled
-                    // callbacks otherwise skips the mutex entirely.
+                    // when the flag is set. Both queues form the next
+                    // generation in the order their items were scheduled.
                     if self.wake.ready_pending.load(Ordering::Acquire) {
                         let mut pending =
                             pending_ready.lock().expect("poisoned pending ready queue");
-                        if !pending.is_empty() {
-                            if ready_batch.is_empty() {
-                                std::mem::swap(&mut ready_batch, pending.deref_mut());
-                            } else {
-                                // A refill triggered by READY_DRAIN_SLICE
-                                // leaves
-                                // older items in `ready_batch`. Newly queued
-                                // items have to
-                                // go behind them: asyncio orders callbacks
-                                // by when they were scheduled, so putting the
-                                // fresh arrivals first would run a producer's
-                                // later `call_soon_threadsafe` before its
-                                // earlier
-                                // one. Rare with the GIL, because a producer
-                                // only
-                                // gets to enqueue while this thread is parked;
-                                // constant on a free-threaded interpreter,
-                                // where
-                                // producers append all through the drain.
-                                ready_batch.append(pending.deref_mut());
-                            }
-                        }
-                        if pending.is_empty() {
-                            self.wake.ready_pending.store(false, Ordering::Release);
-                        }
+                        merge_ready_generation(
+                            &mut ready_batch,
+                            &mut local_ready,
+                            &mut local_taken,
+                            pending.deref_mut(),
+                        );
+                        self.wake.ready_pending.store(false, Ordering::Release);
+                    } else if !local_ready.is_empty() {
+                        local_taken += local_ready.len() as u64;
+                        std::mem::swap(&mut ready_batch, &mut *local_ready);
                     }
-
-                    // Prioritize cross-thread wakeups such as signals and
-                    // transport connection_lost
-                    // notifications so they cannot be starved by a
-                    // hot stream of locally-scheduled callbacks.
-                    if !local_ready.is_empty() {
-                        if ready_batch.is_empty() {
-                            std::mem::swap(&mut ready_batch, &mut *local_ready);
-                        } else {
-                            ready_batch.extend(local_ready.drain(..));
-                        }
-                    }
-
-                    processed_since_refill = 0;
 
                     if ready_batch.is_empty() {
                         break;
@@ -868,6 +900,7 @@ impl LoopCore {
                     .expect("ready batch was checked as non-empty");
                 match item {
                     ReadyItem::Stop => {
+                        self.stop_requested.store(false, Ordering::Release);
                         self.state.lock().expect("poisoned loop state").stopping = true;
                     }
                     ReadyItem::Callback(callback) => {
@@ -1016,9 +1049,10 @@ impl LoopCore {
                         } = *payload;
                         self.resolve_connect_completed(py, future, fd, wait_errno)?;
                     }
+                    #[cfg(unix)]
+                    ReadyItem::LoopWork(work) => (work.0)(py)?,
                 }
 
-                processed_since_refill += 1;
                 processed_this_turn += 1;
                 if processed_this_turn >= MAX_READY_ITEMS_PER_TURN {
                     // stop() must not truncate callbacks already queued for
@@ -1051,7 +1085,7 @@ impl LoopCore {
             if pending_signal_error.is_none()
                 && let Err(err) = py.check_signals()
             {
-                let _ = self.send_command(LoopCommand::RequestStop);
+                let _ = self.schedule_stop();
                 pending_signal_error = Some(err);
                 continue;
             }
@@ -1068,8 +1102,14 @@ impl LoopCore {
             // worker-thread ping-pong on its cheaper spin path. As before,
             // hot Python callback chains must also service local I/O.
             if !ready_batch.is_empty() || !local_ready.is_empty() || spin_cooldown > 0 {
-                LOOP_RUNTIMES.with(|runtimes| {
-                    runtimes.borrow()[&loop_runtime_key].poll_once();
+                // Poll with the GIL released, as uvloop does around every
+                // poll: back-to-back turns otherwise hold it for the whole
+                // switch interval while threads that feed the loop
+                // (call_soon_threadsafe producers) wait for it.
+                py.detach(|| {
+                    LOOP_RUNTIMES.with(|runtimes| {
+                        runtimes.borrow()[&loop_runtime_key].poll_once();
+                    });
                 });
                 if !ready_batch.is_empty()
                     || !local_ready.is_empty()
@@ -1079,12 +1119,11 @@ impl LoopCore {
                 }
             }
 
-            // Wait for the next wakeup with the GIL released. First spin
-            // briefly to catch an imminent cross-thread wake
-            // (reader worker / runtime thread) in user space — this
-            // keeps request/response ping-pong latency low and
-            // tight. On spin timeout (or after too many consecutive
-            // catches, to avoid starving this loop's own runtime
+            // Wait for the next wakeup with the GIL released. When
+            // `RSLOOP_WAKE_SPIN_US` enables it, first spin briefly to catch an
+            // imminent cross-thread wake in user space (see
+            // `wake_spin_window`). On spin timeout (or after too many
+            // consecutive catches, to avoid starving this loop's own runtime
             // tasks) park by driving the runtime: its `driver.wait` runs here
             // on the loop thread and is interrupted by a
             // cross-thread wake. Keep the `!Send` runtime lookup
@@ -1149,14 +1188,20 @@ impl LoopCore {
         // or KeyboardInterrupt) breaks out of the drain loop mid-batch:
         // FinishRun moves pending_ready back into the runtime's ready_batch.
         if !ready_batch.is_empty() || !local_ready.is_empty() {
-            // We want to *prepend* the scheduled items to preserve order (even
-            // if it's not strictly guaranteed). so rebuild and replace the
-            // pending Deque
+            // The unexecuted batch is the oldest work; the next generation
+            // (both queues, merged in scheduling order) follows it, and items
+            // queued off-thread from here on go behind both.
             let mut leftover = std::mem::take(&mut ready_batch);
-            leftover.extend(local_ready.drain(..));
             let mut pending = pending_ready.lock().expect("poisoned pending ready queue");
-            leftover.append(pending.deref_mut());
-            *pending = leftover;
+            let mut queued = VecDeque::new();
+            merge_ready_generation(
+                &mut queued,
+                &mut local_ready,
+                &mut local_taken,
+                pending.deref_mut(),
+            );
+            leftover.append(&mut queued);
+            pending.items = leftover;
         }
 
         self.active_ready_dispatch
@@ -1210,6 +1255,7 @@ impl LoopCore {
     /// stop semantics before `run_forever` returns.
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
     pub fn schedule_stop(&self) -> Result<(), LoopCoreError> {
+        self.stop_requested.store(true, Ordering::Release);
         self.send_command(LoopCommand::RequestStop)
     }
 
@@ -1657,6 +1703,8 @@ impl LoopCore {
                     ReadyItem::Callback(callback) => LoopCommand::ScheduleReady(callback),
                     ReadyItem::HandleCallback(handle) => LoopCommand::ScheduleReadyHandle(handle),
                     ReadyItem::Stop => LoopCommand::RequestStop,
+                    #[cfg(unix)]
+                    ReadyItem::LoopWork(work) => LoopCommand::LoopWork(work),
                     ReadyItem::FutureSetResult(payload) => {
                         let FutureCompletion { future, value } = *payload;
                         LoopCommand::Future(LoopFutureCommand::SetResult { future, value })
@@ -1831,6 +1879,14 @@ impl LoopCore {
                     }
                     _ => unreachable!("local connect completion enqueue preserves item kind"),
                 }),
+            #[cfg(unix)]
+            LoopCommand::LoopWork(work) => self
+                .try_enqueue_local_ready(ReadyItem::LoopWork(work))
+                .or_else(|item| self.try_enqueue_active_ready(item))
+                .map_err(|item| match item {
+                    ReadyItem::LoopWork(work) => LoopCommand::LoopWork(work),
+                    _ => unreachable!("local loop work enqueue preserves item kind"),
+                }),
             LoopCommand::RequestStop => self
                 .try_enqueue_local_ready(ReadyItem::Stop)
                 .or_else(|item| self.try_enqueue_active_ready(item))
@@ -1858,6 +1914,7 @@ impl LoopCore {
             // to it across this call. TLS is cleared before the allocation
             // drops.
             unsafe { (*ready).push_back(item) };
+            self.note_local_enqueues(1);
             if !tls.drain_active.get() {
                 // I/O futures are polled with Python detached, but still on
                 // this thread. Wake the park future without locking the
@@ -1879,14 +1936,85 @@ impl LoopCore {
             return Err(item);
         };
 
-        dispatch
+        let mut pending = dispatch
             .pending_ready
             .lock()
-            .expect("poisoned pending ready queue")
-            .push_back(item);
+            .expect("poisoned pending ready queue");
+        // Read under the queue lock so marks never decrease along the queue.
+        pending.push(item, self.local_enqueue_mark());
+        drop(pending);
         self.wake.signal();
         Ok(())
     }
+
+    /// Counts items the loop thread queued for itself.
+    #[inline]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
+    fn note_local_enqueues(&self, count: usize) {
+        // Single writer (the loop thread): a plain load/store pair, no
+        // read-modify-write. Readers that are ordered after an enqueue by
+        // other synchronization (a thread start, a lock, a queue) see it by
+        // coherence, so relaxed accesses suffice.
+        let enqueues = self.local_enqueues.load(Ordering::Relaxed);
+        self.local_enqueues
+            .store(enqueues + count as u64, Ordering::Relaxed);
+    }
+
+    /// Mark for an item queued off the loop thread now: it follows every
+    /// loop-thread enqueue counted so far. Call with the pending queue locked.
+    #[inline]
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
+    pub(crate) fn local_enqueue_mark(&self) -> u64 {
+        self.local_enqueues.load(Ordering::Relaxed)
+    }
+}
+
+/// Starts the next ready generation in scheduling order.
+///
+/// `local` holds the loop thread's own enqueues, numbered from `local_taken`;
+/// an item in `pending` stamped with mark `m` was queued off-thread after the
+/// first `m` loop-thread enqueues, so it goes behind the local items numbered
+/// below `m` and ahead of the rest. Each queue keeps its own order. Taking the
+/// off-thread queue wholesale ahead of the local one instead let a later
+/// `call_soon_threadsafe` overtake an earlier `call_soon` whenever both waited
+/// for the same generation.
+#[cfg_attr(feature = "profile", hotpath::measure)]
+fn merge_ready_generation<T>(
+    batch: &mut VecDeque<T>,
+    local: &mut VecDeque<T>,
+    local_taken: &mut u64,
+    pending: &mut PendingReady<T>,
+) {
+    debug_assert!(batch.is_empty(), "a generation starts from an empty batch");
+    let PendingReady { items, marks } = pending;
+    if items.is_empty() {
+        *local_taken += local.len() as u64;
+        std::mem::swap(batch, local);
+        marks.clear();
+        return;
+    }
+    if local.is_empty() {
+        std::mem::swap(batch, items);
+        marks.clear();
+        return;
+    }
+    batch.reserve(items.len() + local.len());
+    for (index, &(start, mark)) in marks.iter().enumerate() {
+        // Earlier segments were drained from the front: the last one is
+        // whatever remains.
+        let len = marks
+            .get(index + 1)
+            .map_or(items.len(), |next| next.0 - start);
+        let due = usize::try_from(mark.saturating_sub(*local_taken))
+            .unwrap_or(usize::MAX)
+            .min(local.len());
+        batch.extend(local.drain(..due));
+        *local_taken += due as u64;
+        batch.extend(items.drain(..len));
+    }
+    marks.clear();
+    *local_taken += local.len() as u64;
+    batch.append(local);
 }
 
 #[cfg(test)]
@@ -2131,5 +2259,58 @@ mod wake_tests {
             core.send_command(LoopCommand::RequestStop),
             Err(LoopCoreError::ChannelClosed)
         ));
+    }
+}
+
+#[cfg(test)]
+mod generation_order_tests {
+    use super::*;
+
+    fn merged(
+        local: &[u32],
+        local_taken: u64,
+        pending: &[(u32, u64)],
+    ) -> (Vec<u32>, u64, PendingReady<u32>) {
+        let mut queue = PendingReady::default();
+        for &(item, mark) in pending {
+            queue.push(item, mark);
+        }
+        let mut local = local.iter().copied().collect::<VecDeque<_>>();
+        let mut taken = local_taken;
+        let mut batch = VecDeque::new();
+        merge_ready_generation(&mut batch, &mut local, &mut taken, &mut queue);
+        assert!(local.is_empty());
+        (batch.into_iter().collect(), taken, queue)
+    }
+
+    #[test]
+    fn off_thread_items_follow_the_local_items_queued_before_them() {
+        // Local items 10, 11, 12 are enqueues #5, #6, #7.
+        let (order, taken, rest) = merged(&[10, 11, 12], 5, &[(1, 5), (2, 6), (3, 6), (4, 8)]);
+        assert_eq!(order, [1, 10, 2, 3, 11, 12, 4]);
+        assert_eq!(taken, 8);
+        assert!(rest.items.is_empty() && rest.marks.is_empty());
+    }
+
+    #[test]
+    fn stale_marks_and_single_sources_keep_queue_order() {
+        assert_eq!(merged(&[10, 11], 7, &[(1, 3), (2, 7)]).0, [1, 2, 10, 11]);
+        assert_eq!(merged(&[10, 11], 7, &[]).0, [10, 11]);
+        assert_eq!(merged(&[10, 11], 7, &[]).1, 9);
+        assert_eq!(merged(&[], 7, &[(1, 9), (2, 9)]).0, [1, 2]);
+        assert_eq!(merged(&[], 7, &[(1, 9)]).1, 7);
+    }
+
+    #[test]
+    fn pending_marks_are_stored_once_per_change() {
+        let mut queue = PendingReady::default();
+        queue.push(1_u32, 4);
+        queue.extend([2, 3], 4);
+        queue.extend([], 9);
+        queue.extend([4, 5], 6);
+        queue.push(6, 6);
+        assert_eq!(queue.marks, [(0, 4), (3, 6)]);
+        assert_eq!(queue.take_items(), [1, 2, 3, 4, 5, 6]);
+        assert!(queue.marks.is_empty());
     }
 }

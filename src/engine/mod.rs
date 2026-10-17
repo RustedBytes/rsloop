@@ -8,6 +8,8 @@ mod timer_entry;
 
 pub(crate) use callbacks::{CallbackArgs, CallbackKind};
 pub use callbacks::{PyHandle, PyTimerHandle, ReadyCallback};
+#[cfg(unix)]
+pub use commands::LoopWork;
 pub use commands::{
     LoopCommand, LoopFutureCommand, LoopIoCommand, LoopRunCommand, LoopSignalCommand,
     LoopTransportCommand,

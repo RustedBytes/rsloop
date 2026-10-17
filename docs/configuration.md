@@ -9,6 +9,7 @@ environment later is not a supported way to retune an active process.
 | `RSLOOP_TRANSPORT_STATS` | Boolean; disabled | Enables transport counters. Trimmed, case-sensitive values `1`, `true`, `yes`, `on` enable it; all other values disable it. |
 | `RSLOOP_MAX_WRITE_BUFFER_BYTES` | Positive integer bytes; `67108864` (64 MiB) | Caps buffered writes. Missing, invalid, zero, or out-of-range values use the default. |
 | `RSLOOP_MAX_PENDING_TLS_HANDSHAKES` | Positive integer count; `256` | Caps pending server TLS handshakes. Missing, invalid, zero, or out-of-range values use the default. |
+| `RSLOOP_WAKE_SPIN_US` | Unsigned integer microseconds; `0` | The loop thread busy-waits this long for a cross-thread wake before parking. Zero (the default) parks at once; values above `1000` clamp to `1000`; invalid values use `0`. Spinning helps only when wakes come from GIL-free threads: a spinning loop competes for the GIL with the Python threads that wake it. |
 | `RSLOOP_READER_SPIN_US` | Unsigned integer microseconds; `30` | Blocking reader workers retry nonblocking reads before polling. Zero disables spinning; values above `1000` clamp to `1000`; invalid values use `30`. |
 
 For example, enable counters for a local script on Unix:

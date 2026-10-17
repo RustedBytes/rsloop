@@ -27,7 +27,7 @@ use super::commands::ConnectCompletion;
 use super::{
     commands::{
         AcceptedConnection, FutureCompletion, LoopCommand, LoopFutureCommand, LoopIoCommand,
-        LoopRunCommand, LoopSignalCommand, LoopTransportCommand, ReadyItem,
+        LoopRunCommand, LoopSignalCommand, LoopTransportCommand, PendingReady, ReadyItem,
     },
     loop_core::LoopCore,
 };
@@ -130,6 +130,9 @@ struct RuntimeDispatcher {
     core: Arc<LoopCore>,
     command_rx: Receiver<LoopCommand>,
     ready_batch: VecDeque<ReadyItem>,
+    /// Channel handles in `ready_batch`, released from
+    /// `LoopCore::channel_handles` once they reach an active run.
+    channel_handles: usize,
     active_run: Option<ActiveRun>,
     #[cfg(unix)]
     signal_tasks: HashMap<i32, SignalWatcher>,
@@ -143,7 +146,7 @@ struct RuntimeDispatcher {
 
 /// Queue shared with the Python loop thread while `run_forever` is active.
 struct ActiveRun {
-    pending_ready: Arc<std::sync::Mutex<VecDeque<ReadyItem>>>,
+    pending_ready: Arc<std::sync::Mutex<PendingReady>>,
 }
 
 #[cfg(unix)]
@@ -218,6 +221,7 @@ pub fn run_runtime_thread(core: Arc<LoopCore>, command_rx: Receiver<LoopCommand>
         core: Arc::clone(&core),
         command_rx,
         ready_batch: VecDeque::new(),
+        channel_handles: 0,
         active_run: None,
         #[cfg(unix)]
         signal_tasks: HashMap::new(),
@@ -296,6 +300,7 @@ impl RuntimeDispatcher {
                 self.ready_batch.push_back(ReadyItem::Callback(callback));
             }
             LoopCommand::ScheduleReadyHandle(handle) => {
+                self.channel_handles += 1;
                 self.ready_batch
                     .push_back(ReadyItem::HandleCallback(handle));
             }
@@ -332,9 +337,12 @@ impl RuntimeDispatcher {
                         stream,
                     })));
             }
-            LoopCommand::Run(LoopRunCommand::EnterRun { pending_ready }) => {
+            LoopCommand::Run(LoopRunCommand::EnterRun {
+                pending_ready,
+                local_mark,
+            }) => {
                 self.active_run = Some(ActiveRun { pending_ready });
-                self.dispatch_ready_batch();
+                self.forward_ready_batch(local_mark);
             }
             LoopCommand::Run(LoopRunCommand::FinishRun { done_tx }) => {
                 self.finish_run();
@@ -528,6 +536,10 @@ impl RuntimeDispatcher {
                         wait_errno,
                     })));
             }
+            #[cfg(unix)]
+            LoopCommand::LoopWork(work) => {
+                self.ready_batch.push_back(ReadyItem::LoopWork(work));
+            }
             LoopCommand::RequestStop => {
                 self.ready_batch.push_back(ReadyItem::Stop);
             }
@@ -544,6 +556,16 @@ impl RuntimeDispatcher {
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeDispatcher"))]
     fn dispatch_ready_batch(&mut self) {
+        // Commands received mid-run are merged behind every loop-thread
+        // enqueue so far; their producers called in before forwarding, so this
+        // only errs towards running them later, as a busy queue would.
+        self.forward_ready_batch(self.core.local_enqueue_mark());
+    }
+
+    /// Moves received commands into the active run, scheduled after
+    /// `local_mark` loop-thread enqueues.
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "RuntimeDispatcher"))]
+    fn forward_ready_batch(&mut self, local_mark: u64) {
         let Some(active_run) = self.active_run.as_ref() else {
             return;
         };
@@ -556,8 +578,10 @@ impl RuntimeDispatcher {
             .pending_ready
             .lock()
             .expect("poisoned pending ready queue");
-        pending.extend(self.ready_batch.drain(..));
+        pending.extend(self.ready_batch.drain(..), local_mark);
         drop(pending);
+        self.core
+            .channel_handles_forwarded(std::mem::take(&mut self.channel_handles));
         // Wake the parked loop thread so runtime-dispatched work (fd
         // watchers) is observed; `signal_ready` coalesces redundant wakes.
         self.core.signal_ready();
@@ -569,8 +593,13 @@ impl RuntimeDispatcher {
             return;
         };
 
+        // The run's queue holds older work (its unexecuted callbacks, then
+        // direct off-thread handles) than commands received since the last
+        // dispatch, so it goes first.
         if let Ok(mut pending) = active_run.pending_ready.lock() {
-            self.ready_batch.extend(pending.drain(..));
+            let mut queued = pending.take_items();
+            queued.append(&mut self.ready_batch);
+            self.ready_batch = queued;
         }
 
         {

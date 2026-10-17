@@ -99,6 +99,10 @@ pub(super) fn getaddrinfo<'py>(
     if let Some(result) = numeric_addrinfo(&slf, py, &request)? {
         return Ok(result);
     }
+    #[cfg(unix)]
+    if let Some(result) = super::resolver::getaddrinfo(&slf, py, &request)? {
+        return Ok(result);
+    }
     let socket = py.import("socket")?;
     let host = request.host.unwrap_or_else(|| py.None());
     let port = request.port.unwrap_or_else(|| py.None());

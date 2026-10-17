@@ -29,7 +29,7 @@ use std::{
     rc::Rc,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, Ordering, fence},
     },
     task::{Context, Poll, Wake, Waker},
 };
@@ -282,14 +282,21 @@ impl BlockOnNotify {
     fn notify(&self) {
         self.ready.store(true, Ordering::Release);
 
-        if std::thread::current().id() != self.thread_id
-            && self.remote_wake.waiting.load(Ordering::Acquire)
-            && !self
-                .remote_wake
-                .interrupt_pending
-                .swap(true, Ordering::AcqRel)
-        {
-            self.remote_wake.interruptor.interrupt();
+        if std::thread::current().id() != self.thread_id {
+            // Pairs with the fence in `drive` after it publishes `waiting`:
+            // either the park sees `ready`, or this sees `waiting` and
+            // interrupts it. Release/acquire alone lets both loads read the
+            // stale value (store-load reordering), and the park then sleeps
+            // through this wake with no deadline.
+            fence(Ordering::SeqCst);
+            if self.remote_wake.waiting.load(Ordering::Acquire)
+                && !self
+                    .remote_wake
+                    .interrupt_pending
+                    .swap(true, Ordering::AcqRel)
+            {
+                self.remote_wake.interruptor.interrupt();
+            }
         }
     }
 
@@ -939,6 +946,11 @@ impl Runtime {
                     .interrupt_pending
                     .store(false, Ordering::Release);
                 inner.remote_wake.waiting.store(true, Ordering::Release);
+                // Pairs with the fences in `BlockOnNotify::notify` and
+                // `TaskWake::enqueue_if_needed`: a wake that published before
+                // this point is seen below, and one that publishes after it
+                // sees `waiting` and interrupts the wait.
+                fence(Ordering::SeqCst);
 
                 if root_notify.is_ready() || inner.should_skip_wait() {
                     inner.stop_waiting();
@@ -1784,6 +1796,86 @@ mod tests {
             }
         }));
         assert_eq!(value, 11);
+    }
+
+    #[test]
+    fn block_on_never_misses_a_wake_racing_with_the_park() {
+        // A cross-thread wake stores the root's ready flag and then loads the
+        // park's `waiting` flag; the park stores `waiting` and then loads
+        // ready. Each side's store can still sit in its store buffer when it
+        // loads, so without a full fence both can read the stale value: the
+        // waker skips the interrupt and the park sleeps with no deadline.
+        assert_cross_thread_wakes_never_missed(false);
+    }
+
+    #[test]
+    fn spawned_task_never_misses_a_wake_racing_with_the_park() {
+        // The same handshake through the remote task queue.
+        assert_cross_thread_wakes_never_missed(true);
+    }
+
+    fn assert_cross_thread_wakes_never_missed(spawned: bool) {
+        use std::{
+            sync::{Mutex, atomic::AtomicUsize, mpsc},
+            time::Duration,
+        };
+
+        const ROUNDS: usize = 100_000;
+        let woken = Arc::new(AtomicUsize::new(0));
+        let armed = Arc::new(AtomicUsize::new(0));
+        let slot: Arc<Mutex<Option<std::task::Waker>>> = Arc::new(Mutex::new(None));
+        let (done_tx, done_rx) = mpsc::channel();
+        let progress = woken.clone();
+        {
+            let (woken, armed, slot) = (woken.clone(), armed.clone(), slot.clone());
+            std::thread::spawn(move || {
+                for round in 1..=ROUNDS {
+                    while armed.load(Ordering::Acquire) < round {
+                        std::hint::spin_loop();
+                    }
+                    let waker = slot.lock().unwrap().take().unwrap();
+                    woken.store(round, Ordering::Release);
+                    waker.wake();
+                }
+            });
+        }
+        std::thread::spawn(move || {
+            let runtime = Runtime::new(AnyDriver::new_mio().unwrap());
+            for round in 1..=ROUNDS {
+                let (woken, armed, slot) = (woken.clone(), armed.clone(), slot.clone());
+                let mut published = false;
+                let wait = std::future::poll_fn(move |cx| {
+                    if woken.load(Ordering::Acquire) >= round {
+                        return Poll::Ready(());
+                    }
+                    if !published {
+                        published = true;
+                        *slot.lock().unwrap() = Some(cx.waker().clone());
+                        armed.store(round, Ordering::Release);
+                    }
+                    Poll::Pending
+                });
+                if spawned {
+                    runtime.block_on(runtime.spawn(wait));
+                } else {
+                    runtime.block_on(wait);
+                }
+            }
+            done_tx.send(()).unwrap();
+        });
+        // Fail on a stall, not on a slow machine: a missed wake stops all
+        // progress, while every completed round only takes microseconds.
+        let mut last = 0;
+        while done_rx.recv_timeout(Duration::from_secs(5)).is_err() {
+            let now = progress.load(Ordering::Acquire);
+            assert!(
+                now != last,
+                "{} parked through the wake of round {}",
+                if spawned { "spawned task" } else { "block_on" },
+                now + 1
+            );
+            last = now;
+        }
     }
 
     #[test]

@@ -5,6 +5,7 @@ import contextvars
 import gc
 import sys
 import threading
+import time
 import weakref
 from typing import Any, cast
 
@@ -213,6 +214,124 @@ class TestFastCallback:
         finally:
             thread.join()
             loop.close()
+
+    def test_threadsafe_producer_order_survives_run_restarts(self):
+        # A producer that keeps posting while runs stop and restart sends some
+        # callbacks through the dispatcher (between runs) and some straight to
+        # the active run; neither path may overtake the other.
+        loop = rsloop.new_event_loop()
+        events = []
+        total = 20000
+
+        def record(value):
+            events.append(value)
+            if len(events) % 97 == 0:
+                loop.stop()
+
+        def producer():
+            for value in range(total):
+                loop.call_soon_threadsafe(record, value)
+                if value % 64 == 0:
+                    time.sleep(0)  # let runs start and stop while posting
+            loop.call_soon_threadsafe(loop.stop)
+
+        thread = threading.Thread(target=producer)
+        try:
+            thread.start()
+            while len(events) < total:
+                loop.run_forever()
+            thread.join()
+            assert events == list(range(total))
+        finally:
+            thread.join()
+            loop.close()
+
+
+def _post_threadsafe(loop, callback, *args):
+    # Thread start and join order this call after everything the caller
+    # scheduled before and before everything it schedules after.
+    thread = threading.Thread(target=loop.call_soon_threadsafe, args=(callback, *args))
+    thread.start()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("factory", [asyncio.new_event_loop, rsloop.new_event_loop])
+@pytest.mark.parametrize("filler", [0, 5, 130])
+def test_earlier_call_soon_runs_before_later_threadsafe_call(factory, filler):
+    # Both callbacks wait for the same next generation: the loop thread's
+    # call_soon was queued first, so it must run first.
+    loop = factory()
+    events = []
+
+    def record(value):
+        events.append(value)
+        if len(events) == 2:
+            loop.stop()
+
+    try:
+        loop.call_soon(loop.call_soon, record, "older")
+        for index in range(filler + 1):
+            if index == filler * 3 // 4:
+                loop.call_soon(_post_threadsafe, loop, record, "newer")
+            else:
+                loop.call_soon(lambda: None)
+        loop.call_later(5, loop.stop)
+        loop.run_forever()
+        assert events == ["older", "newer"]
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("factory", [asyncio.new_event_loop, rsloop.new_event_loop])
+def test_call_soon_and_threadsafe_calls_interleave_in_scheduling_order(factory):
+    loop = factory()
+    events = []
+    rounds = 50
+
+    def schedule():
+        for index in range(rounds):
+            loop.call_soon(events.append, ("local", index))
+            _post_threadsafe(loop, events.append, ("thread", index))
+        loop.call_soon(loop.stop)
+
+    try:
+        loop.call_soon(schedule)
+        loop.call_later(5, loop.stop)
+        loop.run_forever()
+        expected = [
+            (source, index) for index in range(rounds) for source in ("local", "thread")
+        ]
+        assert events == expected
+    finally:
+        loop.close()
+
+
+@pytest.mark.parametrize("factory", [asyncio.new_event_loop, rsloop.new_event_loop])
+def test_threadsafe_call_runs_before_later_call_soon(factory):
+    # The reverse direction: a thread posts, then lets a running callback go
+    # on to schedule from the loop thread.
+    loop = factory()
+    events = []
+    posted = threading.Event()
+
+    def poster():
+        loop.call_soon_threadsafe(events.append, "older")
+        posted.set()
+
+    def schedule():
+        threading.Thread(target=poster).start()
+        assert posted.wait(timeout=5)
+        loop.call_soon(events.append, "newer")
+        loop.call_soon(loop.stop)
+
+    try:
+        loop.call_soon(schedule)
+        loop.call_later(5, loop.stop)
+        loop.run_forever()
+        assert events == ["older", "newer"]
+    finally:
+        loop.close()
 
 
 @pytest.mark.parametrize("factory", [asyncio.new_event_loop, rsloop.new_event_loop])
