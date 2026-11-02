@@ -23,6 +23,31 @@ import rsloop
 import rsloop._loop_compat as loop_compat
 
 EXCEPTION_GROUP = getattr(builtins, "ExceptionGroup", None)
+HAS_PROC_FD = os.path.isdir("/proc/self/fd")
+
+
+def _descriptor_duplicates(sock: socket.socket) -> list[int]:
+    """Other descriptors in this process that keep ``sock``'s socket open."""
+    target = f"socket:[{os.fstat(sock.fileno()).st_ino}]"
+    duplicates = []
+    for name in os.listdir("/proc/self/fd"):
+        if int(name) == sock.fileno():
+            continue
+        try:
+            if os.readlink(f"/proc/self/fd/{name}") == target:
+                duplicates.append(int(name))
+        except OSError:
+            pass
+    return duplicates
+
+
+async def _wait_for_duplicate(sock: socket.socket) -> None:
+    # A parked readiness wait holds its own duplicate of the descriptor.
+    for _ in range(200):
+        if _descriptor_duplicates(sock):
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("the readiness wait never armed")
 
 
 class TestCompatibility:
@@ -1233,7 +1258,10 @@ class TestCompatibility:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
                 peer.bind(("127.0.0.1", 0))
                 port = None
-                for _ in range(2):
+                # Rebinding the same connected 4-tuple fails on BSD/macOS while
+                # any descriptor still holds the previous socket; /proc shows
+                # the same leak directly on Linux, where the rebind succeeds.
+                for _ in range(10):
                     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     try:
                         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1244,19 +1272,118 @@ class TestCompatibility:
                         lost = loop.create_future()
 
                         class Protocol(asyncio.DatagramProtocol):
-                            def connection_lost(self, exc, result=lost):
-                                result.set_result(exc)
+                            def connection_lost(self, exc, result=lost, sock=sock):
+                                # The transport closes sock after this callback,
+                                # so the loop's own reader wait must be gone.
+                                held = (
+                                    _descriptor_duplicates(sock) if HAS_PROC_FD else []
+                                )
+                                result.set_result((exc, held))
 
                         transport, _ = await loop.create_datagram_endpoint(
                             Protocol, sock=sock
                         )
+                        # Let the reader park on the socket before closing.
+                        await asyncio.sleep(0.01)
                         transport.close()
-                        assert await asyncio.wait_for(lost, 1) is None
+                        assert await asyncio.wait_for(lost, 1) == (None, [])
                         assert sock.fileno() == -1
                     finally:
                         sock.close()
 
         rsloop.run(main())
+
+    @pytest.mark.skipif(not HAS_PROC_FD, reason="requires /proc/self/fd")
+    def test_remove_reader_releases_wait_descriptor_before_returning(self) -> None:
+        # The readiness wait owns a duplicate of the descriptor. If it outlives
+        # remove_reader(), closing the socket next does not release it.
+        loop = rsloop.new_event_loop()
+        a, b = socket.socketpair()
+        try:
+            a.setblocking(False)
+
+            async def remove_while_running() -> None:
+                loop.add_reader(a, lambda: None)
+                await _wait_for_duplicate(a)
+                assert loop.remove_reader(a)
+                assert _descriptor_duplicates(a) == []
+
+            async def arm() -> None:
+                loop.add_reader(a, lambda: None)
+                await _wait_for_duplicate(a)
+
+            loop.run_until_complete(remove_while_running())
+            # Armed during one run, removed while the loop is stopped.
+            loop.run_until_complete(arm())
+            assert _descriptor_duplicates(a) != []
+            assert loop.remove_reader(a)
+            assert _descriptor_duplicates(a) == []
+        finally:
+            loop.close()
+            a.close()
+            b.close()
+
+    @pytest.mark.skipif(not HAS_PROC_FD, reason="requires /proc/self/fd")
+    def test_reader_armed_while_stopped_hands_over_to_running_loop(self) -> None:
+        # A reader added while the loop is stopped waits on the runtime thread.
+        # Its re-arm, replacement and removal while running must neither lose
+        # events nor leave that wait holding the descriptor.
+        loop = rsloop.new_event_loop()
+        a, b = socket.socketpair()
+        fired: list[tuple[str, bytes]] = []
+
+        def reader(tag: str) -> None:
+            fired.append((tag, a.recv(1)))
+
+        async def wait_fired(count: int) -> None:
+            for _ in range(200):
+                if len(fired) >= count:
+                    return
+                await asyncio.sleep(0.005)
+            raise AssertionError(f"expected {count} reader calls, got {fired}")
+
+        async def wait_released() -> None:
+            # Waits on the runtime thread are cancelled through its queue.
+            for _ in range(200):
+                if not _descriptor_duplicates(a):
+                    return
+                await asyncio.sleep(0.005)
+            raise AssertionError("a removed reader still holds the descriptor")
+
+        async def fire_then_remove() -> None:
+            b.send(b"x")
+            await wait_fired(1)
+            # The re-armed wait runs on the loop thread: removal is immediate.
+            await _wait_for_duplicate(a)
+            assert loop.remove_reader(a)
+            assert _descriptor_duplicates(a) == []
+
+        async def replace_then_remove() -> None:
+            await _wait_for_duplicate(a)
+            loop.add_reader(a, reader, "new")
+            b.send(b"y")
+            await wait_fired(2)
+            assert loop.remove_reader(a)
+            await wait_released()
+
+        async def remove_unfired() -> None:
+            await _wait_for_duplicate(a)
+            assert loop.remove_reader(a)
+            await wait_released()
+
+        try:
+            a.setblocking(False)
+            loop.add_reader(a, reader, "first")
+            loop.run_until_complete(fire_then_remove())
+            loop.add_reader(a, reader, "old")
+            loop.run_until_complete(replace_then_remove())
+            loop.add_reader(a, reader, "unfired")
+            loop.run_until_complete(remove_unfired())
+            assert fired == [("first", b"x"), ("new", b"y")]
+        finally:
+            loop.close()
+            a.close()
+            b.close()
 
     def test_sendfile_fallback_writes_file_contents(self) -> None:
         async def main(path: str, expected: bytes) -> tuple[int, bytes]:

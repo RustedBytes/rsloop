@@ -13,7 +13,7 @@ use pyo3::{prelude::*, types::PyTuple};
 use super::PyLoop;
 use crate::{
     context::capture_context,
-    engine::{CallbackKind, FdWatch, LoopCommand, LoopIoCommand, ReadyCallback},
+    engine::{CallbackKind, FdWatch, ReadyCallback},
     fd_ops,
 };
 
@@ -54,13 +54,16 @@ pub(super) fn add_reader(
         );
     if let Some(previous) = previous {
         previous.ready.cancel();
+        // The replaced wait may live on the other side of the loop/runtime
+        // thread split from the new one; stop it where it runs.
+        loop_ref
+            .core
+            .stop_fd_watch(raw_fd, false)
+            .map_err(PyLoop::map_loop_error)?;
     }
     loop_ref
         .core
-        .send_command(LoopCommand::Io(LoopIoCommand::StartReader {
-            fd: raw_fd,
-            callback: ready,
-        }))
+        .start_fd_watch(raw_fd, false, ready)
         .map_err(PyLoop::map_loop_error)
 }
 
@@ -102,7 +105,7 @@ pub(super) fn remove_reader(
     };
     loop_ref
         .core
-        .send_command(LoopCommand::Io(LoopIoCommand::StopReader(stop_fd)))
+        .stop_fd_watch(stop_fd, false)
         .map_err(PyLoop::map_loop_error)?;
     Ok(removed)
 }
@@ -141,13 +144,16 @@ pub(super) fn add_writer(
         );
     if let Some(previous) = previous {
         previous.ready.cancel();
+        // The replaced wait may live on the other side of the loop/runtime
+        // thread split from the new one; stop it where it runs.
+        loop_ref
+            .core
+            .stop_fd_watch(raw_fd, true)
+            .map_err(PyLoop::map_loop_error)?;
     }
     loop_ref
         .core
-        .send_command(LoopCommand::Io(LoopIoCommand::StartWriter {
-            fd: raw_fd,
-            callback: ready,
-        }))
+        .start_fd_watch(raw_fd, true, ready)
         .map_err(PyLoop::map_loop_error)
 }
 
@@ -186,7 +192,7 @@ pub(super) fn remove_writer(
     };
     loop_ref
         .core
-        .send_command(LoopCommand::Io(LoopIoCommand::StopWriter(stop_fd)))
+        .stop_fd_watch(stop_fd, true)
         .map_err(PyLoop::map_loop_error)?;
     Ok(removed)
 }

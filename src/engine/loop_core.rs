@@ -44,6 +44,10 @@ use crate::{
     fd_ops::RawFd,
 };
 
+/// Loop-thread readiness waits for one loop, keyed by `(fd, writable)`.
+#[cfg(unix)]
+type FdWatchTasks = HashMap<(RawFd, bool), crate::vibeio::JoinHandle<()>>;
+
 thread_local! {
     /// Per-loop vibeio runtime hosted on the loop thread. Keyed by `LoopCore`
     /// pointer so a thread that runs several loops sequentially keeps each
@@ -67,6 +71,14 @@ thread_local! {
     /// TLS on the loop thread.
     static IO_TASKS: RefCell<HashMap<usize, HashMap<RawFd, crate::vibeio::JoinHandle<()>>>> =
         RefCell::new(HashMap::new());
+
+    /// `add_reader()` / `add_writer()` readiness waits armed while the loop
+    /// runs, keyed by loop pointer then by `(fd, writable)`. Each wait owns a
+    /// duplicate of the descriptor; keeping it on the loop thread lets
+    /// removal drop that duplicate before `remove_reader()` returns, so a
+    /// caller that closes its socket next really releases it.
+    #[cfg(unix)]
+    static FD_WATCH_TASKS: RefCell<HashMap<usize, FdWatchTasks>> = RefCell::new(HashMap::new());
 }
 
 /// Cross-thread wake state for the loop thread, kept separate from `LoopCore`
@@ -1300,6 +1312,13 @@ impl LoopCore {
                 }
             }
         });
+        #[cfg(unix)]
+        if let Some(handles) = FD_WATCH_TASKS.with(|tasks| tasks.borrow_mut().remove(&runtime_key))
+        {
+            for (_, handle) in handles {
+                handle.cancel();
+            }
+        }
         LOOP_RUNTIMES.with(|runtimes| {
             if let Some(runtime) = runtimes.borrow_mut().remove(&runtime_key) {
                 drop(std::mem::ManuallyDrop::into_inner(runtime));
@@ -1407,7 +1426,7 @@ impl LoopCore {
     }
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
-    fn rearm_fd_watch_if_needed(&self, ready: &ReadyCallback) {
+    fn rearm_fd_watch_if_needed(self: &Arc<Self>, ready: &ReadyCallback) {
         // Readiness callbacks are one-shot at the runtime layer. Re-arm them
         // only after the current ready batch has drained so callbacks queued
         // by Future.set_result() can remove the registration first. This
@@ -1417,39 +1436,125 @@ impl LoopCore {
         // Only re-arm when this callback is still the current registration
         // for the fd: a stale fire that outlived remove_reader()/add_reader()
         // must not restart a watcher for the superseded callback.
-        let command = match ready.kind() {
-            CallbackKind::Reader(fd) => self
-                .state
-                .lock()
-                .expect("poisoned loop state")
-                .reader_keepalive
+        let (fd, writable) = match ready.kind() {
+            CallbackKind::Reader(fd) => (fd, false),
+            CallbackKind::Writer(fd) => (fd, true),
+            _ => return,
+        };
+        let callback = {
+            let state = self.state.lock().expect("poisoned loop state");
+            let watches = if writable {
+                &state.writer_keepalive
+            } else {
+                &state.reader_keepalive
+            };
+            watches
                 .get(&fd)
                 .filter(|watch| std::ptr::eq(Arc::as_ptr(&watch.ready), ready))
-                .map(|watch| {
-                    LoopCommand::Io(LoopIoCommand::StartReader {
-                        fd,
-                        callback: Arc::clone(&watch.ready),
-                    })
-                }),
-            CallbackKind::Writer(fd) => self
-                .state
-                .lock()
-                .expect("poisoned loop state")
-                .writer_keepalive
-                .get(&fd)
-                .filter(|watch| std::ptr::eq(Arc::as_ptr(&watch.ready), ready))
-                .map(|watch| {
-                    LoopCommand::Io(LoopIoCommand::StartWriter {
-                        fd,
-                        callback: Arc::clone(&watch.ready),
-                    })
-                }),
-            _ => None,
+                .map(|watch| Arc::clone(&watch.ready))
         };
 
-        if let Some(command) = command {
-            let _ = self.send_command(command);
+        if let Some(callback) = callback {
+            let _ = self.start_fd_watch(fd, writable, callback);
         }
+    }
+
+    /// Arms one readiness wait for an `add_reader()` / `add_writer()`
+    /// registration. While this loop runs on the calling thread the wait is a
+    /// task on the loop's own runtime, so `stop_fd_watch` can drop it (and the
+    /// descriptor duplicate it owns) synchronously. A registration made while
+    /// the loop is stopped, or from another thread, waits on the coordination
+    /// thread instead.
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
+    pub(crate) fn start_fd_watch(
+        self: &Arc<Self>,
+        fd: RawFd,
+        writable: bool,
+        callback: Arc<ReadyCallback>,
+    ) -> Result<(), LoopCoreError> {
+        #[cfg(unix)]
+        let callback = {
+            let key = Arc::as_ptr(self) as usize;
+            let spawned = if self.on_runtime_thread() {
+                let core = Arc::clone(self);
+                let ready = Arc::clone(&callback);
+                LOOP_RUNTIMES.with(|runtimes| {
+                    runtimes.borrow().get(&key).map(|runtime| {
+                        runtime.spawn(async move {
+                            if super::dispatcher::wait_fd_ready(fd, writable).await.is_ok()
+                                && !ready.cancelled()
+                            {
+                                let _ = core.send_command(LoopCommand::ScheduleReady(ready));
+                            }
+                        })
+                    })
+                })
+            } else {
+                None
+            };
+            match spawned {
+                Some(handle) => {
+                    // Cancel outside the borrow: dropping the replaced wait can
+                    // release Python objects whose finalizers re-enter here.
+                    let replaced = FD_WATCH_TASKS.with(|tasks| {
+                        tasks
+                            .borrow_mut()
+                            .entry(key)
+                            .or_default()
+                            .insert((fd, writable), handle)
+                    });
+                    if let Some(replaced) = replaced {
+                        replaced.cancel();
+                    }
+                    return Ok(());
+                }
+                None => {
+                    // Keep one owner per watch: a stale local wait must not
+                    // make stop_fd_watch skip the coordination-thread wait.
+                    let stale = FD_WATCH_TASKS.with(|tasks| {
+                        tasks
+                            .borrow_mut()
+                            .get_mut(&key)
+                            .and_then(|map| map.remove(&(fd, writable)))
+                    });
+                    if let Some(stale) = stale {
+                        stale.cancel();
+                    }
+                    callback
+                }
+            }
+        };
+        self.send_command(LoopCommand::Io(if writable {
+            LoopIoCommand::StartWriter { fd, callback }
+        } else {
+            LoopIoCommand::StartReader { fd, callback }
+        }))
+    }
+
+    /// Stops the readiness wait armed for `fd`. A wait on this thread's loop
+    /// runtime is dropped before this returns, releasing its descriptor
+    /// duplicate; any other wait is cancelled through the coordination thread.
+    #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]
+    pub(crate) fn stop_fd_watch(&self, fd: RawFd, writable: bool) -> Result<(), LoopCoreError> {
+        #[cfg(unix)]
+        {
+            let key = self as *const LoopCore as usize;
+            let local = FD_WATCH_TASKS.with(|tasks| {
+                tasks
+                    .borrow_mut()
+                    .get_mut(&key)
+                    .and_then(|map| map.remove(&(fd, writable)))
+            });
+            if let Some(handle) = local {
+                handle.cancel();
+                return Ok(());
+            }
+        }
+        self.send_command(LoopCommand::Io(if writable {
+            LoopIoCommand::StopWriter(fd)
+        } else {
+            LoopIoCommand::StopReader(fd)
+        }))
     }
 
     #[cfg_attr(feature = "profile", hotpath::measure(impl_type = "LoopCore"))]

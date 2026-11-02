@@ -36,7 +36,7 @@ use crate::fd_ops;
 /// One readiness wait on the native reactor. A duplicate protects cancellation
 /// from descriptor reuse while user code closes or replaces its registration.
 #[cfg_attr(feature = "profile", hotpath::measure(future = true))]
-async fn wait_fd_ready(fd: fd_ops::RawFd, writable: bool) -> std::io::Result<()> {
+pub(super) async fn wait_fd_ready(fd: fd_ops::RawFd, writable: bool) -> std::io::Result<()> {
     let (read, write) = fd_ops::poll_fd(fd, !writable, writable, 0)?;
     if if writable { write } else { read } {
         return Ok(());
