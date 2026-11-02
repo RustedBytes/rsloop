@@ -567,11 +567,15 @@ async def __loop_create_datagram_endpoint(
         raise ValueError(
             "socket modifier keyword arguments can not be used when sock is specified"
         )
-    if sock is None and local_addr is None and remote_addr is None:
+    if (
+        sock is None
+        and local_addr is None
+        and remote_addr is None
+        and family == 0
+    ):
         raise ValueError("unexpected address family")
 
     if sock is None:
-        addrinfos = None
         if remote_addr is not None:
             addrinfos = await self.getaddrinfo(
                 *remote_addr,
@@ -588,6 +592,10 @@ async def __loop_create_datagram_endpoint(
                 proto=proto,
                 flags=flags,
             )
+        else:
+            addrinfos = [
+                (family, __socket.SOCK_DGRAM, proto, "", None),
+            ]
         if not addrinfos:
             raise OSError("getaddrinfo() returned empty list")
 
