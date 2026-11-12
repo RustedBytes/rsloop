@@ -17,14 +17,6 @@ mod tests {
 
     use super::*;
 
-    struct ChildGuard(std::process::Child);
-    impl Drop for ChildGuard {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-
     #[test]
     fn running_child_stays_pending_until_exit() {
         let runtime = crate::vibeio::executor::Runtime::new(AnyDriver::new_mio().unwrap());
@@ -32,14 +24,18 @@ mod tests {
             for completion in [false, true] {
                 // The pipe, not a delay, keeps the child alive until explicitly
                 // released.
-                let mut child = ChildGuard(
+                let mut child = std::mem::DropGuard::new(
                     Command::new("sh")
                         .args(["-c", "read line; exit 7"])
                         .stdin(Stdio::piped())
                         .spawn()
                         .unwrap(),
+                    |mut child| {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    },
                 );
-                let mut op = WaitPidOp::new(child.0.id());
+                let mut op = WaitPidOp::new(child.id());
                 let driver = crate::vibeio::executor::current_driver().unwrap();
                 let mut cx = Context::from_waker(std::task::Waker::noop());
                 let first = if completion {
@@ -61,7 +57,7 @@ mod tests {
                     second.is_pending(),
                     "spurious wake completed wait: {second:?}"
                 );
-                drop(child.0.stdin.take());
+                drop(child.stdin.take());
                 let raw = crate::vibeio::time::timeout(
                     crate::vibeio::test_support::WATCHDOG,
                     poll_fn(|cx| {

@@ -35,7 +35,7 @@ jobs:
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-09-25
+          toolchain: "1.100.0"
       - uses: Swatinem/rust-cache@v2
       - name: Build cp315t release wheel
         shell: bash

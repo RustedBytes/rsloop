@@ -1052,17 +1052,11 @@ impl Drop for Runtime {
 mod tests {
     #[test]
     fn detached_tasks_complete_and_runtime_drop_releases_unpolled_tasks() {
-        use std::{cell::Cell, rc::Rc};
-        struct Guard(Rc<Cell<usize>>);
-        impl Drop for Guard {
-            fn drop(&mut self) {
-                self.0.set(self.0.get() + 1);
-            }
-        }
+        use std::{cell::Cell, mem::DropGuard, rc::Rc};
         let runtime = super::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
         let completed = Rc::new(Cell::new(false));
         let drops = Rc::new(Cell::new(0));
-        let guard = Guard(drops.clone());
+        let guard = DropGuard::new(drops.clone(), |drops| drops.set(drops.get() + 1));
         let task_completed = completed.clone();
         runtime.spawn_detached(async move {
             let _guard = guard;
@@ -1071,7 +1065,7 @@ mod tests {
         runtime.poll_once();
         assert!(completed.get());
         assert_eq!(drops.get(), 1);
-        let guard = Guard(drops.clone());
+        let guard = DropGuard::new(drops.clone(), |drops| drops.set(drops.get() + 1));
         runtime.spawn_detached(async move {
             let _guard = guard;
             std::future::pending::<()>().await;
@@ -1082,16 +1076,10 @@ mod tests {
 
     #[test]
     fn expired_root_deadline_drops_borrowed_future_and_allows_next_root() {
-        use std::cell::Cell;
-        struct Guard<'a>(&'a Cell<bool>);
-        impl Drop for Guard<'_> {
-            fn drop(&mut self) {
-                self.0.set(true);
-            }
-        }
+        use std::{cell::Cell, mem::DropGuard};
         let runtime = super::Runtime::new(crate::vibeio::driver::AnyDriver::new_mock());
         let dropped = Cell::new(false);
-        let guard = Guard(&dropped);
+        let guard = DropGuard::new(&dropped, |dropped| dropped.set(true));
         let result = runtime.block_on_until(
             async {
                 let _guard = guard;

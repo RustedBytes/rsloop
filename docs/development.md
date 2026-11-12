@@ -8,7 +8,7 @@ Local development uses Python 3.14.7, pinned in `.python-version`. Install that
 interpreter before running the `uv` commands below. This development pin does
 not change the package's Python 3.10+ support or the multi-version test matrix.
 
-Local builds and build/test CI use Rust `nightly-2026-09-25`, pinned in
+Local builds and build/test CI use Rust `1.100.0`, pinned in
 [`rust-toolchain.toml`](https://github.com/RustedBytes/rsloop/blob/master/rust-toolchain.toml).
 Rustup selects it automatically
 inside this repository. LLVM tools remain optional for PGO builds.
@@ -19,7 +19,7 @@ Quick Rust check:
 cargo check
 ```
 
-The nightly pin supplies the allocator API merged in
+Rust 1.100.0 supplies the stabilized allocator API merged in
 [rust-lang/rust#156882](https://github.com/rust-lang/rust/pull/156882).
 Scheduler batch reuse uses the stabilized `Allocator` and
 `Vec::with_capacity_in` APIs in every normal build. The

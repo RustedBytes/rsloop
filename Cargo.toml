@@ -91,6 +91,9 @@ perf = { level = "warn", priority = -1 }
 style = { level = "allow", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
 
+[lints.cargo]
+unused_dependencies = "warn"
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)", "cfg(musl_v1_2_3)", "cfg(syscall_accept4)", "cfg(feature, values(\"blocking-default\", \"fs\", \"pipe\", \"process\", \"signal\", \"splice\", \"stdio\"))"] }
 

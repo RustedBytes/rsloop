@@ -61,7 +61,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "nightly-2026-09-25"
+          toolchain: "1.100.0"
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@v2
@@ -96,7 +96,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "nightly-2026-09-25"
+          toolchain: "1.100.0"
           components: clippy
 
       - name: Cache Cargo registry
@@ -205,7 +205,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "nightly-2026-09-25"
+          toolchain: "1.100.0"
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@v2
@@ -245,7 +245,7 @@ jobs:
           python-version: "3.13"
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "nightly-2026-09-25"
+          toolchain: "1.100.0"
       - uses: Swatinem/rust-cache@v2
       - name: Install Redis and Python test dependencies
         run: |
@@ -351,7 +351,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "nightly-2026-09-25"
+          toolchain: "1.100.0"
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@v2
