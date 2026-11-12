@@ -1,6 +1,6 @@
 [package]
 name = "rsloop"
-version = "0.1.66"
+version = "0.1.67"
 edition = "2024"
 description = "An event loop for asyncio written in Rust"
 documentation = "https://github.com/RustedBytes/rsloop#readme"
@@ -24,7 +24,7 @@ crossbeam-queue = "0.3"
 errno = { version = "0.3", optional = true }
 futures = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = "0.3"
-hotpath = { version = "0.28.3", optional = true }
+hotpath = { version = "0.31", optional = true }
 libc = "0.2"
 memchr = "2"
 mio = "1"
@@ -33,7 +33,7 @@ oneshot = { version = "0.2", features = ["async", "std"] }
 pin-project-lite = "0.2"
 pyo3 = { version = "0.29.3" }
 pyo3-async-runtimes = { version = "0.29", default-features = false }
-rustls = "0.23.45"
+rustls = "0.23.46"
 rustls-native-certs = "0.8"
 rustls-pemfile = "2"
 rusty_pool = { version = "0.7", default-features = false, optional = true }
