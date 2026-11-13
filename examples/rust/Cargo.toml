@@ -10,7 +10,7 @@ name = "rsloop_rust_example"
 
 [dependencies]
 smol = "2"
-pyo3 = "0.29.2"
+pyo3 = "0.30.1"
 rsloop = { path = "../.." }
 
 [profile.release]

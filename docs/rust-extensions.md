@@ -117,7 +117,7 @@ Your extension crate should depend on:
 ```toml
 [dependencies]
 smol = "2"
-pyo3 = "0.29.3"
+pyo3 = "0.30.1"
 rsloop = { git = "https://github.com/RustedBytes/rsloop", rev = "e42b8132730c70b1f1d79eaf1403eb3c3c7b66cf" }
 ```
 
