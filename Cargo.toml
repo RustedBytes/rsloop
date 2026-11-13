@@ -36,7 +36,7 @@ pyo3-async-runtimes = { version = "0.30", default-features = false }
 rustls = "0.23.46"
 rustls-native-certs = "0.8"
 rustls-pemfile = "2"
-rusty_pool = { version = "0.7", default-features = false, optional = true }
+rusty_pool = { version = "1.0", default-features = false, optional = true }
 signal-hook = "0.4"
 slab = "0.4"
 smol = "2"
