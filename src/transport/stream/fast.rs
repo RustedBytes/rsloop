@@ -1324,6 +1324,11 @@ impl PyFastStreamReader {
                 reader.borrow_mut().waiter_done_cb = Some(callback.clone_ref(py));
             }
             future.call_method1(py, "add_done_callback", (callback,))?;
+            // ReadFuture returns undelivered bytes through this reference.
+            future.bind(py).setattr(
+                pyo3::intern!(py, "_rsloop_reader"),
+                PyWeakrefReference::new(&reader)?,
+            )?;
         }
         Ok(future)
     }
@@ -1438,6 +1443,40 @@ impl PyFastStreamReader {
     #[inline]
     fn create_future(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         loop_create_future(py, &self.loop_obj)
+    }
+
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "PyFastStreamReader")
+    )]
+    /// The Future of a read that waits for data: `rsloop._stream_reader.
+    /// ReadFuture`, whose `__await__` returns bytes to the buffer when the
+    /// awaiting task is cancelled after the read completed (see there).
+    fn create_read_future(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        static READ_FUTURE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+        let class = READ_FUTURE.get_or_try_init(py, || {
+            Ok::<_, PyErr>(
+                py.import("rsloop._stream_reader")?
+                    .getattr("ReadFuture")?
+                    .unbind(),
+            )
+        })?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item(pyo3::intern!(py, "loop"), self.loop_obj.bind(py))?;
+        Ok(class.bind(py).call((), Some(&kwargs))?.unbind())
+    }
+
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "PyFastStreamReader")
+    )]
+    /// Put bytes a completed read took from the buffer, but never delivered
+    /// (its task was cancelled before resuming), back in front of the buffer.
+    fn restore_undelivered_bytes(&mut self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
+        self.clear_cancelled_waiter(py)?;
+        self.buffer.prepend(data);
+        self.maybe_pause_transport(py)?;
+        self.maybe_complete_waiter(py)
     }
 
     #[cfg_attr(
@@ -1693,7 +1732,7 @@ impl PyFastStreamReader {
                 python_names::resume_reading(py),
             )?;
         }
-        let future = self.create_future(py)?;
+        let future = self.create_read_future(py)?;
         let exact = match &kind {
             ReadWaitKind::Exact(expected) => Some(ExactReadAccumulator::new(py, *expected)?),
             _ => None,
@@ -2215,6 +2254,14 @@ impl PyFastStreamReader {
     )]
     fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
+    }
+
+    #[cfg_attr(
+        feature = "profile",
+        hotpath::measure(impl_type = "PyFastStreamReader")
+    )]
+    fn _restore_undelivered(&mut self, py: Python<'_>, data: &Bound<'_, PyBytes>) -> PyResult<()> {
+        self.restore_undelivered_bytes(py, data.as_bytes())
     }
 
     #[cfg_attr(

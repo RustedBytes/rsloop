@@ -278,3 +278,29 @@ def test_waiter_callback_does_not_keep_reader_alive(loop_factory):
         await asyncio.sleep(0)
 
     run(loop_factory, main)
+
+
+@pytest.mark.parametrize(
+    "native", [False, True], ids=["stdlib-reader", "native-reader"]
+)
+@pytest.mark.parametrize(
+    "method", ["read", "readexactly", "readuntil", "readline", "readall"]
+)
+def test_cancel_after_completion_keeps_bytes(loop_factory, native, method):
+    # Data completes the pending read, then the task is cancelled before it
+    # resumes (as when an asyncio.wait_for timeout fires in the same loop
+    # iteration). asyncio's StreamReader leaves the bytes in its buffer; the
+    # native reader must not lose them with the result nobody receives.
+    async def main():
+        reader = new_reader(native)
+        task = asyncio.create_task(await_read(reader, method))
+        await asyncio.sleep(0)
+        reader.feed_data(b"1234567\n")
+        if method == "readall":
+            reader.feed_eof()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return await reader.read(100)
+
+    assert run(loop_factory, main) == b"1234567\n"
