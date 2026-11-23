@@ -109,6 +109,8 @@ jobs:
     name: allocator miri (strict provenance)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      RUSTUP_TOOLCHAIN: nightly-2026-09-25
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -118,7 +120,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "nightly-2026-09-25"
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
           components: miri,rust-src
 
       - name: Cache Cargo registry
