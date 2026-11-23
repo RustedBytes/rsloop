@@ -52,13 +52,14 @@ integration = [
   "aiohttp>=3.14.3",
   "aiosqlite>=0.20.0",
   "anyio>=4.14.2",
-  "beanie>=2.0.0",
+  # Patched dnspython requires Python 3.11+ for Beanie, Edgy and Piccolo.
+  "beanie>=2.0.0; python_version >= '3.11'",
   # Patched Autobahn requires Python 3.11+, so Daphne is unavailable on 3.10.
   "autobahn>=26.7.1; python_version >= '3.11'",
   "daphne>=4.2.3; python_version >= '3.11'",
   "django>=5.2.17,<6; python_version < '3.12'",
   "django>=6.1.1; python_version >= '3.12'",
-  "edgy>=0.30.0",
+  "edgy>=0.30.0; python_version >= '3.11'",
   "falcon>=4.1.0",
   "fastapi>=0.124.4",
   "faststream[nats]>=0.5.48",
@@ -67,7 +68,7 @@ integration = [
   "litestar>=2.24.0",
   "mangum>=0.21.0",
   "ormar>=0.22.0",
-  "piccolo>=1.30.0",
+  "piccolo>=1.30.0; python_version >= '3.11'",
   "quart>=0.19.9",
   "sanic>=23.12.1,<24; python_version < '3.10'",
   "sanic>=25.3.0; python_version >= '3.10'",
@@ -103,9 +104,12 @@ build-backend = "maturin"
 [tool.uv]
 # Security floors for transitive integration dependencies.
 constraint-dependencies = [
+  "dnspython>=2.9.2",
   "mako>=1.4.2",
   "multidict>=6.9.1",
+  "opentelemetry-api>=1.45.2",
   "pymongo>=4.18.2",
+  "wcmatch>=11.2",
   "werkzeug>=3.1.9",
 ]
 
