@@ -1,13 +1,14 @@
 # Benchmarks
 
-Measured October 19, 2026 at commit `45a7eaa`: rsloop 0.1.65 (release build,
-io_uring), uvloop 0.22.1 and zuvloop 0.0.17 on an Intel Core i9-9900K,
-Linux 7.0.0-38-generic x86_64. GIL-enabled runs use CPython 3.14.7;
-free-threaded runs use CPython 3.14.0 with `PYTHON_GIL=0` for every loop.
+Measured November 23, 2026 at commit `70419b9` on an AMD Ryzen AI 7 350
+running Linux 6.6.87.2 under WSL2 (x86_64). The comparison uses rsloop 0.1.69
+(release build with io_uring), uvloop 0.23.0 and zuvloop 0.0.21. GIL-enabled
+runs use CPython 3.14.7. Free-threaded runs use CPython 3.14.3t with
+`PYTHON_GIL=0` for every loop.
 
 Results are medians of seven runs after two warmups unless stated otherwise.
-Times are milliseconds; lower is better. Benchmarks ran sequentially after
-builds finished. This is a shared host, so small differences may be noise.
+Lower times are better. Benchmarks ran sequentially after both release builds
+finished. Small differences may reflect host noise.
 The different Python patch versions prevent isolating the GIL's effect.
 
 ## Callbacks, tasks and TCP
@@ -20,8 +21,8 @@ Each sample uses a fresh process with cyclic GC disabled:
   native fast streams; the other loops use asyncio streams.
 
 Peak RSS includes the interpreter and libraries, measured with Linux `VmHWM`.
-CPU affinity includes worker threads. CPUs 2 and 3 are separate physical
-cores; allowing two cores still runs one event loop per process.
+CPU affinity includes worker threads. CPUs 2 and 4 are separate physical
+cores. Each process runs one event loop in both affinity configurations.
 
 ### One core, GIL enabled (CPU 2)
 
@@ -29,35 +30,35 @@ Time (ms):
 
 | Workload | asyncio | uvloop | zuvloop | rsloop |
 |---|---:|---:|---:|---:|
-| 1,000,000 callbacks | 543.76 | 251.22 | 180.84 | 172.42 |
-| 200,000 tasks | 556.13 | 343.16 | 298.41 | 312.17 |
-| 20,000 TCP round trips | 566.80 | 470.57 | 375.18 | 416.03 |
+| 1,000,000 callbacks | 329.50 | 154.31 | 105.77 | 110.01 |
+| 200,000 tasks | 411.15 | 228.04 | 215.31 | 210.26 |
+| 20,000 TCP round trips | 224.60 | 168.09 | 153.95 | 169.34 |
 
 Peak RSS (MiB):
 
 | Workload | asyncio | uvloop | zuvloop | rsloop |
 |---|---:|---:|---:|---:|
-| 1,000,000 callbacks | 200.9 | 234.5 | 125.9 | 103.8 |
-| 200,000 tasks | 31.6 | 34.2 | 33.3 | 34.7 |
-| 20,000 TCP round trips | 24.3 | 27.7 | 26.5 | 28.3 |
+| 1,000,000 callbacks | 201.1 | 234.4 | 126.3 | 118.9 |
+| 200,000 tasks | 31.4 | 34.4 | 33.6 | 34.2 |
+| 20,000 TCP round trips | 24.2 | 27.6 | 26.9 | 28.2 |
 
-### Two cores, GIL enabled (CPUs 2–3)
+### Two cores, GIL enabled (CPUs 2 and 4)
 
 Time (ms):
 
 | Workload | asyncio | uvloop | zuvloop | rsloop |
 |---|---:|---:|---:|---:|
-| 1,000,000 callbacks | 544.80 | 255.77 | 179.15 | 173.40 |
-| 200,000 tasks | 557.89 | 342.04 | 299.83 | 315.82 |
-| 20,000 TCP round trips | 563.22 | 467.68 | 381.18 | 405.75 |
+| 1,000,000 callbacks | 331.84 | 155.22 | 105.83 | 111.19 |
+| 200,000 tasks | 406.50 | 224.10 | 192.67 | 227.60 |
+| 20,000 TCP round trips | 226.63 | 169.32 | 155.41 | 170.50 |
 
 Peak RSS (MiB):
 
 | Workload | asyncio | uvloop | zuvloop | rsloop |
 |---|---:|---:|---:|---:|
-| 1,000,000 callbacks | 200.9 | 234.5 | 125.9 | 103.7 |
-| 200,000 tasks | 31.5 | 34.2 | 33.1 | 34.6 |
-| 20,000 TCP round trips | 24.3 | 27.8 | 26.5 | 28.3 |
+| 1,000,000 callbacks | 201.1 | 234.4 | 126.3 | 118.9 |
+| 200,000 tasks | 31.4 | 34.3 | 33.7 | 34.2 |
+| 20,000 TCP round trips | 24.2 | 27.6 | 27.0 | 28.1 |
 
 ### One core, free-threaded (CPU 2)
 
@@ -65,17 +66,17 @@ Time (ms):
 
 | Workload | asyncio | uvloop | zuvloop | rsloop |
 |---|---:|---:|---:|---:|
-| 1,000,000 callbacks | 597.72 | 297.20 | 197.54 | 214.96 |
-| 200,000 tasks | 642.47 | 410.10 | 353.02 | 357.53 |
-| 20,000 TCP round trips | 601.00 | 504.12 | 393.52 | 389.10 |
+| 1,000,000 callbacks | 389.13 | 168.73 | 122.94 | 125.81 |
+| 200,000 tasks | 543.15 | 321.42 | 246.93 | 259.87 |
+| 20,000 TCP round trips | 241.05 | 171.14 | 154.84 | 179.15 |
 
 Peak RSS (MiB):
 
 | Workload | asyncio | uvloop | zuvloop | rsloop |
 |---|---:|---:|---:|---:|
-| 1,000,000 callbacks | 207.9 | 256.5 | 132.9 | 186.2 |
-| 200,000 tasks | 38.8 | 41.4 | 42.4 | 42.3 |
-| 20,000 TCP round trips | 30.6 | 34.3 | 33.7 | 35.8 |
+| 1,000,000 callbacks | 207.8 | 257.4 | 133.0 | 186.1 |
+| 200,000 tasks | 38.2 | 42.0 | 42.5 | 41.9 |
+| 20,000 TCP round trips | 30.2 | 34.0 | 33.6 | 36.1 |
 
 ## Network workloads
 
@@ -94,11 +95,11 @@ server shutdown and excludes listener creation.
 
 | Workload | asyncio | uvloop | zuvloop | rsloop |
 |---|---:|---:|---:|---:|
-| HTTP keep-alive | 246.61 | 149.77 | 127.38 | 139.65 |
-| TLS HTTP | 513.99 | 319.40 | 333.97 | 345.32 |
-| Raw WebSocket | 1675.11 | 1585.60 | 1570.79 | 1609.34 |
-| Raw TLS WebSocket | 1920.41 | 1747.61 | 1777.40 | 1877.24 |
-| 8,000 short TCP connections | 1187.17 | 875.43 | 782.51 | 796.91 |
+| HTTP keep-alive | 120.49 | 108.42 | 76.52 | 79.77 |
+| TLS HTTP | 222.44 | 169.87 | 191.16 | 207.09 |
+| Raw WebSocket | 1018.22 | 977.03 | 969.91 | 991.83 |
+| Raw TLS WebSocket | 1125.71 | 1070.71 | 1113.07 | 1180.05 |
+| 8,000 short TCP connections | 594.54 | 352.42 | 430.53 | 407.07 |
 
 ## Native reader lifecycle
 
@@ -108,9 +109,9 @@ Future completion callbacks. Values are median nanoseconds per round.
 
 | Operation | Buffered (ns) | Waiting (ns) |
 |---|---:|---:|
-| `read` | 275.6 | 2646.5 |
-| `readexactly` | 272.4 | 1887.4 |
-| `readuntil` | 295.2 | 1932.7 |
+| `read` | 132.8 | 2069.8 |
+| `readexactly` | 131.7 | 1340.3 |
+| `readuntil` | 172.8 | 1346.9 |
 
 ## Reproduce
 
@@ -118,10 +119,13 @@ Run from the repository root. Build both environments before measuring:
 
 ```bash
 uv venv --python 3.14.7 target/bench-gil
-uv venv --python 3.14.0t target/bench-free-threaded
+uv venv --python 3.14.3t target/bench-free-threaded
+uv pip install --python target/bench-gil/bin/python maturin==1.16.0
 for env in bench-gil bench-free-threaded; do
-  uv pip install --python target/$env/bin/python maturin uvloop==0.22.1 zuvloop==0.0.17
-  VIRTUAL_ENV="$PWD/target/$env" target/$env/bin/maturin develop --release --locked
+  uv pip install --python "target/$env/bin/python" uvloop==0.23.0 zuvloop==0.0.21
+  target/bench-gil/bin/maturin build --release --locked --compatibility linux \
+    --interpreter "target/$env/bin/python" --out "target/benchmarks/wheels/$env"
+  uv pip install --python "target/$env/bin/python" "target/benchmarks/wheels/$env/"*.whl
 done
 uv run --no-project python scripts/generate_test_tls_certs.py tests/fixtures/tls
 mkdir -p target/benchmarks
@@ -138,7 +142,7 @@ compare() {
     --json-output "target/benchmarks/$3.json"
 }
 PYTHON_GIL=1 compare 2 target/bench-gil/bin/python gil-one-core
-PYTHON_GIL=1 compare 2,3 target/bench-gil/bin/python gil-two-cores
+PYTHON_GIL=1 compare 2,4 target/bench-gil/bin/python gil-two-cores
 PYTHON_GIL=0 compare 2 target/bench-free-threaded/bin/python free-threaded-one-core
 ```
 
@@ -185,7 +189,8 @@ done
 ```
 
 Raw samples and logs for this refresh are local build artifacts in
-`target/benchmarks-2026-10-19/`: `gil-one-core.json`, `gil-two-cores.json`,
-`free-threaded-one-core.json`, `network.json`, `churn-<loop>.json` and
-`reads.json`. The `environment-*.json` files record Python/package versions,
-GIL state, build profile, reactor and native binary hashes.
+`target/benchmarks-2026-11-23/`. Sample files include `gil-one-core.json`,
+`gil-two-cores.json`, `free-threaded-one-core.json`, `network.json`,
+`churn-<loop>.json` and `reads.json`. The `environment-*.json` files record
+Python and package versions, GIL state, build profile, reactor and native
+binary hashes.
