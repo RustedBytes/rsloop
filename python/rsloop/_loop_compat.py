@@ -396,7 +396,8 @@ class __RsloopDatagramTransport:
         self._reader_task.cancel()
         if self._writer_task is not None:
             self._writer_task.cancel()
-        self._call_connection_lost(exc)
+        # Run after the cancelled tasks have removed their socket watches.
+        self._loop.call_soon(self._call_connection_lost, exc)
 
     def _call_connection_lost(self, exc):
         if self._conn_lost:

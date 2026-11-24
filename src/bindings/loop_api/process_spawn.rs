@@ -21,7 +21,7 @@ use std::os::windows::process::CommandExt;
 use std::process::Command;
 
 use pyo3::{
-    exceptions::{PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError},
+    exceptions::{PyNotImplementedError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyDict, PyTuple},
 };
@@ -170,9 +170,7 @@ where
                     &mut command,
                     kwargs.as_ref().map(|kwargs| kwargs.bind(py)),
                 )?;
-                let child = command
-                    .spawn()
-                    .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+                let child = command.spawn()?;
                 Ok((child, spawn_config, stdout_override, stderr_override))
             })?;
 

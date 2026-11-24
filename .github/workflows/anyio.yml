@@ -27,19 +27,19 @@ jobs:
         include:
           - os_name: linux
             runner: ubuntu-latest
-            python_version: "3.10"
+            python_version: "3.11"
           - os_name: linux
             runner: ubuntu-latest
             python_version: "3.14"
           - os_name: macos
             runner: macos-15
-            python_version: "3.10"
+            python_version: "3.11"
           - os_name: macos
             runner: macos-15
             python_version: "3.14"
           - os_name: windows
             runner: windows-latest
-            python_version: "3.10"
+            python_version: "3.11"
           - os_name: windows
             runner: windows-latest
             python_version: "3.14"
@@ -59,6 +59,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python ${{ matrix.python_version }}
+        id: python
         uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python_version }}
@@ -80,9 +81,12 @@ jobs:
 
       - name: Install AnyIO test dependencies and local rsloop
         working-directory: anyio
+        shell: bash
+        env:
+          UV_PYTHON: ${{ steps.python.outputs.python-path }}
         run: |
-          uv pip install --system --group test --editable ".[trio]"
-          uv pip install --system --no-deps --editable ..
+          uv pip install --group test --editable ".[trio]"
+          uv pip install --no-deps --editable ..
 
       - name: Add rsloop to AnyIO's backend matrix
         run: python scripts/prepare_anyio_rsloop_tests.py anyio
