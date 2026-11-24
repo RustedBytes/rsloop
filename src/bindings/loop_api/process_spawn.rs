@@ -18,7 +18,7 @@
 use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
-use std::process::Command;
+use std::{io, process::Command};
 
 use pyo3::{
     exceptions::{PyNotImplementedError, PyTypeError, PyValueError},
@@ -170,7 +170,7 @@ where
                     &mut command,
                     kwargs.as_ref().map(|kwargs| kwargs.bind(py)),
                 )?;
-                let child = command.spawn()?;
+                let child = command.spawn().map_err(process_spawn_error)?;
                 Ok((child, spawn_config, stdout_override, stderr_override))
             })?;
 
@@ -185,6 +185,21 @@ where
 
         Python::attach(|py| transport_protocol_pair(py, transport.into_any(), &protocol))
     })
+}
+
+fn process_spawn_error(error: io::Error) -> PyErr {
+    #[cfg(windows)]
+    {
+        use pyo3::exceptions::PyFileNotFoundError;
+        use windows_sys::Win32::Foundation::ERROR_INVALID_NAME;
+
+        // Rust resolves the executable path before launching it. Windows can
+        // report an invalid name for a literal command with no matching file.
+        if error.raw_os_error() == Some(ERROR_INVALID_NAME as i32) {
+            return PyFileNotFoundError::new_err((libc::ENOENT, error.to_string()));
+        }
+    }
+    error.into()
 }
 
 /// `/bin/sh -c <cmd>` on Unix, `%COMSPEC% /c "<cmd>"` on Windows.

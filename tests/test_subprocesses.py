@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 import rsloop
 
 
@@ -23,6 +25,18 @@ def test_create_subprocess_exec_defaults_to_inherit() -> None:
         assert proc.stderr is None
 
     rsloop.run(main())
+
+
+def test_create_subprocess_exec_treats_path_as_literal(tmp_path: Path) -> None:
+    marker = tmp_path / "marker"
+    command = tmp_path / f"nonexistent; touch {marker} #"
+
+    async def main() -> None:
+        with pytest.raises(FileNotFoundError):
+            await asyncio.create_subprocess_exec(str(command))
+
+    rsloop.run(main())
+    assert not marker.exists()
 
 
 def test_loop_subprocess_exec_defaults_to_pipe() -> None:
